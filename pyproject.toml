@@ -1,0 +1,35 @@
+[project]
+name = "stakehold"
+version = "0.1.0"
+requires-python = ">=3.14"
+dependencies = [
+    "data-store",
+    "portfolio",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+data-store = { workspace = true }
+portfolio = { workspace = true }
+
+[tool.uv.workspace]
+members = ["services/*"]
+
+[dependency-groups]
+dev = [
+    "autoflake",
+    "black",
+    "detect-secrets",
+    "flake8",
+    "hatchling",
+    "isort",
+    "pre-commit",
+    "pycln",
+    "pytest",
+    "pytest-testmon",
+]
+
+[tool.pytest.ini_options]
+addopts = "--import-mode=importlib"
