@@ -1,0 +1,30 @@
+# Secrets & environment
+.env
+.env.local
+*.tfvars
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+.python-version
+requirements.txt
+build/
+dist/
+
+# Testing
+.pytest_cache/
+.testmondata
+.coverage
+htmlcov/
+
+# OS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+
+# Claude Code
+.claude/settings.local.json
