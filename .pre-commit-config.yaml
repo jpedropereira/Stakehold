@@ -1,0 +1,82 @@
+# Pre-commit config for this project.
+#
+# Design notes (read before editing):
+# - flake8 has no `args:` here on purpose. It auto-discovers `.flake8` at the repo
+#   root, which is the single source of truth for its rules. Duplicating
+#   ignore/max-line-length here as args creates two configs that can silently drift
+#   apart (this bit a prior project: pyproject.toml had a `[flake8]` section that
+#   flake8 never actually read, while the real behavior was defined only here).
+# - Hook order matters: autoflake/black/pycln/isort mutate files, so they run before
+#   flake8 lints the final result.
+# - detect-secrets runs against every commit, not just on push, because a leaked
+#   credential is worse the longer it's out there -- catch it at the earliest point.
+# - Tests run in two tiers: `pytest-fast` on commit (testmon-scoped: only tests
+#   touched by the change, so commits stay quick) and `pytest-all` on push (the
+#   full suite, as a slower but thorough gate before code leaves the machine).
+#   `pre-commit`/`pre-push` are the current stage names -- avoid the old
+#   `commit`/`push` aliases, which are deprecated.
+# - Test path is `services`, not a single `tests/` dir: this is a uv workspace with
+#   two services (data-store, portfolio), each with its own tests/. Pytest recurses
+#   into both from that one root.
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-yaml
+      - id: end-of-file-fixer
+      - id: pretty-format-json
+        args: ["--autofix", "--no-sort-keys"]
+      - id: trailing-whitespace
+      - id: check-added-large-files
+      - id: check-merge-conflict
+
+  - repo: https://github.com/PyCQA/autoflake
+    rev: v2.3.3
+    hooks:
+      - id: autoflake
+        args: ["--in-place", "--remove-all-unused-imports", "--remove-unused-variable"]
+
+  - repo: https://github.com/psf/black
+    rev: 26.5.1
+    hooks:
+      - id: black
+        args: ["--line-length=100"]
+
+  - repo: https://github.com/pycqa/flake8
+    rev: 7.3.0
+    hooks:
+      - id: flake8
+
+  - repo: https://github.com/hadialqattan/pycln
+    rev: v2.6.0
+    hooks:
+      - id: pycln
+
+  - repo: https://github.com/pycqa/isort
+    rev: 8.0.1
+    hooks:
+      - id: isort
+        args: ["--profile", "black", "--filter-files"]
+
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        args: ["--baseline", ".secrets.baseline"]
+        exclude: package.lock.json|uv.lock|poetry.lock
+
+  - repo: local
+    hooks:
+      - id: pytest-fast
+        name: Run tests for changed files
+        entry: bash -c 'uv run pytest services --testmon --tb=short -x'
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
+      - id: pytest-all
+        name: Run all tests on push
+        entry: bash -c 'uv run pytest services'
+        language: system
+        pass_filenames: false
+        stages: [pre-push]

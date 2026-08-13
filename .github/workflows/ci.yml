@@ -1,0 +1,35 @@
+# GitHub Actions workflow mirroring the local pre-commit hooks.
+#
+# Design note: this runs the *same* pre-commit config as local hooks (via
+# pre-commit/action), rather than re-declaring lint rules separately in CI steps.
+# One config, two enforcement points -- so there's never a case where CI and local
+# hooks disagree about what "passing" means. It exists because local hooks alone
+# only protect contributors who ran `pre-commit install` and didn't pass
+# `--no-verify`; CI is the backstop that can't be skipped.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@v3
+        with:
+          python-version: "3.14"
+
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
+
+      - name: Run pre-commit hooks
+        uses: pre-commit/action@v3.0.1
+
+      - name: Run full test suite
+        run: uv run pytest services
