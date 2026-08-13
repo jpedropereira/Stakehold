@@ -23,6 +23,7 @@ dev = [
     "black",
     "detect-secrets",
     "flake8",
+    "hatchling",
     "isort",
     "pre-commit",
     "pycln",
