@@ -35,11 +35,11 @@ uv run pytest services --testmon --tb=short -x                                # 
 ### Lint/format
 
 ```bash
+uv run autoflake --in-place --remove-all-unused-imports --remove-unused-variable -r .
 uv run black --line-length=100 .
+uv run pycln .
 uv run isort --profile black --filter-files .
 uv run flake8
-uv run autoflake --in-place --remove-all-unused-imports --remove-unused-variable -r .
-uv run pycln .
 ```
 
 ### Secret scanning
