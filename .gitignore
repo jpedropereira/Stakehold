@@ -26,5 +26,8 @@ htmlcov/
 .idea/
 .vscode/
 
+#local
+dev/
+
 # Claude Code
 .claude/settings.local.json
