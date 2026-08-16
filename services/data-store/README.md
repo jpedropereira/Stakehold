@@ -3,6 +3,23 @@
 Scrapes iShares ETF holdings, pulls daily OHLCV price history for the constituent tickers, and
 stores both in Postgres — orchestrated by Airflow, explorable via pgAdmin.
 
+## Fund configuration
+
+Which funds get scraped is driven by `config/etfs.yaml`, which is **gitignored, not committed**.
+Set yours up by copying the template:
+
+```bash
+cp services/data-store/config/etfs.yaml.example services/data-store/config/etfs.yaml
+```
+
+then edit it to list the fund(s) you want to track — see the comments in
+`etfs.yaml.example` for the shape of each entry.
+
+**Disclaimer**: data scraped from iShares product pages is subject to iShares' own terms and
+conditions. This project provides the tooling only — it is the user's responsibility to review
+and comply with those terms (including any restrictions on scraping, redistribution, or
+commercial use) for any fund URL they configure here.
+
 ## Airflow
 
 Airflow orchestrates ingestion. Bring it up with Docker Compose:

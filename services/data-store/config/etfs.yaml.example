@@ -1,0 +1,13 @@
+# Copy to etfs.yaml (in this same directory) and edit for your own funds.
+# etfs.yaml is gitignored — see services/data-store/README.md for why, and for the disclaimer
+# about iShares' own terms of use that applies to any fund you point this at.
+
+funds:
+  - key: my_fund                         # stable id: used as fund_key in the DB, and as the
+                                          # --fund CLI flag once ingestion commands exist
+    display_name: "My Fund Display Name"
+    provider: ishares                    # which scraper implementation handles this entry
+    url: "https://www.ishares.com/<...>" # the fund's iShares product page
+    isin: null                           # optional
+    price_source: yfinance               # which PriceSource implementation prices its constituents
+    enabled: true
