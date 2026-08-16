@@ -21,7 +21,7 @@ from its provider (iShares, currently) on a given date.
 | `market_value`   | `NUMERIC(20,2)` |                                                                 |
 | `weight_percent` | `NUMERIC(6,4)`  |                                                                 |
 | `notional_value` | `NUMERIC(20,2)` |                                                                 |
-| `shares`         | `NUMERIC(20,4)` | CSV "Quantity".                                                |
+| `shares`         | `NUMERIC(20,4)` | CSV "Shares".                                                  |
 | `price`          | `NUMERIC(18,6)` |                                                                 |
 | `location`       | `VARCHAR(100)`  |                                                                 |
 | `exchange`       | `VARCHAR(100)`  |                                                                 |
