@@ -11,15 +11,6 @@ def _connect():
     return psycopg.connect(os.environ["DATABASE_URL"])
 
 
-@pytest.fixture(autouse=True)
-def clean_tables():
-    yield
-    with _connect() as conn:
-        with conn.cursor() as cur:
-            cur.execute("DROP TABLE IF EXISTS etf_holdings, daily_ohlcv")
-        conn.commit()
-
-
 def test_db_init_creates_expected_tables():
     exit_code = cli.main(["db", "init"])
 

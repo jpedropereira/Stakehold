@@ -22,11 +22,26 @@ commercial use) for any fund URL they configure here.
 
 ## Airflow
 
-Airflow orchestrates ingestion. Bring it up with Docker Compose:
+Airflow orchestrates ingestion via two DAGs (`ingest_holdings`, `@weekly`; `ingest_daily_ohlcv`,
+`@daily`), each a thin wrapper shelling out to the same `data-store` CLI already covered above —
+see `Dockerfile.airflow` for why (keeps Airflow's own Python environment free of this project's
+heavy deps, and means what runs in the DAG is byte-for-byte what you can run and test locally).
+
+Airflow runs on a **custom image** (`Dockerfile.airflow`: the official `apache/airflow` image +
+`uv` + this workspace, baked in at build time, browser included). Bring it up with Docker
+Compose — the image builds automatically on first run:
 
 ```bash
 cd services/data-store
 docker compose up -d
+```
+
+**After changing `data_store` code**, rebuild explicitly — unlike `dags/` (bind-mounted, picked
+up live), the application code baked into the image is a build-time snapshot:
+
+```bash
+docker compose build
+docker compose up -d --force-recreate airflow-apiserver airflow-scheduler airflow-dag-processor airflow-triggerer
 ```
 
 Once the stack is healthy, the UI is at [http://localhost:8081](http://localhost:8081) (port
@@ -35,6 +50,14 @@ configurable via `AIRFLOW_PORT` in `.env`).
 Log in with the admin credentials set in `services/data-store/.env`
 (`AIRFLOW_ADMIN_USERNAME` / `AIRFLOW_ADMIN_PASSWORD`, copied from `.env.example` — see that file
 for how to generate them). No credentials are stored in this README; check your local `.env`.
+
+`airflow-init` chowns the bind-mounted `dags/`/`logs/` dirs to `AIRFLOW_UID` on every start. Set
+`AIRFLOW_UID` in `.env` to your host UID (`id -u`) so those directories stay writable by you — if
+you forget and they end up owned by the container's default uid, reclaim them with:
+
+```bash
+sudo chown -R $(id -u):$(id -g) services/data-store/dags services/data-store/logs
+```
 
 ## Database + pgAdmin
 
@@ -97,3 +120,17 @@ Non-equity holdings (futures, cash, FX lines) are excluded automatically. Non-US
 that need an exchange-suffix ticker mapping for yfinance (e.g. Tokyo, Stockholm) aren't resolved
 yet — `ingest-ohlcv` will skip them and log a "possibly delisted" warning from yfinance rather
 than failing the whole run.
+
+## Running ingestion via Airflow
+
+With the full stack up (`docker compose up -d`) and `config/etfs.yaml` set up, the two DAGs run
+on their own schedule once unpaused in the UI. To trigger either one manually — from the UI's
+"Trigger DAG" button, or from a shell:
+
+```bash
+docker exec <airflow-scheduler-container> airflow dags trigger ingest_holdings
+docker exec <airflow-scheduler-container> airflow dags trigger ingest_daily_ohlcv
+```
+
+Task logs land under `services/data-store/logs/dag_id=.../run_id=.../task_id=.../attempt=N.log`
+(bind-mounted, so readable from the host — no need to shell into the container).
