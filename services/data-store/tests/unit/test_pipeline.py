@@ -3,7 +3,7 @@ from datetime import date
 import pandas as pd
 import pytest
 from data_store import pipeline
-from data_store.config_loader import FundConfig
+from data_store.config_loader import FundConfig, TickerConfig
 
 
 def make_fund(*, provider="ishares", price_source="yfinance", key="test_fund"):
@@ -18,14 +18,24 @@ def make_fund(*, provider="ishares", price_source="yfinance", key="test_fund"):
     )
 
 
+def make_tracked_ticker(*, ticker, asset_type, price_source="yfinance"):
+    return TickerConfig(
+        ticker=ticker,
+        display_name=ticker,
+        asset_type=asset_type,
+        price_source=price_source,
+        enabled=True,
+    )
+
+
 class FakePriceSource:
-    name = "fake_source"
+    name = "yfinance"
 
     def __init__(self):
         self.fetch_calls = []
 
     def fetch(self, tickers, start_date, end_date):
-        self.fetch_calls.append((tickers, start_date, end_date))
+        self.fetch_calls.append((sorted(tickers), start_date, end_date))
         return pd.DataFrame({"ticker": tickers, "price_date": [start_date] * len(tickers)})
 
 
@@ -76,68 +86,154 @@ def test_ingest_holdings_raises_on_unknown_provider():
         pipeline.ingest_holdings(object(), fund, date(2026, 1, 1))
 
 
-def test_ingest_daily_ohlcv_reads_tickers_from_repository_not_scrape_result(monkeypatch):
+def _patch_price_source(monkeypatch, fake_source, save_calls):
+    monkeypatch.setitem(pipeline.PRICE_SOURCES, "yfinance", lambda: fake_source)
+    monkeypatch.setattr(
+        pipeline,
+        "save_prices",
+        lambda conn_arg, source, asset_type, df: save_calls.append(
+            (source, asset_type, sorted(df["ticker"]))
+        )
+        or len(df),
+    )
+
+
+def test_ingest_daily_ohlcv_prices_holdings_derived_tickers_as_equity(monkeypatch):
     fund = make_fund()
     conn = object()
-    get_tickers_calls = []
     fake_source = FakePriceSource()
     save_calls = []
+    get_tickers_calls = []
 
     def fake_get_latest_tickers(conn_arg, fund_key):
         get_tickers_calls.append((conn_arg, fund_key))
         return ["AAPL", "MSFT"]
 
-    def fake_save_prices(conn_arg, source_name, asset_type, df):
-        save_calls.append((conn_arg, source_name, asset_type, df))
-        return len(df)
-
     monkeypatch.setattr(pipeline, "get_latest_tickers", fake_get_latest_tickers)
-    monkeypatch.setitem(pipeline.PRICE_SOURCES, "yfinance", lambda: fake_source)
-    monkeypatch.setattr(pipeline, "save_prices", fake_save_prices)
+    _patch_price_source(monkeypatch, fake_source, save_calls)
 
-    count = pipeline.ingest_daily_ohlcv(conn, fund, date(2026, 1, 1), date(2026, 1, 10))
+    count = pipeline.ingest_daily_ohlcv(conn, [fund], [], date(2026, 1, 1), date(2026, 1, 10))
 
     assert count == 2
     assert get_tickers_calls == [(conn, fund.key)]
-    assert fake_source.fetch_calls == [(["AAPL", "MSFT"], date(2026, 1, 1), date(2026, 1, 10))]
-    assert save_calls[0][1] == "fake_source"
-    assert save_calls[0][2] == "equity"
+    assert save_calls == [("yfinance", "equity", ["AAPL", "MSFT"])]
 
 
-def test_ingest_daily_ohlcv_dedupes_and_strips_tickers(monkeypatch):
+def test_ingest_daily_ohlcv_prices_tracked_tickers_with_their_own_asset_type(monkeypatch):
+    conn = object()
+    fake_source = FakePriceSource()
+    save_calls = []
+    tracked = [make_tracked_ticker(ticker="IWDA.AS", asset_type="etf")]
+
+    _patch_price_source(monkeypatch, fake_source, save_calls)
+
+    count = pipeline.ingest_daily_ohlcv(conn, [], tracked, date(2026, 1, 1), date(2026, 1, 10))
+
+    assert count == 1
+    assert save_calls == [("yfinance", "etf", ["IWDA.AS"])]
+
+
+def test_ingest_daily_ohlcv_dedupes_ticker_in_both_holdings_and_tracked(monkeypatch):
     fund = make_fund()
     conn = object()
     fake_source = FakePriceSource()
+    save_calls = []
+
+    # BABA is both a fund holding and an explicitly tracked ticker (both asset_type=equity
+    # here, so they land in the same group) -- must be fetched once, not twice.
+    monkeypatch.setattr(pipeline, "get_latest_tickers", lambda c, k: ["BABA", "AAPL"])
+    tracked = [make_tracked_ticker(ticker="BABA", asset_type="equity")]
+    _patch_price_source(monkeypatch, fake_source, save_calls)
+
+    count = pipeline.ingest_daily_ohlcv(conn, [fund], tracked, date(2026, 1, 1), date(2026, 1, 10))
+
+    assert count == 2
+    assert len(fake_source.fetch_calls) == 1
+    assert fake_source.fetch_calls[0][0] == ["AAPL", "BABA"]
+
+
+def test_ingest_daily_ohlcv_tracked_ticker_asset_type_wins_over_holdings_default(monkeypatch):
+    fund = make_fund()
+    conn = object()
+    fake_source = FakePriceSource()
+    save_calls = []
+
+    # A ticker that appears in fund holdings (which would default it to equity) but is
+    # explicitly configured with a different asset_type in tracked_tickers -- the explicit
+    # config wins.
+    monkeypatch.setattr(pipeline, "get_latest_tickers", lambda c, k: ["WEIRD"])
+    tracked = [make_tracked_ticker(ticker="WEIRD", asset_type="etf")]
+    _patch_price_source(monkeypatch, fake_source, save_calls)
+
+    pipeline.ingest_daily_ohlcv(conn, [fund], tracked, date(2026, 1, 1), date(2026, 1, 10))
+
+    assert save_calls == [("yfinance", "etf", ["WEIRD"])]
+
+
+def test_ingest_daily_ohlcv_groups_by_asset_type_for_separate_save_calls(monkeypatch):
+    conn = object()
+    fake_source = FakePriceSource()
+    save_calls = []
+    tracked = [
+        make_tracked_ticker(ticker="IWDA.AS", asset_type="etf"),
+        make_tracked_ticker(ticker="BTC-USD", asset_type="crypto"),
+    ]
+
+    _patch_price_source(monkeypatch, fake_source, save_calls)
+
+    count = pipeline.ingest_daily_ohlcv(conn, [], tracked, date(2026, 1, 1), date(2026, 1, 10))
+
+    assert count == 2
+    assert sorted(save_calls) == sorted(
+        [("yfinance", "etf", ["IWDA.AS"]), ("yfinance", "crypto", ["BTC-USD"])]
+    )
+    assert len(fake_source.fetch_calls) == 2
+
+
+def test_ingest_daily_ohlcv_dedupes_across_multiple_funds(monkeypatch):
+    fund_a = make_fund(key="fund_a")
+    fund_b = make_fund(key="fund_b")
+    conn = object()
+    fake_source = FakePriceSource()
+    save_calls = []
+
+    def fake_get_latest_tickers(conn_arg, fund_key):
+        return {"fund_a": ["AAPL", "MSFT"], "fund_b": ["AAPL", "NVDA"]}[fund_key]
+
+    monkeypatch.setattr(pipeline, "get_latest_tickers", fake_get_latest_tickers)
+    _patch_price_source(monkeypatch, fake_source, save_calls)
+
+    pipeline.ingest_daily_ohlcv(conn, [fund_a, fund_b], [], date(2026, 1, 1), date(2026, 1, 10))
+
+    assert len(fake_source.fetch_calls) == 1
+    assert fake_source.fetch_calls[0][0] == ["AAPL", "MSFT", "NVDA"]
+
+
+def test_ingest_daily_ohlcv_strips_and_dedupes_raw_holdings_tickers(monkeypatch):
+    fund = make_fund()
+    conn = object()
+    fake_source = FakePriceSource()
+    save_calls = []
 
     monkeypatch.setattr(
         pipeline,
         "get_latest_tickers",
-        lambda conn_arg, fund_key: [" AAPL", "AAPL", "MSFT ", "", None],
+        lambda c, k: [" AAPL", "AAPL", "MSFT ", "", None],
     )
-    monkeypatch.setitem(pipeline.PRICE_SOURCES, "yfinance", lambda: fake_source)
-    monkeypatch.setattr(
-        pipeline, "save_prices", lambda conn_arg, source_name, asset_type, df: len(df)
-    )
+    _patch_price_source(monkeypatch, fake_source, save_calls)
 
-    pipeline.ingest_daily_ohlcv(conn, fund, date(2026, 1, 1), date(2026, 1, 10))
+    pipeline.ingest_daily_ohlcv(conn, [fund], [], date(2026, 1, 1), date(2026, 1, 10))
 
-    fetched_tickers = fake_source.fetch_calls[0][0]
-    assert fetched_tickers == ["AAPL", "MSFT"]
+    assert fake_source.fetch_calls[0][0] == ["AAPL", "MSFT"]
 
 
-def test_ingest_daily_ohlcv_returns_zero_when_no_tickers(monkeypatch):
-    fund = make_fund()
-    conn = object()
-
-    monkeypatch.setattr(pipeline, "get_latest_tickers", lambda conn_arg, fund_key: [])
-
-    count = pipeline.ingest_daily_ohlcv(conn, fund, date(2026, 1, 1), date(2026, 1, 10))
+def test_ingest_daily_ohlcv_returns_zero_when_no_tickers():
+    count = pipeline.ingest_daily_ohlcv(object(), [], [], date(2026, 1, 1), date(2026, 1, 10))
 
     assert count == 0
 
 
 def test_ingest_daily_ohlcv_returns_zero_when_price_source_has_no_data(monkeypatch):
-    fund = make_fund()
     conn = object()
 
     class EmptyPriceSource:
@@ -146,22 +242,21 @@ def test_ingest_daily_ohlcv_returns_zero_when_price_source_has_no_data(monkeypat
         def fetch(self, tickers, start_date, end_date):
             return pd.DataFrame()
 
-    monkeypatch.setattr(pipeline, "get_latest_tickers", lambda conn_arg, fund_key: ["AAPL"])
+    tracked = [make_tracked_ticker(ticker="AAPL", asset_type="equity")]
     monkeypatch.setitem(pipeline.PRICE_SOURCES, "yfinance", lambda: EmptyPriceSource())
     save_calls = []
     monkeypatch.setattr(pipeline, "save_prices", lambda *a: save_calls.append(a) or len(a[-1]))
 
-    count = pipeline.ingest_daily_ohlcv(conn, fund, date(2026, 1, 1), date(2026, 1, 10))
+    count = pipeline.ingest_daily_ohlcv(conn, [], tracked, date(2026, 1, 1), date(2026, 1, 10))
 
     assert count == 0
     assert save_calls == []
 
 
-def test_ingest_daily_ohlcv_raises_on_unknown_price_source(monkeypatch):
-    fund = make_fund(price_source="unknown_source")
-    conn = object()
-
-    monkeypatch.setattr(pipeline, "get_latest_tickers", lambda conn_arg, fund_key: ["AAPL"])
+def test_ingest_daily_ohlcv_raises_on_unknown_price_source():
+    tracked = [
+        make_tracked_ticker(ticker="AAPL", asset_type="equity", price_source="unknown_source")
+    ]
 
     with pytest.raises(ValueError, match="unknown_source"):
-        pipeline.ingest_daily_ohlcv(conn, fund, date(2026, 1, 1), date(2026, 1, 10))
+        pipeline.ingest_daily_ohlcv(object(), [], tracked, date(2026, 1, 1), date(2026, 1, 10))

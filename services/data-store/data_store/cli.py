@@ -3,7 +3,12 @@ import sys
 from datetime import date, timedelta
 from pathlib import Path
 
-from data_store.config_loader import FundConfig, load_funds
+from data_store.config_loader import (
+    FundConfig,
+    TickerConfig,
+    load_funds,
+    load_tracked_tickers,
+)
 from data_store.db.connection import apply_schema, get_connection
 from data_store.pipeline import ingest_daily_ohlcv, ingest_holdings
 from data_store.settings import load_settings
@@ -30,6 +35,14 @@ def _select_funds(funds: list[FundConfig], fund_key: str | None) -> list[FundCon
     return [fund for fund in funds if fund.enabled]
 
 
+def _load_enabled_tracked_tickers(path: Path) -> list[TickerConfig]:
+    # tracked_tickers.yaml is optional — a setup with only fund-holdings-based pricing
+    # shouldn't need to create it just to run ingest-ohlcv.
+    if not path.is_file():
+        return []
+    return [tt for tt in load_tracked_tickers(path) if tt.enabled]
+
+
 def _ingest_holdings(args: argparse.Namespace) -> int:
     settings = load_settings()
     funds = _select_funds(load_funds(settings.config_path), args.fund)
@@ -46,13 +59,13 @@ def _ingest_holdings(args: argparse.Namespace) -> int:
 def _ingest_ohlcv(args: argparse.Namespace) -> int:
     settings = load_settings()
     funds = _select_funds(load_funds(settings.config_path), args.fund)
+    tracked_tickers = _load_enabled_tracked_tickers(settings.tracked_tickers_path)
     end_date = date.today()
     start_date = end_date - timedelta(days=args.days)
     conn = get_connection(settings.database_url)
     try:
-        for fund in funds:
-            count = ingest_daily_ohlcv(conn, fund, start_date, end_date)
-            print(f"{fund.key}: {count} price rows")
+        count = ingest_daily_ohlcv(conn, funds, tracked_tickers, start_date, end_date)
+        print(f"{count} price rows")
     finally:
         conn.close()
     return 0
@@ -79,7 +92,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "ingest-ohlcv", help="Fetch and load daily OHLCV prices"
     )
     ingest_ohlcv_parser.add_argument(
-        "--fund", help="Fund key to ingest (default: all enabled funds)"
+        "--fund",
+        help=(
+            "Only price this fund's holdings (default: all enabled funds). "
+            "Tracked tickers from tracked_tickers.yaml are always included."
+        ),
     )
     ingest_ohlcv_parser.add_argument(
         "--days", type=int, default=7, help="Lookback window in days (default: 7)"

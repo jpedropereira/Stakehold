@@ -13,6 +13,7 @@ class SettingsError(Exception):
 class Settings:
     database_url: str
     config_path: Path
+    tracked_tickers_path: Path
 
 
 def load_settings() -> Settings:
@@ -23,5 +24,12 @@ def load_settings() -> Settings:
         raise SettingsError("DATABASE_URL is not set")
 
     config_path = Path(os.environ.get("DATA_STORE_CONFIG_PATH", "config/etfs.yaml"))
+    tracked_tickers_path = Path(
+        os.environ.get("DATA_STORE_TRACKED_TICKERS_PATH", "config/tracked_tickers.yaml")
+    )
 
-    return Settings(database_url=database_url, config_path=config_path)
+    return Settings(
+        database_url=database_url,
+        config_path=config_path,
+        tracked_tickers_path=tracked_tickers_path,
+    )

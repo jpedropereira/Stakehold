@@ -37,6 +37,7 @@ services/data-store/.data/
 
 # Fund config (services/data-store) — see README.md for why and the etfs.yaml.example template
 services/data-store/config/etfs.yaml
+services/data-store/config/tracked_tickers.yaml
 
 # Claude Code
 .claude/settings.local.json

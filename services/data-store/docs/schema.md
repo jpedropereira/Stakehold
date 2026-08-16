@@ -42,15 +42,15 @@ snapshot. This is idempotent on rerun and needs no dedup-view machinery: "latest
 ## `daily_ohlcv`
 
 One row per `(ticker, price_date, source)` — daily OHLCV price history for tickers found in the
-most recent `etf_holdings` snapshot, and (from `asset_type`) also intended to cover ETFs,
-commodities, and crypto tracked directly (not only equities discovered via holdings).
+most recent `etf_holdings` snapshot, plus ETFs, ETCs, commodities, and crypto tracked directly
+via `config/tracked_tickers.yaml` (not derived from any fund's holdings).
 
 | Column        | Type            | Notes                                             |
 |---------------|-----------------|----------------------------------------------------|
 | `ticker`      | `VARCHAR(20)`   | Part of PK.                                         |
 | `price_date`  | `DATE`          | Part of PK.                                         |
 | `source`      | `VARCHAR(20)`   | Part of PK, e.g. `'yfinance'`.                      |
-| `asset_type`  | `VARCHAR(20)`   | `equity` / `etf` / `commodity` / `crypto`. Not part of the PK — a descriptive attribute of the ticker, not part of its identity. Validated at the app layer (a registry, like `PRICE_SOURCES`), not a DB `CHECK` constraint. |
+| `asset_type`  | `VARCHAR(20)`   | `equity` / `etf` / `commodity` / `crypto` / `etc`. `etc` (Exchange Traded Commodity, e.g. a gold-backed ETC) is kept distinct from `commodity` (raw futures contracts, not tracked yet) since they're different instrument wrappers. Not part of the PK — a descriptive attribute of the ticker, not part of its identity. Validated at the app layer (`config_loader.VALID_ASSET_TYPES`), not a DB `CHECK` constraint. |
 | `open`        | `NUMERIC(18,4)` |                                                      |
 | `high`        | `NUMERIC(18,4)` |                                                      |
 | `low`         | `NUMERIC(18,4)` |                                                      |

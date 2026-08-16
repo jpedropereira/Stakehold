@@ -2,13 +2,19 @@ from datetime import date
 
 import pytest
 from data_store import cli
-from data_store.config_loader import FundConfig
+from data_store.config_loader import FundConfig, TickerConfig
 from data_store.settings import Settings
 
 
 @pytest.fixture
 def fake_settings(tmp_path):
-    return Settings(database_url="postgresql://user:pass@localhost/db", config_path=tmp_path)
+    return Settings(
+        database_url="postgresql://user:pass@localhost/db",
+        config_path=tmp_path,
+        # Deliberately a nonexistent path by default: tracked_tickers.yaml is optional, and
+        # most cli.py tests shouldn't need to care about it.
+        tracked_tickers_path=tmp_path / "does-not-exist.yaml",
+    )
 
 
 def make_fund(key, enabled=True):
@@ -18,6 +24,16 @@ def make_fund(key, enabled=True):
         provider="ishares",
         url=f"https://example.com/{key}",
         isin=None,
+        price_source="yfinance",
+        enabled=enabled,
+    )
+
+
+def make_tracked_ticker(ticker, asset_type="etf", enabled=True):
+    return TickerConfig(
+        ticker=ticker,
+        display_name=ticker,
+        asset_type=asset_type,
         price_source="yfinance",
         enabled=enabled,
     )
@@ -126,8 +142,8 @@ def test_ingest_ohlcv_runs_for_all_enabled_funds_with_default_lookback(monkeypat
     monkeypatch.setattr(cli, "load_funds", lambda path: funds)
     monkeypatch.setattr(cli, "get_connection", lambda url: FakeConn([]))
 
-    def fake_ingest(conn, fund, start_date, end_date):
-        calls.append((fund.key, start_date, end_date))
+    def fake_ingest(conn, passed_funds, tracked_tickers, start_date, end_date):
+        calls.append((passed_funds, tracked_tickers, start_date, end_date))
         return 3
 
     monkeypatch.setattr(cli, "ingest_daily_ohlcv", fake_ingest)
@@ -136,8 +152,9 @@ def test_ingest_ohlcv_runs_for_all_enabled_funds_with_default_lookback(monkeypat
 
     assert exit_code == 0
     assert len(calls) == 1
-    fund_key, start_date, end_date = calls[0]
-    assert fund_key == "a"
+    passed_funds, tracked_tickers, start_date, end_date = calls[0]
+    assert [f.key for f in passed_funds] == ["a"]
+    assert tracked_tickers == []  # tracked_tickers.yaml doesn't exist in fake_settings
     assert end_date == date.today()
     assert (end_date - start_date).days == 7
 
@@ -150,10 +167,54 @@ def test_ingest_ohlcv_respects_days_flag(monkeypatch, fake_settings):
     monkeypatch.setattr(cli, "load_funds", lambda path: funds)
     monkeypatch.setattr(cli, "get_connection", lambda url: FakeConn([]))
     monkeypatch.setattr(
-        cli, "ingest_daily_ohlcv", lambda conn, fund, s, e: calls.append((s, e)) or 1
+        cli,
+        "ingest_daily_ohlcv",
+        lambda conn, funds, tt, s, e: calls.append((s, e)) or 1,
     )
 
     cli.main(["ingest-ohlcv", "--days", "30"])
 
     start_date, end_date = calls[0]
     assert (end_date - start_date).days == 30
+
+
+def test_ingest_ohlcv_includes_enabled_tracked_tickers(monkeypatch, fake_settings, tmp_path):
+    settings = Settings(
+        database_url=fake_settings.database_url,
+        config_path=fake_settings.config_path,
+        tracked_tickers_path=tmp_path / "tracked_tickers.yaml",
+    )
+    (tmp_path / "tracked_tickers.yaml").write_text("tickers: []\n")  # just needs to exist
+    tracked = [make_tracked_ticker("IWDA.AS"), make_tracked_ticker("BTC-USD", enabled=False)]
+    calls = []
+
+    monkeypatch.setattr(cli, "load_settings", lambda: settings)
+    monkeypatch.setattr(cli, "load_funds", lambda path: [])
+    monkeypatch.setattr(cli, "load_tracked_tickers", lambda path: tracked)
+    monkeypatch.setattr(cli, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(
+        cli,
+        "ingest_daily_ohlcv",
+        lambda conn, funds, tt, s, e: calls.append(tt) or 1,
+    )
+
+    cli.main(["ingest-ohlcv"])
+
+    assert [t.ticker for t in calls[0]] == ["IWDA.AS"]  # disabled BTC-USD excluded
+
+
+def test_ingest_ohlcv_treats_missing_tracked_tickers_file_as_empty(monkeypatch, fake_settings):
+    calls = []
+
+    monkeypatch.setattr(cli, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(cli, "load_funds", lambda path: [])
+    monkeypatch.setattr(cli, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(
+        cli,
+        "ingest_daily_ohlcv",
+        lambda conn, funds, tt, s, e: calls.append(tt) or 0,
+    )
+
+    cli.main(["ingest-ohlcv"])
+
+    assert calls[0] == []
