@@ -87,8 +87,8 @@ def test_ingest_daily_ohlcv_reads_tickers_from_repository_not_scrape_result(monk
         get_tickers_calls.append((conn_arg, fund_key))
         return ["AAPL", "MSFT"]
 
-    def fake_save_prices(conn_arg, source_name, df):
-        save_calls.append((conn_arg, source_name, df))
+    def fake_save_prices(conn_arg, source_name, asset_type, df):
+        save_calls.append((conn_arg, source_name, asset_type, df))
         return len(df)
 
     monkeypatch.setattr(pipeline, "get_latest_tickers", fake_get_latest_tickers)
@@ -101,6 +101,7 @@ def test_ingest_daily_ohlcv_reads_tickers_from_repository_not_scrape_result(monk
     assert get_tickers_calls == [(conn, fund.key)]
     assert fake_source.fetch_calls == [(["AAPL", "MSFT"], date(2026, 1, 1), date(2026, 1, 10))]
     assert save_calls[0][1] == "fake_source"
+    assert save_calls[0][2] == "equity"
 
 
 def test_ingest_daily_ohlcv_dedupes_and_strips_tickers(monkeypatch):
@@ -114,7 +115,9 @@ def test_ingest_daily_ohlcv_dedupes_and_strips_tickers(monkeypatch):
         lambda conn_arg, fund_key: [" AAPL", "AAPL", "MSFT ", "", None],
     )
     monkeypatch.setitem(pipeline.PRICE_SOURCES, "yfinance", lambda: fake_source)
-    monkeypatch.setattr(pipeline, "save_prices", lambda conn_arg, source_name, df: len(df))
+    monkeypatch.setattr(
+        pipeline, "save_prices", lambda conn_arg, source_name, asset_type, df: len(df)
+    )
 
     pipeline.ingest_daily_ohlcv(conn, fund, date(2026, 1, 1), date(2026, 1, 10))
 

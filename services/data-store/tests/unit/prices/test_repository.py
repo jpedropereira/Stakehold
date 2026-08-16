@@ -62,20 +62,22 @@ def test_save_prices_creates_temp_table_copies_and_upserts():
     conn = FakeConnection()
     df = make_df([["AAPL", date(2026, 1, 1), 100.0, 101.0, 99.0, 100.5, 100.5, 1000]])
 
-    count = save_prices(conn, "yfinance", df)
+    count = save_prices(conn, "yfinance", "equity", df)
 
     assert count == 1
     create_sql = conn._cursor.executed[0][0]
     assert "CREATE TEMP TABLE" in create_sql
+    assert "asset_type" in create_sql
     assert "COPY" in conn._cursor.copy_calls[0]
     upsert_sql = conn._cursor.executed[1][0]
     assert "INSERT INTO daily_ohlcv" in upsert_sql
+    assert "asset_type" in upsert_sql
     assert "ON CONFLICT" in upsert_sql
     assert "DO UPDATE" in upsert_sql
     assert conn.committed is True
 
 
-def test_save_prices_stamps_source_on_each_row():
+def test_save_prices_stamps_source_and_asset_type_on_each_row():
     conn = FakeConnection()
     df = make_df(
         [
@@ -84,21 +86,23 @@ def test_save_prices_stamps_source_on_each_row():
         ]
     )
 
-    save_prices(conn, "yfinance", df)
+    save_prices(conn, "yfinance", "equity", df)
 
     sources = [row[2] for row in conn._cursor.copy_rows]
+    asset_types = [row[3] for row in conn._cursor.copy_rows]
     assert sources == ["yfinance", "yfinance"]
+    assert asset_types == ["equity", "equity"]
 
 
 def test_save_prices_writes_none_for_missing_values():
     conn = FakeConnection()
     df = make_df([["AAPL", date(2026, 1, 1), np.nan, 101.0, 99.0, 100.5, np.nan, 1000]])
 
-    save_prices(conn, "yfinance", df)
+    save_prices(conn, "yfinance", "equity", df)
 
     written_row = conn._cursor.copy_rows[0]
-    assert written_row[3] is None  # open
-    assert written_row[7] is None  # adj_close
+    assert written_row[4] is None  # open
+    assert written_row[8] is None  # adj_close
 
 
 def test_save_prices_casts_volume_to_int_for_bigint_column():
@@ -107,9 +111,9 @@ def test_save_prices_casts_volume_to_int_for_bigint_column():
     # rejects that literal text representation, so it must be cast to a real int.
     df = make_df([["AAPL", date(2026, 1, 1), 100.0, 101.0, 99.0, 100.5, 100.5, 37476700.0]])
 
-    save_prices(conn, "yfinance", df)
+    save_prices(conn, "yfinance", "equity", df)
 
-    volume = conn._cursor.copy_rows[0][8]
+    volume = conn._cursor.copy_rows[0][9]
     assert volume == 37476700
     assert isinstance(volume, int)
 
@@ -118,6 +122,15 @@ def test_save_prices_writes_none_for_missing_volume():
     conn = FakeConnection()
     df = make_df([["AAPL", date(2026, 1, 1), 100.0, 101.0, 99.0, 100.5, 100.5, np.nan]])
 
-    save_prices(conn, "yfinance", df)
+    save_prices(conn, "yfinance", "equity", df)
 
-    assert conn._cursor.copy_rows[0][8] is None
+    assert conn._cursor.copy_rows[0][9] is None
+
+
+def test_save_prices_supports_other_asset_types():
+    conn = FakeConnection()
+    df = make_df([["BTC-USD", date(2026, 1, 1), 50000.0, 51000.0, 49000.0, 50500.0, 50500.0, 1000]])
+
+    save_prices(conn, "yfinance", "crypto", df)
+
+    assert conn._cursor.copy_rows[0][3] == "crypto"

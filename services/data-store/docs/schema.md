@@ -42,13 +42,15 @@ snapshot. This is idempotent on rerun and needs no dedup-view machinery: "latest
 ## `daily_ohlcv`
 
 One row per `(ticker, price_date, source)` — daily OHLCV price history for tickers found in the
-most recent `etf_holdings` snapshot.
+most recent `etf_holdings` snapshot, and (from `asset_type`) also intended to cover ETFs,
+commodities, and crypto tracked directly (not only equities discovered via holdings).
 
 | Column        | Type            | Notes                                             |
 |---------------|-----------------|----------------------------------------------------|
 | `ticker`      | `VARCHAR(20)`   | Part of PK.                                         |
 | `price_date`  | `DATE`          | Part of PK.                                         |
 | `source`      | `VARCHAR(20)`   | Part of PK, e.g. `'yfinance'`.                      |
+| `asset_type`  | `VARCHAR(20)`   | `equity` / `etf` / `commodity` / `crypto`. Not part of the PK — a descriptive attribute of the ticker, not part of its identity. Validated at the app layer (a registry, like `PRICE_SOURCES`), not a DB `CHECK` constraint. |
 | `open`        | `NUMERIC(18,4)` |                                                      |
 | `high`        | `NUMERIC(18,4)` |                                                      |
 | `low`         | `NUMERIC(18,4)` |                                                      |
@@ -57,7 +59,9 @@ most recent `etf_holdings` snapshot.
 | `volume`      | `BIGINT`        |                                                      |
 | `ingested_at` | `TIMESTAMPTZ`   | Defaults to `now()`.                                |
 
-Index: `(ticker, price_date)` for time-series lookups.
+Index: `(ticker, price_date)` for time-series lookups. No dedicated index on `asset_type` —
+low-cardinality, and the existing index already covers the primary lookup pattern; add one later
+if a specific "all rows of type X" query pattern needs it.
 
 **Loading strategy: true upsert** (`INSERT ... ON CONFLICT (ticker, price_date, source) DO UPDATE`).
 Successive ingestion runs fetch overlapping date windows, and providers sometimes restate recent
