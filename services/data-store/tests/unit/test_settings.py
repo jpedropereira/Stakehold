@@ -43,3 +43,21 @@ def test_missing_database_url_raises(monkeypatch):
 
     with pytest.raises(SettingsError, match="DATABASE_URL"):
         load_settings()
+
+
+def test_tracked_tickers_path_defaults_to_config_tracked_tickers_yaml(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost/db")
+    monkeypatch.delenv("DATA_STORE_TRACKED_TICKERS_PATH", raising=False)
+
+    result = load_settings()
+
+    assert result.tracked_tickers_path == Path("config/tracked_tickers.yaml")
+
+
+def test_tracked_tickers_path_overridable_via_env(monkeypatch, tmp_path):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost/db")
+    monkeypatch.setenv("DATA_STORE_TRACKED_TICKERS_PATH", str(tmp_path / "custom.yaml"))
+
+    result = load_settings()
+
+    assert result.tracked_tickers_path == tmp_path / "custom.yaml"

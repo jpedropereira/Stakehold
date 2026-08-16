@@ -20,6 +20,27 @@ conditions. This project provides the tooling only — it is the user's responsi
 and comply with those terms (including any restrictions on scraping, redistribution, or
 commercial use) for any fund URL they configure here.
 
+## Tracked tickers (ETFs, ETCs, commodities, crypto, standalone stocks)
+
+`config/tracked_tickers.yaml` — also gitignored, also optional — lists tickers to price
+*directly*, not derived from any fund's holdings: the ETF itself (not its constituents), an
+ETC, crypto, or a standalone stock. Set yours up the same way:
+
+```bash
+cp services/data-store/config/tracked_tickers.yaml.example services/data-store/config/tracked_tickers.yaml
+```
+
+Each entry needs `ticker` (the yfinance symbol, e.g. `IWDA.AS`, `BTC-USD`), `asset_type` (one
+of `equity` / `etf` / `commodity` / `crypto` / `etc`), `display_name`, `price_source`, and
+`enabled`. If the file doesn't exist, `ingest-ohlcv` just treats it as "no tracked tickers" —
+you don't need to create it if you only care about fund-holdings-based pricing.
+
+A ticker that appears both here and in a fund's holdings (e.g. a stock you track directly that
+also happens to be a holding) is only fetched once per run, not once per source — `ingest-ohlcv`
+resolves the full ticker list across every fund's holdings and this file before fetching
+anything, deduping by ticker. If the same ticker appears in both, the `tracked_tickers.yaml`
+entry's `asset_type` wins.
+
 ## Airflow
 
 Airflow orchestrates ingestion via two DAGs (`ingest_holdings`, `@weekly`; `ingest_daily_ohlcv`,
@@ -108,9 +129,9 @@ uv run data-store ingest-holdings          # scrapes iShares, loads etf_holdings
 uv run data-store ingest-ohlcv --days 7    # reads tickers from etf_holdings, loads daily_ohlcv
 ```
 
-Both subcommands accept `--fund KEY` to target a single fund (default: all funds with
-`enabled: true` in `etfs.yaml`). `ingest-ohlcv` also accepts `--days N` (default 7) for the
-lookback window.
+Both subcommands accept `--fund KEY` (`ingest-ohlcv`: only that fund's holdings — tracked
+tickers from `tracked_tickers.yaml` are always included regardless). `ingest-ohlcv` also
+accepts `--days N` (default 7) for the lookback window.
 
 The two flows are independent — `ingest-ohlcv` always reads the *current* ticker list from
 `etf_holdings` (whatever `ingest-holdings` most recently loaded), not a fresh scrape, so it can
