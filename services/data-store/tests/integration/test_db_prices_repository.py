@@ -45,17 +45,19 @@ def test_save_prices_inserts_new_rows():
     conn = _connect()
     df = make_df([["TEST", date(2026, 1, 1), 10.0, 11.0, 9.0, 10.5, 10.5, 1000]])
 
-    count = save_prices(conn, "yfinance", df)
+    count = save_prices(conn, "yfinance", "equity", df)
 
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT close FROM daily_ohlcv WHERE ticker = %s AND price_date = %s AND source = %s",
+            "SELECT close, asset_type FROM daily_ohlcv "
+            "WHERE ticker = %s AND price_date = %s AND source = %s",
             ("TEST", date(2026, 1, 1), "yfinance"),
         )
-        (close,) = cur.fetchone()
+        close, asset_type = cur.fetchone()
 
     assert count == 1
     assert float(close) == 10.5
+    assert asset_type == "equity"
     conn.close()
 
 
@@ -64,8 +66,8 @@ def test_save_prices_upserts_on_rerun_with_restated_values():
     original = make_df([["TEST", date(2026, 1, 1), 10.0, 11.0, 9.0, 10.5, 10.5, 1000]])
     restated = make_df([["TEST", date(2026, 1, 1), 10.0, 11.0, 9.0, 12.0, 12.0, 5000]])
 
-    save_prices(conn, "yfinance", original)
-    save_prices(conn, "yfinance", restated)
+    save_prices(conn, "yfinance", "equity", original)
+    save_prices(conn, "yfinance", "equity", restated)
 
     with conn.cursor() as cur:
         cur.execute(
@@ -91,8 +93,8 @@ def test_save_prices_keeps_distinct_sources_independent():
     yfinance_df = make_df([["TEST", date(2026, 1, 1), 10.0, 11.0, 9.0, 10.5, 10.5, 1000]])
     other_df = make_df([["TEST", date(2026, 1, 1), 20.0, 21.0, 19.0, 20.5, 20.5, 2000]])
 
-    save_prices(conn, "yfinance", yfinance_df)
-    save_prices(conn, "other_source", other_df)
+    save_prices(conn, "yfinance", "equity", yfinance_df)
+    save_prices(conn, "other_source", "equity", other_df)
 
     with conn.cursor() as cur:
         cur.execute(
@@ -102,4 +104,22 @@ def test_save_prices_keeps_distinct_sources_independent():
         (total,) = cur.fetchone()
 
     assert total == 2
+    conn.close()
+
+
+def test_save_prices_stores_non_equity_asset_types():
+    conn = _connect()
+    df = make_df([["TEST", date(2026, 1, 1), 50000.0, 51000.0, 49000.0, 50500.0, 50500.0, 1000]])
+
+    save_prices(conn, "yfinance", "crypto", df)
+
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT asset_type FROM daily_ohlcv "
+            "WHERE ticker = %s AND price_date = %s AND source = %s",
+            ("TEST", date(2026, 1, 1), "yfinance"),
+        )
+        (asset_type,) = cur.fetchone()
+
+    assert asset_type == "crypto"
     conn.close()

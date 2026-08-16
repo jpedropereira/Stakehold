@@ -49,7 +49,9 @@ def ingest_daily_ohlcv(conn, fund_config: FundConfig, start_date: date, end_date
     if prices.empty:
         return 0
 
-    return save_prices(conn, price_source.name, prices)
+    # Tickers here always come from etf_holdings, i.e. equity constituents of a fund — not yet
+    # wired up for commodity/crypto tickers, which would need their own config/ingestion path.
+    return save_prices(conn, price_source.name, "equity", prices)
 
 
 def _clean_tickers(tickers: list[str]) -> list[str]:

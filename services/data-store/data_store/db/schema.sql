@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS daily_ohlcv (
     ticker      VARCHAR(20)  NOT NULL,
     price_date  DATE         NOT NULL,
     source      VARCHAR(20)  NOT NULL,
+    asset_type  VARCHAR(20)  NOT NULL,
     open        NUMERIC(18,4),
     high        NUMERIC(18,4),
     low         NUMERIC(18,4),
@@ -33,5 +34,11 @@ CREATE TABLE IF NOT EXISTS daily_ohlcv (
     ingested_at TIMESTAMPTZ  NOT NULL DEFAULT now(),
     PRIMARY KEY (ticker, price_date, source)
 );
+
+-- Upgrades tables created before asset_type existed. DEFAULT is a one-time backfill
+-- convenience for pre-existing rows (all equities, from ETF holdings, at the time this was
+-- added) — dropped immediately after so future inserts must specify it explicitly.
+ALTER TABLE daily_ohlcv ADD COLUMN IF NOT EXISTS asset_type VARCHAR(20) NOT NULL DEFAULT 'equity';
+ALTER TABLE daily_ohlcv ALTER COLUMN asset_type DROP DEFAULT;
 
 CREATE INDEX IF NOT EXISTS idx_daily_ohlcv_ticker_date ON daily_ohlcv (ticker, price_date);
