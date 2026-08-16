@@ -19,7 +19,7 @@ def save_prices(conn, source: str, df: pd.DataFrame) -> int:
         with cur.copy(f"COPY tmp_daily_ohlcv ({', '.join(copy_columns)}) FROM STDIN") as copy:
             for _, row in df.iterrows():
                 values = [row["ticker"], row["price_date"], source] + [
-                    None if pd.isna(row[c]) else row[c] for c in _COLUMNS[2:]
+                    _cast_value(column, row[column]) for column in _COLUMNS[2:]
                 ]
                 copy.write_row(values)
 
@@ -38,3 +38,11 @@ def save_prices(conn, source: str, df: pd.DataFrame) -> int:
             """)
     conn.commit()
     return len(df)
+
+
+def _cast_value(column: str, value):
+    if pd.isna(value):
+        return None
+    if column == "volume":
+        return int(value)
+    return value

@@ -137,6 +137,20 @@ def test_get_latest_tickers_returns_most_recent_snapshot_only():
                 "USD",
             ],
             [None, "CASH", "Cash", "Cash", 1.0, 0.1, 1.0, 1.0, 1.0, "US", "-", "USD"],
+            [
+                "ESU6",
+                "S&P500 EMINI SEP 26",
+                "Cash and/or Derivatives",
+                "Futures",
+                0.0,
+                0.0,
+                1.0,
+                1.0,
+                1.0,
+                "US",
+                "Index And Options Market",
+                "USD",
+            ],
         ]
     )
 
@@ -145,5 +159,5 @@ def test_get_latest_tickers_returns_most_recent_snapshot_only():
 
     tickers = get_latest_tickers(conn, "test_fund")
 
-    assert tickers == ["AAPL"]
+    assert tickers == ["AAPL"]  # not ESU6 (futures) or the null-ticker cash line
     conn.close()
