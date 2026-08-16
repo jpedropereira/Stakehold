@@ -99,3 +99,25 @@ def test_save_prices_writes_none_for_missing_values():
     written_row = conn._cursor.copy_rows[0]
     assert written_row[3] is None  # open
     assert written_row[7] is None  # adj_close
+
+
+def test_save_prices_casts_volume_to_int_for_bigint_column():
+    conn = FakeConnection()
+    # yfinance returns volume as a float (e.g. 37476700.0); COPY into a BIGINT column
+    # rejects that literal text representation, so it must be cast to a real int.
+    df = make_df([["AAPL", date(2026, 1, 1), 100.0, 101.0, 99.0, 100.5, 100.5, 37476700.0]])
+
+    save_prices(conn, "yfinance", df)
+
+    volume = conn._cursor.copy_rows[0][8]
+    assert volume == 37476700
+    assert isinstance(volume, int)
+
+
+def test_save_prices_writes_none_for_missing_volume():
+    conn = FakeConnection()
+    df = make_df([["AAPL", date(2026, 1, 1), 100.0, 101.0, 99.0, 100.5, 100.5, np.nan]])
+
+    save_prices(conn, "yfinance", df)
+
+    assert conn._cursor.copy_rows[0][8] is None

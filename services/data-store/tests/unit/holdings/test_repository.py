@@ -222,3 +222,13 @@ def test_get_latest_tickers_queries_max_as_of_date():
     sql, params = conn._cursor.executed[0]
     assert "MAX(as_of_date)" in sql
     assert params == ("my_fund", "my_fund")
+
+
+def test_get_latest_tickers_filters_to_equity():
+    conn = FakeConnection(fetch_result=[])
+
+    get_latest_tickers(conn, "my_fund")
+
+    sql, _ = conn._cursor.executed[0]
+    assert "asset_class" in sql
+    assert "equity" in sql.lower()
