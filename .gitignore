@@ -32,5 +32,8 @@ dev/
 # Airflow (services/data-store)
 services/data-store/logs/
 
+# Postgres/pgAdmin data (services/data-store)
+services/data-store/.data/
+
 # Claude Code
 .claude/settings.local.json
