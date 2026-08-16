@@ -1,0 +1,66 @@
+# data-store schema
+
+DDL lives at `data_store/db/schema.sql` and is applied via `data-store db init`. This document
+explains the *why* behind each table's grain and loading strategy; keep it in lockstep with any
+schema change (see `.claude/rules/data-schema.md`).
+
+## `etf_holdings`
+
+One row per `(fund_key, as_of_date, holding)` — a full snapshot of an ETF's constituents as scraped
+from its provider (iShares, currently) on a given date.
+
+| Column           | Type            | Notes                                                       |
+|------------------|-----------------|---------------------------------------------------------------|
+| `id`             | `BIGSERIAL`     | Surrogate PK.                                                  |
+| `fund_key`       | `VARCHAR(50)`   | Matches the `key` in `config/etfs.yaml`.                       |
+| `as_of_date`     | `DATE`          | The scrape date (v1 simplification — not the CSV's own as-of date). |
+| `holding_ticker` | `VARCHAR(20)`   | Nullable — cash/derivative lines have none.                    |
+| `holding_name`   | `VARCHAR(200)`  |                                                                 |
+| `sector`         | `VARCHAR(100)`  |                                                                 |
+| `asset_class`    | `VARCHAR(100)`  |                                                                 |
+| `market_value`   | `NUMERIC(20,2)` |                                                                 |
+| `weight_percent` | `NUMERIC(6,4)`  |                                                                 |
+| `notional_value` | `NUMERIC(20,2)` |                                                                 |
+| `shares`         | `NUMERIC(20,4)` | CSV "Quantity".                                                |
+| `price`          | `NUMERIC(18,6)` |                                                                 |
+| `location`       | `VARCHAR(100)`  |                                                                 |
+| `exchange`       | `VARCHAR(100)`  |                                                                 |
+| `currency`       | `VARCHAR(10)`   |                                                                 |
+| `ingested_at`    | `TIMESTAMPTZ`   | Defaults to `now()`.                                           |
+
+Indexes: `(fund_key, as_of_date)` for snapshot lookups, `(holding_ticker)` for cross-fund ticker
+lookups (used by `daily_ohlcv` ingestion to find what to price).
+
+No separate `funds` reference table — `fund_key` is a plain string matching the YAML `key`. Easy to
+add later if richer per-fund metadata needs to live in the DB.
+
+**Loading strategy: delete-then-insert per `(fund_key, as_of_date)`**, not upsert. A holdings pull
+is a full snapshot replacement for that date — there's no meaningful row-level merge within one
+snapshot. This is idempotent on rerun and needs no dedup-view machinery: "latest" is just
+`MAX(as_of_date)`. History across dates is preserved automatically (each date is its own partition).
+
+## `daily_ohlcv`
+
+One row per `(ticker, price_date, source)` — daily OHLCV price history for tickers found in the
+most recent `etf_holdings` snapshot.
+
+| Column        | Type            | Notes                                             |
+|---------------|-----------------|----------------------------------------------------|
+| `ticker`      | `VARCHAR(20)`   | Part of PK.                                         |
+| `price_date`  | `DATE`          | Part of PK.                                         |
+| `source`      | `VARCHAR(20)`   | Part of PK, e.g. `'yfinance'`.                      |
+| `open`        | `NUMERIC(18,4)` |                                                      |
+| `high`        | `NUMERIC(18,4)` |                                                      |
+| `low`         | `NUMERIC(18,4)` |                                                      |
+| `close`       | `NUMERIC(18,4)` |                                                      |
+| `adj_close`   | `NUMERIC(18,4)` |                                                      |
+| `volume`      | `BIGINT`        |                                                      |
+| `ingested_at` | `TIMESTAMPTZ`   | Defaults to `now()`.                                |
+
+Index: `(ticker, price_date)` for time-series lookups.
+
+**Loading strategy: true upsert** (`INSERT ... ON CONFLICT (ticker, price_date, source) DO UPDATE`).
+Successive ingestion runs fetch overlapping date windows, and providers sometimes restate recent
+values (late settlement adjustments), so overwriting on rerun is the normal case. `source` is part
+of the primary key so a second price source can coexist for the same ticker/date without
+collision — the schema-level hook for adding price sources beyond yfinance later.
