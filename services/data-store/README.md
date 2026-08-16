@@ -71,3 +71,29 @@ To explore the data, register a server in pgAdmin:
 
 `etf_holdings` and `daily_ohlcv` then show up under
 `data-store → Databases → <your db> → Schemas → public → Tables`.
+
+## Running ingestion via the CLI
+
+With Postgres up and the schema applied, and `config/etfs.yaml` set up (see above), run both
+ingestion flows end to end:
+
+```bash
+cd services/data-store
+docker compose up -d postgres pgadmin
+uv run data-store db init
+uv run data-store ingest-holdings          # scrapes iShares, loads etf_holdings
+uv run data-store ingest-ohlcv --days 7    # reads tickers from etf_holdings, loads daily_ohlcv
+```
+
+Both subcommands accept `--fund KEY` to target a single fund (default: all funds with
+`enabled: true` in `etfs.yaml`). `ingest-ohlcv` also accepts `--days N` (default 7) for the
+lookback window.
+
+The two flows are independent — `ingest-ohlcv` always reads the *current* ticker list from
+`etf_holdings` (whatever `ingest-holdings` most recently loaded), not a fresh scrape, so it can
+run on its own daily cadence without depending on a holdings scrape having just run.
+
+Non-equity holdings (futures, cash, FX lines) are excluded automatically. Non-US-listed equities
+that need an exchange-suffix ticker mapping for yfinance (e.g. Tokyo, Stockholm) aren't resolved
+yet — `ingest-ohlcv` will skip them and log a "possibly delisted" warning from yfinance rather
+than failing the whole run.
