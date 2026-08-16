@@ -29,5 +29,8 @@ htmlcov/
 #local
 dev/
 
+# Airflow (services/data-store)
+services/data-store/logs/
+
 # Claude Code
 .claude/settings.local.json
