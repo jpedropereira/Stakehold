@@ -87,3 +87,16 @@ not an error) — it's logged as a warning naming the ticker and raw exchange st
 ticker is skipped for the run. This resolution happens at price-fetch time, not at holdings-scrape
 time, so `etf_holdings.holding_ticker` stays raw/unmodified and a mapping-table fix takes effect on
 the next pricing run with no re-scrape needed.
+
+Before appending the suffix, `_resolve_yfinance_ticker` also applies any exchange-specific raw
+ticker normalization registered in `pipeline._TICKER_NORMALIZERS` — yfinance's per-market ticker
+syntax doesn't always match the raw symbol iShares scrapes (verified against real yfinance data,
+not guessed): Hong Kong codes need zero-padding to 4 digits (`"1"` → `"0001.HK"`), London tickers
+that already end in `.` must not double it (`"BP."` → `"BP.L"`, not `"BP..L"`), and Nordic/Canadian
+share-class tickers need their separator swapped to a hyphen (`"VOLV B"` → `"VOLV-B.ST"`,
+`"BBD.B"` → `"BBD-B.TO"`). Separately, `config/yfinance_exchange_suffixes.yaml`'s optional
+`ticker_overrides:` section (loaded via `load_ticker_overrides`, same file) holds one-off raw
+ticker → final ticker rewrites for cases no general rule covers — either the source's exchange
+tagging is simply wrong (e.g. `"HEIA"` tagged under a US exchange but actually needing
+`"HEIA.AS"`), or the raw ticker needs a full rewrite (e.g. `"BRKB"` → `"BRK-B"`). An override wins
+outright and skips exchange resolution entirely.

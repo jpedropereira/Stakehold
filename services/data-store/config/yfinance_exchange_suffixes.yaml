@@ -66,3 +66,14 @@ exchanges:
     suffix: ".VI"
   # "NO MARKET (E.G. UNLISTED)" deliberately has no entry -- an ambiguous/unresolvable case,
   # not a "no suffix needed" one. Holdings on it correctly warn + skip.
+
+# One-off raw-ticker rewrites for cases plain exchange-suffix resolution can't handle: either
+# the source data's exchange tagging is simply wrong, or the raw ticker needs a full rewrite
+# yfinance doesn't derive from exchange+suffix alone. Each entry was verified against real
+# yfinance data before being added here -- don't add one without confirming it actually
+# resolves. Optional: an absent or empty section just means none are configured yet.
+ticker_overrides:
+  - raw_ticker: BRKB
+    ticker: BRK-B
+  - raw_ticker: HEIA
+    ticker: HEIA.AS

@@ -8,6 +8,7 @@ from data_store.config_loader import (
     TickerConfig,
     load_exchange_suffixes,
     load_funds,
+    load_ticker_overrides,
     load_tracked_tickers,
 )
 from data_store.db.connection import apply_schema, get_connection
@@ -66,12 +67,21 @@ def _ingest_ohlcv(args: argparse.Namespace) -> int:
     funds = _select_funds(load_funds(settings.config_path), args.fund)
     tracked_tickers = _load_enabled_tracked_tickers(settings.tracked_tickers_path)
     exchange_suffixes = load_exchange_suffixes(settings.exchange_suffixes_path)
+    ticker_overrides = load_ticker_overrides(settings.exchange_suffixes_path)
+    only_tickers = set(args.ticker) if args.ticker else None
     end_date = date.today()
     start_date = end_date - timedelta(days=args.days)
     conn = get_connection(settings.database_url)
     try:
         count = ingest_daily_ohlcv(
-            conn, funds, tracked_tickers, exchange_suffixes, start_date, end_date
+            conn,
+            funds,
+            tracked_tickers,
+            exchange_suffixes,
+            start_date,
+            end_date,
+            only_tickers=only_tickers,
+            ticker_overrides=ticker_overrides,
         )
         print(f"{count} price rows")
     finally:
@@ -84,10 +94,8 @@ def _backfill_ohlcv(args: argparse.Namespace) -> int:
     funds = _select_funds(load_funds(settings.config_path), args.fund)
     tracked_tickers = _load_enabled_tracked_tickers(settings.tracked_tickers_path)
     exchange_suffixes = load_exchange_suffixes(settings.exchange_suffixes_path)
-    if args.ticker:
-        wanted = set(args.ticker)
-        funds = []
-        tracked_tickers = [tt for tt in tracked_tickers if tt.ticker in wanted]
+    ticker_overrides = load_ticker_overrides(settings.exchange_suffixes_path)
+    only_tickers = set(args.ticker) if args.ticker else None
     end_date = date.today()
     earliest_date = date.fromisoformat(args.earliest_date)
     conn = get_connection(settings.database_url)
@@ -100,6 +108,8 @@ def _backfill_ohlcv(args: argparse.Namespace) -> int:
             earliest_date,
             end_date,
             args.delay_seconds,
+            only_tickers=only_tickers,
+            ticker_overrides=ticker_overrides,
         )
         print(f"{count} price rows")
     finally:
@@ -137,6 +147,15 @@ def _build_parser() -> argparse.ArgumentParser:
     ingest_ohlcv_parser.add_argument(
         "--days", type=int, default=7, help="Lookback window in days (default: 7)"
     )
+    ingest_ohlcv_parser.add_argument(
+        "--ticker",
+        action="append",
+        help=(
+            "Restrict to this final (post-suffix-resolution) ticker (repeatable), e.g. "
+            "'AAPL' or '0700.HK' -- matches any currently followed ticker, from fund "
+            "holdings or tracked_tickers.yaml. Default: all resolved tickers."
+        ),
+    )
     ingest_ohlcv_parser.set_defaults(handler=_ingest_ohlcv)
 
     backfill_ohlcv_parser = subparsers.add_parser(
@@ -152,8 +171,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "--ticker",
         action="append",
         help=(
-            "Restrict to this ticker (repeatable), must be enabled in tracked_tickers.yaml. "
-            "Intended for small manual dry runs."
+            "Restrict to this final (post-suffix-resolution) ticker (repeatable), e.g. "
+            "'AAPL' or '0700.HK' -- matches any currently followed ticker, from fund "
+            "holdings or tracked_tickers.yaml. Intended for small manual dry runs, or "
+            "re-backfilling specific tickers that previously failed."
         ),
     )
     backfill_ohlcv_parser.add_argument(

@@ -131,7 +131,11 @@ uv run data-store ingest-ohlcv --days 7    # reads tickers from etf_holdings, lo
 
 Both subcommands accept `--fund KEY` (`ingest-ohlcv`: only that fund's holdings — tracked
 tickers from `tracked_tickers.yaml` are always included regardless). `ingest-ohlcv` also
-accepts `--days N` (default 7) for the lookback window.
+accepts `--days N` (default 7) for the lookback window. Both also accept `--ticker TICKER`
+(repeatable) to restrict the run to specific final, post-suffix-resolution tickers (e.g.
+`--ticker AAPL --ticker 0700.HK`) — matches any currently followed ticker, fund-holdings-derived
+or tracked; useful for a small manual run or re-attempting specific tickers that previously
+failed. Omit it to run against everything followed, as before.
 
 The two flows are independent — `ingest-ohlcv` always reads the *current* ticker list from
 `etf_holdings` (whatever `ingest-holdings` most recently loaded), not a fresh scrape, so it can
@@ -147,6 +151,15 @@ guessed ticker to yfinance, which would otherwise silently return zero rows inst
 If you add a fund with holdings on an exchange not yet in that file, add an entry for it (query
 `SELECT DISTINCT exchange FROM etf_holdings` for the exact raw string — don't guess spelling).
 
+yfinance's per-market ticker syntax also doesn't always match the raw symbol iShares scrapes, even
+once the right suffix is appended — e.g. Hong Kong codes need zero-padding (`"1"` → `"0001.HK"`),
+Nordic/Canadian share classes use a hyphen where the raw ticker has a space or dot
+(`"VOLV B"` → `"VOLV-B.ST"`). These are handled automatically by exchange (see
+`pipeline._TICKER_NORMALIZERS`). For one-off cases no general rule covers — the source's exchange
+tagging is simply wrong, or a ticker needs a full rewrite (e.g. `"BRKB"` → `"BRK-B"`) — add an
+entry to the same file's optional `ticker_overrides:` section; verify it against real yfinance
+data before adding it.
+
 ## Running ingestion via Airflow
 
 With the full stack up (`docker compose up -d`) and `config/etfs.yaml` set up, the two DAGs run
@@ -160,3 +173,9 @@ docker exec <airflow-scheduler-container> airflow dags trigger ingest_daily_ohlc
 
 Task logs land under `services/data-store/logs/dag_id=.../run_id=.../task_id=.../attempt=N.log`
 (bind-mounted, so readable from the host — no need to shell into the container).
+
+`ingest_daily_ohlcv` and `backfill_historical_ohlcv` both accept a `tickers` param (a JSON array,
+default `[]`) via the UI's "Trigger DAG w/ config" dialog, mapped straight to the CLI's `--ticker`
+flag (each list value shell-escaped before being interpolated into the task's `bash_command`, so a
+malicious/malformed value can't break out of its argument). Leave it empty to run against
+everything followed, as before.
