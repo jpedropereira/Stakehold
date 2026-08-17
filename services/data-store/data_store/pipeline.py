@@ -86,6 +86,14 @@ def backfill_historical_ohlcv(
     to the run. Re-running is cheap: a ticker that already succeeded now has a smaller (or
     empty) remaining gap computed fresh from daily_ohlcv itself — no separate checkpoint is
     needed, the table is the checkpoint."""
+    # yfinance logs an ERROR-level "Failed download"/"Data doesn't exist" message on every
+    # empty result via its own 'yfinance' logger — which, here, is the expected outcome for
+    # every ticker once requested back past its actual listing date. Left alone that noise
+    # drowns out our own per-ticker progress lines below, so it's silenced for this run only
+    # (not touched for the daily flow, where an empty result is more likely to mean something
+    # actually needs attention, e.g. a delisted/mistyped ticker).
+    logging.getLogger("yfinance").setLevel(logging.CRITICAL)
+
     resolved = _resolve_priceable_tickers(conn, funds, tracked_tickers)
     if not resolved:
         return 0
