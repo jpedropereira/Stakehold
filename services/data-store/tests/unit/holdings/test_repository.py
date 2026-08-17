@@ -214,13 +214,14 @@ def test_save_holdings_writes_none_for_missing_values():
 
 
 def test_get_latest_tickers_queries_max_as_of_date():
-    conn = FakeConnection(fetch_result=[("AAPL",), ("MSFT",)])
+    conn = FakeConnection(fetch_result=[("AAPL", "NASDAQ"), ("MSFT", "NASDAQ")])
 
     tickers = get_latest_tickers(conn, "my_fund")
 
-    assert tickers == ["AAPL", "MSFT"]
+    assert tickers == [("AAPL", "NASDAQ"), ("MSFT", "NASDAQ")]
     sql, params = conn._cursor.executed[0]
     assert "MAX(as_of_date)" in sql
+    assert "exchange" in sql
     assert params == ("my_fund", "my_fund")
 
 

@@ -77,14 +77,14 @@ def test_backfill_is_idempotent_on_rerun(monkeypatch):
     tracked = [_make_tracked_ticker()]
 
     first_count = pipeline.backfill_historical_ohlcv(
-        conn, [], tracked, date(2024, 1, 1), date(2024, 1, 10), delay_seconds=0
+        conn, [], tracked, {}, date(2024, 1, 1), date(2024, 1, 10), delay_seconds=0
     )
 
     assert first_count == 10
     assert fake_source.fetch_calls == [("TEST", date(2024, 1, 1), date(2024, 1, 10))]
 
     second_count = pipeline.backfill_historical_ohlcv(
-        conn, [], tracked, date(2024, 1, 1), date(2024, 1, 10), delay_seconds=0
+        conn, [], tracked, {}, date(2024, 1, 1), date(2024, 1, 10), delay_seconds=0
     )
 
     # The whole earliest_date..end_date range is already covered by the first run -- the
@@ -103,11 +103,11 @@ def test_backfill_requests_only_remaining_gap_after_partial_coverage(monkeypatch
 
     # Simulate an earlier run that only covered the most recent week.
     pipeline.backfill_historical_ohlcv(
-        conn, [], tracked, date(2024, 1, 4), date(2024, 1, 10), delay_seconds=0
+        conn, [], tracked, {}, date(2024, 1, 4), date(2024, 1, 10), delay_seconds=0
     )
 
     pipeline.backfill_historical_ohlcv(
-        conn, [], tracked, date(2024, 1, 1), date(2024, 1, 10), delay_seconds=0
+        conn, [], tracked, {}, date(2024, 1, 1), date(2024, 1, 10), delay_seconds=0
     )
 
     # Second run should only have requested the still-missing stretch before the existing

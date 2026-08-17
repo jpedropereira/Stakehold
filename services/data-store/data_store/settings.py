@@ -14,6 +14,7 @@ class Settings:
     database_url: str
     config_path: Path
     tracked_tickers_path: Path
+    exchange_suffixes_path: Path
 
 
 def load_settings() -> Settings:
@@ -27,9 +28,15 @@ def load_settings() -> Settings:
     tracked_tickers_path = Path(
         os.environ.get("DATA_STORE_TRACKED_TICKERS_PATH", "config/tracked_tickers.yaml")
     )
+    exchange_suffixes_path = Path(
+        os.environ.get(
+            "DATA_STORE_EXCHANGE_SUFFIXES_PATH", "config/yfinance_exchange_suffixes.yaml"
+        )
+    )
 
     return Settings(
         database_url=database_url,
         config_path=config_path,
         tracked_tickers_path=tracked_tickers_path,
+        exchange_suffixes_path=exchange_suffixes_path,
     )

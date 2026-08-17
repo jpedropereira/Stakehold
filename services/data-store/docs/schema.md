@@ -47,7 +47,7 @@ via `config/tracked_tickers.yaml` (not derived from any fund's holdings).
 
 | Column        | Type            | Notes                                             |
 |---------------|-----------------|----------------------------------------------------|
-| `ticker`      | `VARCHAR(20)`   | Part of PK.                                         |
+| `ticker`      | `VARCHAR(20)`   | Part of PK. For holdings-derived rows, this is the yfinance-ready ticker (raw `etf_holdings.holding_ticker` plus the exchange suffix resolved via `config/yfinance_exchange_suffixes.yaml`, e.g. `0700.HK`), not necessarily equal to `etf_holdings.holding_ticker` itself. Tracked-ticker rows already store the ticker as configured in `tracked_tickers.yaml`. |
 | `price_date`  | `DATE`          | Part of PK.                                         |
 | `source`      | `VARCHAR(20)`   | Part of PK, e.g. `'yfinance'`.                      |
 | `asset_type`  | `VARCHAR(20)`   | `equity` / `etf` / `commodity` / `crypto` / `etc`. `etc` (Exchange Traded Commodity, e.g. a gold-backed ETC) is kept distinct from `commodity` (raw futures contracts, not tracked yet) since they're different instrument wrappers. Not part of the PK — a descriptive attribute of the ticker, not part of its identity. Validated at the app layer (`config_loader.VALID_ASSET_TYPES`), not a DB `CHECK` constraint. |
@@ -76,3 +76,14 @@ fetches only the stretch older than that — never re-requesting a range already
 schema change, no separate checkpoint table: `daily_ohlcv` itself is the checkpoint, since the gap
 is recomputed fresh from committed rows on every run, making a partial/interrupted backfill cheap
 to resume rather than needing to restart from scratch.
+
+**Exchange-suffix resolution for holdings-derived tickers**: `etf_holdings.holding_ticker` is the
+raw, unsuffixed symbol as scraped (e.g. `"0700"`). Both `ingest-ohlcv` and `backfill-ohlcv` resolve
+it into a yfinance-ready ticker via `pipeline._resolve_yfinance_ticker`, which looks up
+`etf_holdings.exchange` in `config/yfinance_exchange_suffixes.yaml` (a raw exchange string -> yfinance
+suffix mapping, e.g. `"Hong Kong Exchanges And Clearing Ltd"` -> `.HK`). An exchange with no entry
+in that mapping is not guessed at or sent bare to yfinance (which would silently return zero rows,
+not an error) — it's logged as a warning naming the ticker and raw exchange string, and that
+ticker is skipped for the run. This resolution happens at price-fetch time, not at holdings-scrape
+time, so `etf_holdings.holding_ticker` stays raw/unmodified and a mapping-table fix takes effect on
+the next pricing run with no re-scrape needed.

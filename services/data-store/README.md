@@ -138,9 +138,14 @@ The two flows are independent — `ingest-ohlcv` always reads the *current* tick
 run on its own daily cadence without depending on a holdings scrape having just run.
 
 Non-equity holdings (futures, cash, FX lines) are excluded automatically. Non-US-listed equities
-that need an exchange-suffix ticker mapping for yfinance (e.g. Tokyo, Stockholm) aren't resolved
-yet — `ingest-ohlcv` will skip them and log a "possibly delisted" warning from yfinance rather
-than failing the whole run.
+need a yfinance exchange-suffix ticker mapping (e.g. `0700` on the Hong Kong exchange -> `0700.HK`)
+— resolved via `config/yfinance_exchange_suffixes.yaml`, a **committed** file (unlike
+`etfs.yaml`/`tracked_tickers.yaml`, since it's generic reference data, not personal fund choices).
+A holding on an exchange with no entry there is logged as a warning naming the ticker and the raw
+exchange string, and skipped for that run — `ingest-ohlcv`/`backfill-ohlcv` never send a bare or
+guessed ticker to yfinance, which would otherwise silently return zero rows instead of erroring.
+If you add a fund with holdings on an exchange not yet in that file, add an entry for it (query
+`SELECT DISTINCT exchange FROM etf_holdings` for the exact raw string — don't guess spelling).
 
 ## Running ingestion via Airflow
 

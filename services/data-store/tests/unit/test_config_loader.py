@@ -3,6 +3,7 @@ from data_store.config_loader import (
     ConfigError,
     FundConfig,
     TickerConfig,
+    load_exchange_suffixes,
     load_funds,
     load_tracked_tickers,
 )
@@ -16,6 +17,12 @@ def write_yaml(tmp_path, content):
 
 def write_tracked_tickers_yaml(tmp_path, content):
     path = tmp_path / "tracked_tickers.yaml"
+    path.write_text(content)
+    return path
+
+
+def write_exchange_suffixes_yaml(tmp_path, content):
+    path = tmp_path / "yfinance_exchange_suffixes.yaml"
     path.write_text(content)
     return path
 
@@ -272,3 +279,127 @@ def test_rejects_empty_tracked_tickers_list(tmp_path):
 
     with pytest.raises(ConfigError, match="no tickers"):
         load_tracked_tickers(path)
+
+
+def test_loads_exchange_with_string_suffix(tmp_path):
+    path = write_exchange_suffixes_yaml(
+        tmp_path,
+        """
+        exchanges:
+          - exchange: "London Stock Exchange"
+            suffix: ".L"
+        """,
+    )
+
+    suffixes = load_exchange_suffixes(path)
+
+    assert suffixes == {"London Stock Exchange": ".L"}
+
+
+def test_loads_exchange_with_null_suffix_as_none(tmp_path):
+    path = write_exchange_suffixes_yaml(
+        tmp_path,
+        """
+        exchanges:
+          - exchange: "NASDAQ"
+            suffix: null
+        """,
+    )
+
+    suffixes = load_exchange_suffixes(path)
+
+    assert suffixes == {"NASDAQ": None}
+
+
+def test_loads_multiple_exchanges(tmp_path):
+    path = write_exchange_suffixes_yaml(
+        tmp_path,
+        """
+        exchanges:
+          - exchange: "NASDAQ"
+            suffix: null
+          - exchange: "Tokyo Stock Exchange"
+            suffix: ".T"
+          - exchange: "Hong Kong Exchanges And Clearing Ltd"
+            suffix: ".HK"
+        """,
+    )
+
+    suffixes = load_exchange_suffixes(path)
+
+    assert suffixes == {
+        "NASDAQ": None,
+        "Tokyo Stock Exchange": ".T",
+        "Hong Kong Exchanges And Clearing Ltd": ".HK",
+    }
+
+
+def test_rejects_missing_exchange_suffixes_file(tmp_path):
+    with pytest.raises(ConfigError, match="not found"):
+        load_exchange_suffixes(tmp_path / "does-not-exist.yaml")
+
+
+def test_rejects_empty_exchanges_list(tmp_path):
+    path = write_exchange_suffixes_yaml(tmp_path, "exchanges: []\n")
+
+    with pytest.raises(ConfigError, match="no exchanges"):
+        load_exchange_suffixes(path)
+
+
+def test_rejects_exchange_entry_missing_exchange_field(tmp_path):
+    path = write_exchange_suffixes_yaml(
+        tmp_path,
+        """
+        exchanges:
+          - suffix: ".L"
+        """,
+    )
+
+    with pytest.raises(ConfigError, match="exchange"):
+        load_exchange_suffixes(path)
+
+
+def test_rejects_exchange_entry_missing_suffix_key_entirely(tmp_path):
+    # suffix must be explicitly present, even as null -- a key-less entry must not silently
+    # default to "no suffix needed", since that's indistinguishable from a deliberate mapping.
+    path = write_exchange_suffixes_yaml(
+        tmp_path,
+        """
+        exchanges:
+          - exchange: "NASDAQ"
+        """,
+    )
+
+    with pytest.raises(ConfigError, match="suffix"):
+        load_exchange_suffixes(path)
+
+
+def test_rejects_duplicate_exchange(tmp_path):
+    path = write_exchange_suffixes_yaml(
+        tmp_path,
+        """
+        exchanges:
+          - exchange: "NASDAQ"
+            suffix: null
+          - exchange: "NASDAQ"
+            suffix: ".XX"
+        """,
+    )
+
+    with pytest.raises(ConfigError, match="(?i)duplicate"):
+        load_exchange_suffixes(path)
+
+
+@pytest.mark.parametrize("bad_suffix", ["L", "", "DE", "123"])
+def test_rejects_suffix_not_starting_with_dot(tmp_path, bad_suffix):
+    path = write_exchange_suffixes_yaml(
+        tmp_path,
+        f"""
+        exchanges:
+          - exchange: "London Stock Exchange"
+            suffix: "{bad_suffix}"
+        """,
+    )
+
+    with pytest.raises(ConfigError, match="Invalid suffix"):
+        load_exchange_suffixes(path)
