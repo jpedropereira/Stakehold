@@ -77,3 +77,16 @@ ticker_overrides:
     ticker: BRK-B
   - raw_ticker: HEIA
     ticker: HEIA.AS
+  # CICT/CLAR: iShares' `ticker` field for these Singapore REITs is a short marketing code,
+  # not the actual SGX trading symbol yfinance needs.
+  - raw_ticker: CICT
+    ticker: C38U.SI
+  - raw_ticker: CLAR
+    ticker: A17U.SI
+  # 2299955D: not a distinct security -- a ~$0.14 (0.0000% weight) rounding remnant of
+  # Constellation Software Inc, which is already tracked correctly under its real ticker
+  # (raw "CSU" on Toronto Stock Exchange -> CSU.TO). Overriding to the same final ticker just
+  # dedupes this dust position against that existing resolution instead of trying (and always
+  # failing) to fetch a nonexistent "2299955D.TO".
+  - raw_ticker: "2299955D"
+    ticker: CSU.TO
