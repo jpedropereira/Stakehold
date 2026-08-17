@@ -1,3 +1,4 @@
+import logging
 from datetime import date
 
 import pandas as pd
@@ -275,6 +276,35 @@ class FakeSinglePriceSource:
         if ticker in self.fail_tickers:
             raise RuntimeError(f"{ticker} failed")
         return pd.DataFrame({"ticker": [ticker], "price_date": [start_date]})
+
+
+def test_backfill_silences_yfinances_own_noisy_no_data_logging(monkeypatch):
+    # yfinance logs an ERROR-level "Failed download"/"Data doesn't exist" message via its own
+    # 'yfinance' logger every time a fetch returns empty -- which, during a backfill, is the
+    # expected outcome for every ticker once it's requested back past that ticker's actual
+    # listing date. That noise drowns out our own clean per-ticker progress lines, so backfill
+    # raises the yfinance logger's level instead of leaving it at the default.
+    yf_logger = logging.getLogger("yfinance")
+    original_level = yf_logger.level
+    yf_logger.setLevel(logging.NOTSET)
+
+    conn = object()
+    fake_source = FakeSinglePriceSource()
+    tracked = [make_tracked_ticker(ticker="AAPL", asset_type="equity")]
+
+    monkeypatch.setitem(pipeline.PRICE_SOURCES, "yfinance", lambda: fake_source)
+    monkeypatch.setattr(pipeline, "get_earliest_price_dates", lambda conn, source, tickers: {})
+    monkeypatch.setattr(pipeline, "save_prices", lambda conn, source, asset_type, df: len(df))
+    monkeypatch.setattr("data_store.pipeline.time.sleep", lambda s: None)
+
+    try:
+        pipeline.backfill_historical_ohlcv(
+            conn, [], tracked, date(1900, 1, 1), date(2026, 1, 1), delay_seconds=0
+        )
+
+        assert yf_logger.level >= logging.CRITICAL
+    finally:
+        yf_logger.setLevel(original_level)
 
 
 def test_backfill_fetches_full_range_when_no_existing_data(monkeypatch):
