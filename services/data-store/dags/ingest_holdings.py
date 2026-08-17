@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from airflow.providers.standard.operators.bash import BashOperator
+from airflow.providers.standard.operators.empty import EmptyOperator
 from airflow.sdk import DAG
 
 with DAG(
@@ -11,9 +12,15 @@ with DAG(
     catchup=False,
     tags=["data-store", "holdings"],
 ) as dag:
-    BashOperator(
+    start = EmptyOperator(task_id="start")
+
+    ingest = BashOperator(
         task_id="ingest_holdings",
         bash_command=(
             "cd /opt/stakehold/services/data-store && uv run --frozen data-store ingest-holdings"
         ),
     )
+
+    end = EmptyOperator(task_id="end")
+
+    start >> ingest >> end
