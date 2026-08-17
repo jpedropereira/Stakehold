@@ -218,3 +218,116 @@ def test_ingest_ohlcv_treats_missing_tracked_tickers_file_as_empty(monkeypatch, 
     cli.main(["ingest-ohlcv"])
 
     assert calls[0] == []
+
+
+def test_backfill_ohlcv_default_run(monkeypatch, fake_settings):
+    funds = [make_fund("a")]
+    calls = []
+
+    monkeypatch.setattr(cli, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(cli, "load_funds", lambda path: funds)
+    monkeypatch.setattr(cli, "get_connection", lambda url: FakeConn([]))
+
+    def fake_backfill(conn, passed_funds, tracked_tickers, earliest_date, end_date, delay_seconds):
+        calls.append((passed_funds, tracked_tickers, earliest_date, end_date, delay_seconds))
+        return 3
+
+    monkeypatch.setattr(cli, "backfill_historical_ohlcv", fake_backfill)
+
+    exit_code = cli.main(["backfill-ohlcv"])
+
+    assert exit_code == 0
+    assert len(calls) == 1
+    passed_funds, tracked_tickers, earliest_date, end_date, delay_seconds = calls[0]
+    assert [f.key for f in passed_funds] == ["a"]
+    assert tracked_tickers == []
+    assert earliest_date == date(1900, 1, 1)
+    assert end_date == date.today()
+    assert delay_seconds == 10.0
+
+
+def test_backfill_ohlcv_respects_fund_flag(monkeypatch, fake_settings):
+    funds = [make_fund("a"), make_fund("b")]
+    calls = []
+
+    monkeypatch.setattr(cli, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(cli, "load_funds", lambda path: funds)
+    monkeypatch.setattr(cli, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(
+        cli,
+        "backfill_historical_ohlcv",
+        lambda conn, funds, tt, ed, end, ds: calls.append(funds) or 0,
+    )
+
+    cli.main(["backfill-ohlcv", "--fund", "b"])
+
+    assert [f.key for f in calls[0]] == ["b"]
+
+
+def test_backfill_ohlcv_respects_earliest_date_and_delay_flags(monkeypatch, fake_settings):
+    calls = []
+
+    monkeypatch.setattr(cli, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(cli, "load_funds", lambda path: [])
+    monkeypatch.setattr(cli, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(
+        cli,
+        "backfill_historical_ohlcv",
+        lambda conn, funds, tt, ed, end, ds: calls.append((ed, ds)) or 0,
+    )
+
+    cli.main(["backfill-ohlcv", "--earliest-date", "2000-06-15", "--delay-seconds", "3.5"])
+
+    earliest_date, delay_seconds = calls[0]
+    assert earliest_date == date(2000, 6, 15)
+    assert delay_seconds == 3.5
+
+
+def test_backfill_ohlcv_ticker_flag_filters_tracked_tickers_and_empties_funds(
+    monkeypatch, fake_settings, tmp_path
+):
+    settings = Settings(
+        database_url=fake_settings.database_url,
+        config_path=fake_settings.config_path,
+        tracked_tickers_path=tmp_path / "tracked_tickers.yaml",
+    )
+    (tmp_path / "tracked_tickers.yaml").write_text("tickers: []\n")
+    tracked = [
+        make_tracked_ticker("BABA"),
+        make_tracked_ticker("NVCR"),
+        make_tracked_ticker("IWDA.AS"),
+    ]
+    calls = []
+
+    monkeypatch.setattr(cli, "load_settings", lambda: settings)
+    monkeypatch.setattr(cli, "load_funds", lambda path: [make_fund("a")])
+    monkeypatch.setattr(cli, "load_tracked_tickers", lambda path: tracked)
+    monkeypatch.setattr(cli, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(
+        cli,
+        "backfill_historical_ohlcv",
+        lambda conn, funds, tt, ed, end, ds: calls.append((funds, tt)) or 0,
+    )
+
+    cli.main(["backfill-ohlcv", "--ticker", "BABA", "--ticker", "NVCR"])
+
+    passed_funds, passed_tickers = calls[0]
+    assert passed_funds == []
+    assert sorted(t.ticker for t in passed_tickers) == ["BABA", "NVCR"]
+
+
+def test_backfill_ohlcv_treats_missing_tracked_tickers_file_as_empty(monkeypatch, fake_settings):
+    calls = []
+
+    monkeypatch.setattr(cli, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(cli, "load_funds", lambda path: [])
+    monkeypatch.setattr(cli, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(
+        cli,
+        "backfill_historical_ohlcv",
+        lambda conn, funds, tt, ed, end, ds: calls.append(tt) or 0,
+    )
+
+    cli.main(["backfill-ohlcv"])
+
+    assert calls[0] == []

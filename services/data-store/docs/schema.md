@@ -68,3 +68,11 @@ Successive ingestion runs fetch overlapping date windows, and providers sometime
 values (late settlement adjustments), so overwriting on rerun is the normal case. `source` is part
 of the primary key so a second price source can coexist for the same ticker/date without
 collision — the schema-level hook for adding price sources beyond yfinance later.
+
+**Backfill loading pattern**: the daily `ingest-ohlcv` flow above keeps a rolling recent window
+filled. Deep history is filled separately by `backfill-ohlcv` (`pipeline.backfill_historical_ohlcv`),
+which for each ticker computes `MIN(price_date)` already stored (`get_earliest_price_dates`) and
+fetches only the stretch older than that — never re-requesting a range already covered. No
+schema change, no separate checkpoint table: `daily_ohlcv` itself is the checkpoint, since the gap
+is recomputed fresh from committed rows on every run, making a partial/interrupted backfill cheap
+to resume rather than needing to restart from scratch.

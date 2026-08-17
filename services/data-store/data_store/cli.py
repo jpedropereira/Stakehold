@@ -10,7 +10,11 @@ from data_store.config_loader import (
     load_tracked_tickers,
 )
 from data_store.db.connection import apply_schema, get_connection
-from data_store.pipeline import ingest_daily_ohlcv, ingest_holdings
+from data_store.pipeline import (
+    backfill_historical_ohlcv,
+    ingest_daily_ohlcv,
+    ingest_holdings,
+)
 from data_store.settings import load_settings
 
 _SCHEMA_PATH = Path(__file__).parent / "db" / "schema.sql"
@@ -71,6 +75,27 @@ def _ingest_ohlcv(args: argparse.Namespace) -> int:
     return 0
 
 
+def _backfill_ohlcv(args: argparse.Namespace) -> int:
+    settings = load_settings()
+    funds = _select_funds(load_funds(settings.config_path), args.fund)
+    tracked_tickers = _load_enabled_tracked_tickers(settings.tracked_tickers_path)
+    if args.ticker:
+        wanted = set(args.ticker)
+        funds = []
+        tracked_tickers = [tt for tt in tracked_tickers if tt.ticker in wanted]
+    end_date = date.today()
+    earliest_date = date.fromisoformat(args.earliest_date)
+    conn = get_connection(settings.database_url)
+    try:
+        count = backfill_historical_ohlcv(
+            conn, funds, tracked_tickers, earliest_date, end_date, args.delay_seconds
+        )
+        print(f"{count} price rows")
+    finally:
+        conn.close()
+    return 0
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="data-store")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -102,6 +127,40 @@ def _build_parser() -> argparse.ArgumentParser:
         "--days", type=int, default=7, help="Lookback window in days (default: 7)"
     )
     ingest_ohlcv_parser.set_defaults(handler=_ingest_ohlcv)
+
+    backfill_ohlcv_parser = subparsers.add_parser(
+        "backfill-ohlcv",
+        help=(
+            "Backfill full historical daily OHLCV for all followed tickers, filling only "
+            "what's missing before each ticker's earliest stored date. Deliberately slow; "
+            "intended for rare, manual/on-demand runs that may take hours."
+        ),
+    )
+    backfill_ohlcv_parser.add_argument("--fund", help="Only backfill this fund's holdings.")
+    backfill_ohlcv_parser.add_argument(
+        "--ticker",
+        action="append",
+        help=(
+            "Restrict to this ticker (repeatable), must be enabled in tracked_tickers.yaml. "
+            "Intended for small manual dry runs."
+        ),
+    )
+    backfill_ohlcv_parser.add_argument(
+        "--earliest-date",
+        default="1900-01-01",
+        help=(
+            "Lower bound requested from yfinance (default: 1900-01-01 -- yfinance clips to "
+            "each ticker's actual listing date, so this is effectively 'as far back as "
+            "available')."
+        ),
+    )
+    backfill_ohlcv_parser.add_argument(
+        "--delay-seconds",
+        type=float,
+        default=10.0,
+        help="Seconds to sleep after each ticker's fetch, to stay under yfinance's rate limiting.",
+    )
+    backfill_ohlcv_parser.set_defaults(handler=_backfill_ohlcv)
 
     return parser
 

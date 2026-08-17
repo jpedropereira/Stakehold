@@ -1,3 +1,5 @@
+from datetime import date
+
 import pandas as pd
 
 _COLUMNS = ["ticker", "price_date", "open", "high", "low", "close", "adj_close", "volume"]
@@ -48,3 +50,22 @@ def _cast_value(column: str, value):
     if column == "volume":
         return int(value)
     return value
+
+
+def get_earliest_price_dates(conn, source: str, tickers: list[str]) -> dict[str, date]:
+    """{ticker: earliest stored price_date} for tickers with at least one row for this
+    source. A ticker with no rows at all is absent from the result — callers distinguish
+    "never priced" from "priced starting on date X"."""
+    if not tickers:
+        return {}
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT ticker, MIN(price_date)
+            FROM daily_ohlcv
+            WHERE source = %s AND ticker = ANY(%s)
+            GROUP BY ticker
+            """,
+            (source, tickers),
+        )
+        return {row[0]: row[1] for row in cur.fetchall()}

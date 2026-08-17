@@ -6,7 +6,7 @@ import pandas as pd
 import psycopg
 import pytest
 from data_store.db.connection import apply_schema
-from data_store.prices.repository import save_prices
+from data_store.prices.repository import get_earliest_price_dates, save_prices
 
 pytestmark = pytest.mark.integration
 
@@ -122,4 +122,33 @@ def test_save_prices_stores_non_equity_asset_types():
         (asset_type,) = cur.fetchone()
 
     assert asset_type == "crypto"
+    conn.close()
+
+
+def test_get_earliest_price_dates_returns_min_date_per_ticker_and_source():
+    conn = _connect()
+    save_prices(
+        conn,
+        "yfinance",
+        "equity",
+        make_df(
+            [
+                ["TEST", date(2020, 1, 1), 10.0, 11.0, 9.0, 10.5, 10.5, 1000],
+                ["TEST", date(2021, 1, 1), 10.0, 11.0, 9.0, 10.5, 10.5, 1000],
+            ]
+        ),
+    )
+    save_prices(
+        conn,
+        "other_source",
+        "equity",
+        make_df([["TEST", date(2015, 1, 1), 10.0, 11.0, 9.0, 10.5, 10.5, 1000]]),
+    )
+
+    yfinance_result = get_earliest_price_dates(conn, "yfinance", ["TEST", "NEVER_INSERTED"])
+    other_result = get_earliest_price_dates(conn, "other_source", ["TEST"])
+
+    assert yfinance_result == {"TEST": date(2020, 1, 1)}
+    assert "NEVER_INSERTED" not in yfinance_result
+    assert other_result == {"TEST": date(2015, 1, 1)}
     conn.close()
