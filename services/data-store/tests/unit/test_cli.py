@@ -14,7 +14,16 @@ def fake_settings(tmp_path):
         # Deliberately a nonexistent path by default: tracked_tickers.yaml is optional, and
         # most cli.py tests shouldn't need to care about it.
         tracked_tickers_path=tmp_path / "does-not-exist.yaml",
+        exchange_suffixes_path=tmp_path / "yfinance_exchange_suffixes.yaml",
     )
+
+
+@pytest.fixture(autouse=True)
+def stub_load_exchange_suffixes(monkeypatch):
+    # exchange_suffixes.yaml is load-bearing (unconditionally loaded, unlike
+    # tracked_tickers.yaml), but most cli.py tests don't exercise suffix resolution itself --
+    # stub it to an empty dict by default so those tests don't each need to care about it.
+    monkeypatch.setattr(cli, "load_exchange_suffixes", lambda path: {})
 
 
 def make_fund(key, enabled=True):
@@ -142,8 +151,8 @@ def test_ingest_ohlcv_runs_for_all_enabled_funds_with_default_lookback(monkeypat
     monkeypatch.setattr(cli, "load_funds", lambda path: funds)
     monkeypatch.setattr(cli, "get_connection", lambda url: FakeConn([]))
 
-    def fake_ingest(conn, passed_funds, tracked_tickers, start_date, end_date):
-        calls.append((passed_funds, tracked_tickers, start_date, end_date))
+    def fake_ingest(conn, passed_funds, tracked_tickers, exchange_suffixes, start_date, end_date):
+        calls.append((passed_funds, tracked_tickers, exchange_suffixes, start_date, end_date))
         return 3
 
     monkeypatch.setattr(cli, "ingest_daily_ohlcv", fake_ingest)
@@ -152,9 +161,10 @@ def test_ingest_ohlcv_runs_for_all_enabled_funds_with_default_lookback(monkeypat
 
     assert exit_code == 0
     assert len(calls) == 1
-    passed_funds, tracked_tickers, start_date, end_date = calls[0]
+    passed_funds, tracked_tickers, exchange_suffixes, start_date, end_date = calls[0]
     assert [f.key for f in passed_funds] == ["a"]
     assert tracked_tickers == []  # tracked_tickers.yaml doesn't exist in fake_settings
+    assert exchange_suffixes == {}
     assert end_date == date.today()
     assert (end_date - start_date).days == 7
 
@@ -169,7 +179,7 @@ def test_ingest_ohlcv_respects_days_flag(monkeypatch, fake_settings):
     monkeypatch.setattr(
         cli,
         "ingest_daily_ohlcv",
-        lambda conn, funds, tt, s, e: calls.append((s, e)) or 1,
+        lambda conn, funds, tt, ex, s, e: calls.append((s, e)) or 1,
     )
 
     cli.main(["ingest-ohlcv", "--days", "30"])
@@ -183,6 +193,7 @@ def test_ingest_ohlcv_includes_enabled_tracked_tickers(monkeypatch, fake_setting
         database_url=fake_settings.database_url,
         config_path=fake_settings.config_path,
         tracked_tickers_path=tmp_path / "tracked_tickers.yaml",
+        exchange_suffixes_path=fake_settings.exchange_suffixes_path,
     )
     (tmp_path / "tracked_tickers.yaml").write_text("tickers: []\n")  # just needs to exist
     tracked = [make_tracked_ticker("IWDA.AS"), make_tracked_ticker("BTC-USD", enabled=False)]
@@ -195,7 +206,7 @@ def test_ingest_ohlcv_includes_enabled_tracked_tickers(monkeypatch, fake_setting
     monkeypatch.setattr(
         cli,
         "ingest_daily_ohlcv",
-        lambda conn, funds, tt, s, e: calls.append(tt) or 1,
+        lambda conn, funds, tt, ex, s, e: calls.append(tt) or 1,
     )
 
     cli.main(["ingest-ohlcv"])
@@ -212,12 +223,48 @@ def test_ingest_ohlcv_treats_missing_tracked_tickers_file_as_empty(monkeypatch, 
     monkeypatch.setattr(
         cli,
         "ingest_daily_ohlcv",
-        lambda conn, funds, tt, s, e: calls.append(tt) or 0,
+        lambda conn, funds, tt, ex, s, e: calls.append(tt) or 0,
     )
 
     cli.main(["ingest-ohlcv"])
 
     assert calls[0] == []
+
+
+def test_ingest_ohlcv_loads_and_passes_exchange_suffixes(monkeypatch, fake_settings):
+    calls = []
+
+    monkeypatch.setattr(cli, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(cli, "load_funds", lambda path: [])
+    monkeypatch.setattr(cli, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(
+        cli, "load_exchange_suffixes", lambda path: {"NASDAQ": None, "London Stock Exchange": ".L"}
+    )
+    monkeypatch.setattr(
+        cli,
+        "ingest_daily_ohlcv",
+        lambda conn, funds, tt, ex, s, e: calls.append(ex) or 0,
+    )
+
+    cli.main(["ingest-ohlcv"])
+
+    assert calls[0] == {"NASDAQ": None, "London Stock Exchange": ".L"}
+
+
+def test_ingest_ohlcv_propagates_config_error_from_exchange_suffixes(monkeypatch, fake_settings):
+    from data_store.config_loader import ConfigError
+
+    monkeypatch.setattr(cli, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(cli, "load_funds", lambda path: [])
+    monkeypatch.setattr(cli, "get_connection", lambda url: FakeConn([]))
+
+    def raise_config_error(path):
+        raise ConfigError("bad exchange suffixes config")
+
+    monkeypatch.setattr(cli, "load_exchange_suffixes", raise_config_error)
+
+    with pytest.raises(ConfigError, match="bad exchange suffixes config"):
+        cli.main(["ingest-ohlcv"])
 
 
 def test_backfill_ohlcv_default_run(monkeypatch, fake_settings):
@@ -228,8 +275,25 @@ def test_backfill_ohlcv_default_run(monkeypatch, fake_settings):
     monkeypatch.setattr(cli, "load_funds", lambda path: funds)
     monkeypatch.setattr(cli, "get_connection", lambda url: FakeConn([]))
 
-    def fake_backfill(conn, passed_funds, tracked_tickers, earliest_date, end_date, delay_seconds):
-        calls.append((passed_funds, tracked_tickers, earliest_date, end_date, delay_seconds))
+    def fake_backfill(
+        conn,
+        passed_funds,
+        tracked_tickers,
+        exchange_suffixes,
+        earliest_date,
+        end_date,
+        delay_seconds,
+    ):
+        calls.append(
+            (
+                passed_funds,
+                tracked_tickers,
+                exchange_suffixes,
+                earliest_date,
+                end_date,
+                delay_seconds,
+            )
+        )
         return 3
 
     monkeypatch.setattr(cli, "backfill_historical_ohlcv", fake_backfill)
@@ -238,9 +302,12 @@ def test_backfill_ohlcv_default_run(monkeypatch, fake_settings):
 
     assert exit_code == 0
     assert len(calls) == 1
-    passed_funds, tracked_tickers, earliest_date, end_date, delay_seconds = calls[0]
+    passed_funds, tracked_tickers, exchange_suffixes, earliest_date, end_date, delay_seconds = (
+        calls[0]
+    )
     assert [f.key for f in passed_funds] == ["a"]
     assert tracked_tickers == []
+    assert exchange_suffixes == {}
     assert earliest_date == date(1900, 1, 1)
     assert end_date == date.today()
     assert delay_seconds == 10.0
@@ -256,7 +323,7 @@ def test_backfill_ohlcv_respects_fund_flag(monkeypatch, fake_settings):
     monkeypatch.setattr(
         cli,
         "backfill_historical_ohlcv",
-        lambda conn, funds, tt, ed, end, ds: calls.append(funds) or 0,
+        lambda conn, funds, tt, ex, ed, end, ds: calls.append(funds) or 0,
     )
 
     cli.main(["backfill-ohlcv", "--fund", "b"])
@@ -273,7 +340,7 @@ def test_backfill_ohlcv_respects_earliest_date_and_delay_flags(monkeypatch, fake
     monkeypatch.setattr(
         cli,
         "backfill_historical_ohlcv",
-        lambda conn, funds, tt, ed, end, ds: calls.append((ed, ds)) or 0,
+        lambda conn, funds, tt, ex, ed, end, ds: calls.append((ed, ds)) or 0,
     )
 
     cli.main(["backfill-ohlcv", "--earliest-date", "2000-06-15", "--delay-seconds", "3.5"])
@@ -290,6 +357,7 @@ def test_backfill_ohlcv_ticker_flag_filters_tracked_tickers_and_empties_funds(
         database_url=fake_settings.database_url,
         config_path=fake_settings.config_path,
         tracked_tickers_path=tmp_path / "tracked_tickers.yaml",
+        exchange_suffixes_path=fake_settings.exchange_suffixes_path,
     )
     (tmp_path / "tracked_tickers.yaml").write_text("tickers: []\n")
     tracked = [
@@ -306,7 +374,7 @@ def test_backfill_ohlcv_ticker_flag_filters_tracked_tickers_and_empties_funds(
     monkeypatch.setattr(
         cli,
         "backfill_historical_ohlcv",
-        lambda conn, funds, tt, ed, end, ds: calls.append((funds, tt)) or 0,
+        lambda conn, funds, tt, ex, ed, end, ds: calls.append((funds, tt)) or 0,
     )
 
     cli.main(["backfill-ohlcv", "--ticker", "BABA", "--ticker", "NVCR"])
@@ -325,9 +393,43 @@ def test_backfill_ohlcv_treats_missing_tracked_tickers_file_as_empty(monkeypatch
     monkeypatch.setattr(
         cli,
         "backfill_historical_ohlcv",
-        lambda conn, funds, tt, ed, end, ds: calls.append(tt) or 0,
+        lambda conn, funds, tt, ex, ed, end, ds: calls.append(tt) or 0,
     )
 
     cli.main(["backfill-ohlcv"])
 
     assert calls[0] == []
+
+
+def test_backfill_ohlcv_loads_and_passes_exchange_suffixes(monkeypatch, fake_settings):
+    calls = []
+
+    monkeypatch.setattr(cli, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(cli, "load_funds", lambda path: [])
+    monkeypatch.setattr(cli, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(cli, "load_exchange_suffixes", lambda path: {"NASDAQ": None})
+    monkeypatch.setattr(
+        cli,
+        "backfill_historical_ohlcv",
+        lambda conn, funds, tt, ex, ed, end, ds: calls.append(ex) or 0,
+    )
+
+    cli.main(["backfill-ohlcv"])
+
+    assert calls[0] == {"NASDAQ": None}
+
+
+def test_backfill_ohlcv_propagates_config_error_from_exchange_suffixes(monkeypatch, fake_settings):
+    from data_store.config_loader import ConfigError
+
+    monkeypatch.setattr(cli, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(cli, "load_funds", lambda path: [])
+    monkeypatch.setattr(cli, "get_connection", lambda url: FakeConn([]))
+
+    def raise_config_error(path):
+        raise ConfigError("bad exchange suffixes config")
+
+    monkeypatch.setattr(cli, "load_exchange_suffixes", raise_config_error)
+
+    with pytest.raises(ConfigError, match="bad exchange suffixes config"):
+        cli.main(["backfill-ohlcv"])

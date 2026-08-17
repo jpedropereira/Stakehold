@@ -42,6 +42,7 @@ def ingest_daily_ohlcv(
     conn,
     funds: list[FundConfig],
     tracked_tickers: list[TickerConfig],
+    exchange_suffixes: dict[str, str | None],
     start_date: date,
     end_date: date,
 ) -> int:
@@ -49,7 +50,7 @@ def ingest_daily_ohlcv(
     resolved into a single deduped map first (not fetched per-source) so a ticker that's both
     a fund holding and an explicitly tracked ticker — or held by more than one fund — is only
     fetched once, not once per source."""
-    resolved = _resolve_priceable_tickers(conn, funds, tracked_tickers)
+    resolved = _resolve_priceable_tickers(conn, funds, tracked_tickers, exchange_suffixes)
     if not resolved:
         return 0
 
@@ -74,6 +75,7 @@ def backfill_historical_ohlcv(
     conn,
     funds: list[FundConfig],
     tracked_tickers: list[TickerConfig],
+    exchange_suffixes: dict[str, str | None],
     earliest_date: date,
     end_date: date,
     delay_seconds: float,
@@ -94,7 +96,7 @@ def backfill_historical_ohlcv(
     # actually needs attention, e.g. a delisted/mistyped ticker).
     logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
-    resolved = _resolve_priceable_tickers(conn, funds, tracked_tickers)
+    resolved = _resolve_priceable_tickers(conn, funds, tracked_tickers, exchange_suffixes)
     if not resolved:
         return 0
 
@@ -156,18 +158,49 @@ def backfill_historical_ohlcv(
 
 
 def _resolve_priceable_tickers(
-    conn, funds: list[FundConfig], tracked_tickers: list[TickerConfig]
+    conn,
+    funds: list[FundConfig],
+    tracked_tickers: list[TickerConfig],
+    exchange_suffixes: dict[str, str | None],
 ) -> dict[str, tuple[str, str]]:
-    """{ticker: (asset_type, price_source)}. Holdings-derived tickers default to
-    ("equity", fund.price_source); explicit tracked_tickers entries win for tickers that
-    appear in both."""
+    """{ticker: (asset_type, price_source)}. Holdings-derived tickers are resolved into their
+    yfinance-ready suffixed form (e.g. "0700" on "Hong Kong Exchanges And Clearing Ltd" ->
+    "0700.HK") via exchange_suffixes and default to ("equity", fund.price_source); a raw
+    ticker whose exchange has no mapping entry is dropped (logged, not fetched -- see
+    _resolve_yfinance_ticker). Explicit tracked_tickers entries -- already fully yfinance-ready
+    -- are never suffix-resolved, and win for tickers that appear in both."""
     resolved: dict[str, tuple[str, str]] = {}
     for fund in funds:
-        for ticker in _clean_tickers(get_latest_tickers(conn, fund.key)):
-            resolved.setdefault(ticker, ("equity", fund.price_source))
+        for raw_ticker, exchange in get_latest_tickers(conn, fund.key):
+            ticker = (raw_ticker or "").strip()
+            if not ticker:
+                continue
+            yf_ticker = _resolve_yfinance_ticker(ticker, exchange, exchange_suffixes)
+            if yf_ticker is None:
+                continue
+            resolved.setdefault(yf_ticker, ("equity", fund.price_source))
     for tt in tracked_tickers:
         resolved[tt.ticker] = (tt.asset_type, tt.price_source)
     return resolved
+
+
+def _resolve_yfinance_ticker(
+    ticker: str, exchange: str | None, exchange_suffixes: dict[str, str | None]
+) -> str | None:
+    """`ticker` + the yfinance suffix mapped for `exchange`. Returns None (after logging a
+    warning naming both) when `exchange` has no entry in exchange_suffixes -- an unresolvable
+    ticker must never be sent to yfinance bare, since yfinance won't error on a wrong/bare
+    ticker, it just silently returns no data."""
+    exchange_key = (exchange or "").strip()
+    if exchange_key not in exchange_suffixes:
+        logger.warning(
+            "No yfinance suffix mapped for exchange %r (ticker %r); skipping from this run.",
+            exchange_key,
+            ticker,
+        )
+        return None
+    suffix = exchange_suffixes[exchange_key] or ""
+    return f"{ticker}{suffix}"
 
 
 def _group_by_source_and_type(
@@ -177,14 +210,3 @@ def _group_by_source_and_type(
     for ticker, (asset_type, price_source) in resolved.items():
         groups.setdefault((price_source, asset_type), []).append(ticker)
     return groups
-
-
-def _clean_tickers(tickers: list[str]) -> list[str]:
-    seen = set()
-    cleaned = []
-    for ticker in tickers:
-        ticker = (ticker or "").strip()
-        if ticker and ticker not in seen:
-            seen.add(ticker)
-            cleaned.append(ticker)
-    return cleaned

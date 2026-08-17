@@ -6,6 +6,7 @@ from pathlib import Path
 from data_store.config_loader import (
     FundConfig,
     TickerConfig,
+    load_exchange_suffixes,
     load_funds,
     load_tracked_tickers,
 )
@@ -64,11 +65,14 @@ def _ingest_ohlcv(args: argparse.Namespace) -> int:
     settings = load_settings()
     funds = _select_funds(load_funds(settings.config_path), args.fund)
     tracked_tickers = _load_enabled_tracked_tickers(settings.tracked_tickers_path)
+    exchange_suffixes = load_exchange_suffixes(settings.exchange_suffixes_path)
     end_date = date.today()
     start_date = end_date - timedelta(days=args.days)
     conn = get_connection(settings.database_url)
     try:
-        count = ingest_daily_ohlcv(conn, funds, tracked_tickers, start_date, end_date)
+        count = ingest_daily_ohlcv(
+            conn, funds, tracked_tickers, exchange_suffixes, start_date, end_date
+        )
         print(f"{count} price rows")
     finally:
         conn.close()
@@ -79,6 +83,7 @@ def _backfill_ohlcv(args: argparse.Namespace) -> int:
     settings = load_settings()
     funds = _select_funds(load_funds(settings.config_path), args.fund)
     tracked_tickers = _load_enabled_tracked_tickers(settings.tracked_tickers_path)
+    exchange_suffixes = load_exchange_suffixes(settings.exchange_suffixes_path)
     if args.ticker:
         wanted = set(args.ticker)
         funds = []
@@ -88,7 +93,13 @@ def _backfill_ohlcv(args: argparse.Namespace) -> int:
     conn = get_connection(settings.database_url)
     try:
         count = backfill_historical_ohlcv(
-            conn, funds, tracked_tickers, earliest_date, end_date, args.delay_seconds
+            conn,
+            funds,
+            tracked_tickers,
+            exchange_suffixes,
+            earliest_date,
+            end_date,
+            args.delay_seconds,
         )
         print(f"{count} price rows")
     finally:

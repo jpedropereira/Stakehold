@@ -39,14 +39,15 @@ def save_holdings(conn, fund_key: str, as_of_date: date, df: pd.DataFrame) -> in
     return len(df)
 
 
-def get_latest_tickers(conn, fund_key: str) -> list[str]:
-    """Equity tickers from the most recent as_of_date snapshot for fund_key. Excludes
-    cash/derivative lines (no ticker, or a futures/FX contract code rather than a tradeable
-    equity ticker yfinance can price)."""
+def get_latest_tickers(conn, fund_key: str) -> list[tuple[str, str | None]]:
+    """(holding_ticker, exchange) pairs from the most recent as_of_date snapshot for fund_key.
+    Excludes cash/derivative lines (no ticker, or a futures/FX contract code rather than a
+    tradeable equity ticker yfinance can price). `exchange` is the raw scraped string --
+    resolving it into a yfinance suffix is the caller's job, not this function's."""
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT holding_ticker FROM etf_holdings
+            SELECT holding_ticker, exchange FROM etf_holdings
             WHERE fund_key = %s
               AND as_of_date = (
                   SELECT MAX(as_of_date) FROM etf_holdings WHERE fund_key = %s
@@ -56,4 +57,4 @@ def get_latest_tickers(conn, fund_key: str) -> list[str]:
             """,
             (fund_key, fund_key),
         )
-        return [row[0] for row in cur.fetchall()]
+        return [(row[0], row[1]) for row in cur.fetchall()]

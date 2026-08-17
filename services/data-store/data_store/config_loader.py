@@ -5,6 +5,7 @@ import yaml
 
 _REQUIRED_FIELDS = ("key", "display_name", "provider", "url", "price_source", "enabled")
 _TICKER_REQUIRED_FIELDS = ("ticker", "display_name", "asset_type", "price_source", "enabled")
+_EXCHANGE_SUFFIX_REQUIRED_FIELDS = ("exchange", "suffix")
 VALID_ASSET_TYPES = {"equity", "etf", "commodity", "crypto", "etc"}
 
 
@@ -111,3 +112,41 @@ def load_tracked_tickers(path: Path) -> list[TickerConfig]:
         )
 
     return tickers
+
+
+def load_exchange_suffixes(path: Path) -> dict[str, str | None]:
+    """{raw exchange string: yfinance suffix, or None if that exchange needs no suffix}.
+    Unlike load_funds/load_tracked_tickers this returns a dict, not a list of dataclasses --
+    it's fundamentally a lookup table (no per-entry identity/enabled flag), and dict-key
+    presence is what lets "unmapped" and "mapped with no suffix" stay distinguishable to
+    callers."""
+    if not path.is_file():
+        raise ConfigError(f"Config file not found: {path}")
+
+    with path.open() as f:
+        data = yaml.safe_load(f) or {}
+
+    entries = data.get("exchanges") or []
+    if not entries:
+        raise ConfigError(f"Config file has no exchanges defined: {path}")
+
+    suffixes: dict[str, str | None] = {}
+    for entry in entries:
+        missing = [field for field in _EXCHANGE_SUFFIX_REQUIRED_FIELDS if field not in entry]
+        if missing:
+            raise ConfigError(f"Exchange entry missing required field(s): {', '.join(missing)}")
+
+        exchange = entry["exchange"]
+        if exchange in suffixes:
+            raise ConfigError(f"Duplicate exchange: {exchange}")
+
+        suffix = entry["suffix"]
+        if suffix is not None and (not isinstance(suffix, str) or not suffix.startswith(".")):
+            raise ConfigError(
+                f"Invalid suffix {suffix!r} for exchange {exchange!r}; "
+                "must be null or a string starting with '.'"
+            )
+
+        suffixes[exchange] = suffix
+
+    return suffixes

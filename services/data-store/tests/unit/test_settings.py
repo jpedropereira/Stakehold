@@ -61,3 +61,21 @@ def test_tracked_tickers_path_overridable_via_env(monkeypatch, tmp_path):
     result = load_settings()
 
     assert result.tracked_tickers_path == tmp_path / "custom.yaml"
+
+
+def test_exchange_suffixes_path_defaults_to_config_yfinance_exchange_suffixes_yaml(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost/db")
+    monkeypatch.delenv("DATA_STORE_EXCHANGE_SUFFIXES_PATH", raising=False)
+
+    result = load_settings()
+
+    assert result.exchange_suffixes_path == Path("config/yfinance_exchange_suffixes.yaml")
+
+
+def test_exchange_suffixes_path_overridable_via_env(monkeypatch, tmp_path):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost/db")
+    monkeypatch.setenv("DATA_STORE_EXCHANGE_SUFFIXES_PATH", str(tmp_path / "custom.yaml"))
+
+    result = load_settings()
+
+    assert result.exchange_suffixes_path == tmp_path / "custom.yaml"

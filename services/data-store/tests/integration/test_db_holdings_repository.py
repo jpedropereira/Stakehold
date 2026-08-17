@@ -159,5 +159,5 @@ def test_get_latest_tickers_returns_most_recent_snapshot_only():
 
     tickers = get_latest_tickers(conn, "test_fund")
 
-    assert tickers == ["AAPL"]  # not ESU6 (futures) or the null-ticker cash line
+    assert tickers == [("AAPL", "NASDAQ")]  # not ESU6 (futures) or the null-ticker cash line
     conn.close()
