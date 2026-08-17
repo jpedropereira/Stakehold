@@ -26,6 +26,13 @@ def stub_load_exchange_suffixes(monkeypatch):
     monkeypatch.setattr(cli, "load_exchange_suffixes", lambda path: {})
 
 
+@pytest.fixture(autouse=True)
+def stub_load_ticker_overrides(monkeypatch):
+    # ticker_overrides live in the same file/setting as exchange_suffixes and are loaded
+    # unconditionally alongside it -- stub to empty by default for the same reason.
+    monkeypatch.setattr(cli, "load_ticker_overrides", lambda path: {})
+
+
 def make_fund(key, enabled=True):
     return FundConfig(
         key=key,
@@ -151,8 +158,19 @@ def test_ingest_ohlcv_runs_for_all_enabled_funds_with_default_lookback(monkeypat
     monkeypatch.setattr(cli, "load_funds", lambda path: funds)
     monkeypatch.setattr(cli, "get_connection", lambda url: FakeConn([]))
 
-    def fake_ingest(conn, passed_funds, tracked_tickers, exchange_suffixes, start_date, end_date):
-        calls.append((passed_funds, tracked_tickers, exchange_suffixes, start_date, end_date))
+    def fake_ingest(
+        conn,
+        passed_funds,
+        tracked_tickers,
+        exchange_suffixes,
+        start_date,
+        end_date,
+        only_tickers=None,
+        ticker_overrides=None,
+    ):
+        calls.append(
+            (passed_funds, tracked_tickers, exchange_suffixes, start_date, end_date, only_tickers)
+        )
         return 3
 
     monkeypatch.setattr(cli, "ingest_daily_ohlcv", fake_ingest)
@@ -161,10 +179,11 @@ def test_ingest_ohlcv_runs_for_all_enabled_funds_with_default_lookback(monkeypat
 
     assert exit_code == 0
     assert len(calls) == 1
-    passed_funds, tracked_tickers, exchange_suffixes, start_date, end_date = calls[0]
+    passed_funds, tracked_tickers, exchange_suffixes, start_date, end_date, only_tickers = calls[0]
     assert [f.key for f in passed_funds] == ["a"]
     assert tracked_tickers == []  # tracked_tickers.yaml doesn't exist in fake_settings
     assert exchange_suffixes == {}
+    assert only_tickers is None
     assert end_date == date.today()
     assert (end_date - start_date).days == 7
 
@@ -179,13 +198,59 @@ def test_ingest_ohlcv_respects_days_flag(monkeypatch, fake_settings):
     monkeypatch.setattr(
         cli,
         "ingest_daily_ohlcv",
-        lambda conn, funds, tt, ex, s, e: calls.append((s, e)) or 1,
+        lambda conn, funds, tt, ex, s, e, only_tickers=None, ticker_overrides=None: calls.append(
+            (s, e)
+        )
+        or 1,
     )
 
     cli.main(["ingest-ohlcv", "--days", "30"])
 
     start_date, end_date = calls[0]
     assert (end_date - start_date).days == 30
+
+
+def test_ingest_ohlcv_ticker_flag_passes_only_tickers_filter(monkeypatch, fake_settings):
+    funds = [make_fund("a")]
+    calls = []
+
+    monkeypatch.setattr(cli, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(cli, "load_funds", lambda path: funds)
+    monkeypatch.setattr(cli, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(
+        cli,
+        "ingest_daily_ohlcv",
+        lambda conn, funds, tt, ex, s, e, only_tickers=None, ticker_overrides=None: calls.append(
+            (funds, only_tickers)
+        )
+        or 0,
+    )
+
+    cli.main(["ingest-ohlcv", "--ticker", "BABA", "--ticker", "0700.HK"])
+
+    passed_funds, only_tickers = calls[0]
+    assert [f.key for f in passed_funds] == ["a"]
+    assert only_tickers == {"BABA", "0700.HK"}
+
+
+def test_ingest_ohlcv_without_ticker_flag_passes_none(monkeypatch, fake_settings):
+    calls = []
+
+    monkeypatch.setattr(cli, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(cli, "load_funds", lambda path: [])
+    monkeypatch.setattr(cli, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(
+        cli,
+        "ingest_daily_ohlcv",
+        lambda conn, funds, tt, ex, s, e, only_tickers=None, ticker_overrides=None: calls.append(
+            only_tickers
+        )
+        or 0,
+    )
+
+    cli.main(["ingest-ohlcv"])
+
+    assert calls[0] is None
 
 
 def test_ingest_ohlcv_includes_enabled_tracked_tickers(monkeypatch, fake_settings, tmp_path):
@@ -206,7 +271,8 @@ def test_ingest_ohlcv_includes_enabled_tracked_tickers(monkeypatch, fake_setting
     monkeypatch.setattr(
         cli,
         "ingest_daily_ohlcv",
-        lambda conn, funds, tt, ex, s, e: calls.append(tt) or 1,
+        lambda conn, funds, tt, ex, s, e, only_tickers=None, ticker_overrides=None: calls.append(tt)
+        or 1,
     )
 
     cli.main(["ingest-ohlcv"])
@@ -223,7 +289,8 @@ def test_ingest_ohlcv_treats_missing_tracked_tickers_file_as_empty(monkeypatch, 
     monkeypatch.setattr(
         cli,
         "ingest_daily_ohlcv",
-        lambda conn, funds, tt, ex, s, e: calls.append(tt) or 0,
+        lambda conn, funds, tt, ex, s, e, only_tickers=None, ticker_overrides=None: calls.append(tt)
+        or 0,
     )
 
     cli.main(["ingest-ohlcv"])
@@ -243,12 +310,34 @@ def test_ingest_ohlcv_loads_and_passes_exchange_suffixes(monkeypatch, fake_setti
     monkeypatch.setattr(
         cli,
         "ingest_daily_ohlcv",
-        lambda conn, funds, tt, ex, s, e: calls.append(ex) or 0,
+        lambda conn, funds, tt, ex, s, e, only_tickers=None, ticker_overrides=None: calls.append(ex)
+        or 0,
     )
 
     cli.main(["ingest-ohlcv"])
 
     assert calls[0] == {"NASDAQ": None, "London Stock Exchange": ".L"}
+
+
+def test_ingest_ohlcv_loads_and_passes_ticker_overrides(monkeypatch, fake_settings):
+    calls = []
+
+    monkeypatch.setattr(cli, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(cli, "load_funds", lambda path: [])
+    monkeypatch.setattr(cli, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(cli, "load_ticker_overrides", lambda path: {"BRKB": "BRK-B"})
+    monkeypatch.setattr(
+        cli,
+        "ingest_daily_ohlcv",
+        lambda conn, funds, tt, ex, s, e, only_tickers=None, ticker_overrides=None: calls.append(
+            ticker_overrides
+        )
+        or 0,
+    )
+
+    cli.main(["ingest-ohlcv"])
+
+    assert calls[0] == {"BRKB": "BRK-B"}
 
 
 def test_ingest_ohlcv_propagates_config_error_from_exchange_suffixes(monkeypatch, fake_settings):
@@ -283,6 +372,8 @@ def test_backfill_ohlcv_default_run(monkeypatch, fake_settings):
         earliest_date,
         end_date,
         delay_seconds,
+        only_tickers=None,
+        ticker_overrides=None,
     ):
         calls.append(
             (
@@ -292,6 +383,7 @@ def test_backfill_ohlcv_default_run(monkeypatch, fake_settings):
                 earliest_date,
                 end_date,
                 delay_seconds,
+                only_tickers,
             )
         )
         return 3
@@ -302,12 +394,19 @@ def test_backfill_ohlcv_default_run(monkeypatch, fake_settings):
 
     assert exit_code == 0
     assert len(calls) == 1
-    passed_funds, tracked_tickers, exchange_suffixes, earliest_date, end_date, delay_seconds = (
-        calls[0]
-    )
+    (
+        passed_funds,
+        tracked_tickers,
+        exchange_suffixes,
+        earliest_date,
+        end_date,
+        delay_seconds,
+        only_tickers,
+    ) = calls[0]
     assert [f.key for f in passed_funds] == ["a"]
     assert tracked_tickers == []
     assert exchange_suffixes == {}
+    assert only_tickers is None
     assert earliest_date == date(1900, 1, 1)
     assert end_date == date.today()
     assert delay_seconds == 10.0
@@ -323,7 +422,7 @@ def test_backfill_ohlcv_respects_fund_flag(monkeypatch, fake_settings):
     monkeypatch.setattr(
         cli,
         "backfill_historical_ohlcv",
-        lambda conn, funds, tt, ex, ed, end, ds: calls.append(funds) or 0,
+        lambda conn, funds, tt, ex, ed, end, ds, **kw: calls.append(funds) or 0,
     )
 
     cli.main(["backfill-ohlcv", "--fund", "b"])
@@ -340,7 +439,7 @@ def test_backfill_ohlcv_respects_earliest_date_and_delay_flags(monkeypatch, fake
     monkeypatch.setattr(
         cli,
         "backfill_historical_ohlcv",
-        lambda conn, funds, tt, ex, ed, end, ds: calls.append((ed, ds)) or 0,
+        lambda conn, funds, tt, ex, ed, end, ds, **kw: calls.append((ed, ds)) or 0,
     )
 
     cli.main(["backfill-ohlcv", "--earliest-date", "2000-06-15", "--delay-seconds", "3.5"])
@@ -350,38 +449,49 @@ def test_backfill_ohlcv_respects_earliest_date_and_delay_flags(monkeypatch, fake
     assert delay_seconds == 3.5
 
 
-def test_backfill_ohlcv_ticker_flag_filters_tracked_tickers_and_empties_funds(
-    monkeypatch, fake_settings, tmp_path
-):
-    settings = Settings(
-        database_url=fake_settings.database_url,
-        config_path=fake_settings.config_path,
-        tracked_tickers_path=tmp_path / "tracked_tickers.yaml",
-        exchange_suffixes_path=fake_settings.exchange_suffixes_path,
-    )
-    (tmp_path / "tracked_tickers.yaml").write_text("tickers: []\n")
-    tracked = [
-        make_tracked_ticker("BABA"),
-        make_tracked_ticker("NVCR"),
-        make_tracked_ticker("IWDA.AS"),
-    ]
+def test_backfill_ohlcv_ticker_flag_passes_only_tickers_filter(monkeypatch, fake_settings):
+    # --ticker no longer pre-filters tracked_tickers.yaml and empties funds -- it passes an
+    # only_tickers filter through to backfill_historical_ohlcv, applied *after* suffix
+    # resolution, so it can target holdings-derived tickers (e.g. "0700.HK") too, not just
+    # tracked_tickers entries. funds/tracked_tickers loading stays untouched.
+    funds = [make_fund("a")]
     calls = []
 
-    monkeypatch.setattr(cli, "load_settings", lambda: settings)
-    monkeypatch.setattr(cli, "load_funds", lambda path: [make_fund("a")])
-    monkeypatch.setattr(cli, "load_tracked_tickers", lambda path: tracked)
+    monkeypatch.setattr(cli, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(cli, "load_funds", lambda path: funds)
     monkeypatch.setattr(cli, "get_connection", lambda url: FakeConn([]))
     monkeypatch.setattr(
         cli,
         "backfill_historical_ohlcv",
-        lambda conn, funds, tt, ex, ed, end, ds: calls.append((funds, tt)) or 0,
+        lambda conn, funds, tt, ex, ed, end, ds, only_tickers=None, **kw: calls.append(
+            (funds, only_tickers)
+        )
+        or 0,
     )
 
-    cli.main(["backfill-ohlcv", "--ticker", "BABA", "--ticker", "NVCR"])
+    cli.main(["backfill-ohlcv", "--ticker", "BABA", "--ticker", "0700.HK"])
 
-    passed_funds, passed_tickers = calls[0]
-    assert passed_funds == []
-    assert sorted(t.ticker for t in passed_tickers) == ["BABA", "NVCR"]
+    passed_funds, only_tickers = calls[0]
+    assert [f.key for f in passed_funds] == ["a"]
+    assert only_tickers == {"BABA", "0700.HK"}
+
+
+def test_backfill_ohlcv_without_ticker_flag_passes_none(monkeypatch, fake_settings):
+    calls = []
+
+    monkeypatch.setattr(cli, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(cli, "load_funds", lambda path: [])
+    monkeypatch.setattr(cli, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(
+        cli,
+        "backfill_historical_ohlcv",
+        lambda conn, funds, tt, ex, ed, end, ds, only_tickers=None, **kw: calls.append(only_tickers)
+        or 0,
+    )
+
+    cli.main(["backfill-ohlcv"])
+
+    assert calls[0] is None
 
 
 def test_backfill_ohlcv_treats_missing_tracked_tickers_file_as_empty(monkeypatch, fake_settings):
@@ -393,7 +503,7 @@ def test_backfill_ohlcv_treats_missing_tracked_tickers_file_as_empty(monkeypatch
     monkeypatch.setattr(
         cli,
         "backfill_historical_ohlcv",
-        lambda conn, funds, tt, ex, ed, end, ds: calls.append(tt) or 0,
+        lambda conn, funds, tt, ex, ed, end, ds, **kw: calls.append(tt) or 0,
     )
 
     cli.main(["backfill-ohlcv"])
@@ -411,12 +521,33 @@ def test_backfill_ohlcv_loads_and_passes_exchange_suffixes(monkeypatch, fake_set
     monkeypatch.setattr(
         cli,
         "backfill_historical_ohlcv",
-        lambda conn, funds, tt, ex, ed, end, ds: calls.append(ex) or 0,
+        lambda conn, funds, tt, ex, ed, end, ds, **kw: calls.append(ex) or 0,
     )
 
     cli.main(["backfill-ohlcv"])
 
     assert calls[0] == {"NASDAQ": None}
+
+
+def test_backfill_ohlcv_loads_and_passes_ticker_overrides(monkeypatch, fake_settings):
+    calls = []
+
+    monkeypatch.setattr(cli, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(cli, "load_funds", lambda path: [])
+    monkeypatch.setattr(cli, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(cli, "load_ticker_overrides", lambda path: {"BRKB": "BRK-B"})
+    monkeypatch.setattr(
+        cli,
+        "backfill_historical_ohlcv",
+        lambda conn, funds, tt, ex, ed, end, ds, ticker_overrides=None, **kw: calls.append(
+            ticker_overrides
+        )
+        or 0,
+    )
+
+    cli.main(["backfill-ohlcv"])
+
+    assert calls[0] == {"BRKB": "BRK-B"}
 
 
 def test_backfill_ohlcv_propagates_config_error_from_exchange_suffixes(monkeypatch, fake_settings):

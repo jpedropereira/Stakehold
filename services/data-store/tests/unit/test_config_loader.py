@@ -5,6 +5,7 @@ from data_store.config_loader import (
     TickerConfig,
     load_exchange_suffixes,
     load_funds,
+    load_ticker_overrides,
     load_tracked_tickers,
 )
 
@@ -403,3 +404,78 @@ def test_rejects_suffix_not_starting_with_dot(tmp_path, bad_suffix):
 
     with pytest.raises(ConfigError, match="Invalid suffix"):
         load_exchange_suffixes(path)
+
+
+def test_loads_ticker_overrides(tmp_path):
+    path = write_exchange_suffixes_yaml(
+        tmp_path,
+        """
+        exchanges:
+          - exchange: "NASDAQ"
+            suffix: null
+        ticker_overrides:
+          - raw_ticker: BRKB
+            ticker: BRK-B
+          - raw_ticker: HEIA
+            ticker: HEIA.AS
+        """,
+    )
+
+    overrides = load_ticker_overrides(path)
+
+    assert overrides == {"BRKB": "BRK-B", "HEIA": "HEIA.AS"}
+
+
+def test_ticker_overrides_section_is_optional(tmp_path):
+    # Unlike `exchanges:`, an absent or empty `ticker_overrides:` section is not an error --
+    # most deployments won't have any known source-data mistags to override yet.
+    path = write_exchange_suffixes_yaml(
+        tmp_path,
+        """
+        exchanges:
+          - exchange: "NASDAQ"
+            suffix: null
+        """,
+    )
+
+    assert load_ticker_overrides(path) == {}
+
+
+def test_rejects_missing_ticker_overrides_file(tmp_path):
+    with pytest.raises(ConfigError, match="not found"):
+        load_ticker_overrides(tmp_path / "does-not-exist.yaml")
+
+
+def test_rejects_ticker_override_entry_missing_required_field(tmp_path):
+    path = write_exchange_suffixes_yaml(
+        tmp_path,
+        """
+        exchanges:
+          - exchange: "NASDAQ"
+            suffix: null
+        ticker_overrides:
+          - raw_ticker: BRKB
+        """,
+    )
+
+    with pytest.raises(ConfigError, match="ticker"):
+        load_ticker_overrides(path)
+
+
+def test_rejects_duplicate_ticker_override(tmp_path):
+    path = write_exchange_suffixes_yaml(
+        tmp_path,
+        """
+        exchanges:
+          - exchange: "NASDAQ"
+            suffix: null
+        ticker_overrides:
+          - raw_ticker: BRKB
+            ticker: BRK-B
+          - raw_ticker: BRKB
+            ticker: BRK.B
+        """,
+    )
+
+    with pytest.raises(ConfigError, match="(?i)duplicate"):
+        load_ticker_overrides(path)

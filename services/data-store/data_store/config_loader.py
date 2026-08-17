@@ -6,6 +6,7 @@ import yaml
 _REQUIRED_FIELDS = ("key", "display_name", "provider", "url", "price_source", "enabled")
 _TICKER_REQUIRED_FIELDS = ("ticker", "display_name", "asset_type", "price_source", "enabled")
 _EXCHANGE_SUFFIX_REQUIRED_FIELDS = ("exchange", "suffix")
+_TICKER_OVERRIDE_REQUIRED_FIELDS = ("raw_ticker", "ticker")
 VALID_ASSET_TYPES = {"equity", "etf", "commodity", "crypto", "etc"}
 
 
@@ -150,3 +151,36 @@ def load_exchange_suffixes(path: Path) -> dict[str, str | None]:
         suffixes[exchange] = suffix
 
     return suffixes
+
+
+def load_ticker_overrides(path: Path) -> dict[str, str]:
+    """{raw ticker: final yfinance-ready ticker}, read from the same file as
+    load_exchange_suffixes (a different top-level key). For one-off cases plain
+    exchange-suffix resolution can't handle: a raw ticker that needs a full rewrite (e.g.
+    "BRKB" -> "BRK-B", a share-class ticker the source didn't separate), or one whose source
+    exchange tagging is simply wrong (e.g. "HEIA" tagged under a US exchange but actually
+    needing "HEIA.AS"). Unlike `exchanges:`, `ticker_overrides:` is optional -- an absent or
+    empty section just means none are configured yet, not a config error."""
+    if not path.is_file():
+        raise ConfigError(f"Config file not found: {path}")
+
+    with path.open() as f:
+        data = yaml.safe_load(f) or {}
+
+    entries = data.get("ticker_overrides") or []
+
+    overrides: dict[str, str] = {}
+    for entry in entries:
+        missing = [field for field in _TICKER_OVERRIDE_REQUIRED_FIELDS if field not in entry]
+        if missing:
+            raise ConfigError(
+                f"Ticker override entry missing required field(s): {', '.join(missing)}"
+            )
+
+        raw_ticker = entry["raw_ticker"]
+        if raw_ticker in overrides:
+            raise ConfigError(f"Duplicate ticker override: {raw_ticker}")
+
+        overrides[raw_ticker] = entry["ticker"]
+
+    return overrides
