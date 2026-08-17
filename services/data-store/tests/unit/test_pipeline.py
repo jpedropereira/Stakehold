@@ -260,3 +260,180 @@ def test_ingest_daily_ohlcv_raises_on_unknown_price_source():
 
     with pytest.raises(ValueError, match="unknown_source"):
         pipeline.ingest_daily_ohlcv(object(), [], tracked, date(2026, 1, 1), date(2026, 1, 10))
+
+
+class FakeSinglePriceSource:
+    name = "yfinance"
+
+    def __init__(self, *, fail_tickers=None):
+        self.fetch_calls = []
+        self.fail_tickers = fail_tickers or set()
+
+    def fetch(self, tickers, start_date, end_date):
+        ticker = tickers[0]
+        self.fetch_calls.append((ticker, start_date, end_date))
+        if ticker in self.fail_tickers:
+            raise RuntimeError(f"{ticker} failed")
+        return pd.DataFrame({"ticker": [ticker], "price_date": [start_date]})
+
+
+def test_backfill_fetches_full_range_when_no_existing_data(monkeypatch):
+    conn = object()
+    fake_source = FakeSinglePriceSource()
+    tracked = [make_tracked_ticker(ticker="AAPL", asset_type="equity")]
+
+    monkeypatch.setitem(pipeline.PRICE_SOURCES, "yfinance", lambda: fake_source)
+    monkeypatch.setattr(pipeline, "get_earliest_price_dates", lambda conn, source, tickers: {})
+    monkeypatch.setattr(pipeline, "save_prices", lambda conn, source, asset_type, df: len(df))
+    monkeypatch.setattr("data_store.pipeline.time.sleep", lambda s: None)
+
+    pipeline.backfill_historical_ohlcv(
+        conn, [], tracked, date(1900, 1, 1), date(2026, 1, 1), delay_seconds=0
+    )
+
+    assert fake_source.fetch_calls == [("AAPL", date(1900, 1, 1), date(2026, 1, 1))]
+
+
+def test_backfill_fetches_only_gap_before_existing_floor(monkeypatch):
+    conn = object()
+    fake_source = FakeSinglePriceSource()
+    tracked = [make_tracked_ticker(ticker="AAPL", asset_type="equity")]
+
+    monkeypatch.setitem(pipeline.PRICE_SOURCES, "yfinance", lambda: fake_source)
+    monkeypatch.setattr(
+        pipeline,
+        "get_earliest_price_dates",
+        lambda conn, source, tickers: {"AAPL": date(2010, 1, 1)},
+    )
+    monkeypatch.setattr(pipeline, "save_prices", lambda conn, source, asset_type, df: len(df))
+    monkeypatch.setattr("data_store.pipeline.time.sleep", lambda s: None)
+
+    pipeline.backfill_historical_ohlcv(
+        conn, [], tracked, date(1900, 1, 1), date(2026, 1, 1), delay_seconds=0
+    )
+
+    # fetch()'s end is exclusive, so passing the floor itself already stops the day before
+    # it -- no -1 day adjustment (that would silently drop the trading day right before it).
+    assert fake_source.fetch_calls == [("AAPL", date(1900, 1, 1), date(2010, 1, 1))]
+
+
+def test_backfill_skips_ticker_already_covered_to_earliest_date(monkeypatch):
+    conn = object()
+    fake_source = FakeSinglePriceSource()
+    tracked = [make_tracked_ticker(ticker="AAPL", asset_type="equity")]
+
+    monkeypatch.setitem(pipeline.PRICE_SOURCES, "yfinance", lambda: fake_source)
+    monkeypatch.setattr(
+        pipeline,
+        "get_earliest_price_dates",
+        lambda conn, source, tickers: {"AAPL": date(1900, 1, 1)},
+    )
+    save_calls = []
+    monkeypatch.setattr(pipeline, "save_prices", lambda *a: save_calls.append(a))
+    monkeypatch.setattr("data_store.pipeline.time.sleep", lambda s: None)
+
+    count = pipeline.backfill_historical_ohlcv(
+        conn, [], tracked, date(1900, 1, 1), date(2026, 1, 1), delay_seconds=0
+    )
+
+    assert fake_source.fetch_calls == []
+    assert save_calls == []
+    assert count == 0
+
+
+def test_backfill_sleeps_after_fetched_and_failed_tickers_not_after_skips(monkeypatch):
+    conn = object()
+    fake_source = FakeSinglePriceSource(fail_tickers={"BAD"})
+    tracked = [
+        make_tracked_ticker(ticker="AAPL", asset_type="equity"),
+        make_tracked_ticker(ticker="BAD", asset_type="equity"),
+        make_tracked_ticker(ticker="COVERED", asset_type="equity"),
+    ]
+
+    monkeypatch.setitem(pipeline.PRICE_SOURCES, "yfinance", lambda: fake_source)
+    monkeypatch.setattr(
+        pipeline,
+        "get_earliest_price_dates",
+        lambda conn, source, tickers: {"COVERED": date(1900, 1, 1)},
+    )
+    monkeypatch.setattr(pipeline, "save_prices", lambda conn, source, asset_type, df: len(df))
+    sleep_calls = []
+    monkeypatch.setattr("data_store.pipeline.time.sleep", lambda s: sleep_calls.append(s))
+
+    pipeline.backfill_historical_ohlcv(
+        conn, [], tracked, date(1900, 1, 1), date(2026, 1, 1), delay_seconds=5
+    )
+
+    # AAPL (fetched successfully) and BAD (failed) both sleep; COVERED (skipped) does not.
+    assert sleep_calls == [5, 5]
+
+
+def test_backfill_continues_after_one_ticker_fails(monkeypatch):
+    conn = object()
+    fake_source = FakeSinglePriceSource(fail_tickers={"BAD"})
+    tracked = [
+        make_tracked_ticker(ticker="BAD", asset_type="equity"),
+        make_tracked_ticker(ticker="GOOD", asset_type="equity"),
+    ]
+
+    monkeypatch.setitem(pipeline.PRICE_SOURCES, "yfinance", lambda: fake_source)
+    monkeypatch.setattr(pipeline, "get_earliest_price_dates", lambda conn, source, tickers: {})
+    save_calls = []
+    monkeypatch.setattr(
+        pipeline,
+        "save_prices",
+        lambda conn, source, asset_type, df: save_calls.append(df) or len(df),
+    )
+    monkeypatch.setattr("data_store.pipeline.time.sleep", lambda s: None)
+
+    count = pipeline.backfill_historical_ohlcv(
+        conn, [], tracked, date(1900, 1, 1), date(2026, 1, 1), delay_seconds=0
+    )
+
+    assert count == 1  # only GOOD saved
+    assert len(save_calls) == 1
+
+
+def test_backfill_groups_by_source_and_type_and_queries_floors_per_group(monkeypatch):
+    conn = object()
+    fake_source = FakeSinglePriceSource()
+    tracked = [
+        make_tracked_ticker(ticker="IWDA.AS", asset_type="etf"),
+        make_tracked_ticker(ticker="BTC-USD", asset_type="crypto"),
+    ]
+
+    monkeypatch.setitem(pipeline.PRICE_SOURCES, "yfinance", lambda: fake_source)
+    floor_calls = []
+
+    def fake_floors(conn, source, tickers):
+        floor_calls.append((source, sorted(tickers)))
+        return {}
+
+    monkeypatch.setattr(pipeline, "get_earliest_price_dates", fake_floors)
+    monkeypatch.setattr(pipeline, "save_prices", lambda conn, source, asset_type, df: len(df))
+    monkeypatch.setattr("data_store.pipeline.time.sleep", lambda s: None)
+
+    pipeline.backfill_historical_ohlcv(
+        conn, [], tracked, date(1900, 1, 1), date(2026, 1, 1), delay_seconds=0
+    )
+
+    assert sorted(floor_calls) == sorted([("yfinance", ["BTC-USD"]), ("yfinance", ["IWDA.AS"])])
+
+
+def test_backfill_raises_on_unknown_price_source():
+    tracked = [
+        make_tracked_ticker(ticker="AAPL", asset_type="equity", price_source="unknown_source")
+    ]
+
+    with pytest.raises(ValueError, match="unknown_source"):
+        pipeline.backfill_historical_ohlcv(
+            object(), [], tracked, date(1900, 1, 1), date(2026, 1, 1), delay_seconds=0
+        )
+
+
+def test_backfill_returns_zero_when_no_tickers():
+    count = pipeline.backfill_historical_ohlcv(
+        object(), [], [], date(1900, 1, 1), date(2026, 1, 1), delay_seconds=0
+    )
+
+    assert count == 0

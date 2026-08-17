@@ -2,7 +2,7 @@ from datetime import date
 
 import numpy as np
 import pandas as pd
-from data_store.prices.repository import save_prices
+from data_store.prices.repository import get_earliest_price_dates, save_prices
 
 
 class FakeCopy:
@@ -20,10 +20,11 @@ class FakeCopy:
 
 
 class FakeCursor:
-    def __init__(self):
+    def __init__(self, fetch_result=None):
         self.executed = []
         self.copy_calls = []
         self.copy_rows = []
+        self.fetch_result = fetch_result or []
 
     def execute(self, sql, params=None):
         self.executed.append((sql, params))
@@ -31,6 +32,9 @@ class FakeCursor:
     def copy(self, sql):
         self.copy_calls.append(sql)
         return FakeCopy(self.copy_rows)
+
+    def fetchall(self):
+        return self.fetch_result
 
     def __enter__(self):
         return self
@@ -40,8 +44,8 @@ class FakeCursor:
 
 
 class FakeConnection:
-    def __init__(self):
-        self._cursor = FakeCursor()
+    def __init__(self, fetch_result=None):
+        self._cursor = FakeCursor(fetch_result=fetch_result)
         self.committed = False
 
     def cursor(self):
@@ -134,3 +138,33 @@ def test_save_prices_supports_other_asset_types():
     save_prices(conn, "yfinance", "crypto", df)
 
     assert conn._cursor.copy_rows[0][3] == "crypto"
+
+
+def test_get_earliest_price_dates_returns_empty_for_no_tickers():
+    conn = FakeConnection()
+
+    result = get_earliest_price_dates(conn, "yfinance", [])
+
+    assert result == {}
+    assert conn._cursor.executed == []
+
+
+def test_get_earliest_price_dates_returns_min_date_per_ticker():
+    conn = FakeConnection(fetch_result=[("AAPL", date(2020, 1, 1)), ("MSFT", date(2015, 6, 15))])
+
+    result = get_earliest_price_dates(conn, "yfinance", ["AAPL", "MSFT", "NVCR"])
+
+    assert result == {"AAPL": date(2020, 1, 1), "MSFT": date(2015, 6, 15)}
+    assert "NVCR" not in result  # no rows for this ticker -- absent, not None
+
+
+def test_get_earliest_price_dates_query_shape():
+    conn = FakeConnection(fetch_result=[])
+
+    get_earliest_price_dates(conn, "yfinance", ["AAPL", "MSFT"])
+
+    sql, params = conn._cursor.executed[0]
+    assert "MIN(price_date)" in sql
+    assert "GROUP BY" in sql
+    assert "ANY(%s)" in sql
+    assert params == ("yfinance", ["AAPL", "MSFT"])

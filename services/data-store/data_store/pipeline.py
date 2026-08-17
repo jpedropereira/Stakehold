@@ -1,3 +1,5 @@
+import logging
+import time
 from datetime import date
 
 from data_store.config_loader import FundConfig, TickerConfig
@@ -8,8 +10,10 @@ from data_store.holdings.repository import (
     save_holdings,
 )
 from data_store.holdings.scraper import get_holdings_csv_url
-from data_store.prices.repository import save_prices
+from data_store.prices.repository import get_earliest_price_dates, save_prices
 from data_store.prices.yfinance_source import YFinancePriceSource
+
+logger = logging.getLogger(__name__)
 
 # A new fund provider or price source is a new registry entry here, not a branch in the
 # functions below.
@@ -64,6 +68,83 @@ def ingest_daily_ohlcv(
         total += save_prices(conn, price_source.name, asset_type, prices)
 
     return total
+
+
+def backfill_historical_ohlcv(
+    conn,
+    funds: list[FundConfig],
+    tracked_tickers: list[TickerConfig],
+    earliest_date: date,
+    end_date: date,
+    delay_seconds: float,
+) -> int:
+    """For each priceable ticker (same resolution as ingest_daily_ohlcv), fetches and stores
+    only the still-missing stretch of history: earliest_date up to (existing earliest stored
+    date - 1 day), or up to end_date if no rows exist yet. One ticker at a time, sleeping
+    delay_seconds after each live fetch (success or failure) — never after a skip. A ticker
+    that fails after YFinancePriceSource's internal retries is logged and skipped, not fatal
+    to the run. Re-running is cheap: a ticker that already succeeded now has a smaller (or
+    empty) remaining gap computed fresh from daily_ohlcv itself — no separate checkpoint is
+    needed, the table is the checkpoint."""
+    resolved = _resolve_priceable_tickers(conn, funds, tracked_tickers)
+    if not resolved:
+        return 0
+
+    total_rows = 0
+    processed = skipped = failed = 0
+    ticker_count = len(resolved)
+    for (price_source_name, asset_type), tickers in _group_by_source_and_type(resolved).items():
+        try:
+            price_source_cls = PRICE_SOURCES[price_source_name]
+        except KeyError:
+            raise ValueError(f"Unknown price source: {price_source_name!r}") from None
+
+        price_source = price_source_cls()
+        floors = get_earliest_price_dates(conn, price_source_name, tickers)
+        for ticker in tickers:
+            floor = floors.get(ticker)
+            # fetch()'s end is exclusive (confirmed against real yfinance), so passing floor
+            # itself as the end already stops the day before it — no -1 day adjustment needed,
+            # and one would silently drop the trading day immediately before floor.
+            fetch_end = floor if floor else end_date
+            if fetch_end <= earliest_date:
+                skipped += 1
+                processed += 1
+                print(f"backfill: {ticker} already covered back to {floor}, skipping", flush=True)
+                continue
+
+            try:
+                prices = price_source.fetch([ticker], earliest_date, fetch_end)
+            except Exception as e:
+                failed += 1
+                logger.warning("backfill: %s failed after retries, skipping: %s", ticker, e)
+                time.sleep(delay_seconds)
+                processed += 1
+                continue
+
+            if not prices.empty:
+                total_rows += save_prices(conn, price_source.name, asset_type, prices)
+                print(
+                    f"backfill: {ticker} -> {len(prices)} rows ({earliest_date} to {fetch_end})",
+                    flush=True,
+                )
+            else:
+                print(f"backfill: {ticker} -> no data ({earliest_date} to {fetch_end})", flush=True)
+            time.sleep(delay_seconds)
+            processed += 1
+            if processed % 25 == 0:
+                print(
+                    f"backfill progress: {processed}/{ticker_count} tickers, "
+                    f"{total_rows} rows so far",
+                    flush=True,
+                )
+
+    print(
+        f"backfill complete: {ticker_count} tickers "
+        f"({skipped} already covered, {failed} failed), {total_rows} rows written",
+        flush=True,
+    )
+    return total_rows
 
 
 def _resolve_priceable_tickers(
