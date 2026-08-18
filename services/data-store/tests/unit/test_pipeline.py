@@ -863,3 +863,516 @@ def test_backfill_applies_ticker_overrides_for_holdings_derived_tickers(monkeypa
     )
 
     assert [call[0] for call in fake_source.fetch_calls] == ["BRK-B"]
+
+
+class FakeDividendSource:
+    name = "yfinance"
+
+    def __init__(self):
+        self.fetch_calls = []
+
+    def fetch(self, tickers, start_date, end_date):
+        self.fetch_calls.append((sorted(tickers), start_date, end_date))
+        return pd.DataFrame({"ticker": tickers, "ex_date": [start_date] * len(tickers)})
+
+
+def _patch_dividend_source(monkeypatch, fake_source, save_calls):
+    monkeypatch.setitem(pipeline.DIVIDEND_SOURCES, "yfinance", lambda: fake_source)
+    monkeypatch.setattr(
+        pipeline,
+        "save_dividends",
+        lambda conn_arg, source, asset_type, df: save_calls.append(
+            (source, asset_type, sorted(df["ticker"]))
+        )
+        or len(df),
+    )
+
+
+def test_ingest_dividend_events_prices_holdings_derived_tickers_as_equity(monkeypatch):
+    fund = make_fund()
+    conn = object()
+    fake_source = FakeDividendSource()
+    save_calls = []
+
+    monkeypatch.setattr(
+        pipeline, "get_latest_tickers", lambda c, k: [("AAPL", "NASDAQ"), ("MSFT", "NASDAQ")]
+    )
+    _patch_dividend_source(monkeypatch, fake_source, save_calls)
+
+    count = pipeline.ingest_dividend_events(
+        conn, [fund], [], {"NASDAQ": None}, date(2026, 1, 1), date(2026, 1, 10)
+    )
+
+    assert count == 2
+    assert save_calls == [("yfinance", "equity", ["AAPL", "MSFT"])]
+
+
+def test_ingest_dividend_events_suffixes_holdings_derived_ticker_by_exchange(monkeypatch):
+    fund = make_fund()
+    conn = object()
+    fake_source = FakeDividendSource()
+    save_calls = []
+
+    monkeypatch.setattr(
+        pipeline,
+        "get_latest_tickers",
+        lambda c, k: [("0700", "Hong Kong Exchanges And Clearing Ltd")],
+    )
+    _patch_dividend_source(monkeypatch, fake_source, save_calls)
+
+    pipeline.ingest_dividend_events(
+        conn,
+        [fund],
+        [],
+        {"Hong Kong Exchanges And Clearing Ltd": ".HK"},
+        date(2026, 1, 1),
+        date(2026, 1, 10),
+    )
+
+    assert save_calls == [("yfinance", "equity", ["0700.HK"])]
+
+
+def test_ingest_dividend_events_skips_and_warns_on_unmapped_exchange(monkeypatch, caplog):
+    fund = make_fund()
+    conn = object()
+    fake_source = FakeDividendSource()
+    save_calls = []
+
+    monkeypatch.setattr(
+        pipeline,
+        "get_latest_tickers",
+        lambda c, k: [("AAPL", "NASDAQ"), ("0005", "NO MARKET (E.G. UNLISTED)")],
+    )
+    _patch_dividend_source(monkeypatch, fake_source, save_calls)
+
+    with caplog.at_level("WARNING"):
+        count = pipeline.ingest_dividend_events(
+            conn, [fund], [], {"NASDAQ": None}, date(2026, 1, 1), date(2026, 1, 10)
+        )
+
+    assert count == 1
+    assert save_calls == [("yfinance", "equity", ["AAPL"])]
+    assert "0005" in caplog.text
+    assert "NO MARKET (E.G. UNLISTED)" in caplog.text
+
+
+def test_ingest_dividend_events_prices_tracked_tickers_with_their_own_asset_type(monkeypatch):
+    conn = object()
+    fake_source = FakeDividendSource()
+    save_calls = []
+    tracked = [make_tracked_ticker(ticker="IWDA.AS", asset_type="etf")]
+
+    _patch_dividend_source(monkeypatch, fake_source, save_calls)
+
+    count = pipeline.ingest_dividend_events(
+        conn, [], tracked, {}, date(2026, 1, 1), date(2026, 1, 10)
+    )
+
+    assert count == 1
+    assert save_calls == [("yfinance", "etf", ["IWDA.AS"])]
+
+
+def test_ingest_dividend_events_dedupes_ticker_in_both_holdings_and_tracked(monkeypatch):
+    fund = make_fund()
+    conn = object()
+    fake_source = FakeDividendSource()
+    save_calls = []
+
+    monkeypatch.setattr(
+        pipeline, "get_latest_tickers", lambda c, k: [("BABA", "NASDAQ"), ("AAPL", "NASDAQ")]
+    )
+    tracked = [make_tracked_ticker(ticker="BABA", asset_type="equity")]
+    _patch_dividend_source(monkeypatch, fake_source, save_calls)
+
+    count = pipeline.ingest_dividend_events(
+        conn, [fund], tracked, {"NASDAQ": None}, date(2026, 1, 1), date(2026, 1, 10)
+    )
+
+    assert count == 2
+    assert len(fake_source.fetch_calls) == 1
+    assert fake_source.fetch_calls[0][0] == ["AAPL", "BABA"]
+
+
+def test_ingest_dividend_events_groups_by_asset_type_for_separate_save_calls(monkeypatch):
+    conn = object()
+    fake_source = FakeDividendSource()
+    save_calls = []
+    tracked = [
+        make_tracked_ticker(ticker="IWDA.AS", asset_type="etf"),
+        make_tracked_ticker(ticker="CSU.TO", asset_type="equity"),
+    ]
+
+    _patch_dividend_source(monkeypatch, fake_source, save_calls)
+
+    count = pipeline.ingest_dividend_events(
+        conn, [], tracked, {}, date(2026, 1, 1), date(2026, 1, 10)
+    )
+
+    assert count == 2
+    assert sorted(save_calls) == sorted(
+        [("yfinance", "etf", ["IWDA.AS"]), ("yfinance", "equity", ["CSU.TO"])]
+    )
+    assert len(fake_source.fetch_calls) == 2
+
+
+def test_ingest_dividend_events_returns_zero_when_no_tickers():
+    count = pipeline.ingest_dividend_events(
+        object(), [], [], {}, date(2026, 1, 1), date(2026, 1, 10)
+    )
+
+    assert count == 0
+
+
+def test_ingest_dividend_events_returns_zero_when_source_has_no_data(monkeypatch):
+    conn = object()
+
+    class EmptyDividendSource:
+        name = "empty_source"
+
+        def fetch(self, tickers, start_date, end_date):
+            return pd.DataFrame()
+
+    tracked = [make_tracked_ticker(ticker="IWDA.AS", asset_type="etf")]
+    monkeypatch.setitem(pipeline.DIVIDEND_SOURCES, "yfinance", lambda: EmptyDividendSource())
+    save_calls = []
+    monkeypatch.setattr(pipeline, "save_dividends", lambda *a: save_calls.append(a) or len(a[-1]))
+
+    count = pipeline.ingest_dividend_events(
+        conn, [], tracked, {}, date(2026, 1, 1), date(2026, 1, 10)
+    )
+
+    assert count == 0
+    assert save_calls == []
+
+
+def test_ingest_dividend_events_raises_on_unknown_dividend_source():
+    tracked = [
+        make_tracked_ticker(ticker="AAPL", asset_type="equity", price_source="unknown_source")
+    ]
+
+    with pytest.raises(ValueError, match="unknown_source"):
+        pipeline.ingest_dividend_events(
+            object(), [], tracked, {}, date(2026, 1, 1), date(2026, 1, 10)
+        )
+
+
+def test_ingest_dividend_events_filters_to_only_tickers_when_given(monkeypatch):
+    conn = object()
+    fake_source = FakeDividendSource()
+    save_calls = []
+    tracked = [
+        make_tracked_ticker(ticker="AAPL", asset_type="equity"),
+        make_tracked_ticker(ticker="MSFT", asset_type="equity"),
+    ]
+
+    _patch_dividend_source(monkeypatch, fake_source, save_calls)
+
+    count = pipeline.ingest_dividend_events(
+        conn,
+        [],
+        tracked,
+        {},
+        date(2026, 1, 1),
+        date(2026, 1, 10),
+        only_tickers={"MSFT"},
+    )
+
+    assert count == 1
+    assert save_calls == [("yfinance", "equity", ["MSFT"])]
+
+
+def test_ingest_dividend_events_only_tickers_can_target_holdings_derived_suffixed_tickers(
+    monkeypatch,
+):
+    fund = make_fund()
+    conn = object()
+    fake_source = FakeDividendSource()
+    save_calls = []
+
+    monkeypatch.setattr(
+        pipeline,
+        "get_latest_tickers",
+        lambda c, k: [("0700", "Hong Kong Exchanges And Clearing Ltd"), ("AAPL", "NASDAQ")],
+    )
+    _patch_dividend_source(monkeypatch, fake_source, save_calls)
+
+    pipeline.ingest_dividend_events(
+        conn,
+        [fund],
+        [],
+        {"Hong Kong Exchanges And Clearing Ltd": ".HK", "NASDAQ": None},
+        date(2026, 1, 1),
+        date(2026, 1, 10),
+        only_tickers={"0700.HK"},
+    )
+
+    assert save_calls == [("yfinance", "equity", ["0700.HK"])]
+
+
+def test_ingest_dividend_events_applies_ticker_overrides_for_holdings_derived_tickers(
+    monkeypatch,
+):
+    fund = make_fund()
+    conn = object()
+    fake_source = FakeDividendSource()
+    save_calls = []
+
+    monkeypatch.setattr(
+        pipeline, "get_latest_tickers", lambda c, k: [("BRKB", "New York Stock Exchange Inc.")]
+    )
+    _patch_dividend_source(monkeypatch, fake_source, save_calls)
+
+    pipeline.ingest_dividend_events(
+        conn,
+        [fund],
+        [],
+        {"New York Stock Exchange Inc.": None},
+        date(2026, 1, 1),
+        date(2026, 1, 10),
+        ticker_overrides={"BRKB": "BRK-B"},
+    )
+
+    assert save_calls == [("yfinance", "equity", ["BRK-B"])]
+
+
+def test_ingest_dividend_events_logs_run_summary(monkeypatch, capsys):
+    # Observability requirement: unlike ingest_daily_ohlcv (near-silent today),
+    # ingest_dividend_events must print enough to understand what happened without querying the
+    # DB -- resolved ticker/group counts up front, and a per-group outcome (rows found, or an
+    # explicit "no dividend data" distinguishing a real zero-dividend result, e.g. an
+    # accumulating ETF, from a fetch that returned nothing). print(), not logger.info -- this
+    # codebase has no logging.basicConfig, so logger.info is silently swallowed by default
+    # (confirmed via a live CLI dry run); print(..., flush=True) is what actually surfaces, the
+    # same style backfill_historical_ohlcv already uses.
+    conn = object()
+    fake_source = FakeDividendSource()
+    save_calls = []
+    tracked = [make_tracked_ticker(ticker="IWDA.AS", asset_type="etf")]
+
+    _patch_dividend_source(monkeypatch, fake_source, save_calls)
+
+    pipeline.ingest_dividend_events(conn, [], tracked, {}, date(2026, 1, 1), date(2026, 1, 10))
+
+    out = capsys.readouterr().out
+    assert "1" in out  # resolved ticker count appears somewhere in the summary
+    assert "IWDA.AS" not in out  # summary is count-based, not a per-ticker dump
+
+
+def test_ingest_dividend_events_logs_no_dividend_data_distinctly(monkeypatch, capsys):
+    conn = object()
+
+    class EmptyDividendSource:
+        name = "empty_source"
+
+        def fetch(self, tickers, start_date, end_date):
+            return pd.DataFrame()
+
+    tracked = [make_tracked_ticker(ticker="IWDA.AS", asset_type="etf")]
+    monkeypatch.setitem(pipeline.DIVIDEND_SOURCES, "yfinance", lambda: EmptyDividendSource())
+    monkeypatch.setattr(pipeline, "save_dividends", lambda *a: len(a[-1]))
+
+    pipeline.ingest_dividend_events(conn, [], tracked, {}, date(2026, 1, 1), date(2026, 1, 10))
+
+    assert "no dividend data" in capsys.readouterr().out.lower()
+
+
+class FakeSingleDividendSource:
+    name = "yfinance"
+
+    def __init__(self, *, fail_tickers=None):
+        self.fetch_calls = []
+        self.fail_tickers = fail_tickers or set()
+
+    def fetch(self, tickers, start_date, end_date):
+        ticker = tickers[0]
+        self.fetch_calls.append((ticker, start_date, end_date))
+        if ticker in self.fail_tickers:
+            raise RuntimeError(f"{ticker} failed")
+        return pd.DataFrame({"ticker": [ticker], "ex_date": [start_date]})
+
+
+def test_backfill_dividends_fetches_full_range_when_no_existing_data(monkeypatch):
+    conn = object()
+    fake_source = FakeSingleDividendSource()
+    tracked = [make_tracked_ticker(ticker="CSU.TO", asset_type="equity")]
+
+    monkeypatch.setitem(pipeline.DIVIDEND_SOURCES, "yfinance", lambda: fake_source)
+    monkeypatch.setattr(pipeline, "get_earliest_dividend_dates", lambda conn, source, tickers: {})
+    monkeypatch.setattr(pipeline, "save_dividends", lambda conn, source, asset_type, df: len(df))
+    monkeypatch.setattr("data_store.pipeline.time.sleep", lambda s: None)
+
+    pipeline.backfill_dividend_events(
+        conn, [], tracked, {}, date(1900, 1, 1), date(2026, 1, 1), delay_seconds=0
+    )
+
+    assert fake_source.fetch_calls == [("CSU.TO", date(1900, 1, 1), date(2026, 1, 1))]
+
+
+def test_backfill_dividends_fetches_only_gap_before_existing_floor(monkeypatch):
+    conn = object()
+    fake_source = FakeSingleDividendSource()
+    tracked = [make_tracked_ticker(ticker="CSU.TO", asset_type="equity")]
+
+    monkeypatch.setitem(pipeline.DIVIDEND_SOURCES, "yfinance", lambda: fake_source)
+    monkeypatch.setattr(
+        pipeline,
+        "get_earliest_dividend_dates",
+        lambda conn, source, tickers: {"CSU.TO": date(2008, 3, 17)},
+    )
+    monkeypatch.setattr(pipeline, "save_dividends", lambda conn, source, asset_type, df: len(df))
+    monkeypatch.setattr("data_store.pipeline.time.sleep", lambda s: None)
+
+    pipeline.backfill_dividend_events(
+        conn, [], tracked, {}, date(1900, 1, 1), date(2026, 1, 1), delay_seconds=0
+    )
+
+    assert fake_source.fetch_calls == [("CSU.TO", date(1900, 1, 1), date(2008, 3, 17))]
+
+
+def test_backfill_dividends_skips_ticker_already_covered_to_earliest_date(monkeypatch):
+    conn = object()
+    fake_source = FakeSingleDividendSource()
+    tracked = [make_tracked_ticker(ticker="CSU.TO", asset_type="equity")]
+
+    monkeypatch.setitem(pipeline.DIVIDEND_SOURCES, "yfinance", lambda: fake_source)
+    monkeypatch.setattr(
+        pipeline,
+        "get_earliest_dividend_dates",
+        lambda conn, source, tickers: {"CSU.TO": date(1900, 1, 1)},
+    )
+    save_calls = []
+    monkeypatch.setattr(pipeline, "save_dividends", lambda *a: save_calls.append(a))
+    monkeypatch.setattr("data_store.pipeline.time.sleep", lambda s: None)
+
+    count = pipeline.backfill_dividend_events(
+        conn, [], tracked, {}, date(1900, 1, 1), date(2026, 1, 1), delay_seconds=0
+    )
+
+    assert fake_source.fetch_calls == []
+    assert save_calls == []
+    assert count == 0
+
+
+def test_backfill_dividends_sleeps_after_fetched_and_failed_tickers_not_after_skips(monkeypatch):
+    conn = object()
+    fake_source = FakeSingleDividendSource(fail_tickers={"BAD"})
+    tracked = [
+        make_tracked_ticker(ticker="CSU.TO", asset_type="equity"),
+        make_tracked_ticker(ticker="BAD", asset_type="equity"),
+        make_tracked_ticker(ticker="COVERED", asset_type="equity"),
+    ]
+
+    monkeypatch.setitem(pipeline.DIVIDEND_SOURCES, "yfinance", lambda: fake_source)
+    monkeypatch.setattr(
+        pipeline,
+        "get_earliest_dividend_dates",
+        lambda conn, source, tickers: {"COVERED": date(1900, 1, 1)},
+    )
+    monkeypatch.setattr(pipeline, "save_dividends", lambda conn, source, asset_type, df: len(df))
+    sleep_calls = []
+    monkeypatch.setattr("data_store.pipeline.time.sleep", lambda s: sleep_calls.append(s))
+
+    pipeline.backfill_dividend_events(
+        conn, [], tracked, {}, date(1900, 1, 1), date(2026, 1, 1), delay_seconds=5
+    )
+
+    assert sleep_calls == [5, 5]
+
+
+def test_backfill_dividends_continues_after_one_ticker_fails(monkeypatch):
+    conn = object()
+    fake_source = FakeSingleDividendSource(fail_tickers={"BAD"})
+    tracked = [
+        make_tracked_ticker(ticker="BAD", asset_type="equity"),
+        make_tracked_ticker(ticker="GOOD", asset_type="equity"),
+    ]
+
+    monkeypatch.setitem(pipeline.DIVIDEND_SOURCES, "yfinance", lambda: fake_source)
+    monkeypatch.setattr(pipeline, "get_earliest_dividend_dates", lambda conn, source, tickers: {})
+    save_calls = []
+    monkeypatch.setattr(
+        pipeline,
+        "save_dividends",
+        lambda conn, source, asset_type, df: save_calls.append(df) or len(df),
+    )
+    monkeypatch.setattr("data_store.pipeline.time.sleep", lambda s: None)
+
+    count = pipeline.backfill_dividend_events(
+        conn, [], tracked, {}, date(1900, 1, 1), date(2026, 1, 1), delay_seconds=0
+    )
+
+    assert count == 1  # only GOOD saved
+    assert len(save_calls) == 1
+
+
+def test_backfill_dividends_raises_on_unknown_dividend_source():
+    tracked = [
+        make_tracked_ticker(ticker="AAPL", asset_type="equity", price_source="unknown_source")
+    ]
+
+    with pytest.raises(ValueError, match="unknown_source"):
+        pipeline.backfill_dividend_events(
+            object(), [], tracked, {}, date(1900, 1, 1), date(2026, 1, 1), delay_seconds=0
+        )
+
+
+def test_backfill_dividends_returns_zero_when_no_tickers():
+    count = pipeline.backfill_dividend_events(
+        object(), [], [], {}, date(1900, 1, 1), date(2026, 1, 1), delay_seconds=0
+    )
+
+    assert count == 0
+
+
+def test_backfill_dividends_filters_to_only_tickers_when_given(monkeypatch):
+    conn = object()
+    fake_source = FakeSingleDividendSource()
+    tracked = [
+        make_tracked_ticker(ticker="AAPL", asset_type="equity"),
+        make_tracked_ticker(ticker="MSFT", asset_type="equity"),
+    ]
+
+    monkeypatch.setitem(pipeline.DIVIDEND_SOURCES, "yfinance", lambda: fake_source)
+    monkeypatch.setattr(pipeline, "get_earliest_dividend_dates", lambda conn, source, tickers: {})
+    monkeypatch.setattr(pipeline, "save_dividends", lambda conn, source, asset_type, df: len(df))
+    monkeypatch.setattr("data_store.pipeline.time.sleep", lambda s: None)
+
+    pipeline.backfill_dividend_events(
+        conn,
+        [],
+        tracked,
+        {},
+        date(1900, 1, 1),
+        date(2026, 1, 1),
+        delay_seconds=0,
+        only_tickers={"MSFT"},
+    )
+
+    assert [call[0] for call in fake_source.fetch_calls] == ["MSFT"]
+
+
+def test_backfill_dividends_applies_ticker_overrides_for_holdings_derived_tickers(monkeypatch):
+    fund = make_fund()
+    conn = object()
+    fake_source = FakeSingleDividendSource()
+
+    monkeypatch.setattr(
+        pipeline, "get_latest_tickers", lambda c, k: [("BRKB", "New York Stock Exchange Inc.")]
+    )
+    monkeypatch.setitem(pipeline.DIVIDEND_SOURCES, "yfinance", lambda: fake_source)
+    monkeypatch.setattr(pipeline, "get_earliest_dividend_dates", lambda conn, source, tickers: {})
+    monkeypatch.setattr(pipeline, "save_dividends", lambda conn, source, asset_type, df: len(df))
+    monkeypatch.setattr("data_store.pipeline.time.sleep", lambda s: None)
+
+    pipeline.backfill_dividend_events(
+        conn,
+        [fund],
+        [],
+        {"New York Stock Exchange Inc.": None},
+        date(1900, 1, 1),
+        date(2026, 1, 1),
+        delay_seconds=0,
+        ticker_overrides={"BRKB": "BRK-B"},
+    )
+
+    assert [call[0] for call in fake_source.fetch_calls] == ["BRK-B"]

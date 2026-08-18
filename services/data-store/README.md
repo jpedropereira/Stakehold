@@ -43,8 +43,9 @@ entry's `asset_type` wins.
 
 ## Airflow
 
-Airflow orchestrates ingestion via two DAGs (`ingest_holdings`, `@weekly`; `ingest_daily_ohlcv`,
-`@daily`), each a thin wrapper shelling out to the same `data-store` CLI already covered above —
+Airflow orchestrates ingestion via three DAGs (`ingest_holdings`, `@weekly`; `ingest_daily_ohlcv`
+and `ingest_dividends`, both `@daily`), each a thin wrapper shelling out to the same `data-store`
+CLI already covered above —
 see `Dockerfile.airflow` for why (keeps Airflow's own Python environment free of this project's
 heavy deps, and means what runs in the DAG is byte-for-byte what you can run and test locally).
 
@@ -113,7 +114,7 @@ To explore the data, register a server in pgAdmin:
    - **Maintenance database** / **Username** / **Password**: your `POSTGRES_DB` /
      `POSTGRES_USER` / `POSTGRES_PASSWORD` values from `.env`
 
-`etf_holdings` and `daily_ohlcv` then show up under
+`etf_holdings`, `daily_ohlcv`, and `dividend_events` then show up under
 `data-store → Databases → <your db> → Schemas → public → Tables`.
 
 ## Running ingestion via the CLI
@@ -127,19 +128,22 @@ docker compose up -d postgres pgadmin
 uv run data-store db init
 uv run data-store ingest-holdings          # scrapes iShares, loads etf_holdings
 uv run data-store ingest-ohlcv --days 7    # reads tickers from etf_holdings, loads daily_ohlcv
+uv run data-store ingest-dividends --days 7  # same ticker universe, loads dividend_events
 ```
 
-Both subcommands accept `--fund KEY` (`ingest-ohlcv`: only that fund's holdings — tracked
-tickers from `tracked_tickers.yaml` are always included regardless). `ingest-ohlcv` also
-accepts `--days N` (default 7) for the lookback window. Both also accept `--ticker TICKER`
-(repeatable) to restrict the run to specific final, post-suffix-resolution tickers (e.g.
-`--ticker AAPL --ticker 0700.HK`) — matches any currently followed ticker, fund-holdings-derived
-or tracked; useful for a small manual run or re-attempting specific tickers that previously
-failed. Omit it to run against everything followed, as before.
+`ingest-ohlcv` and `ingest-dividends` (and their `backfill-ohlcv`/`backfill-dividends`
+counterparts) all accept `--fund KEY` (only that fund's holdings — tracked tickers from
+`tracked_tickers.yaml` are always included regardless), `--days N` (default 7, ingest commands
+only) for the lookback window, and `--ticker TICKER` (repeatable) to restrict the run to specific
+final, post-suffix-resolution tickers (e.g. `--ticker AAPL --ticker 0700.HK`) — matches any
+currently followed ticker, fund-holdings-derived or tracked; useful for a small manual run or
+re-attempting specific tickers that previously failed. Omit it to run against everything
+followed, as before.
 
-The two flows are independent — `ingest-ohlcv` always reads the *current* ticker list from
-`etf_holdings` (whatever `ingest-holdings` most recently loaded), not a fresh scrape, so it can
-run on its own daily cadence without depending on a holdings scrape having just run.
+All three flows are independent — `ingest-ohlcv` and `ingest-dividends` always read the *current*
+ticker list from `etf_holdings` (whatever `ingest-holdings` most recently loaded), not a fresh
+scrape, so each can run on its own daily cadence without depending on a holdings scrape having
+just run.
 
 Non-equity holdings (futures, cash, FX lines) are excluded automatically. Non-US-listed equities
 need a yfinance exchange-suffix ticker mapping (e.g. `0700` on the Hong Kong exchange -> `0700.HK`)
@@ -150,6 +154,8 @@ exchange string, and skipped for that run — `ingest-ohlcv`/`backfill-ohlcv` ne
 guessed ticker to yfinance, which would otherwise silently return zero rows instead of erroring.
 If you add a fund with holdings on an exchange not yet in that file, add an entry for it (query
 `SELECT DISTINCT exchange FROM etf_holdings` for the exact raw string — don't guess spelling).
+`ingest-dividends`/`backfill-dividends` reuse this exact same resolution — a ticker priced under
+`daily_ohlcv` resolves identically for `dividend_events`.
 
 yfinance's per-market ticker syntax also doesn't always match the raw symbol iShares scrapes, even
 once the right suffix is appended — e.g. Hong Kong codes need zero-padding (`"1"` → `"0001.HK"`),
@@ -162,20 +168,21 @@ data before adding it.
 
 ## Running ingestion via Airflow
 
-With the full stack up (`docker compose up -d`) and `config/etfs.yaml` set up, the two DAGs run
-on their own schedule once unpaused in the UI. To trigger either one manually — from the UI's
-"Trigger DAG" button, or from a shell:
+With the full stack up (`docker compose up -d`) and `config/etfs.yaml` set up, the scheduled DAGs
+run on their own schedule once unpaused in the UI. To trigger any of them manually — from the
+UI's "Trigger DAG" button, or from a shell:
 
 ```bash
 docker exec <airflow-scheduler-container> airflow dags trigger ingest_holdings
 docker exec <airflow-scheduler-container> airflow dags trigger ingest_daily_ohlcv
+docker exec <airflow-scheduler-container> airflow dags trigger ingest_dividends
 ```
 
 Task logs land under `services/data-store/logs/dag_id=.../run_id=.../task_id=.../attempt=N.log`
 (bind-mounted, so readable from the host — no need to shell into the container).
 
-`ingest_daily_ohlcv` and `backfill_historical_ohlcv` both accept a `tickers` param (a JSON array,
-default `[]`) via the UI's "Trigger DAG w/ config" dialog, mapped straight to the CLI's `--ticker`
-flag (each list value shell-escaped before being interpolated into the task's `bash_command`, so a
-malicious/malformed value can't break out of its argument). Leave it empty to run against
-everything followed, as before.
+`ingest_daily_ohlcv`/`backfill_historical_ohlcv` and `ingest_dividends`/`backfill_dividend_events`
+all accept a `tickers` param (a JSON array, default `[]`) via the UI's "Trigger DAG w/ config"
+dialog, mapped straight to the CLI's `--ticker` flag (each list value shell-escaped before being
+interpolated into the task's `bash_command`, so a malicious/malformed value can't break out of its
+argument). Leave it empty to run against everything followed, as before.
