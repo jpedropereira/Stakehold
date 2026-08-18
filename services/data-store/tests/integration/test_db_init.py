@@ -20,12 +20,13 @@ def test_db_init_creates_expected_tables():
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT table_name FROM information_schema.tables
-                WHERE table_schema = 'public' AND table_name IN ('etf_holdings', 'daily_ohlcv')
+                WHERE table_schema = 'public'
+                  AND table_name IN ('etf_holdings', 'daily_ohlcv', 'dividend_events')
                 ORDER BY table_name
                 """)
             tables = [row[0] for row in cur.fetchall()]
 
-    assert tables == ["daily_ohlcv", "etf_holdings"]
+    assert tables == ["daily_ohlcv", "dividend_events", "etf_holdings"]
 
 
 def test_db_init_is_idempotent():

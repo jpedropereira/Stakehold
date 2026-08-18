@@ -3,6 +3,8 @@ import time
 from datetime import date
 
 from data_store.config_loader import FundConfig, TickerConfig
+from data_store.dividends.repository import get_earliest_dividend_dates, save_dividends
+from data_store.dividends.yfinance_source import YFinanceDividendSource
 from data_store.holdings.parser import fetch_holdings_csv
 from data_store.holdings.repository import (
     get_latest_tickers,
@@ -23,6 +25,15 @@ SCRAPERS = {
 
 PRICE_SOURCES = {
     "yfinance": YFinancePriceSource,
+}
+
+# Kept separate from PRICE_SOURCES even though yfinance is (so far) the only entry in both:
+# a dividend source and a price source are different Protocols (see prices/base.py,
+# dividends/base.py) with different fetch() shapes, so collapsing the two registries would mean
+# picking a class out of PRICE_SOURCES and hoping it also happens to expose a dividend-fetch
+# surface -- exactly the coupling this keeps out.
+DIVIDEND_SOURCES = {
+    "yfinance": YFinanceDividendSource,
 }
 
 
@@ -117,6 +128,80 @@ def ingest_daily_ohlcv(
     return total
 
 
+def ingest_dividend_events(
+    conn,
+    funds: list[FundConfig],
+    tracked_tickers: list[TickerConfig],
+    exchange_suffixes: dict[str, str | None],
+    start_date: date,
+    end_date: date,
+    only_tickers: set[str] | None = None,
+    ticker_overrides: dict[str, str] | None = None,
+) -> int:
+    """Direct mirror of ingest_daily_ohlcv: same ticker-universe resolution
+    (_resolve_priceable_tickers, _group_by_source_and_type), swapping DIVIDEND_SOURCES for
+    PRICE_SOURCES and save_dividends for save_prices. `only_tickers`/`ticker_overrides` behave
+    identically to ingest_daily_ohlcv's -- see that docstring."""
+    # print (not logger.info) -- this codebase has no logging.basicConfig anywhere, so
+    # logger.info is silently swallowed by default (only WARNING+ reaches the console via
+    # Python's lastResort handler); print(..., flush=True) is the one style confirmed visible
+    # both in a plain CLI run and in Airflow's captured BashOperator task-log output, matching
+    # backfill_historical_ohlcv's existing progress lines.
+    resolved = _resolve_priceable_tickers(
+        conn, funds, tracked_tickers, exchange_suffixes, ticker_overrides
+    )
+    if only_tickers is not None:
+        resolved = {t: v for t, v in resolved.items() if t in only_tickers}
+    if not resolved:
+        print("ingest-dividends: no tickers to price, nothing to do.", flush=True)
+        return 0
+
+    groups = _group_by_source_and_type(resolved)
+    print(
+        f"ingest-dividends: resolved {len(resolved)} ticker(s) across {len(groups)} "
+        "(source, asset_type) group(s).",
+        flush=True,
+    )
+
+    total = 0
+    for (source_name, asset_type), tickers in groups.items():
+        try:
+            dividend_source_cls = DIVIDEND_SOURCES[source_name]
+        except KeyError:
+            raise ValueError(f"Unknown dividend source: {source_name!r}") from None
+
+        dividend_source = dividend_source_cls()
+        print(
+            f"ingest-dividends: fetching dividends for {len(tickers)} ticker(s) "
+            f"(source={source_name}, asset_type={asset_type}).",
+            flush=True,
+        )
+        dividends = dividend_source.fetch(tickers, start_date, end_date)
+        if dividends.empty:
+            print(
+                f"ingest-dividends: no dividend data for this group "
+                f"(source={source_name}, asset_type={asset_type}) -- either none of these "
+                f"{len(tickers)} ticker(s) paid a dividend in this window, or the fetch "
+                "returned nothing.",
+                flush=True,
+            )
+            continue
+
+        saved = save_dividends(conn, dividend_source.name, asset_type, dividends)
+        print(
+            f"ingest-dividends: saved {saved} dividend row(s) "
+            f"(source={source_name}, asset_type={asset_type}).",
+            flush=True,
+        )
+        total += saved
+
+    print(
+        f"ingest-dividends complete: {total} row(s) across {len(resolved)} ticker(s).",
+        flush=True,
+    )
+    return total
+
+
 def backfill_historical_ohlcv(
     conn,
     funds: list[FundConfig],
@@ -206,6 +291,95 @@ def backfill_historical_ohlcv(
 
     print(
         f"backfill complete: {ticker_count} tickers "
+        f"({skipped} already covered, {failed} failed), {total_rows} rows written",
+        flush=True,
+    )
+    return total_rows
+
+
+def backfill_dividend_events(
+    conn,
+    funds: list[FundConfig],
+    tracked_tickers: list[TickerConfig],
+    exchange_suffixes: dict[str, str | None],
+    earliest_date: date,
+    end_date: date,
+    delay_seconds: float,
+    only_tickers: set[str] | None = None,
+    ticker_overrides: dict[str, str] | None = None,
+) -> int:
+    """Direct structural mirror of backfill_historical_ohlcv: per-ticker gap computed via
+    get_earliest_dividend_dates instead of get_earliest_price_dates, same
+    silence-yfinance-logger / sleep-after-fetch-or-failure-not-skip / progress-every-25 /
+    never-fatal-on-one-ticker-failure behavior. `only_tickers`/`ticker_overrides` behave
+    identically to backfill_historical_ohlcv's -- see that docstring."""
+    logging.getLogger("yfinance").setLevel(logging.CRITICAL)
+
+    resolved = _resolve_priceable_tickers(
+        conn, funds, tracked_tickers, exchange_suffixes, ticker_overrides
+    )
+    if only_tickers is not None:
+        resolved = {t: v for t, v in resolved.items() if t in only_tickers}
+    if not resolved:
+        return 0
+
+    total_rows = 0
+    processed = skipped = failed = 0
+    ticker_count = len(resolved)
+    for (source_name, asset_type), tickers in _group_by_source_and_type(resolved).items():
+        try:
+            dividend_source_cls = DIVIDEND_SOURCES[source_name]
+        except KeyError:
+            raise ValueError(f"Unknown dividend source: {source_name!r}") from None
+
+        dividend_source = dividend_source_cls()
+        floors = get_earliest_dividend_dates(conn, source_name, tickers)
+        for ticker in tickers:
+            floor = floors.get(ticker)
+            fetch_end = floor if floor else end_date
+            if fetch_end <= earliest_date:
+                skipped += 1
+                processed += 1
+                print(
+                    f"backfill-dividends: {ticker} already covered back to {floor}, skipping",
+                    flush=True,
+                )
+                continue
+
+            try:
+                dividends = dividend_source.fetch([ticker], earliest_date, fetch_end)
+            except Exception as e:
+                failed += 1
+                logger.warning(
+                    "backfill-dividends: %s failed after retries, skipping: %s", ticker, e
+                )
+                time.sleep(delay_seconds)
+                processed += 1
+                continue
+
+            if not dividends.empty:
+                total_rows += save_dividends(conn, dividend_source.name, asset_type, dividends)
+                print(
+                    f"backfill-dividends: {ticker} -> {len(dividends)} rows "
+                    f"({earliest_date} to {fetch_end})",
+                    flush=True,
+                )
+            else:
+                print(
+                    f"backfill-dividends: {ticker} -> no data ({earliest_date} to {fetch_end})",
+                    flush=True,
+                )
+            time.sleep(delay_seconds)
+            processed += 1
+            if processed % 25 == 0:
+                print(
+                    f"backfill-dividends progress: {processed}/{ticker_count} tickers, "
+                    f"{total_rows} rows so far",
+                    flush=True,
+                )
+
+    print(
+        f"backfill-dividends complete: {ticker_count} tickers "
         f"({skipped} already covered, {failed} failed), {total_rows} rows written",
         flush=True,
     )

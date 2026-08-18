@@ -100,3 +100,34 @@ ticker → final ticker rewrites for cases no general rule covers — either the
 tagging is simply wrong (e.g. `"HEIA"` tagged under a US exchange but actually needing
 `"HEIA.AS"`), or the raw ticker needs a full rewrite (e.g. `"BRKB"` → `"BRK-B"`). An override wins
 outright and skips exchange resolution entirely.
+
+## `dividend_events`
+
+One row per `(ticker, ex_date, source)` — dividend/distribution events for the same ticker
+universe priced into `daily_ohlcv` (fund holdings plus `config/tracked_tickers.yaml` entries).
+
+| Column        | Type            | Notes                                             |
+|---------------|-----------------|------------------------------------------------------|
+| `ticker`      | `VARCHAR(20)`   | Part of PK. Same resolved, yfinance-ready ticker as `daily_ohlcv.ticker` — see that table's exchange-suffix-resolution notes above; unchanged for `dividend_events`. |
+| `ex_date`     | `DATE`          | Part of PK. The ex-dividend date, as returned by yfinance. |
+| `source`      | `VARCHAR(20)`   | Part of PK, e.g. `'yfinance'`.                        |
+| `asset_type`  | `VARCHAR(20)`   | Same `config_loader.VALID_ASSET_TYPES` values as `daily_ohlcv.asset_type`. |
+| `amount`      | `NUMERIC(18,4)` | Per-share cash amount, in the ticker's trading currency (implicit via exchange suffix, same as `daily_ohlcv` — no separate `currency` column). `NOT NULL`: a row only exists for a real, nonzero payment — zero/NaN yfinance rows are filtered out before this table is ever written to. |
+| `ingested_at` | `TIMESTAMPTZ`   | Defaults to `now()`.                                  |
+
+Index: `(ticker, ex_date)` for time-series lookups, same rationale as `daily_ohlcv`'s index.
+
+**Loading strategy: true upsert** (`INSERT ... ON CONFLICT (ticker, ex_date, source) DO UPDATE`),
+for the same reasons as `daily_ohlcv`: successive `ingest-dividends` runs overlap date windows, and
+an occasional late-announced or corrected special dividend needs to overwrite cleanly on rerun
+rather than requiring a delete-then-insert cycle.
+
+**Backfill loading pattern**: identical mechanism to `daily_ohlcv`'s — `backfill-dividends`
+(`pipeline.backfill_dividend_events`) computes each ticker's remaining gap via
+`get_earliest_dividend_dates` and fetches only the stretch older than that; `dividend_events`
+itself is the checkpoint, no separate table needed.
+
+**Exchange-suffix resolution and ticker normalization**: identical to `daily_ohlcv` — see that
+table's section above. Both flows share the exact same ticker-resolution code
+(`pipeline._resolve_priceable_tickers`), so a ticker priced under `daily_ohlcv` resolves to the
+same final ticker string under `dividend_events`.

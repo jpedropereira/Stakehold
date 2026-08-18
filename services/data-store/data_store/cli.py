@@ -13,8 +13,10 @@ from data_store.config_loader import (
 )
 from data_store.db.connection import apply_schema, get_connection
 from data_store.pipeline import (
+    backfill_dividend_events,
     backfill_historical_ohlcv,
     ingest_daily_ohlcv,
+    ingest_dividend_events,
     ingest_holdings,
 )
 from data_store.settings import load_settings
@@ -117,6 +119,61 @@ def _backfill_ohlcv(args: argparse.Namespace) -> int:
     return 0
 
 
+def _ingest_dividends(args: argparse.Namespace) -> int:
+    settings = load_settings()
+    funds = _select_funds(load_funds(settings.config_path), args.fund)
+    tracked_tickers = _load_enabled_tracked_tickers(settings.tracked_tickers_path)
+    exchange_suffixes = load_exchange_suffixes(settings.exchange_suffixes_path)
+    ticker_overrides = load_ticker_overrides(settings.exchange_suffixes_path)
+    only_tickers = set(args.ticker) if args.ticker else None
+    end_date = date.today()
+    start_date = end_date - timedelta(days=args.days)
+    conn = get_connection(settings.database_url)
+    try:
+        count = ingest_dividend_events(
+            conn,
+            funds,
+            tracked_tickers,
+            exchange_suffixes,
+            start_date,
+            end_date,
+            only_tickers=only_tickers,
+            ticker_overrides=ticker_overrides,
+        )
+        print(f"{count} dividend rows")
+    finally:
+        conn.close()
+    return 0
+
+
+def _backfill_dividends(args: argparse.Namespace) -> int:
+    settings = load_settings()
+    funds = _select_funds(load_funds(settings.config_path), args.fund)
+    tracked_tickers = _load_enabled_tracked_tickers(settings.tracked_tickers_path)
+    exchange_suffixes = load_exchange_suffixes(settings.exchange_suffixes_path)
+    ticker_overrides = load_ticker_overrides(settings.exchange_suffixes_path)
+    only_tickers = set(args.ticker) if args.ticker else None
+    end_date = date.today()
+    earliest_date = date.fromisoformat(args.earliest_date)
+    conn = get_connection(settings.database_url)
+    try:
+        count = backfill_dividend_events(
+            conn,
+            funds,
+            tracked_tickers,
+            exchange_suffixes,
+            earliest_date,
+            end_date,
+            args.delay_seconds,
+            only_tickers=only_tickers,
+            ticker_overrides=ticker_overrides,
+        )
+        print(f"{count} dividend rows")
+    finally:
+        conn.close()
+    return 0
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="data-store")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -193,6 +250,66 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Seconds to sleep after each ticker's fetch, to stay under yfinance's rate limiting.",
     )
     backfill_ohlcv_parser.set_defaults(handler=_backfill_ohlcv)
+
+    ingest_dividends_parser = subparsers.add_parser(
+        "ingest-dividends", help="Fetch and load dividend events"
+    )
+    ingest_dividends_parser.add_argument(
+        "--fund",
+        help=(
+            "Only price this fund's holdings (default: all enabled funds). "
+            "Tracked tickers from tracked_tickers.yaml are always included."
+        ),
+    )
+    ingest_dividends_parser.add_argument(
+        "--days", type=int, default=7, help="Lookback window in days (default: 7)"
+    )
+    ingest_dividends_parser.add_argument(
+        "--ticker",
+        action="append",
+        help=(
+            "Restrict to this final (post-suffix-resolution) ticker (repeatable), e.g. "
+            "'AAPL' or '0700.HK' -- matches any currently followed ticker, from fund "
+            "holdings or tracked_tickers.yaml. Default: all resolved tickers."
+        ),
+    )
+    ingest_dividends_parser.set_defaults(handler=_ingest_dividends)
+
+    backfill_dividends_parser = subparsers.add_parser(
+        "backfill-dividends",
+        help=(
+            "Backfill full dividend history for all followed tickers, filling only what's "
+            "missing before each ticker's earliest stored ex_date. Deliberately slow; "
+            "intended for rare, manual/on-demand runs that may take hours."
+        ),
+    )
+    backfill_dividends_parser.add_argument("--fund", help="Only backfill this fund's holdings.")
+    backfill_dividends_parser.add_argument(
+        "--ticker",
+        action="append",
+        help=(
+            "Restrict to this final (post-suffix-resolution) ticker (repeatable), e.g. "
+            "'AAPL' or '0700.HK' -- matches any currently followed ticker, from fund "
+            "holdings or tracked_tickers.yaml. Intended for small manual dry runs, or "
+            "re-backfilling specific tickers that previously failed."
+        ),
+    )
+    backfill_dividends_parser.add_argument(
+        "--earliest-date",
+        default="1900-01-01",
+        help=(
+            "Lower bound requested from yfinance (default: 1900-01-01 -- yfinance clips to "
+            "each ticker's actual listing date, so this is effectively 'as far back as "
+            "available')."
+        ),
+    )
+    backfill_dividends_parser.add_argument(
+        "--delay-seconds",
+        type=float,
+        default=10.0,
+        help="Seconds to sleep after each ticker's fetch, to stay under yfinance's rate limiting.",
+    )
+    backfill_dividends_parser.set_defaults(handler=_backfill_dividends)
 
     return parser
 

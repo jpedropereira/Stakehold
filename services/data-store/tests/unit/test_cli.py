@@ -564,3 +564,394 @@ def test_backfill_ohlcv_propagates_config_error_from_exchange_suffixes(monkeypat
 
     with pytest.raises(ConfigError, match="bad exchange suffixes config"):
         cli.main(["backfill-ohlcv"])
+
+
+def test_ingest_dividends_runs_for_all_enabled_funds_with_default_lookback(
+    monkeypatch, fake_settings
+):
+    funds = [make_fund("a")]
+    calls = []
+
+    monkeypatch.setattr(cli, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(cli, "load_funds", lambda path: funds)
+    monkeypatch.setattr(cli, "get_connection", lambda url: FakeConn([]))
+
+    def fake_ingest(
+        conn,
+        passed_funds,
+        tracked_tickers,
+        exchange_suffixes,
+        start_date,
+        end_date,
+        only_tickers=None,
+        ticker_overrides=None,
+    ):
+        calls.append(
+            (passed_funds, tracked_tickers, exchange_suffixes, start_date, end_date, only_tickers)
+        )
+        return 3
+
+    monkeypatch.setattr(cli, "ingest_dividend_events", fake_ingest)
+
+    exit_code = cli.main(["ingest-dividends"])
+
+    assert exit_code == 0
+    assert len(calls) == 1
+    passed_funds, tracked_tickers, exchange_suffixes, start_date, end_date, only_tickers = calls[0]
+    assert [f.key for f in passed_funds] == ["a"]
+    assert tracked_tickers == []
+    assert exchange_suffixes == {}
+    assert only_tickers is None
+    assert end_date == date.today()
+    assert (end_date - start_date).days == 7
+
+
+def test_ingest_dividends_respects_days_flag(monkeypatch, fake_settings):
+    funds = [make_fund("a")]
+    calls = []
+
+    monkeypatch.setattr(cli, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(cli, "load_funds", lambda path: funds)
+    monkeypatch.setattr(cli, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(
+        cli,
+        "ingest_dividend_events",
+        lambda conn, funds, tt, ex, s, e, only_tickers=None, ticker_overrides=None: calls.append(
+            (s, e)
+        )
+        or 1,
+    )
+
+    cli.main(["ingest-dividends", "--days", "30"])
+
+    start_date, end_date = calls[0]
+    assert (end_date - start_date).days == 30
+
+
+def test_ingest_dividends_ticker_flag_passes_only_tickers_filter(monkeypatch, fake_settings):
+    funds = [make_fund("a")]
+    calls = []
+
+    monkeypatch.setattr(cli, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(cli, "load_funds", lambda path: funds)
+    monkeypatch.setattr(cli, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(
+        cli,
+        "ingest_dividend_events",
+        lambda conn, funds, tt, ex, s, e, only_tickers=None, ticker_overrides=None: calls.append(
+            (funds, only_tickers)
+        )
+        or 0,
+    )
+
+    cli.main(["ingest-dividends", "--ticker", "CSU.TO", "--ticker", "BT-A.L"])
+
+    passed_funds, only_tickers = calls[0]
+    assert [f.key for f in passed_funds] == ["a"]
+    assert only_tickers == {"CSU.TO", "BT-A.L"}
+
+
+def test_ingest_dividends_without_ticker_flag_passes_none(monkeypatch, fake_settings):
+    calls = []
+
+    monkeypatch.setattr(cli, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(cli, "load_funds", lambda path: [])
+    monkeypatch.setattr(cli, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(
+        cli,
+        "ingest_dividend_events",
+        lambda conn, funds, tt, ex, s, e, only_tickers=None, ticker_overrides=None: calls.append(
+            only_tickers
+        )
+        or 0,
+    )
+
+    cli.main(["ingest-dividends"])
+
+    assert calls[0] is None
+
+
+def test_ingest_dividends_treats_missing_tracked_tickers_file_as_empty(monkeypatch, fake_settings):
+    calls = []
+
+    monkeypatch.setattr(cli, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(cli, "load_funds", lambda path: [])
+    monkeypatch.setattr(cli, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(
+        cli,
+        "ingest_dividend_events",
+        lambda conn, funds, tt, ex, s, e, only_tickers=None, ticker_overrides=None: calls.append(tt)
+        or 0,
+    )
+
+    cli.main(["ingest-dividends"])
+
+    assert calls[0] == []
+
+
+def test_ingest_dividends_loads_and_passes_exchange_suffixes(monkeypatch, fake_settings):
+    calls = []
+
+    monkeypatch.setattr(cli, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(cli, "load_funds", lambda path: [])
+    monkeypatch.setattr(cli, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(cli, "load_exchange_suffixes", lambda path: {"NASDAQ": None})
+    monkeypatch.setattr(
+        cli,
+        "ingest_dividend_events",
+        lambda conn, funds, tt, ex, s, e, only_tickers=None, ticker_overrides=None: calls.append(ex)
+        or 0,
+    )
+
+    cli.main(["ingest-dividends"])
+
+    assert calls[0] == {"NASDAQ": None}
+
+
+def test_ingest_dividends_loads_and_passes_ticker_overrides(monkeypatch, fake_settings):
+    calls = []
+
+    monkeypatch.setattr(cli, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(cli, "load_funds", lambda path: [])
+    monkeypatch.setattr(cli, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(cli, "load_ticker_overrides", lambda path: {"BRKB": "BRK-B"})
+    monkeypatch.setattr(
+        cli,
+        "ingest_dividend_events",
+        lambda conn, funds, tt, ex, s, e, only_tickers=None, ticker_overrides=None: calls.append(
+            ticker_overrides
+        )
+        or 0,
+    )
+
+    cli.main(["ingest-dividends"])
+
+    assert calls[0] == {"BRKB": "BRK-B"}
+
+
+def test_ingest_dividends_propagates_config_error_from_exchange_suffixes(
+    monkeypatch, fake_settings
+):
+    from data_store.config_loader import ConfigError
+
+    monkeypatch.setattr(cli, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(cli, "load_funds", lambda path: [])
+    monkeypatch.setattr(cli, "get_connection", lambda url: FakeConn([]))
+
+    def raise_config_error(path):
+        raise ConfigError("bad exchange suffixes config")
+
+    monkeypatch.setattr(cli, "load_exchange_suffixes", raise_config_error)
+
+    with pytest.raises(ConfigError, match="bad exchange suffixes config"):
+        cli.main(["ingest-dividends"])
+
+
+def test_backfill_dividends_default_run(monkeypatch, fake_settings):
+    funds = [make_fund("a")]
+    calls = []
+
+    monkeypatch.setattr(cli, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(cli, "load_funds", lambda path: funds)
+    monkeypatch.setattr(cli, "get_connection", lambda url: FakeConn([]))
+
+    def fake_backfill(
+        conn,
+        passed_funds,
+        tracked_tickers,
+        exchange_suffixes,
+        earliest_date,
+        end_date,
+        delay_seconds,
+        only_tickers=None,
+        ticker_overrides=None,
+    ):
+        calls.append(
+            (
+                passed_funds,
+                tracked_tickers,
+                exchange_suffixes,
+                earliest_date,
+                end_date,
+                delay_seconds,
+                only_tickers,
+            )
+        )
+        return 3
+
+    monkeypatch.setattr(cli, "backfill_dividend_events", fake_backfill)
+
+    exit_code = cli.main(["backfill-dividends"])
+
+    assert exit_code == 0
+    assert len(calls) == 1
+    (
+        passed_funds,
+        tracked_tickers,
+        exchange_suffixes,
+        earliest_date,
+        end_date,
+        delay_seconds,
+        only_tickers,
+    ) = calls[0]
+    assert [f.key for f in passed_funds] == ["a"]
+    assert tracked_tickers == []
+    assert exchange_suffixes == {}
+    assert only_tickers is None
+    assert earliest_date == date(1900, 1, 1)
+    assert end_date == date.today()
+    assert delay_seconds == 10.0
+
+
+def test_backfill_dividends_respects_fund_flag(monkeypatch, fake_settings):
+    funds = [make_fund("a"), make_fund("b")]
+    calls = []
+
+    monkeypatch.setattr(cli, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(cli, "load_funds", lambda path: funds)
+    monkeypatch.setattr(cli, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(
+        cli,
+        "backfill_dividend_events",
+        lambda conn, funds, tt, ex, ed, end, ds, **kw: calls.append(funds) or 0,
+    )
+
+    cli.main(["backfill-dividends", "--fund", "b"])
+
+    assert [f.key for f in calls[0]] == ["b"]
+
+
+def test_backfill_dividends_respects_earliest_date_and_delay_flags(monkeypatch, fake_settings):
+    calls = []
+
+    monkeypatch.setattr(cli, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(cli, "load_funds", lambda path: [])
+    monkeypatch.setattr(cli, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(
+        cli,
+        "backfill_dividend_events",
+        lambda conn, funds, tt, ex, ed, end, ds, **kw: calls.append((ed, ds)) or 0,
+    )
+
+    cli.main(["backfill-dividends", "--earliest-date", "2000-06-15", "--delay-seconds", "3.5"])
+
+    earliest_date, delay_seconds = calls[0]
+    assert earliest_date == date(2000, 6, 15)
+    assert delay_seconds == 3.5
+
+
+def test_backfill_dividends_ticker_flag_passes_only_tickers_filter(monkeypatch, fake_settings):
+    funds = [make_fund("a")]
+    calls = []
+
+    monkeypatch.setattr(cli, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(cli, "load_funds", lambda path: funds)
+    monkeypatch.setattr(cli, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(
+        cli,
+        "backfill_dividend_events",
+        lambda conn, funds, tt, ex, ed, end, ds, only_tickers=None, **kw: calls.append(
+            (funds, only_tickers)
+        )
+        or 0,
+    )
+
+    cli.main(["backfill-dividends", "--ticker", "CSU.TO", "--ticker", "BT-A.L"])
+
+    passed_funds, only_tickers = calls[0]
+    assert [f.key for f in passed_funds] == ["a"]
+    assert only_tickers == {"CSU.TO", "BT-A.L"}
+
+
+def test_backfill_dividends_without_ticker_flag_passes_none(monkeypatch, fake_settings):
+    calls = []
+
+    monkeypatch.setattr(cli, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(cli, "load_funds", lambda path: [])
+    monkeypatch.setattr(cli, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(
+        cli,
+        "backfill_dividend_events",
+        lambda conn, funds, tt, ex, ed, end, ds, only_tickers=None, **kw: calls.append(only_tickers)
+        or 0,
+    )
+
+    cli.main(["backfill-dividends"])
+
+    assert calls[0] is None
+
+
+def test_backfill_dividends_treats_missing_tracked_tickers_file_as_empty(
+    monkeypatch, fake_settings
+):
+    calls = []
+
+    monkeypatch.setattr(cli, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(cli, "load_funds", lambda path: [])
+    monkeypatch.setattr(cli, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(
+        cli,
+        "backfill_dividend_events",
+        lambda conn, funds, tt, ex, ed, end, ds, **kw: calls.append(tt) or 0,
+    )
+
+    cli.main(["backfill-dividends"])
+
+    assert calls[0] == []
+
+
+def test_backfill_dividends_loads_and_passes_exchange_suffixes(monkeypatch, fake_settings):
+    calls = []
+
+    monkeypatch.setattr(cli, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(cli, "load_funds", lambda path: [])
+    monkeypatch.setattr(cli, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(cli, "load_exchange_suffixes", lambda path: {"NASDAQ": None})
+    monkeypatch.setattr(
+        cli,
+        "backfill_dividend_events",
+        lambda conn, funds, tt, ex, ed, end, ds, **kw: calls.append(ex) or 0,
+    )
+
+    cli.main(["backfill-dividends"])
+
+    assert calls[0] == {"NASDAQ": None}
+
+
+def test_backfill_dividends_loads_and_passes_ticker_overrides(monkeypatch, fake_settings):
+    calls = []
+
+    monkeypatch.setattr(cli, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(cli, "load_funds", lambda path: [])
+    monkeypatch.setattr(cli, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(cli, "load_ticker_overrides", lambda path: {"BRKB": "BRK-B"})
+    monkeypatch.setattr(
+        cli,
+        "backfill_dividend_events",
+        lambda conn, funds, tt, ex, ed, end, ds, ticker_overrides=None, **kw: calls.append(
+            ticker_overrides
+        )
+        or 0,
+    )
+
+    cli.main(["backfill-dividends"])
+
+    assert calls[0] == {"BRKB": "BRK-B"}
+
+
+def test_backfill_dividends_propagates_config_error_from_exchange_suffixes(
+    monkeypatch, fake_settings
+):
+    from data_store.config_loader import ConfigError
+
+    monkeypatch.setattr(cli, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(cli, "load_funds", lambda path: [])
+    monkeypatch.setattr(cli, "get_connection", lambda url: FakeConn([]))
+
+    def raise_config_error(path):
+        raise ConfigError("bad exchange suffixes config")
+
+    monkeypatch.setattr(cli, "load_exchange_suffixes", raise_config_error)
+
+    with pytest.raises(ConfigError, match="bad exchange suffixes config"):
+        cli.main(["backfill-dividends"])

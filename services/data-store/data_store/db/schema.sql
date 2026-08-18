@@ -42,3 +42,20 @@ ALTER TABLE daily_ohlcv ADD COLUMN IF NOT EXISTS asset_type VARCHAR(20) NOT NULL
 ALTER TABLE daily_ohlcv ALTER COLUMN asset_type DROP DEFAULT;
 
 CREATE INDEX IF NOT EXISTS idx_daily_ohlcv_ticker_date ON daily_ohlcv (ticker, price_date);
+
+-- Renamed from `dividends` -- rename-in-place (not drop+recreate) so existing data survives.
+-- A no-op on a fresh DB (no `dividends` table yet) or a DB that already has `dividend_events`.
+ALTER TABLE IF EXISTS dividends RENAME TO dividend_events;
+ALTER INDEX IF EXISTS idx_dividends_ticker_date RENAME TO idx_dividend_events_ticker_date;
+
+CREATE TABLE IF NOT EXISTS dividend_events (
+    ticker      VARCHAR(20)   NOT NULL,
+    ex_date     DATE          NOT NULL,
+    source      VARCHAR(20)   NOT NULL,
+    asset_type  VARCHAR(20)   NOT NULL,
+    amount      NUMERIC(18,4) NOT NULL,
+    ingested_at TIMESTAMPTZ   NOT NULL DEFAULT now(),
+    PRIMARY KEY (ticker, ex_date, source)
+);
+
+CREATE INDEX IF NOT EXISTS idx_dividend_events_ticker_date ON dividend_events (ticker, ex_date);
