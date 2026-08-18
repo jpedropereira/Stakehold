@@ -150,6 +150,23 @@ def test_ingest_holdings_raises_for_unknown_fund_key(monkeypatch, fake_settings)
         cli.main(["ingest-holdings", "--fund", "unknown_key"])
 
 
+def test_ingest_holdings_prints_scrape_start_and_summary(monkeypatch, fake_settings, capsys):
+    funds = [make_fund("a"), make_fund("c")]
+
+    monkeypatch.setattr(cli, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(cli, "load_funds", lambda path: funds)
+    monkeypatch.setattr(cli, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(cli, "ingest_holdings", lambda conn, fund, today: 5)
+
+    cli.main(["ingest-holdings"])
+
+    out = capsys.readouterr().out
+    assert "scraping a" in out
+    assert "scraping c" in out
+    assert "complete: 10" in out  # 5 rows per fund, 2 funds
+    assert "2 fund" in out
+
+
 def test_ingest_ohlcv_runs_for_all_enabled_funds_with_default_lookback(monkeypatch, fake_settings):
     funds = [make_fund("a")]
     calls = []

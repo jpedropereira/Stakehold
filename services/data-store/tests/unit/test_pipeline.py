@@ -570,6 +570,42 @@ def test_ingest_daily_ohlcv_applies_ticker_overrides_for_holdings_derived_ticker
     assert save_calls == [("yfinance", "equity", ["BRK-B"])]
 
 
+def test_ingest_daily_ohlcv_logs_run_summary(monkeypatch, capsys):
+    # Observability requirement: ingest_daily_ohlcv used to be near-silent (only the
+    # unmapped-exchange warning) -- must print enough to understand what happened without
+    # querying the DB, mirroring ingest_dividend_events's print-based progress.
+    conn = object()
+    fake_source = FakePriceSource()
+    save_calls = []
+    tracked = [make_tracked_ticker(ticker="AAPL", asset_type="equity")]
+
+    _patch_price_source(monkeypatch, fake_source, save_calls)
+
+    pipeline.ingest_daily_ohlcv(conn, [], tracked, {}, date(2026, 1, 1), date(2026, 1, 10))
+
+    out = capsys.readouterr().out
+    assert "1" in out  # resolved ticker count appears somewhere in the summary
+    assert "AAPL" not in out  # summary is count-based, not a per-ticker dump
+
+
+def test_ingest_daily_ohlcv_logs_no_price_data_distinctly(monkeypatch, capsys):
+    conn = object()
+
+    class EmptyPriceSource:
+        name = "empty_source"
+
+        def fetch(self, tickers, start_date, end_date):
+            return pd.DataFrame()
+
+    tracked = [make_tracked_ticker(ticker="AAPL", asset_type="equity")]
+    monkeypatch.setitem(pipeline.PRICE_SOURCES, "yfinance", lambda: EmptyPriceSource())
+    monkeypatch.setattr(pipeline, "save_prices", lambda *a: len(a[-1]))
+
+    pipeline.ingest_daily_ohlcv(conn, [], tracked, {}, date(2026, 1, 1), date(2026, 1, 10))
+
+    assert "no price data" in capsys.readouterr().out.lower()
+
+
 class FakeSinglePriceSource:
     name = "yfinance"
 

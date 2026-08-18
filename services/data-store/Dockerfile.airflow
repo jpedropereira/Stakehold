@@ -25,8 +25,15 @@ COPY pyproject.toml uv.lock ./
 COPY services/data-store services/data-store
 COPY services/portfolio services/portfolio
 
+# docker-compose.yml runs every Airflow container as "${AIRFLOW_UID:-50000}:0" -- gid 0
+# (root) always, but the uid varies (it's meant to match the *host* user, for dags/'s bind
+# mount to stay writable from outside the container, and has nothing to do with this image's
+# own baked-in content). chown alone only helps when AIRFLOW_UID happens to equal the
+# `airflow` user's uid; g+w makes this correct for any uid, as long as gid 0 is shared -- which
+# it always is here -- so a real host AIRFLOW_UID doesn't break uv's cache/venv writes.
 RUN uv sync --frozen \
     && uv run --frozen playwright install --with-deps chromium \
-    && chown -R airflow:root /opt/stakehold
+    && chown -R airflow:root /opt/stakehold \
+    && chmod -R g+w /opt/stakehold
 
 USER airflow

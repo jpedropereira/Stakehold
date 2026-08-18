@@ -102,29 +102,58 @@ def ingest_daily_ohlcv(
     fetched once, not once per source. `only_tickers`, when given, restricts the run to exactly
     those final (post-suffix-resolution) tickers -- e.g. "0700.HK", not the raw "0700" -- so it
     can target holdings-derived tickers too, not just tracked_tickers entries. `ticker_overrides`
-    is forwarded to ticker resolution -- see _resolve_yfinance_ticker."""
+    is forwarded to ticker resolution -- see _resolve_yfinance_ticker. Prints per-group progress
+    and a final summary -- see ingest_dividend_events for why print(), not logger.info."""
     resolved = _resolve_priceable_tickers(
         conn, funds, tracked_tickers, exchange_suffixes, ticker_overrides
     )
     if only_tickers is not None:
         resolved = {t: v for t, v in resolved.items() if t in only_tickers}
     if not resolved:
+        print("ingest-ohlcv: no tickers to price, nothing to do.", flush=True)
         return 0
 
+    groups = _group_by_source_and_type(resolved)
+    print(
+        f"ingest-ohlcv: resolved {len(resolved)} ticker(s) across {len(groups)} "
+        "(source, asset_type) group(s).",
+        flush=True,
+    )
+
     total = 0
-    for (price_source_name, asset_type), tickers in _group_by_source_and_type(resolved).items():
+    for (price_source_name, asset_type), tickers in groups.items():
         try:
             price_source_cls = PRICE_SOURCES[price_source_name]
         except KeyError:
             raise ValueError(f"Unknown price source: {price_source_name!r}") from None
 
         price_source = price_source_cls()
+        print(
+            f"ingest-ohlcv: fetching prices for {len(tickers)} ticker(s) "
+            f"(source={price_source_name}, asset_type={asset_type}).",
+            flush=True,
+        )
         prices = price_source.fetch(tickers, start_date, end_date)
         if prices.empty:
+            print(
+                f"ingest-ohlcv: no price data for this group "
+                f"(source={price_source_name}, asset_type={asset_type}).",
+                flush=True,
+            )
             continue
 
-        total += save_prices(conn, price_source.name, asset_type, prices)
+        saved = save_prices(conn, price_source.name, asset_type, prices)
+        print(
+            f"ingest-ohlcv: saved {saved} price row(s) "
+            f"(source={price_source_name}, asset_type={asset_type}).",
+            flush=True,
+        )
+        total += saved
 
+    print(
+        f"ingest-ohlcv complete: {total} row(s) across {len(resolved)} ticker(s).",
+        flush=True,
+    )
     return total
 
 
