@@ -56,9 +56,16 @@ def _ingest_holdings(args: argparse.Namespace) -> int:
     funds = _select_funds(load_funds(settings.config_path), args.fund)
     conn = get_connection(settings.database_url)
     try:
+        total = 0
         for fund in funds:
+            print(f"ingest-holdings: scraping {fund.key}...", flush=True)
             count = ingest_holdings(conn, fund, date.today())
             print(f"{fund.key}: {count} holdings rows")
+            total += count
+        print(
+            f"ingest-holdings complete: {total} row(s) across {len(funds)} fund(s).",
+            flush=True,
+        )
     finally:
         conn.close()
     return 0
