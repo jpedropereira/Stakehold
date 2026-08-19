@@ -1,0 +1,92 @@
+# Maps the raw `exchange` string as scraped verbatim into etf_holdings.exchange to the yfinance
+# ticker suffix needed to price that exchange's holdings correctly. Committed (unlike
+# etfs.yaml/tracked_tickers.yaml) -- this is a generic reference table, not personal fund data.
+#
+# `suffix: null` is an explicit, deliberate "this exchange's yfinance tickers need no suffix"
+# (e.g. NASDAQ, NYSE) -- NOT the same as the exchange being absent from this file entirely.
+# An exchange with no entry here is treated as unresolved: ingest-ohlcv/backfill-ohlcv will log
+# a warning naming the ticker and the raw exchange string, and skip that ticker for the run,
+# rather than sending it to yfinance bare (which silently returns zero rows instead of erroring).
+#
+# Seeded from the real, distinct `exchange` values in this deployment's own etf_holdings table
+# (SELECT exchange, COUNT(*) FROM etf_holdings GROUP BY exchange). If a fund adds a holding on
+# an exchange not listed here, add a new entry -- don't guess spelling, query the real value.
+exchanges:
+  - exchange: "New York Stock Exchange Inc."
+    suffix: null
+  - exchange: "NASDAQ"
+    suffix: null
+  - exchange: "Cboe BZX"
+    suffix: null
+  - exchange: "Tokyo Stock Exchange"
+    suffix: ".T"
+  - exchange: "Toronto Stock Exchange"
+    suffix: ".TO"
+  - exchange: "London Stock Exchange"
+    suffix: ".L"
+  - exchange: "Nyse Euronext - Euronext Paris"
+    suffix: ".PA"
+  - exchange: "Xetra"
+    suffix: ".DE"
+  - exchange: "Deutsche Boerse Xetra"
+    suffix: ".DE"
+  - exchange: "Asx - All Markets"
+    suffix: ".AX"
+  - exchange: "SIX Swiss Exchange"
+    suffix: ".SW"
+  - exchange: "Nasdaq Omx Nordic"
+    suffix: ".ST"
+  - exchange: "Borsa Italiana"
+    suffix: ".MI"
+  - exchange: "Euronext Amsterdam"
+    suffix: ".AS"
+  - exchange: "Hong Kong Exchanges And Clearing Ltd"
+    suffix: ".HK"
+  - exchange: "Bolsa De Madrid"
+    suffix: ".MC"
+  - exchange: "Singapore Exchange"
+    suffix: ".SI"
+  - exchange: "Omx Nordic Exchange Copenhagen A/S"
+    suffix: ".CO"
+  - exchange: "Nasdaq Omx Helsinki Ltd."
+    suffix: ".HE"
+  - exchange: "Oslo Bors Asa"
+    suffix: ".OL"
+  - exchange: "Nyse Euronext - Euronext Brussels"
+    suffix: ".BR"
+  - exchange: "Tel Aviv Stock Exchange"
+    suffix: ".TA"
+  - exchange: "Irish Stock Exchange - All Market"
+    suffix: ".IR"
+  - exchange: "New Zealand Exchange Ltd"
+    suffix: ".NZ"
+  - exchange: "Nyse Euronext - Euronext Lisbon"
+    suffix: ".LS"
+  - exchange: "Wiener Boerse Ag"
+    suffix: ".VI"
+  # "NO MARKET (E.G. UNLISTED)" deliberately has no entry -- an ambiguous/unresolvable case,
+  # not a "no suffix needed" one. Holdings on it correctly warn + skip.
+
+# One-off raw-ticker rewrites for cases plain exchange-suffix resolution can't handle: either
+# the source data's exchange tagging is simply wrong, or the raw ticker needs a full rewrite
+# yfinance doesn't derive from exchange+suffix alone. Each entry was verified against real
+# yfinance data before being added here -- don't add one without confirming it actually
+# resolves. Optional: an absent or empty section just means none are configured yet.
+ticker_overrides:
+  - raw_ticker: BRKB
+    ticker: BRK-B
+  - raw_ticker: HEIA
+    ticker: HEIA.AS
+  # CICT/CLAR: iShares' `ticker` field for these Singapore REITs is a short marketing code,
+  # not the actual SGX trading symbol yfinance needs.
+  - raw_ticker: CICT
+    ticker: C38U.SI
+  - raw_ticker: CLAR
+    ticker: A17U.SI
+  # 2299955D: not a distinct security -- a ~$0.14 (0.0000% weight) rounding remnant of
+  # Constellation Software Inc, which is already tracked correctly under its real ticker
+  # (raw "CSU" on Toronto Stock Exchange -> CSU.TO). Overriding to the same final ticker just
+  # dedupes this dust position against that existing resolution instead of trying (and always
+  # failing) to fetch a nonexistent "2299955D.TO".
+  - raw_ticker: "2299955D"
+    ticker: CSU.TO
