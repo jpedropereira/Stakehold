@@ -1,9 +1,25 @@
-import shlex
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from airflow.providers.standard.operators.bash import BashOperator
 from airflow.providers.standard.operators.empty import EmptyOperator
-from airflow.sdk import DAG, Param
+from airflow.sdk import DAG, Param, task
+from common import (
+    EXTERNAL_PYTHON_KWARGS,
+    assert_interpreter_available,
+    check_run,
+    requested_tickers,
+)
+
+assert_interpreter_available()
+
+
+@task.external_python(**EXTERNAL_PYTHON_KWARGS)
+def ingest(tickers: list[str]) -> dict:
+    # Imports live inside the body because the operator cuts this function out of the DAG into
+    # a standalone file; nothing from the surrounding module is available to it.
+    from data_store.jobs import run_ingest_ohlcv
+
+    return run_ingest_ohlcv(tickers=tickers or None)
+
 
 with DAG(
     dag_id="ingest_daily_ohlcv",
@@ -14,6 +30,7 @@ with DAG(
     start_date=datetime(2024, 1, 1),
     catchup=False,
     tags=["data-store", "prices"],
+    default_args={"execution_timeout": timedelta(hours=1)},
     params={
         "tickers": Param(
             [],
@@ -26,20 +43,8 @@ with DAG(
             ),
         ),
     },
-    # shlex.quote (not raw Jinja interpolation) so a ticker value from the Trigger DAG config
-    # can never break out of its --ticker argument into the shell command.
-    user_defined_filters={"shquote": shlex.quote},
 ) as dag:
     start = EmptyOperator(task_id="start")
-
-    ingest = BashOperator(
-        task_id="ingest_daily_ohlcv",
-        bash_command=(
-            "cd /opt/stakehold/services/data-store && uv run --frozen data-store ingest-ohlcv"
-            "{% for t in params.tickers %} --ticker {{ t | shquote }}{% endfor %}"
-        ),
-    )
-
     end = EmptyOperator(task_id="end")
 
-    start >> ingest >> end
+    start >> check_run(ingest(requested_tickers())) >> end

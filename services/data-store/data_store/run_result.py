@@ -35,10 +35,13 @@ def build_run_result(
     `data_store` is not importable — so a dataclass, enum, date or numpy int would fail there
     with ModuleNotFoundError. Boring is the requirement, not an accident.
     """
-    if units_total == 0:
-        status = STATUS_NOTHING_TO_DO
-    elif failed:
+    # Failure outranks emptiness. A run that ended up with nothing to work on *because*
+    # something failed is not a quiet day -- reporting it as `nothing_to_do` would make it
+    # green, which is the exact silent success this contract exists to prevent.
+    if failed:
         status = STATUS_PARTIAL
+    elif units_total == 0:
+        status = STATUS_NOTHING_TO_DO
     else:
         status = STATUS_OK
     return {"status": status, "rows_saved": rows_saved, **extra}
