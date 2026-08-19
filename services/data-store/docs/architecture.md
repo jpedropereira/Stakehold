@@ -29,6 +29,7 @@ flowchart TD
     end
 
     subgraph orch["Orchestration"]
+        JOBS["jobs.py<br/><i>runnable units: config + connection + one flow</i>"]
         PIPE["pipeline.py<br/><i>the five flows; ticker resolution</i>"]
     end
 
@@ -48,10 +49,11 @@ flowchart TD
     EXT(["External: iShares, yfinance"])
 
     DAGS -->|subprocess| CLI
-    CLI --> PIPE
-    CLI --> CONF
-    CLI --> SET
-    CLI --> DB
+    CLI --> JOBS
+    JOBS --> PIPE
+    JOBS --> CONF
+    JOBS --> SET
+    JOBS --> DB
     PIPE --> HOLD
     PIPE --> PRICE
     PIPE --> DIV
@@ -63,6 +65,17 @@ flowchart TD
     DIV --> PG
     DB --> PG
 ```
+
+**`jobs.py` is the seam that matters.** Each `run_*` there is one complete operation: load
+settings and configuration, open a connection, run the flow, close the connection, return its
+result. `cli.py` is argument parsing plus a call into it, and nothing else. An Airflow task will
+be a call into it and nothing else. Anything that lived in only one of those two would be, by
+construction, untested by the other — which is exactly how a CLI and a scheduled job drift apart.
+
+Its arguments are plain builtins, including `earliest_date` as an ISO string rather than a `date`.
+That looks like a weaker type until you notice both callers hand it over as text — argparse from
+the command line, Airflow from a DAG parameter — so parsing it inside the job keeps that
+conversion in one place instead of two.
 
 The rule that keeps this honest: **`pipeline.py` never touches SQL or HTTP directly, and the
 domain modules never decide *what* to fetch.** Orchestration knows which tickers matter and in
@@ -139,8 +152,15 @@ run whose every group failed. Separating them is what lets an automated check re
 without crying wolf about the first, and it's the same distinction the logging rules require of the
 human-readable output.
 
-`FLOW_RESULT_KEYS` names the three keys every flow guarantees, so a caller can inspect any run
-without knowing which flow produced it.
+`run_result.py` owns this contract — `RUN_RESULT_KEYS` names the two keys *every* run carries, so
+a caller can react to any of them without knowing which ran. Only two, deliberately: a pricing run
+counts tickers and a holdings run counts funds, so a shared "units" key would mean something
+different in each and be a trap rather than a contract. Each run adds its own named counts on top
+(`tickers_resolved`, `groups_failed`, `funds_failed`, and so on).
+
+It lives in its own module rather than in `pipeline.py` because four layers depend on it —
+`pipeline` builds these, `jobs` builds and forwards them, the CLI turns them into exit codes, and
+Airflow reads them back as XCom values. One definition is what stops those drifting.
 
 **The value is plain builtins on purpose.** It is destined to cross a process boundary as an
 Airflow XCom — pickled in this service's interpreter and unpickled in Airflow's, where
@@ -320,6 +340,8 @@ run's summary is as much a part of its contract as its return value.
 ## Where to start reading
 
 1. `pipeline.py` — the five flows; everything else is in service of these.
-2. `cli.py` — how a command becomes a flow, and where configuration is assembled.
-3. One domain module end to end (`prices/` is the most representative).
-4. [`schema.md`](schema.md) — why the tables load the way they do.
+2. `jobs.py` — how configuration, a connection and a flow become one runnable operation.
+3. `cli.py` — how a command becomes a job. Thin on purpose; if it is growing, something belongs
+   in `jobs.py` instead.
+4. One domain module end to end (`prices/` is the most representative).
+5. [`schema.md`](schema.md) — why the tables load the way they do.
