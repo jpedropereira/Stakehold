@@ -191,6 +191,7 @@ def ingest_daily_ohlcv(
                 asset_type,
                 len(tickers),
                 e,
+                exc_info=True,
             )
             continue
 
@@ -286,6 +287,7 @@ def ingest_dividend_events(
                 asset_type,
                 len(tickers),
                 e,
+                exc_info=True,
             )
             continue
 
@@ -382,7 +384,9 @@ def backfill_historical_ohlcv(
                 prices = price_source.fetch([ticker], fetch_start, fetch_end)
             except Exception as e:
                 failed += 1
-                logger.warning("backfill: %s failed after retries, skipping: %s", ticker, e)
+                logger.warning(
+                    "backfill: %s failed after retries, skipping: %s", ticker, e, exc_info=True
+                )
                 time.sleep(delay_seconds)
                 processed += 1
                 continue
@@ -481,7 +485,10 @@ def backfill_dividend_events(
             except Exception as e:
                 failed += 1
                 logger.warning(
-                    "backfill-dividends: %s failed after retries, skipping: %s", ticker, e
+                    "backfill-dividends: %s failed after retries, skipping: %s",
+                    ticker,
+                    e,
+                    exc_info=True,
                 )
                 time.sleep(delay_seconds)
                 processed += 1

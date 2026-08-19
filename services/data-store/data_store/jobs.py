@@ -79,7 +79,14 @@ def run_ingest_holdings(*, fund: str | None = None) -> dict[str, int | str]:
                 count = ingest_holdings(conn, fund_config, date.today())
             except Exception as e:
                 failed += 1
-                logger.warning("ingest-holdings: %s failed, skipping: %s", fund_config.key, e)
+                # exc_info: the message alone rarely identifies a scraping failure, and
+                # under Airflow the task log is the only diagnostic artifact there is.
+                logger.warning(
+                    "ingest-holdings: %s failed, skipping: %s",
+                    fund_config.key,
+                    e,
+                    exc_info=True,
+                )
                 continue
             logger.info(f"{fund_config.key}: {count} holdings rows")
             total += count
