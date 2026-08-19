@@ -1,4 +1,5 @@
 import argparse
+import logging
 import sys
 from datetime import date, timedelta
 from pathlib import Path
@@ -20,6 +21,8 @@ from data_store.pipeline import (
     ingest_holdings,
 )
 from data_store.settings import load_settings
+
+logger = logging.getLogger(__name__)
 
 _SCHEMA_PATH = Path(__file__).parent / "db" / "schema.sql"
 
@@ -57,18 +60,30 @@ def _ingest_holdings(args: argparse.Namespace) -> int:
     conn = get_connection(settings.database_url)
     try:
         total = 0
+        failed = 0
         for fund in funds:
             print(f"ingest-holdings: scraping {fund.key}...", flush=True)
-            count = ingest_holdings(conn, fund, date.today())
+            # Scraping drives a real browser against a third-party site -- the flakiest step
+            # in the service. One fund's failure shouldn't cost every fund queued behind it,
+            # and the run must still reach its summary rather than dying before printing it.
+            try:
+                count = ingest_holdings(conn, fund, date.today())
+            except Exception as e:
+                failed += 1
+                logger.warning("ingest-holdings: %s failed, skipping: %s", fund.key, e)
+                continue
             print(f"{fund.key}: {count} holdings rows")
             total += count
         print(
-            f"ingest-holdings complete: {total} row(s) across {len(funds)} fund(s).",
+            f"ingest-holdings complete: {total} row(s) across {len(funds)} fund(s), "
+            f"{failed} fund(s) failed.",
             flush=True,
         )
     finally:
         conn.close()
-    return 0
+    # Non-zero when anything failed: a scheduled run that silently half-succeeded is the
+    # failure mode this whole pass is about.
+    return 1 if failed else 0
 
 
 def _ingest_ohlcv(args: argparse.Namespace) -> int:

@@ -138,7 +138,8 @@ only) for the lookback window, and `--ticker TICKER` (repeatable) to restrict th
 final, post-suffix-resolution tickers (e.g. `--ticker AAPL --ticker 0700.HK`) — matches any
 currently followed ticker, fund-holdings-derived or tracked; useful for a small manual run or
 re-attempting specific tickers that previously failed. Omit it to run against everything
-followed, as before.
+followed, as before. A `--ticker` value matching nothing is logged as a warning naming it, so a
+typo doesn't quietly look like a successful run that had nothing to do.
 
 ### Rerunning a backfill
 
