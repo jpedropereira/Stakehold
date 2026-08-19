@@ -30,8 +30,14 @@ def save_dividends(conn, source: str, asset_type: str, df: pd.DataFrame) -> int:
                 asset_type = EXCLUDED.asset_type,
                 amount = EXCLUDED.amount
             """)
+        # rowcount, not len(df): the frame is what we asked the database to write, this is
+        # what it actually wrote. They agree today (every staged row either inserts or
+        # updates), so this is a correctness-of-source change rather than a fix to a wrong
+        # number -- but it's the value a run's summary reports, and it should come from the
+        # statement that did the work.
+        written = cur.rowcount
     conn.commit()
-    return len(df)
+    return written
 
 
 def get_earliest_dividend_dates(conn, source: str, tickers: list[str]) -> dict[str, date]:

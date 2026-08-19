@@ -19,7 +19,12 @@ class FakeCopy:
 
 
 class FakeCursor:
-    def __init__(self, fetch_result=None):
+    def __init__(self, fetch_result=None, rowcount=None):
+        # None means "behave like Postgres": the upsert reports one affected row per staged
+        # row, since every row either inserts or updates. Pass an explicit rowcount to assert
+        # that the caller reads the database's count rather than the frame's length.
+        self._forced_rowcount = rowcount
+        self.rowcount = -1  # psycopg's value before any statement has run
         self.executed = []
         self.copy_calls = []
         self.copy_rows = []
@@ -27,6 +32,10 @@ class FakeCursor:
 
     def execute(self, sql, params=None):
         self.executed.append((sql, params))
+        if "INSERT INTO" in sql:
+            self.rowcount = (
+                self._forced_rowcount if self._forced_rowcount is not None else len(self.copy_rows)
+            )
 
     def copy(self, sql):
         self.copy_calls.append(sql)
@@ -43,8 +52,8 @@ class FakeCursor:
 
 
 class FakeConnection:
-    def __init__(self, fetch_result=None):
-        self._cursor = FakeCursor(fetch_result=fetch_result)
+    def __init__(self, fetch_result=None, rowcount=None):
+        self._cursor = FakeCursor(fetch_result=fetch_result, rowcount=rowcount)
         self.committed = False
 
     def cursor(self):
@@ -143,3 +152,16 @@ def test_get_earliest_dividend_dates_query_shape():
     assert "GROUP BY" in sql
     assert "ANY(%s)" in sql
     assert params == ("yfinance", ["AAPL", "MSFT"])
+
+
+def test_save_dividends_reports_what_the_database_wrote_not_the_frame_length():
+    conn = FakeConnection(rowcount=2)
+    df = make_df(
+        [
+            ["AAPL", date(2026, 1, 1), 0.24],
+            ["AAPL", date(2026, 4, 1), 0.25],
+            ["AAPL", date(2026, 7, 1), 0.26],
+        ]
+    )
+
+    assert save_dividends(conn, "yfinance", "equity", df) == 2

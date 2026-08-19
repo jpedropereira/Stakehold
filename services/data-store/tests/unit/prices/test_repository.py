@@ -20,7 +20,12 @@ class FakeCopy:
 
 
 class FakeCursor:
-    def __init__(self, fetch_result=None):
+    def __init__(self, fetch_result=None, rowcount=None):
+        # None means "behave like Postgres": the upsert reports one affected row per staged
+        # row, since every row either inserts or updates. Pass an explicit rowcount to assert
+        # that the caller reads the database's count rather than the frame's length.
+        self._forced_rowcount = rowcount
+        self.rowcount = -1  # psycopg's value before any statement has run
         self.executed = []
         self.copy_calls = []
         self.copy_rows = []
@@ -28,6 +33,10 @@ class FakeCursor:
 
     def execute(self, sql, params=None):
         self.executed.append((sql, params))
+        if "INSERT INTO" in sql:
+            self.rowcount = (
+                self._forced_rowcount if self._forced_rowcount is not None else len(self.copy_rows)
+            )
 
     def copy(self, sql):
         self.copy_calls.append(sql)
@@ -44,8 +53,8 @@ class FakeCursor:
 
 
 class FakeConnection:
-    def __init__(self, fetch_result=None):
-        self._cursor = FakeCursor(fetch_result=fetch_result)
+    def __init__(self, fetch_result=None, rowcount=None):
+        self._cursor = FakeCursor(fetch_result=fetch_result, rowcount=rowcount)
         self.committed = False
 
     def cursor(self):
@@ -168,3 +177,19 @@ def test_get_earliest_price_dates_query_shape():
     assert "GROUP BY" in sql
     assert "ANY(%s)" in sql
     assert params == ("yfinance", ["AAPL", "MSFT"])
+
+
+def test_save_prices_reports_what_the_database_wrote_not_the_frame_length():
+    # The count is what gets logged as the run's outcome, so it should come from the upsert
+    # itself rather than from the frame we handed it -- the frame is the request, rowcount is
+    # the result.
+    conn = FakeConnection(rowcount=2)
+    df = make_df(
+        [
+            ["AAPL", date(2026, 1, 1), 100.0, 101.0, 99.0, 100.5, 100.5, 1000],
+            ["AAPL", date(2026, 1, 2), 100.0, 101.0, 99.0, 100.5, 100.5, 1000],
+            ["AAPL", date(2026, 1, 3), 100.0, 101.0, 99.0, 100.5, 100.5, 1000],
+        ]
+    )
+
+    assert save_prices(conn, "yfinance", "equity", df) == 2
