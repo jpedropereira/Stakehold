@@ -200,3 +200,25 @@ all accept a `tickers` param (a JSON array, default `[]`) via the UI's "Trigger 
 dialog, mapped straight to the CLI's `--ticker` flag (each list value shell-escaped before being
 interpolated into the task's `bash_command`, so a malicious/malformed value can't break out of its
 argument). Leave it empty to run against everything followed, as before.
+
+## Tests
+
+Unit tests need nothing running and are what a plain `pytest` gives you:
+
+```bash
+uv run pytest services/data-store
+```
+
+The integration suite is separate, and is the only coverage of the parts a fake can't
+reach — `COPY`-into-temp-table upserts, `ON CONFLICT` behaviour, and whether `schema.sql`'s
+migrations stay idempotent across reruns. It's marked `integration` and deselected by default
+(root `pyproject.toml`), so it only runs when asked for:
+
+```bash
+cd services/data-store && docker compose up -d postgres
+cd ../.. && uv run pytest services -m integration
+```
+
+The tests read `DATABASE_URL` and apply the schema themselves, so an empty database is fine —
+no seeding step. CI runs them the same way against a Postgres service container, so they can't
+quietly rot into "passes on the machine of whoever started the database".

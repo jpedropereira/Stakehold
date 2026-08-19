@@ -17,6 +17,27 @@ on:
 jobs:
   lint-and-test:
     runs-on: ubuntu-latest
+
+    # The integration suite talks to a real Postgres rather than a fake, because what it
+    # covers is precisely the part a fake can't: COPY-into-temp-table upserts, ON CONFLICT
+    # semantics, and whether schema.sql's migrations stay idempotent. Locally that's the
+    # docker compose stack; here it's a service container, so the same tests run in both
+    # places instead of only on the machine of whoever remembered to start Postgres.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: data_store
+          POSTGRES_USER: data_store
+          POSTGRES_PASSWORD: ci-throwaway  # pragma: allowlist secret
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     steps:
       - uses: actions/checkout@v4
 
@@ -31,5 +52,16 @@ jobs:
       - name: Run pre-commit hooks
         uses: pre-commit/action@v3.0.1
 
-      - name: Run full test suite
+      # Two steps, not one, because the root pyproject deselects `integration` by default
+      # (`addopts = "-m 'not integration'"`) so a plain run never touches them. Kept separate
+      # rather than merged into one `-m ''` invocation so a Postgres-side failure is
+      # immediately distinguishable from a unit-test failure in the run summary.
+      - name: Run unit test suite
         run: uv run pytest services
+
+      - name: Run integration test suite
+        run: uv run pytest services -m integration
+        env:
+          # Matches the service container above. Ephemeral, created and destroyed with the
+          # job -- not a credential to anything that outlives it.
+          DATABASE_URL: postgresql://data_store:ci-throwaway@localhost:5432/data_store  # pragma: allowlist secret
