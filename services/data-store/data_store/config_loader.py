@@ -26,6 +26,20 @@ class FundConfig:
 
 
 @dataclass(frozen=True)
+class TickerResolution:
+    """Everything needed to turn a raw scraped ticker into a provider-ready one.
+
+    The two live in the same file under different top-level keys and are always used together
+    -- an override short-circuits suffix resolution, so a caller holding one without the other
+    would resolve tickers wrongly. Bundling them makes that pairing structural rather than a
+    convention every call site has to remember.
+    """
+
+    exchange_suffixes: dict[str, str | None]
+    ticker_overrides: dict[str, str]
+
+
+@dataclass(frozen=True)
 class TickerConfig:
     ticker: str
     display_name: str
@@ -120,18 +134,32 @@ def load_tracked_tickers(path: Path) -> list[TickerConfig]:
     return tickers
 
 
-def load_exchange_suffixes(path: Path) -> dict[str, str | None]:
-    """{raw exchange string: yfinance suffix, or None if that exchange needs no suffix}.
-    Unlike load_funds/load_tracked_tickers this returns a dict, not a list of dataclasses --
-    it's fundamentally a lookup table (no per-entry identity/enabled flag), and dict-key
-    presence is what lets "unmapped" and "mapped with no suffix" stay distinguishable to
-    callers."""
+def load_ticker_resolution(path: Path) -> TickerResolution:
+    """Both ticker-resolution tables, from a single parse of a single file.
+
+    One read rather than two: the tables are always used together, so parsing once means they
+    cannot be read from different states of the file, and a command stops paying to parse the
+    same YAML twice.
+    """
+    data = _read_yaml_mapping(path)
+    return TickerResolution(
+        exchange_suffixes=_parse_exchange_suffixes(data, path),
+        ticker_overrides=_parse_ticker_overrides(data),
+    )
+
+
+def _read_yaml_mapping(path: Path) -> dict:
     if not path.is_file():
         raise ConfigError(f"Config file not found: {path}")
-
     with path.open() as f:
-        data = yaml.safe_load(f) or {}
+        return yaml.safe_load(f) or {}
 
+
+def _parse_exchange_suffixes(data: dict, path: Path) -> dict[str, str | None]:
+    """{raw exchange string: yfinance suffix, or None if that exchange needs no suffix}.
+    A dict rather than a list of dataclasses because it's fundamentally a lookup table (no
+    per-entry identity or enabled flag), and dict-key presence is what lets "unmapped" and
+    "mapped with no suffix" stay distinguishable to callers."""
     entries = data.get("exchanges") or []
     if not entries:
         raise ConfigError(f"Config file has no exchanges defined: {path}")
@@ -158,20 +186,14 @@ def load_exchange_suffixes(path: Path) -> dict[str, str | None]:
     return suffixes
 
 
-def load_ticker_overrides(path: Path) -> dict[str, str]:
-    """{raw ticker: final yfinance-ready ticker}, read from the same file as
-    load_exchange_suffixes (a different top-level key). For one-off cases plain
+def _parse_ticker_overrides(data: dict) -> dict[str, str]:
+    """{raw ticker: final yfinance-ready ticker}, from the same file's `ticker_overrides:`
+    section. For one-off cases plain
     exchange-suffix resolution can't handle: a raw ticker that needs a full rewrite (e.g.
     "BRKB" -> "BRK-B", a share-class ticker the source didn't separate), or one whose source
     exchange tagging is simply wrong (e.g. "HEIA" tagged under a US exchange but actually
     needing "HEIA.AS"). Unlike `exchanges:`, `ticker_overrides:` is optional -- an absent or
     empty section just means none are configured yet, not a config error."""
-    if not path.is_file():
-        raise ConfigError(f"Config file not found: {path}")
-
-    with path.open() as f:
-        data = yaml.safe_load(f) or {}
-
     entries = data.get("ticker_overrides") or []
 
     overrides: dict[str, str] = {}

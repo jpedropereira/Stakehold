@@ -2,7 +2,7 @@ from datetime import date
 
 import pytest
 from data_store import cli
-from data_store.config_loader import FundConfig, TickerConfig
+from data_store.config_loader import FundConfig, TickerConfig, TickerResolution
 from data_store.settings import Settings
 
 
@@ -18,19 +18,23 @@ def fake_settings(tmp_path):
     )
 
 
-@pytest.fixture(autouse=True)
-def stub_load_exchange_suffixes(monkeypatch):
-    # exchange_suffixes.yaml is load-bearing (unconditionally loaded, unlike
-    # tracked_tickers.yaml), but most cli.py tests don't exercise suffix resolution itself --
-    # stub it to an empty dict by default so those tests don't each need to care about it.
-    monkeypatch.setattr(cli, "load_exchange_suffixes", lambda path: {})
+def stub_resolution(monkeypatch, *, suffixes=None, overrides=None):
+    """Point the CLI's ticker-resolution load at in-memory tables."""
+    monkeypatch.setattr(
+        cli,
+        "load_ticker_resolution",
+        lambda path: TickerResolution(
+            exchange_suffixes=suffixes or {}, ticker_overrides=overrides or {}
+        ),
+    )
 
 
 @pytest.fixture(autouse=True)
-def stub_load_ticker_overrides(monkeypatch):
-    # ticker_overrides live in the same file/setting as exchange_suffixes and are loaded
-    # unconditionally alongside it -- stub to empty by default for the same reason.
-    monkeypatch.setattr(cli, "load_ticker_overrides", lambda path: {})
+def stub_load_ticker_resolution(monkeypatch):
+    # yfinance_exchange_suffixes.yaml is load-bearing (unconditionally loaded, unlike
+    # tracked_tickers.yaml), but most cli.py tests don't exercise ticker resolution itself --
+    # stub it to empty tables by default so those tests don't each need to care about it.
+    stub_resolution(monkeypatch)
 
 
 def flow_result(rows_saved=0, status="ok", **extra):
@@ -327,9 +331,7 @@ def test_ingest_ohlcv_loads_and_passes_exchange_suffixes(monkeypatch, fake_setti
     monkeypatch.setattr(cli, "load_settings", lambda: fake_settings)
     monkeypatch.setattr(cli, "load_funds", lambda path: [])
     monkeypatch.setattr(cli, "get_connection", lambda url: FakeConn([]))
-    monkeypatch.setattr(
-        cli, "load_exchange_suffixes", lambda path: {"NASDAQ": None, "London Stock Exchange": ".L"}
-    )
+    stub_resolution(monkeypatch, suffixes={"NASDAQ": None, "London Stock Exchange": ".L"})
     monkeypatch.setattr(
         cli,
         "ingest_daily_ohlcv",
@@ -348,7 +350,7 @@ def test_ingest_ohlcv_loads_and_passes_ticker_overrides(monkeypatch, fake_settin
     monkeypatch.setattr(cli, "load_settings", lambda: fake_settings)
     monkeypatch.setattr(cli, "load_funds", lambda path: [])
     monkeypatch.setattr(cli, "get_connection", lambda url: FakeConn([]))
-    monkeypatch.setattr(cli, "load_ticker_overrides", lambda path: {"BRKB": "BRK-B"})
+    stub_resolution(monkeypatch, overrides={"BRKB": "BRK-B"})
     monkeypatch.setattr(
         cli,
         "ingest_daily_ohlcv",
@@ -373,7 +375,7 @@ def test_ingest_ohlcv_propagates_config_error_from_exchange_suffixes(monkeypatch
     def raise_config_error(path):
         raise ConfigError("bad exchange suffixes config")
 
-    monkeypatch.setattr(cli, "load_exchange_suffixes", raise_config_error)
+    monkeypatch.setattr(cli, "load_ticker_resolution", raise_config_error)
 
     with pytest.raises(ConfigError, match="bad exchange suffixes config"):
         cli.main(["ingest-ohlcv"])
@@ -542,7 +544,7 @@ def test_backfill_ohlcv_loads_and_passes_exchange_suffixes(monkeypatch, fake_set
     monkeypatch.setattr(cli, "load_settings", lambda: fake_settings)
     monkeypatch.setattr(cli, "load_funds", lambda path: [])
     monkeypatch.setattr(cli, "get_connection", lambda url: FakeConn([]))
-    monkeypatch.setattr(cli, "load_exchange_suffixes", lambda path: {"NASDAQ": None})
+    stub_resolution(monkeypatch, suffixes={"NASDAQ": None})
     monkeypatch.setattr(
         cli,
         "backfill_historical_ohlcv",
@@ -560,7 +562,7 @@ def test_backfill_ohlcv_loads_and_passes_ticker_overrides(monkeypatch, fake_sett
     monkeypatch.setattr(cli, "load_settings", lambda: fake_settings)
     monkeypatch.setattr(cli, "load_funds", lambda path: [])
     monkeypatch.setattr(cli, "get_connection", lambda url: FakeConn([]))
-    monkeypatch.setattr(cli, "load_ticker_overrides", lambda path: {"BRKB": "BRK-B"})
+    stub_resolution(monkeypatch, overrides={"BRKB": "BRK-B"})
     monkeypatch.setattr(
         cli,
         "backfill_historical_ohlcv",
@@ -585,7 +587,7 @@ def test_backfill_ohlcv_propagates_config_error_from_exchange_suffixes(monkeypat
     def raise_config_error(path):
         raise ConfigError("bad exchange suffixes config")
 
-    monkeypatch.setattr(cli, "load_exchange_suffixes", raise_config_error)
+    monkeypatch.setattr(cli, "load_ticker_resolution", raise_config_error)
 
     with pytest.raises(ConfigError, match="bad exchange suffixes config"):
         cli.main(["backfill-ohlcv"])
@@ -720,7 +722,7 @@ def test_ingest_dividends_loads_and_passes_exchange_suffixes(monkeypatch, fake_s
     monkeypatch.setattr(cli, "load_settings", lambda: fake_settings)
     monkeypatch.setattr(cli, "load_funds", lambda path: [])
     monkeypatch.setattr(cli, "get_connection", lambda url: FakeConn([]))
-    monkeypatch.setattr(cli, "load_exchange_suffixes", lambda path: {"NASDAQ": None})
+    stub_resolution(monkeypatch, suffixes={"NASDAQ": None})
     monkeypatch.setattr(
         cli,
         "ingest_dividend_events",
@@ -739,7 +741,7 @@ def test_ingest_dividends_loads_and_passes_ticker_overrides(monkeypatch, fake_se
     monkeypatch.setattr(cli, "load_settings", lambda: fake_settings)
     monkeypatch.setattr(cli, "load_funds", lambda path: [])
     monkeypatch.setattr(cli, "get_connection", lambda url: FakeConn([]))
-    monkeypatch.setattr(cli, "load_ticker_overrides", lambda path: {"BRKB": "BRK-B"})
+    stub_resolution(monkeypatch, overrides={"BRKB": "BRK-B"})
     monkeypatch.setattr(
         cli,
         "ingest_dividend_events",
@@ -766,7 +768,7 @@ def test_ingest_dividends_propagates_config_error_from_exchange_suffixes(
     def raise_config_error(path):
         raise ConfigError("bad exchange suffixes config")
 
-    monkeypatch.setattr(cli, "load_exchange_suffixes", raise_config_error)
+    monkeypatch.setattr(cli, "load_ticker_resolution", raise_config_error)
 
     with pytest.raises(ConfigError, match="bad exchange suffixes config"):
         cli.main(["ingest-dividends"])
@@ -933,7 +935,7 @@ def test_backfill_dividends_loads_and_passes_exchange_suffixes(monkeypatch, fake
     monkeypatch.setattr(cli, "load_settings", lambda: fake_settings)
     monkeypatch.setattr(cli, "load_funds", lambda path: [])
     monkeypatch.setattr(cli, "get_connection", lambda url: FakeConn([]))
-    monkeypatch.setattr(cli, "load_exchange_suffixes", lambda path: {"NASDAQ": None})
+    stub_resolution(monkeypatch, suffixes={"NASDAQ": None})
     monkeypatch.setattr(
         cli,
         "backfill_dividend_events",
@@ -951,7 +953,7 @@ def test_backfill_dividends_loads_and_passes_ticker_overrides(monkeypatch, fake_
     monkeypatch.setattr(cli, "load_settings", lambda: fake_settings)
     monkeypatch.setattr(cli, "load_funds", lambda path: [])
     monkeypatch.setattr(cli, "get_connection", lambda url: FakeConn([]))
-    monkeypatch.setattr(cli, "load_ticker_overrides", lambda path: {"BRKB": "BRK-B"})
+    stub_resolution(monkeypatch, overrides={"BRKB": "BRK-B"})
     monkeypatch.setattr(
         cli,
         "backfill_dividend_events",
@@ -978,7 +980,7 @@ def test_backfill_dividends_propagates_config_error_from_exchange_suffixes(
     def raise_config_error(path):
         raise ConfigError("bad exchange suffixes config")
 
-    monkeypatch.setattr(cli, "load_exchange_suffixes", raise_config_error)
+    monkeypatch.setattr(cli, "load_ticker_resolution", raise_config_error)
 
     with pytest.raises(ConfigError, match="bad exchange suffixes config"):
         cli.main(["backfill-dividends"])

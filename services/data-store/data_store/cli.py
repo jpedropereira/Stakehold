@@ -7,9 +7,8 @@ from pathlib import Path
 from data_store.config_loader import (
     FundConfig,
     TickerConfig,
-    load_exchange_suffixes,
     load_funds,
-    load_ticker_overrides,
+    load_ticker_resolution,
     load_tracked_tickers,
 )
 from data_store.db.connection import apply_schema, get_connection
@@ -103,8 +102,7 @@ def _ingest_ohlcv(args: argparse.Namespace) -> int:
     settings = load_settings()
     funds = _select_funds(load_funds(settings.config_path), args.fund)
     tracked_tickers = _load_enabled_tracked_tickers(settings.tracked_tickers_path)
-    exchange_suffixes = load_exchange_suffixes(settings.exchange_suffixes_path)
-    ticker_overrides = load_ticker_overrides(settings.exchange_suffixes_path)
+    resolution = load_ticker_resolution(settings.exchange_suffixes_path)
     only_tickers = set(args.ticker) if args.ticker else None
     end_date = date.today()
     start_date = end_date - timedelta(days=args.days)
@@ -114,11 +112,11 @@ def _ingest_ohlcv(args: argparse.Namespace) -> int:
             conn,
             funds,
             tracked_tickers,
-            exchange_suffixes,
+            resolution.exchange_suffixes,
             start_date,
             end_date,
             only_tickers=only_tickers,
-            ticker_overrides=ticker_overrides,
+            ticker_overrides=resolution.ticker_overrides,
         )
         exit_code = _report(result, "price rows")
     finally:
@@ -130,8 +128,7 @@ def _backfill_ohlcv(args: argparse.Namespace) -> int:
     settings = load_settings()
     funds = _select_funds(load_funds(settings.config_path), args.fund)
     tracked_tickers = _load_enabled_tracked_tickers(settings.tracked_tickers_path)
-    exchange_suffixes = load_exchange_suffixes(settings.exchange_suffixes_path)
-    ticker_overrides = load_ticker_overrides(settings.exchange_suffixes_path)
+    resolution = load_ticker_resolution(settings.exchange_suffixes_path)
     only_tickers = set(args.ticker) if args.ticker else None
     end_date = date.today()
     earliest_date = (
@@ -143,12 +140,12 @@ def _backfill_ohlcv(args: argparse.Namespace) -> int:
             conn,
             funds,
             tracked_tickers,
-            exchange_suffixes,
+            resolution.exchange_suffixes,
             earliest_date,
             end_date,
             args.delay_seconds,
             only_tickers=only_tickers,
-            ticker_overrides=ticker_overrides,
+            ticker_overrides=resolution.ticker_overrides,
         )
         exit_code = _report(result, "price rows")
     finally:
@@ -160,8 +157,7 @@ def _ingest_dividends(args: argparse.Namespace) -> int:
     settings = load_settings()
     funds = _select_funds(load_funds(settings.config_path), args.fund)
     tracked_tickers = _load_enabled_tracked_tickers(settings.tracked_tickers_path)
-    exchange_suffixes = load_exchange_suffixes(settings.exchange_suffixes_path)
-    ticker_overrides = load_ticker_overrides(settings.exchange_suffixes_path)
+    resolution = load_ticker_resolution(settings.exchange_suffixes_path)
     only_tickers = set(args.ticker) if args.ticker else None
     end_date = date.today()
     start_date = end_date - timedelta(days=args.days)
@@ -171,11 +167,11 @@ def _ingest_dividends(args: argparse.Namespace) -> int:
             conn,
             funds,
             tracked_tickers,
-            exchange_suffixes,
+            resolution.exchange_suffixes,
             start_date,
             end_date,
             only_tickers=only_tickers,
-            ticker_overrides=ticker_overrides,
+            ticker_overrides=resolution.ticker_overrides,
         )
         exit_code = _report(result, "dividend rows")
     finally:
@@ -187,8 +183,7 @@ def _backfill_dividends(args: argparse.Namespace) -> int:
     settings = load_settings()
     funds = _select_funds(load_funds(settings.config_path), args.fund)
     tracked_tickers = _load_enabled_tracked_tickers(settings.tracked_tickers_path)
-    exchange_suffixes = load_exchange_suffixes(settings.exchange_suffixes_path)
-    ticker_overrides = load_ticker_overrides(settings.exchange_suffixes_path)
+    resolution = load_ticker_resolution(settings.exchange_suffixes_path)
     only_tickers = set(args.ticker) if args.ticker else None
     end_date = date.today()
     earliest_date = (
@@ -200,12 +195,12 @@ def _backfill_dividends(args: argparse.Namespace) -> int:
             conn,
             funds,
             tracked_tickers,
-            exchange_suffixes,
+            resolution.exchange_suffixes,
             earliest_date,
             end_date,
             args.delay_seconds,
             only_tickers=only_tickers,
-            ticker_overrides=ticker_overrides,
+            ticker_overrides=resolution.ticker_overrides,
         )
         exit_code = _report(result, "dividend rows")
     finally:
