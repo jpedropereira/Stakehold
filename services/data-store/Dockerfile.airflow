@@ -1,0 +1,39 @@
+# Extends the official Airflow image with `uv` and this repo's workspace, baked in at build
+# time, so DAG tasks can shell out to the exact same `data-store` CLI/venv/lockfile already
+# verified end-to-end outside Airflow — see README.md for the reasoning.
+#
+# Rebuild after changing services/data-store/data_store code (docker compose build):
+# unlike dags/ (bind-mounted, live), the application code here is a build-time snapshot.
+ARG AIRFLOW_BASE_IMAGE=apache/airflow:3.3.1
+FROM ${AIRFLOW_BASE_IMAGE}
+
+USER root
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
+
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/stakehold/.playwright-browsers
+# uv's default cache and managed-Python-toolchain locations both depend on $HOME, which
+# doesn't resolve consistently for the arbitrary-uid airflow user at task-execution time
+# (by default they'd land under /root, built as root, unreadable to airflow at runtime).
+# Pin both to paths baked into (and chown'd within) this image.
+ENV UV_CACHE_DIR=/opt/stakehold/.uv-cache
+ENV UV_PYTHON_INSTALL_DIR=/opt/stakehold/.uv-python
+
+WORKDIR /opt/stakehold
+
+COPY pyproject.toml uv.lock ./
+COPY services/data-store services/data-store
+COPY services/portfolio services/portfolio
+
+# docker-compose.yml runs every Airflow container as "${AIRFLOW_UID:-50000}:0" -- gid 0
+# (root) always, but the uid varies (it's meant to match the *host* user, for dags/'s bind
+# mount to stay writable from outside the container, and has nothing to do with this image's
+# own baked-in content). chown alone only helps when AIRFLOW_UID happens to equal the
+# `airflow` user's uid; g+w makes this correct for any uid, as long as gid 0 is shared -- which
+# it always is here -- so a real host AIRFLOW_UID doesn't break uv's cache/venv writes.
+RUN uv sync --frozen \
+    && uv run --frozen playwright install --with-deps chromium \
+    && chown -R airflow:root /opt/stakehold \
+    && chmod -R g+w /opt/stakehold
+
+USER airflow

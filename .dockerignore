@@ -1,0 +1,10 @@
+.git/
+.venv/
+dev/
+services/data-store/.data/
+services/data-store/logs/
+services/data-store/.env
+**/__pycache__/
+**/.pytest_cache/
+**/.testmondata
+.claude/
