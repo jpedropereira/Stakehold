@@ -140,6 +140,18 @@ currently followed ticker, fund-holdings-derived or tracked; useful for a small 
 re-attempting specific tickers that previously failed. Omit it to run against everything
 followed, as before.
 
+### Rerunning a backfill
+
+Run `backfill-ohlcv` / `backfill-dividends` with no `--earliest-date` and they resume: every
+ticker that already has stored data is skipped, and only tickers with none are fetched (as far
+back as the source goes). That's what makes a rerun after an interruption cheap — a source
+returns a ticker's whole requested range in one call, so each ticker is either fully fetched or
+untouched, never half-done, and "has rows" really does mean "finished".
+
+Pass `--earliest-date YYYY-MM-DD` only to reach *further back than a previous run did*: it
+fetches each ticker the stretch between that date and its earliest stored date. That mode
+re-requests every ticker, so it's the slow path — expect the full multi-hour walk.
+
 All three flows are independent — `ingest-ohlcv` and `ingest-dividends` always read the *current*
 ticker list from `etf_holdings` (whatever `ingest-holdings` most recently loaded), not a fresh
 scrape, so each can run on its own daily cadence without depending on a holdings scrape having

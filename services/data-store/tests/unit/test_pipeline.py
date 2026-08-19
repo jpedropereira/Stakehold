@@ -1412,3 +1412,123 @@ def test_backfill_dividends_applies_ticker_overrides_for_holdings_derived_ticker
     )
 
     assert [call[0] for call in fake_source.fetch_calls] == ["BRK-B"]
+
+
+# --- backfill resume semantics (earliest_date omitted) ---------------------------------------
+#
+# yfinance returns a ticker's whole requested range in one call, so a ticker either got its full
+# history or none of it -- resume granularity is already per-ticker. That makes "has any stored
+# rows" a sound "already done" signal, and it's what makes a rerun cheap. Passing an explicit
+# earliest_date opts back into gap-filling, for deliberately reaching further back than a
+# previous run did.
+
+
+def test_backfill_without_earliest_date_skips_tickers_that_already_have_rows(monkeypatch):
+    conn = object()
+    fake_source = FakeSinglePriceSource()
+    tracked = [make_tracked_ticker(ticker="AAPL", asset_type="equity")]
+
+    monkeypatch.setitem(pipeline.PRICE_SOURCES, "yfinance", lambda: fake_source)
+    monkeypatch.setattr(
+        pipeline,
+        "get_earliest_price_dates",
+        # AAPL's real listing date -- still far above any sane explicit earliest_date, which is
+        # exactly why the old `fetch_end <= earliest_date` skip never fired on a rerun.
+        lambda conn, source, tickers: {"AAPL": date(1980, 12, 12)},
+    )
+    save_calls = []
+    monkeypatch.setattr(pipeline, "save_prices", lambda *a: save_calls.append(a))
+    sleeps = []
+    monkeypatch.setattr("data_store.pipeline.time.sleep", sleeps.append)
+
+    count = pipeline.backfill_historical_ohlcv(
+        conn, [], tracked, {}, None, date(2026, 1, 1), delay_seconds=10
+    )
+
+    assert fake_source.fetch_calls == []
+    assert save_calls == []
+    assert sleeps == []  # a skip must never pay the rate-limit delay
+    assert count == 0
+
+
+def test_backfill_without_earliest_date_fetches_tickers_with_no_rows(monkeypatch):
+    conn = object()
+    fake_source = FakeSinglePriceSource()
+    tracked = [make_tracked_ticker(ticker="AAPL", asset_type="equity")]
+
+    monkeypatch.setitem(pipeline.PRICE_SOURCES, "yfinance", lambda: fake_source)
+    monkeypatch.setattr(pipeline, "get_earliest_price_dates", lambda conn, source, tickers: {})
+    monkeypatch.setattr(pipeline, "save_prices", lambda conn, source, asset_type, df: len(df))
+    monkeypatch.setattr("data_store.pipeline.time.sleep", lambda s: None)
+
+    pipeline.backfill_historical_ohlcv(
+        conn, [], tracked, {}, None, date(2026, 1, 1), delay_seconds=0
+    )
+
+    assert fake_source.fetch_calls == [("AAPL", pipeline.UNBOUNDED_EARLIEST_DATE, date(2026, 1, 1))]
+
+
+def test_backfill_with_explicit_earliest_date_still_fills_the_gap(monkeypatch):
+    # The escape hatch: an explicit date means "reach further back than last time", so a ticker
+    # with rows is not skipped -- it gets the stretch below its floor.
+    conn = object()
+    fake_source = FakeSinglePriceSource()
+    tracked = [make_tracked_ticker(ticker="AAPL", asset_type="equity")]
+
+    monkeypatch.setitem(pipeline.PRICE_SOURCES, "yfinance", lambda: fake_source)
+    monkeypatch.setattr(
+        pipeline,
+        "get_earliest_price_dates",
+        lambda conn, source, tickers: {"AAPL": date(2010, 1, 1)},
+    )
+    monkeypatch.setattr(pipeline, "save_prices", lambda conn, source, asset_type, df: len(df))
+    monkeypatch.setattr("data_store.pipeline.time.sleep", lambda s: None)
+
+    pipeline.backfill_historical_ohlcv(
+        conn, [], tracked, {}, date(1970, 1, 1), date(2026, 1, 1), delay_seconds=0
+    )
+
+    assert fake_source.fetch_calls == [("AAPL", date(1970, 1, 1), date(2010, 1, 1))]
+
+
+def test_backfill_dividends_without_earliest_date_skips_tickers_that_already_have_rows(
+    monkeypatch,
+):
+    conn = object()
+    fake_source = FakeSingleDividendSource()
+    tracked = [make_tracked_ticker(ticker="AAPL", asset_type="equity")]
+
+    monkeypatch.setitem(pipeline.DIVIDEND_SOURCES, "yfinance", lambda: fake_source)
+    monkeypatch.setattr(
+        pipeline,
+        "get_earliest_dividend_dates",
+        lambda conn, source, tickers: {"AAPL": date(1987, 5, 11)},
+    )
+    save_calls = []
+    monkeypatch.setattr(pipeline, "save_dividends", lambda *a: save_calls.append(a))
+    monkeypatch.setattr("data_store.pipeline.time.sleep", lambda s: None)
+
+    count = pipeline.backfill_dividend_events(
+        conn, [], tracked, {}, None, date(2026, 1, 1), delay_seconds=0
+    )
+
+    assert fake_source.fetch_calls == []
+    assert save_calls == []
+    assert count == 0
+
+
+def test_backfill_dividends_without_earliest_date_fetches_tickers_with_no_rows(monkeypatch):
+    conn = object()
+    fake_source = FakeSingleDividendSource()
+    tracked = [make_tracked_ticker(ticker="AAPL", asset_type="equity")]
+
+    monkeypatch.setitem(pipeline.DIVIDEND_SOURCES, "yfinance", lambda: fake_source)
+    monkeypatch.setattr(pipeline, "get_earliest_dividend_dates", lambda conn, source, tickers: {})
+    monkeypatch.setattr(pipeline, "save_dividends", lambda conn, source, asset_type, df: len(df))
+    monkeypatch.setattr("data_store.pipeline.time.sleep", lambda s: None)
+
+    pipeline.backfill_dividend_events(
+        conn, [], tracked, {}, None, date(2026, 1, 1), delay_seconds=0
+    )
+
+    assert fake_source.fetch_calls == [("AAPL", pipeline.UNBOUNDED_EARLIEST_DATE, date(2026, 1, 1))]

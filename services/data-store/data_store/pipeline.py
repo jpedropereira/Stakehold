@@ -17,6 +17,10 @@ from data_store.prices.yfinance_source import YFinancePriceSource
 
 logger = logging.getLogger(__name__)
 
+# Lower bound sent to yfinance when a backfill is asked for "as far back as available".
+# yfinance clips to each ticker's actual listing date, so this is effectively unbounded.
+UNBOUNDED_EARLIEST_DATE = date(1900, 1, 1)
+
 # A new fund provider or price source is a new registry entry here, not a branch in the
 # functions below.
 SCRAPERS = {
@@ -236,20 +240,20 @@ def backfill_historical_ohlcv(
     funds: list[FundConfig],
     tracked_tickers: list[TickerConfig],
     exchange_suffixes: dict[str, str | None],
-    earliest_date: date,
+    earliest_date: date | None,
     end_date: date,
     delay_seconds: float,
     only_tickers: set[str] | None = None,
     ticker_overrides: dict[str, str] | None = None,
 ) -> int:
     """For each priceable ticker (same resolution as ingest_daily_ohlcv), fetches and stores
-    only the still-missing stretch of history: earliest_date up to (existing earliest stored
-    date - 1 day), or up to end_date if no rows exist yet. One ticker at a time, sleeping
-    delay_seconds after each live fetch (success or failure) — never after a skip. A ticker
-    that fails after YFinancePriceSource's internal retries is logged and skipped, not fatal
-    to the run. Re-running is cheap: a ticker that already succeeded now has a smaller (or
-    empty) remaining gap computed fresh from daily_ohlcv itself — no separate checkpoint is
-    needed, the table is the checkpoint. `only_tickers`, when given, restricts the run to
+    the stretch of history it's still missing — see _backfill_window for how `earliest_date`
+    selects between resuming (omitted) and reaching further back than a previous run
+    (given). Either way daily_ohlcv is its own checkpoint; no separate state table is needed.
+
+    One ticker at a time, sleeping delay_seconds after each live fetch (success or failure) —
+    never after a skip. A ticker that fails after YFinancePriceSource's internal retries is
+    logged and skipped, not fatal to the run. `only_tickers`, when given, restricts the run to
     exactly those final (post-suffix-resolution) tickers -- e.g. "0700.HK", not the raw "0700"
     -- so it can target holdings-derived tickers too, not just tracked_tickers entries.
     `ticker_overrides` is forwarded to ticker resolution -- see _resolve_yfinance_ticker."""
@@ -282,18 +286,16 @@ def backfill_historical_ohlcv(
         floors = get_earliest_price_dates(conn, price_source_name, tickers)
         for ticker in tickers:
             floor = floors.get(ticker)
-            # fetch()'s end is exclusive (confirmed against real yfinance), so passing floor
-            # itself as the end already stops the day before it — no -1 day adjustment needed,
-            # and one would silently drop the trading day immediately before floor.
-            fetch_end = floor if floor else end_date
-            if fetch_end <= earliest_date:
+            window = _backfill_window(floor, earliest_date, end_date)
+            if window is None:
                 skipped += 1
                 processed += 1
-                print(f"backfill: {ticker} already covered back to {floor}, skipping", flush=True)
+                print(_already_covered_message("backfill", ticker, floor), flush=True)
                 continue
+            fetch_start, fetch_end = window
 
             try:
-                prices = price_source.fetch([ticker], earliest_date, fetch_end)
+                prices = price_source.fetch([ticker], fetch_start, fetch_end)
             except Exception as e:
                 failed += 1
                 logger.warning("backfill: %s failed after retries, skipping: %s", ticker, e)
@@ -304,11 +306,11 @@ def backfill_historical_ohlcv(
             if not prices.empty:
                 total_rows += save_prices(conn, price_source.name, asset_type, prices)
                 print(
-                    f"backfill: {ticker} -> {len(prices)} rows ({earliest_date} to {fetch_end})",
+                    f"backfill: {ticker} -> {len(prices)} rows ({fetch_start} to {fetch_end})",
                     flush=True,
                 )
             else:
-                print(f"backfill: {ticker} -> no data ({earliest_date} to {fetch_end})", flush=True)
+                print(f"backfill: {ticker} -> no data ({fetch_start} to {fetch_end})", flush=True)
             time.sleep(delay_seconds)
             processed += 1
             if processed % 25 == 0:
@@ -331,14 +333,15 @@ def backfill_dividend_events(
     funds: list[FundConfig],
     tracked_tickers: list[TickerConfig],
     exchange_suffixes: dict[str, str | None],
-    earliest_date: date,
+    earliest_date: date | None,
     end_date: date,
     delay_seconds: float,
     only_tickers: set[str] | None = None,
     ticker_overrides: dict[str, str] | None = None,
 ) -> int:
-    """Direct structural mirror of backfill_historical_ohlcv: per-ticker gap computed via
-    get_earliest_dividend_dates instead of get_earliest_price_dates, same
+    """Direct structural mirror of backfill_historical_ohlcv: per-ticker window computed from
+    get_earliest_dividend_dates instead of get_earliest_price_dates, same optional
+    `earliest_date` resume/deep-fill modes (see _backfill_window), same
     silence-yfinance-logger / sleep-after-fetch-or-failure-not-skip / progress-every-25 /
     never-fatal-on-one-ticker-failure behavior. `only_tickers`/`ticker_overrides` behave
     identically to backfill_historical_ohlcv's -- see that docstring."""
@@ -365,18 +368,16 @@ def backfill_dividend_events(
         floors = get_earliest_dividend_dates(conn, source_name, tickers)
         for ticker in tickers:
             floor = floors.get(ticker)
-            fetch_end = floor if floor else end_date
-            if fetch_end <= earliest_date:
+            window = _backfill_window(floor, earliest_date, end_date)
+            if window is None:
                 skipped += 1
                 processed += 1
-                print(
-                    f"backfill-dividends: {ticker} already covered back to {floor}, skipping",
-                    flush=True,
-                )
+                print(_already_covered_message("backfill-dividends", ticker, floor), flush=True)
                 continue
+            fetch_start, fetch_end = window
 
             try:
-                dividends = dividend_source.fetch([ticker], earliest_date, fetch_end)
+                dividends = dividend_source.fetch([ticker], fetch_start, fetch_end)
             except Exception as e:
                 failed += 1
                 logger.warning(
@@ -390,12 +391,12 @@ def backfill_dividend_events(
                 total_rows += save_dividends(conn, dividend_source.name, asset_type, dividends)
                 print(
                     f"backfill-dividends: {ticker} -> {len(dividends)} rows "
-                    f"({earliest_date} to {fetch_end})",
+                    f"({fetch_start} to {fetch_end})",
                     flush=True,
                 )
             else:
                 print(
-                    f"backfill-dividends: {ticker} -> no data ({earliest_date} to {fetch_end})",
+                    f"backfill-dividends: {ticker} -> no data ({fetch_start} to {fetch_end})",
                     flush=True,
                 )
             time.sleep(delay_seconds)
@@ -413,6 +414,43 @@ def backfill_dividend_events(
         flush=True,
     )
     return total_rows
+
+
+def _backfill_window(
+    floor: date | None, earliest_date: date | None, end_date: date
+) -> tuple[date, date] | None:
+    """The (start, end) one ticker still needs fetched, or None when there's nothing left.
+
+    Two modes, because "how far back have we already looked?" is not something the data itself
+    records:
+
+    - `earliest_date is None` (the plain rerun): a ticker with any stored row is done. Sound
+      because a source returns a ticker's whole requested range in one call -- an interrupted
+      backfill leaves each ticker either fully fetched or untouched, never half-done -- so
+      "has rows" really does mean "already walked back as far as this ticker goes". This is
+      what makes a rerun cheap; without it every completed ticker gets re-requested (and
+      re-slept) forever, since its floor is its listing date, which is always well above any
+      sane explicit earliest_date.
+    - `earliest_date` given: reach further back than a previous run did, so a ticker with rows
+      is not skipped -- it gets the stretch below its floor. `fetch_end` is the floor itself,
+      not floor - 1 day: fetch()'s end is exclusive (confirmed against real yfinance), so the
+      floor already stops the day before it, and subtracting a day would silently drop the
+      trading day immediately before it.
+    """
+    if earliest_date is None:
+        if floor is not None:
+            return None
+        return (UNBOUNDED_EARLIEST_DATE, end_date)
+
+    fetch_end = floor if floor else end_date
+    if fetch_end <= earliest_date:
+        return None
+    return (earliest_date, fetch_end)
+
+
+def _already_covered_message(prefix: str, ticker: str, floor: date | None) -> str:
+    covered = f"back to {floor}" if floor else "for the requested window"
+    return f"{prefix}: {ticker} already covered {covered}, skipping"
 
 
 def _resolve_priceable_tickers(

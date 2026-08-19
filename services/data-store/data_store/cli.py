@@ -106,7 +106,9 @@ def _backfill_ohlcv(args: argparse.Namespace) -> int:
     ticker_overrides = load_ticker_overrides(settings.exchange_suffixes_path)
     only_tickers = set(args.ticker) if args.ticker else None
     end_date = date.today()
-    earliest_date = date.fromisoformat(args.earliest_date)
+    earliest_date = (
+        date.fromisoformat(args.earliest_date) if args.earliest_date is not None else None
+    )
     conn = get_connection(settings.database_url)
     try:
         count = backfill_historical_ohlcv(
@@ -161,7 +163,9 @@ def _backfill_dividends(args: argparse.Namespace) -> int:
     ticker_overrides = load_ticker_overrides(settings.exchange_suffixes_path)
     only_tickers = set(args.ticker) if args.ticker else None
     end_date = date.today()
-    earliest_date = date.fromisoformat(args.earliest_date)
+    earliest_date = (
+        date.fromisoformat(args.earliest_date) if args.earliest_date is not None else None
+    )
     conn = get_connection(settings.database_url)
     try:
         count = backfill_dividend_events(
@@ -243,11 +247,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     backfill_ohlcv_parser.add_argument(
         "--earliest-date",
-        default="1900-01-01",
         help=(
-            "Lower bound requested from yfinance (default: 1900-01-01 -- yfinance clips to "
-            "each ticker's actual listing date, so this is effectively 'as far back as "
-            "available')."
+            "Reach further back than a previous run did: fetches each ticker the stretch "
+            "between this date and its earliest stored date. Omit it for the normal case -- "
+            "every ticker that already has data is skipped, and tickers with none are "
+            "fetched as far back as the source goes, which is what makes a rerun cheap."
         ),
     )
     backfill_ohlcv_parser.add_argument(
@@ -303,11 +307,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     backfill_dividends_parser.add_argument(
         "--earliest-date",
-        default="1900-01-01",
         help=(
-            "Lower bound requested from yfinance (default: 1900-01-01 -- yfinance clips to "
-            "each ticker's actual listing date, so this is effectively 'as far back as "
-            "available')."
+            "Reach further back than a previous run did: fetches each ticker the stretch "
+            "between this date and its earliest stored date. Omit it for the normal case -- "
+            "every ticker that already has data is skipped, and tickers with none are "
+            "fetched as far back as the source goes, which is what makes a rerun cheap."
         ),
     )
     backfill_dividends_parser.add_argument(
