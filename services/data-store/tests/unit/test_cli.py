@@ -976,3 +976,40 @@ def test_backfill_dividends_propagates_config_error_from_exchange_suffixes(
 
     with pytest.raises(ConfigError, match="bad exchange suffixes config"):
         cli.main(["backfill-dividends"])
+
+
+def test_ingest_holdings_continues_after_one_fund_fails(monkeypatch, fake_settings, capsys):
+    # Scraping is the flakiest step in the service (a real browser against a third-party site).
+    # One fund's failure shouldn't cost every fund queued behind it, and the run must still
+    # report what happened rather than dying before its summary.
+    funds = [make_fund("a"), make_fund("b"), make_fund("c")]
+    ingested = []
+
+    def flaky_ingest(conn, fund, today):
+        if fund.key == "b":
+            raise RuntimeError("playwright timed out")
+        ingested.append(fund.key)
+        return 5
+
+    monkeypatch.setattr(cli, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(cli, "load_funds", lambda path: funds)
+    monkeypatch.setattr(cli, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(cli, "ingest_holdings", flaky_ingest)
+
+    exit_code = cli.main(["ingest-holdings"])
+
+    assert ingested == ["a", "c"]
+    out = capsys.readouterr().out
+    assert "complete: 10" in out
+    assert "1 fund(s) failed" in out
+    # A run with a failure in it must not report success.
+    assert exit_code != 0
+
+
+def test_ingest_holdings_returns_zero_when_every_fund_succeeds(monkeypatch, fake_settings):
+    monkeypatch.setattr(cli, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(cli, "load_funds", lambda path: [make_fund("a")])
+    monkeypatch.setattr(cli, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(cli, "ingest_holdings", lambda conn, fund, today: 5)
+
+    assert cli.main(["ingest-holdings"]) == 0

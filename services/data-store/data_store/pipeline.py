@@ -111,8 +111,7 @@ def ingest_daily_ohlcv(
     resolved = _resolve_priceable_tickers(
         conn, funds, tracked_tickers, exchange_suffixes, ticker_overrides
     )
-    if only_tickers is not None:
-        resolved = {t: v for t, v in resolved.items() if t in only_tickers}
+    resolved = _apply_only_tickers(resolved, only_tickers, "ingest-ohlcv")
     if not resolved:
         print("ingest-ohlcv: no tickers to price, nothing to do.", flush=True)
         return 0
@@ -125,10 +124,13 @@ def ingest_daily_ohlcv(
     )
 
     total = 0
+    failed = 0
     for (price_source_name, asset_type), tickers in groups.items():
         try:
             price_source_cls = PRICE_SOURCES[price_source_name]
         except KeyError:
+            # A misconfigured source is a config error, not a runtime hiccup: it will fail
+            # identically on every rerun, so it stays fatal rather than being retried nightly.
             raise ValueError(f"Unknown price source: {price_source_name!r}") from None
 
         price_source = price_source_cls()
@@ -137,16 +139,33 @@ def ingest_daily_ohlcv(
             f"(source={price_source_name}, asset_type={asset_type}).",
             flush=True,
         )
-        prices = price_source.fetch(tickers, start_date, end_date)
-        if prices.empty:
-            print(
-                f"ingest-ohlcv: no price data for this group "
-                f"(source={price_source_name}, asset_type={asset_type}).",
-                flush=True,
+        # One group's failure must not cost the groups after it. This runs unattended on a
+        # schedule, and groups saved before an escaping exception are already committed -- so
+        # letting it propagate turns a partial success into a wholly failed, partially written
+        # run. Mirrors the per-ticker isolation the backfills already have.
+        try:
+            prices = price_source.fetch(tickers, start_date, end_date)
+            if prices.empty:
+                print(
+                    f"ingest-ohlcv: no price data for this group "
+                    f"(source={price_source_name}, asset_type={asset_type}).",
+                    flush=True,
+                )
+                continue
+
+            saved = save_prices(conn, price_source.name, asset_type, prices)
+        except Exception as e:
+            failed += 1
+            logger.warning(
+                "ingest-ohlcv: group (source=%s, asset_type=%s, %d ticker(s)) failed, "
+                "skipping: %s",
+                price_source_name,
+                asset_type,
+                len(tickers),
+                e,
             )
             continue
 
-        saved = save_prices(conn, price_source.name, asset_type, prices)
         print(
             f"ingest-ohlcv: saved {saved} price row(s) "
             f"(source={price_source_name}, asset_type={asset_type}).",
@@ -155,7 +174,8 @@ def ingest_daily_ohlcv(
         total += saved
 
     print(
-        f"ingest-ohlcv complete: {total} row(s) across {len(resolved)} ticker(s).",
+        f"ingest-ohlcv complete: {total} row(s) across {len(resolved)} ticker(s), "
+        f"{failed} group(s) failed.",
         flush=True,
     )
     return total
@@ -183,8 +203,7 @@ def ingest_dividend_events(
     resolved = _resolve_priceable_tickers(
         conn, funds, tracked_tickers, exchange_suffixes, ticker_overrides
     )
-    if only_tickers is not None:
-        resolved = {t: v for t, v in resolved.items() if t in only_tickers}
+    resolved = _apply_only_tickers(resolved, only_tickers, "ingest-dividends")
     if not resolved:
         print("ingest-dividends: no tickers to price, nothing to do.", flush=True)
         return 0
@@ -197,6 +216,7 @@ def ingest_dividend_events(
     )
 
     total = 0
+    failed = 0
     for (source_name, asset_type), tickers in groups.items():
         try:
             dividend_source_cls = DIVIDEND_SOURCES[source_name]
@@ -209,18 +229,32 @@ def ingest_dividend_events(
             f"(source={source_name}, asset_type={asset_type}).",
             flush=True,
         )
-        dividends = dividend_source.fetch(tickers, start_date, end_date)
-        if dividends.empty:
-            print(
-                f"ingest-dividends: no dividend data for this group "
-                f"(source={source_name}, asset_type={asset_type}) -- either none of these "
-                f"{len(tickers)} ticker(s) paid a dividend in this window, or the fetch "
-                "returned nothing.",
-                flush=True,
+        # Same per-group isolation as ingest_daily_ohlcv -- see the comment there.
+        try:
+            dividends = dividend_source.fetch(tickers, start_date, end_date)
+            if dividends.empty:
+                print(
+                    f"ingest-dividends: no dividend data for this group "
+                    f"(source={source_name}, asset_type={asset_type}) -- either none of these "
+                    f"{len(tickers)} ticker(s) paid a dividend in this window, or the fetch "
+                    "returned nothing.",
+                    flush=True,
+                )
+                continue
+
+            saved = save_dividends(conn, dividend_source.name, asset_type, dividends)
+        except Exception as e:
+            failed += 1
+            logger.warning(
+                "ingest-dividends: group (source=%s, asset_type=%s, %d ticker(s)) failed, "
+                "skipping: %s",
+                source_name,
+                asset_type,
+                len(tickers),
+                e,
             )
             continue
 
-        saved = save_dividends(conn, dividend_source.name, asset_type, dividends)
         print(
             f"ingest-dividends: saved {saved} dividend row(s) "
             f"(source={source_name}, asset_type={asset_type}).",
@@ -229,7 +263,8 @@ def ingest_dividend_events(
         total += saved
 
     print(
-        f"ingest-dividends complete: {total} row(s) across {len(resolved)} ticker(s).",
+        f"ingest-dividends complete: {total} row(s) across {len(resolved)} ticker(s), "
+        f"{failed} group(s) failed.",
         flush=True,
     )
     return total
@@ -268,9 +303,9 @@ def backfill_historical_ohlcv(
     resolved = _resolve_priceable_tickers(
         conn, funds, tracked_tickers, exchange_suffixes, ticker_overrides
     )
-    if only_tickers is not None:
-        resolved = {t: v for t, v in resolved.items() if t in only_tickers}
+    resolved = _apply_only_tickers(resolved, only_tickers, "backfill")
     if not resolved:
+        print("backfill: no tickers to fetch, nothing to do.", flush=True)
         return 0
 
     total_rows = 0
@@ -350,9 +385,9 @@ def backfill_dividend_events(
     resolved = _resolve_priceable_tickers(
         conn, funds, tracked_tickers, exchange_suffixes, ticker_overrides
     )
-    if only_tickers is not None:
-        resolved = {t: v for t, v in resolved.items() if t in only_tickers}
+    resolved = _apply_only_tickers(resolved, only_tickers, "backfill-dividends")
     if not resolved:
+        print("backfill-dividends: no tickers to fetch, nothing to do.", flush=True)
         return 0
 
     total_rows = 0
@@ -414,6 +449,31 @@ def backfill_dividend_events(
         flush=True,
     )
     return total_rows
+
+
+def _apply_only_tickers(
+    resolved: dict[str, tuple[str, str]], only_tickers: set[str] | None, prefix: str
+) -> dict[str, tuple[str, str]]:
+    """Restrict a resolved universe to `only_tickers`, warning about any that matched nothing.
+
+    Without the warning a typo'd --ticker and a genuinely empty universe produce identical
+    output ("nothing to do"), which is exactly the pair the logging rules say must never look
+    the same. An unmatched ticker is a real anomaly, so it's logger.warning (visible by
+    default) rather than a progress print.
+    """
+    if only_tickers is None:
+        return resolved
+
+    filtered = {t: v for t, v in resolved.items() if t in only_tickers}
+    unmatched = sorted(only_tickers - filtered.keys())
+    if unmatched:
+        logger.warning(
+            "%s: no currently followed ticker matches %s -- check spelling and note these are "
+            "matched post-suffix-resolution (e.g. '0700.HK', not '0700').",
+            prefix,
+            ", ".join(repr(t) for t in unmatched),
+        )
+    return filtered
 
 
 def _backfill_window(

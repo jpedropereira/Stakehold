@@ -1532,3 +1532,161 @@ def test_backfill_dividends_without_earliest_date_fetches_tickers_with_no_rows(m
     )
 
     assert fake_source.fetch_calls == [("AAPL", pipeline.UNBOUNDED_EARLIEST_DATE, date(2026, 1, 1))]
+
+
+# --- one bad group must not lose the whole run --------------------------------------------
+#
+# The backfills already treat a single ticker's failure as non-fatal. The daily ingests are the
+# ones that actually need it: they run unattended on a schedule, so an exception that escapes
+# means a silent zero-row day -- and any group already saved before it is committed, making the
+# run a partial write as well.
+
+
+class FlakyPriceSource:
+    name = "yfinance"
+
+    def __init__(self, *, fail_asset_types):
+        self.fail_asset_types = fail_asset_types
+        self.fetch_calls = []
+
+    def fetch(self, tickers, start_date, end_date):
+        self.fetch_calls.append(sorted(tickers))
+        if any(t.startswith("FAIL") for t in tickers):
+            raise RuntimeError("yfinance exploded")
+        return pd.DataFrame({"ticker": tickers, "price_date": [start_date] * len(tickers)})
+
+
+def test_ingest_daily_ohlcv_continues_after_one_group_fails(monkeypatch, caplog):
+    conn = object()
+    fake_source = FlakyPriceSource(fail_asset_types={"etf"})
+    save_calls = []
+    tracked = [
+        make_tracked_ticker(ticker="FAIL.AS", asset_type="etf"),
+        make_tracked_ticker(ticker="BTC-USD", asset_type="crypto"),
+    ]
+
+    monkeypatch.setitem(pipeline.PRICE_SOURCES, "yfinance", lambda: fake_source)
+    monkeypatch.setattr(
+        pipeline,
+        "save_prices",
+        lambda conn_arg, source, asset_type, df: save_calls.append(asset_type) or len(df),
+    )
+
+    with caplog.at_level(logging.WARNING):
+        count = pipeline.ingest_daily_ohlcv(
+            conn, [], tracked, {}, date(2026, 1, 1), date(2026, 1, 10)
+        )
+
+    assert save_calls == ["crypto"]  # the healthy group still landed
+    assert count == 1
+    assert "FAIL.AS" in caplog.text or "etf" in caplog.text
+
+
+def test_ingest_daily_ohlcv_reports_failed_groups_in_the_summary(monkeypatch, capsys):
+    conn = object()
+    fake_source = FlakyPriceSource(fail_asset_types={"etf"})
+    tracked = [
+        make_tracked_ticker(ticker="FAIL.AS", asset_type="etf"),
+        make_tracked_ticker(ticker="BTC-USD", asset_type="crypto"),
+    ]
+
+    monkeypatch.setitem(pipeline.PRICE_SOURCES, "yfinance", lambda: fake_source)
+    monkeypatch.setattr(pipeline, "save_prices", lambda conn_arg, source, at, df: len(df))
+
+    pipeline.ingest_daily_ohlcv(conn, [], tracked, {}, date(2026, 1, 1), date(2026, 1, 10))
+
+    # A partial run must not read as a clean one.
+    assert "1 group(s) failed" in capsys.readouterr().out
+
+
+class FlakyDividendSource(FlakyPriceSource):
+    pass
+
+
+def test_ingest_dividend_events_continues_after_one_group_fails(monkeypatch):
+    conn = object()
+    fake_source = FlakyDividendSource(fail_asset_types={"etf"})
+    save_calls = []
+    tracked = [
+        make_tracked_ticker(ticker="FAIL.AS", asset_type="etf"),
+        make_tracked_ticker(ticker="BTC-USD", asset_type="crypto"),
+    ]
+
+    monkeypatch.setitem(pipeline.DIVIDEND_SOURCES, "yfinance", lambda: fake_source)
+    monkeypatch.setattr(
+        pipeline,
+        "save_dividends",
+        lambda conn_arg, source, asset_type, df: save_calls.append(asset_type) or len(df),
+    )
+
+    count = pipeline.ingest_dividend_events(
+        conn, [], tracked, {}, date(2026, 1, 1), date(2026, 1, 10)
+    )
+
+    assert save_calls == ["crypto"]
+    assert count == 1
+
+
+# --- a run that did nothing must say so ----------------------------------------------------
+
+
+def test_backfill_says_so_when_nothing_resolves(capsys):
+    count = pipeline.backfill_historical_ohlcv(
+        object(), [], [], {}, None, date(2026, 1, 1), delay_seconds=0
+    )
+
+    assert count == 0
+    assert "nothing to do" in capsys.readouterr().out.lower()
+
+
+def test_backfill_dividends_says_so_when_nothing_resolves(capsys):
+    count = pipeline.backfill_dividend_events(
+        object(), [], [], {}, None, date(2026, 1, 1), delay_seconds=0
+    )
+
+    assert count == 0
+    assert "nothing to do" in capsys.readouterr().out.lower()
+
+
+def test_ingest_daily_ohlcv_warns_when_a_requested_ticker_matches_nothing(monkeypatch, caplog):
+    # A typo'd --ticker and a genuinely empty universe both end with zero tickers; they must
+    # not look the same in the output.
+    conn = object()
+    tracked = [make_tracked_ticker(ticker="AAPL", asset_type="equity")]
+    _patch_price_source(monkeypatch, FakePriceSource(), [])
+
+    with caplog.at_level(logging.WARNING):
+        pipeline.ingest_daily_ohlcv(
+            conn,
+            [],
+            tracked,
+            {},
+            date(2026, 1, 1),
+            date(2026, 1, 10),
+            only_tickers={"AAPL", "TYPO", "ALSO-WRONG"},
+        )
+
+    assert "TYPO" in caplog.text
+    assert "ALSO-WRONG" in caplog.text
+    assert "AAPL" not in caplog.text  # the one that did match isn't an anomaly
+
+
+def test_backfill_warns_when_a_requested_ticker_matches_nothing(monkeypatch, caplog):
+    monkeypatch.setattr(pipeline, "get_earliest_price_dates", lambda conn, source, tickers: {})
+    monkeypatch.setattr(pipeline, "save_prices", lambda conn, source, asset_type, df: len(df))
+    monkeypatch.setattr("data_store.pipeline.time.sleep", lambda s: None)
+    monkeypatch.setitem(pipeline.PRICE_SOURCES, "yfinance", lambda: FakeSinglePriceSource())
+
+    with caplog.at_level(logging.WARNING):
+        pipeline.backfill_historical_ohlcv(
+            object(),
+            [],
+            [make_tracked_ticker(ticker="AAPL", asset_type="equity")],
+            {},
+            None,
+            date(2026, 1, 1),
+            delay_seconds=0,
+            only_tickers={"NOPE"},
+        )
+
+    assert "NOPE" in caplog.text
