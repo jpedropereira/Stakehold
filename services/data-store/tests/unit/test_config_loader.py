@@ -1,11 +1,12 @@
+from pathlib import Path
+
 import pytest
 from data_store.config_loader import (
     ConfigError,
     FundConfig,
     TickerConfig,
-    load_exchange_suffixes,
     load_funds,
-    load_ticker_overrides,
+    load_ticker_resolution,
     load_tracked_tickers,
 )
 
@@ -301,7 +302,7 @@ def test_loads_exchange_with_string_suffix(tmp_path):
         """,
     )
 
-    suffixes = load_exchange_suffixes(path)
+    suffixes = load_ticker_resolution(path).exchange_suffixes
 
     assert suffixes == {"London Stock Exchange": ".L"}
 
@@ -316,7 +317,7 @@ def test_loads_exchange_with_null_suffix_as_none(tmp_path):
         """,
     )
 
-    suffixes = load_exchange_suffixes(path)
+    suffixes = load_ticker_resolution(path).exchange_suffixes
 
     assert suffixes == {"NASDAQ": None}
 
@@ -335,7 +336,7 @@ def test_loads_multiple_exchanges(tmp_path):
         """,
     )
 
-    suffixes = load_exchange_suffixes(path)
+    suffixes = load_ticker_resolution(path).exchange_suffixes
 
     assert suffixes == {
         "NASDAQ": None,
@@ -346,14 +347,14 @@ def test_loads_multiple_exchanges(tmp_path):
 
 def test_rejects_missing_exchange_suffixes_file(tmp_path):
     with pytest.raises(ConfigError, match="not found"):
-        load_exchange_suffixes(tmp_path / "does-not-exist.yaml")
+        load_ticker_resolution(tmp_path / "does-not-exist.yaml").exchange_suffixes
 
 
 def test_rejects_empty_exchanges_list(tmp_path):
     path = write_exchange_suffixes_yaml(tmp_path, "exchanges: []\n")
 
     with pytest.raises(ConfigError, match="no exchanges"):
-        load_exchange_suffixes(path)
+        load_ticker_resolution(path).exchange_suffixes
 
 
 def test_rejects_exchange_entry_missing_exchange_field(tmp_path):
@@ -366,7 +367,7 @@ def test_rejects_exchange_entry_missing_exchange_field(tmp_path):
     )
 
     with pytest.raises(ConfigError, match="exchange"):
-        load_exchange_suffixes(path)
+        load_ticker_resolution(path).exchange_suffixes
 
 
 def test_rejects_exchange_entry_missing_suffix_key_entirely(tmp_path):
@@ -381,7 +382,7 @@ def test_rejects_exchange_entry_missing_suffix_key_entirely(tmp_path):
     )
 
     with pytest.raises(ConfigError, match="suffix"):
-        load_exchange_suffixes(path)
+        load_ticker_resolution(path).exchange_suffixes
 
 
 def test_rejects_duplicate_exchange(tmp_path):
@@ -397,7 +398,7 @@ def test_rejects_duplicate_exchange(tmp_path):
     )
 
     with pytest.raises(ConfigError, match="(?i)duplicate"):
-        load_exchange_suffixes(path)
+        load_ticker_resolution(path).exchange_suffixes
 
 
 @pytest.mark.parametrize("bad_suffix", ["L", "", "DE", "123"])
@@ -412,7 +413,7 @@ def test_rejects_suffix_not_starting_with_dot(tmp_path, bad_suffix):
     )
 
     with pytest.raises(ConfigError, match="Invalid suffix"):
-        load_exchange_suffixes(path)
+        load_ticker_resolution(path).exchange_suffixes
 
 
 def test_loads_ticker_overrides(tmp_path):
@@ -430,7 +431,7 @@ def test_loads_ticker_overrides(tmp_path):
         """,
     )
 
-    overrides = load_ticker_overrides(path)
+    overrides = load_ticker_resolution(path).ticker_overrides
 
     assert overrides == {"BRKB": "BRK-B", "HEIA": "HEIA.AS"}
 
@@ -447,12 +448,12 @@ def test_ticker_overrides_section_is_optional(tmp_path):
         """,
     )
 
-    assert load_ticker_overrides(path) == {}
+    assert load_ticker_resolution(path).ticker_overrides == {}
 
 
 def test_rejects_missing_ticker_overrides_file(tmp_path):
     with pytest.raises(ConfigError, match="not found"):
-        load_ticker_overrides(tmp_path / "does-not-exist.yaml")
+        load_ticker_resolution(tmp_path / "does-not-exist.yaml").ticker_overrides
 
 
 def test_rejects_ticker_override_entry_missing_required_field(tmp_path):
@@ -468,7 +469,7 @@ def test_rejects_ticker_override_entry_missing_required_field(tmp_path):
     )
 
     with pytest.raises(ConfigError, match="ticker"):
-        load_ticker_overrides(path)
+        load_ticker_resolution(path).ticker_overrides
 
 
 def test_rejects_duplicate_ticker_override(tmp_path):
@@ -487,4 +488,75 @@ def test_rejects_duplicate_ticker_override(tmp_path):
     )
 
     with pytest.raises(ConfigError, match="(?i)duplicate"):
-        load_ticker_overrides(path)
+        load_ticker_resolution(path).ticker_overrides
+
+
+def test_ticker_resolution_reads_both_sections_from_one_parse(tmp_path):
+    # Exchange suffixes and ticker overrides are two views of the same file, always used
+    # together. Loading them in one pass means they cannot disagree about the file's contents,
+    # and a command stops re-reading and re-parsing the same YAML once per view.
+    path = write_exchange_suffixes_yaml(
+        tmp_path,
+        """
+        exchanges:
+          - exchange: "London Stock Exchange"
+            suffix: ".L"
+          - exchange: "NASDAQ"
+            suffix: null
+        ticker_overrides:
+          - raw_ticker: BRKB
+            ticker: BRK-B
+        """,
+    )
+
+    resolution = load_ticker_resolution(path)
+
+    assert resolution.exchange_suffixes == {"London Stock Exchange": ".L", "NASDAQ": None}
+    assert resolution.ticker_overrides == {"BRKB": "BRK-B"}
+
+
+def test_ticker_resolution_reads_the_file_exactly_once(tmp_path, monkeypatch):
+    path = write_exchange_suffixes_yaml(
+        tmp_path,
+        """
+        exchanges:
+          - exchange: "NASDAQ"
+            suffix: null
+        """,
+    )
+    opens = []
+    real_open = Path.open
+    monkeypatch.setattr(
+        Path, "open", lambda self, *a, **k: opens.append(self) or real_open(self, *a, **k)
+    )
+
+    load_ticker_resolution(path)
+
+    assert opens == [path]
+
+
+def test_ticker_resolution_tolerates_a_missing_overrides_section(tmp_path):
+    path = write_exchange_suffixes_yaml(
+        tmp_path,
+        """
+        exchanges:
+          - exchange: "NASDAQ"
+            suffix: null
+        """,
+    )
+
+    assert load_ticker_resolution(path).ticker_overrides == {}
+
+
+def test_ticker_resolution_still_rejects_an_empty_exchanges_section(tmp_path):
+    # exchanges: is required where ticker_overrides: is optional -- resolution cannot work
+    # without a mapping, so an empty one is a config error, not "none configured".
+    path = write_exchange_suffixes_yaml(tmp_path, "exchanges: []\n")
+
+    with pytest.raises(ConfigError, match="no exchanges"):
+        load_ticker_resolution(path)
+
+
+def test_ticker_resolution_rejects_a_missing_file(tmp_path):
+    with pytest.raises(ConfigError, match="not found"):
+        load_ticker_resolution(tmp_path / "nope.yaml")
