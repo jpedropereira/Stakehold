@@ -130,3 +130,83 @@ def test_fetch_raises_on_empty_tickers():
 def test_fetch_raises_when_start_after_end():
     with pytest.raises(ValueError, match="start_date"):
         YFinancePriceSource().fetch(["AAPL"], date(2026, 1, 5), date(2026, 1, 1))
+
+
+def make_sparse_yf_frame(tickers, dates, populated):
+    """A frame shaped like a real multi-ticker `yf.download`: the index is the *union* of every
+    ticker's trading days, so a ticker that didn't trade on a given date has NaN across every
+    price field. `populated` is the set of (date, ticker) pairs that actually have data."""
+    idx = pd.DatetimeIndex(dates, name="Date")
+    cols = pd.MultiIndex.from_product(
+        [["Open", "High", "Low", "Close", "Adj Close", "Volume"], tickers],
+        names=["Price", "Ticker"],
+    )
+    frame = pd.DataFrame(float("nan"), index=idx, columns=cols)
+    for i, (d, ticker) in enumerate(sorted(populated)):
+        for field in ["Open", "High", "Low", "Close", "Adj Close", "Volume"]:
+            frame.loc[pd.Timestamp(d), (field, ticker)] = float(i + 1)
+    return frame
+
+
+def test_fetch_drops_rows_where_the_ticker_did_not_trade(monkeypatch):
+    # AAPL trades both days; 0700.HK only on the 2nd (the 1st is a Hong Kong holiday). The
+    # union index means yfinance hands back an all-NaN row for (2026-01-01, 0700.HK) -- it must
+    # not reach the caller as if it were a real observation.
+    tickers = ["AAPL", "0700.HK"]
+    dates = [date(2026, 1, 1), date(2026, 1, 2)]
+    frame = make_sparse_yf_frame(
+        tickers,
+        dates,
+        populated={
+            (date(2026, 1, 1), "AAPL"),
+            (date(2026, 1, 2), "AAPL"),
+            (date(2026, 1, 2), "0700.HK"),
+        },
+    )
+
+    monkeypatch.setattr("data_store.prices.yfinance_source.yf.download", lambda *a, **k: frame)
+
+    result = YFinancePriceSource().fetch(tickers, date(2026, 1, 1), date(2026, 1, 3))
+
+    pairs = {(row["ticker"], row["price_date"]) for _, row in result.iterrows()}
+    assert pairs == {
+        ("AAPL", date(2026, 1, 1)),
+        ("AAPL", date(2026, 1, 2)),
+        ("0700.HK", date(2026, 1, 2)),
+    }
+
+
+def test_fetch_drops_every_row_for_a_ticker_with_no_data_at_all(monkeypatch):
+    # A ticker yfinance knows nothing about (wrong suffix, delisted) comes back as all-NaN for
+    # every date in the batch. Writing those would make an unpriceable ticker look priced --
+    # exactly the silent-zero-rows failure the exchange-suffix resolution exists to prevent.
+    tickers = ["AAPL", "BOGUS.XX"]
+    dates = [date(2026, 1, 1), date(2026, 1, 2)]
+    frame = make_sparse_yf_frame(
+        tickers,
+        dates,
+        populated={(date(2026, 1, 1), "AAPL"), (date(2026, 1, 2), "AAPL")},
+    )
+
+    monkeypatch.setattr("data_store.prices.yfinance_source.yf.download", lambda *a, **k: frame)
+
+    result = YFinancePriceSource().fetch(tickers, date(2026, 1, 1), date(2026, 1, 3))
+
+    assert set(result["ticker"]) == {"AAPL"}
+    assert len(result) == 2
+
+
+def test_fetch_keeps_rows_that_are_only_partially_populated(monkeypatch):
+    # Not every NaN is junk: a real row with a missing volume (or adj_close) is still a real
+    # observation. Only rows with no OHLC at all are dropped.
+    frame = make_sparse_yf_frame(
+        ["AAPL"], [date(2026, 1, 1)], populated={(date(2026, 1, 1), "AAPL")}
+    )
+    frame.loc[pd.Timestamp(date(2026, 1, 1)), ("Volume", "AAPL")] = float("nan")
+
+    monkeypatch.setattr("data_store.prices.yfinance_source.yf.download", lambda *a, **k: frame)
+
+    result = YFinancePriceSource().fetch(["AAPL"], date(2026, 1, 1), date(2026, 1, 2))
+
+    assert len(result) == 1
+    assert pd.isna(result.iloc[0]["volume"])
