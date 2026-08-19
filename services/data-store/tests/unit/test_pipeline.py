@@ -1,4 +1,5 @@
 import logging
+import pickle
 from datetime import date
 
 import pandas as pd
@@ -113,11 +114,11 @@ def test_ingest_daily_ohlcv_prices_holdings_derived_tickers_as_equity(monkeypatc
     monkeypatch.setattr(pipeline, "get_latest_tickers", fake_get_latest_tickers)
     _patch_price_source(monkeypatch, fake_source, save_calls)
 
-    count = pipeline.ingest_daily_ohlcv(
+    result = pipeline.ingest_daily_ohlcv(
         conn, [fund], [], {"NASDAQ": None}, date(2026, 1, 1), date(2026, 1, 10)
     )
 
-    assert count == 2
+    assert result["rows_saved"] == 2
     assert get_tickers_calls == [(conn, fund.key)]
     assert save_calls == [("yfinance", "equity", ["AAPL", "MSFT"])]
 
@@ -161,11 +162,11 @@ def test_ingest_daily_ohlcv_skips_and_warns_on_unmapped_exchange(monkeypatch, ca
     _patch_price_source(monkeypatch, fake_source, save_calls)
 
     with caplog.at_level("WARNING"):
-        count = pipeline.ingest_daily_ohlcv(
+        result = pipeline.ingest_daily_ohlcv(
             conn, [fund], [], {"NASDAQ": None}, date(2026, 1, 1), date(2026, 1, 10)
         )
 
-    assert count == 1
+    assert result["rows_saved"] == 1
     assert save_calls == [("yfinance", "equity", ["AAPL"])]
     assert "0005" in caplog.text
     assert "NO MARKET (E.G. UNLISTED)" in caplog.text
@@ -179,9 +180,9 @@ def test_ingest_daily_ohlcv_prices_tracked_tickers_with_their_own_asset_type(mon
 
     _patch_price_source(monkeypatch, fake_source, save_calls)
 
-    count = pipeline.ingest_daily_ohlcv(conn, [], tracked, {}, date(2026, 1, 1), date(2026, 1, 10))
+    result = pipeline.ingest_daily_ohlcv(conn, [], tracked, {}, date(2026, 1, 1), date(2026, 1, 10))
 
-    assert count == 1
+    assert result["rows_saved"] == 1
     assert save_calls == [("yfinance", "etf", ["IWDA.AS"])]
 
 
@@ -195,11 +196,11 @@ def test_ingest_daily_ohlcv_tracked_ticker_never_suffix_resolved(monkeypatch):
 
     _patch_price_source(monkeypatch, fake_source, save_calls)
 
-    count = pipeline.ingest_daily_ohlcv(
+    result = pipeline.ingest_daily_ohlcv(
         conn, [], tracked, {"Euronext Amsterdam": ".AS"}, date(2026, 1, 1), date(2026, 1, 10)
     )
 
-    assert count == 1
+    assert result["rows_saved"] == 1
     assert save_calls == [("yfinance", "etf", ["IWDA.AS"])]
 
 
@@ -217,11 +218,11 @@ def test_ingest_daily_ohlcv_dedupes_ticker_in_both_holdings_and_tracked(monkeypa
     tracked = [make_tracked_ticker(ticker="BABA", asset_type="equity")]
     _patch_price_source(monkeypatch, fake_source, save_calls)
 
-    count = pipeline.ingest_daily_ohlcv(
+    result = pipeline.ingest_daily_ohlcv(
         conn, [fund], tracked, {"NASDAQ": None}, date(2026, 1, 1), date(2026, 1, 10)
     )
 
-    assert count == 2
+    assert result["rows_saved"] == 2
     assert len(fake_source.fetch_calls) == 1
     assert fake_source.fetch_calls[0][0] == ["AAPL", "BABA"]
 
@@ -257,9 +258,9 @@ def test_ingest_daily_ohlcv_groups_by_asset_type_for_separate_save_calls(monkeyp
 
     _patch_price_source(monkeypatch, fake_source, save_calls)
 
-    count = pipeline.ingest_daily_ohlcv(conn, [], tracked, {}, date(2026, 1, 1), date(2026, 1, 10))
+    result = pipeline.ingest_daily_ohlcv(conn, [], tracked, {}, date(2026, 1, 1), date(2026, 1, 10))
 
-    assert count == 2
+    assert result["rows_saved"] == 2
     assert sorted(save_calls) == sorted(
         [("yfinance", "etf", ["IWDA.AS"]), ("yfinance", "crypto", ["BTC-USD"])]
     )
@@ -348,9 +349,9 @@ def test_ingest_daily_ohlcv_strips_and_dedupes_raw_holdings_tickers(monkeypatch)
 
 
 def test_ingest_daily_ohlcv_returns_zero_when_no_tickers():
-    count = pipeline.ingest_daily_ohlcv(object(), [], [], {}, date(2026, 1, 1), date(2026, 1, 10))
+    result = pipeline.ingest_daily_ohlcv(object(), [], [], {}, date(2026, 1, 1), date(2026, 1, 10))
 
-    assert count == 0
+    assert result["rows_saved"] == 0
 
 
 def test_ingest_daily_ohlcv_returns_zero_when_price_source_has_no_data(monkeypatch):
@@ -367,9 +368,9 @@ def test_ingest_daily_ohlcv_returns_zero_when_price_source_has_no_data(monkeypat
     save_calls = []
     monkeypatch.setattr(pipeline, "save_prices", lambda *a: save_calls.append(a) or len(a[-1]))
 
-    count = pipeline.ingest_daily_ohlcv(conn, [], tracked, {}, date(2026, 1, 1), date(2026, 1, 10))
+    result = pipeline.ingest_daily_ohlcv(conn, [], tracked, {}, date(2026, 1, 1), date(2026, 1, 10))
 
-    assert count == 0
+    assert result["rows_saved"] == 0
     assert save_calls == []
 
 
@@ -394,7 +395,7 @@ def test_ingest_daily_ohlcv_filters_to_only_tickers_when_given(monkeypatch):
 
     _patch_price_source(monkeypatch, fake_source, save_calls)
 
-    count = pipeline.ingest_daily_ohlcv(
+    result = pipeline.ingest_daily_ohlcv(
         conn,
         [],
         tracked,
@@ -404,7 +405,7 @@ def test_ingest_daily_ohlcv_filters_to_only_tickers_when_given(monkeypatch):
         only_tickers={"MSFT"},
     )
 
-    assert count == 1
+    assert result["rows_saved"] == 1
     assert save_calls == [("yfinance", "equity", ["MSFT"])]
 
 
@@ -713,13 +714,13 @@ def test_backfill_skips_ticker_already_covered_to_earliest_date(monkeypatch):
     monkeypatch.setattr(pipeline, "save_prices", lambda *a: save_calls.append(a))
     monkeypatch.setattr("data_store.pipeline.time.sleep", lambda s: None)
 
-    count = pipeline.backfill_historical_ohlcv(
+    result = pipeline.backfill_historical_ohlcv(
         conn, [], tracked, {}, date(1900, 1, 1), date(2026, 1, 1), delay_seconds=0
     )
 
     assert fake_source.fetch_calls == []
     assert save_calls == []
-    assert count == 0
+    assert result["rows_saved"] == 0
 
 
 def test_backfill_sleeps_after_fetched_and_failed_tickers_not_after_skips(monkeypatch):
@@ -767,11 +768,11 @@ def test_backfill_continues_after_one_ticker_fails(monkeypatch):
     )
     monkeypatch.setattr("data_store.pipeline.time.sleep", lambda s: None)
 
-    count = pipeline.backfill_historical_ohlcv(
+    result = pipeline.backfill_historical_ohlcv(
         conn, [], tracked, {}, date(1900, 1, 1), date(2026, 1, 1), delay_seconds=0
     )
 
-    assert count == 1  # only GOOD saved
+    assert result["rows_saved"] == 1  # only GOOD saved
     assert len(save_calls) == 1
 
 
@@ -813,11 +814,11 @@ def test_backfill_raises_on_unknown_price_source():
 
 
 def test_backfill_returns_zero_when_no_tickers():
-    count = pipeline.backfill_historical_ohlcv(
+    result = pipeline.backfill_historical_ohlcv(
         object(), [], [], {}, date(1900, 1, 1), date(2026, 1, 1), delay_seconds=0
     )
 
-    assert count == 0
+    assert result["rows_saved"] == 0
 
 
 def test_backfill_filters_to_only_tickers_when_given(monkeypatch):
@@ -943,11 +944,11 @@ def test_ingest_dividend_events_prices_holdings_derived_tickers_as_equity(monkey
     )
     _patch_dividend_source(monkeypatch, fake_source, save_calls)
 
-    count = pipeline.ingest_dividend_events(
+    result = pipeline.ingest_dividend_events(
         conn, [fund], [], {"NASDAQ": None}, date(2026, 1, 1), date(2026, 1, 10)
     )
 
-    assert count == 2
+    assert result["rows_saved"] == 2
     assert save_calls == [("yfinance", "equity", ["AAPL", "MSFT"])]
 
 
@@ -990,11 +991,11 @@ def test_ingest_dividend_events_skips_and_warns_on_unmapped_exchange(monkeypatch
     _patch_dividend_source(monkeypatch, fake_source, save_calls)
 
     with caplog.at_level("WARNING"):
-        count = pipeline.ingest_dividend_events(
+        result = pipeline.ingest_dividend_events(
             conn, [fund], [], {"NASDAQ": None}, date(2026, 1, 1), date(2026, 1, 10)
         )
 
-    assert count == 1
+    assert result["rows_saved"] == 1
     assert save_calls == [("yfinance", "equity", ["AAPL"])]
     assert "0005" in caplog.text
     assert "NO MARKET (E.G. UNLISTED)" in caplog.text
@@ -1008,11 +1009,11 @@ def test_ingest_dividend_events_prices_tracked_tickers_with_their_own_asset_type
 
     _patch_dividend_source(monkeypatch, fake_source, save_calls)
 
-    count = pipeline.ingest_dividend_events(
+    result = pipeline.ingest_dividend_events(
         conn, [], tracked, {}, date(2026, 1, 1), date(2026, 1, 10)
     )
 
-    assert count == 1
+    assert result["rows_saved"] == 1
     assert save_calls == [("yfinance", "etf", ["IWDA.AS"])]
 
 
@@ -1028,11 +1029,11 @@ def test_ingest_dividend_events_dedupes_ticker_in_both_holdings_and_tracked(monk
     tracked = [make_tracked_ticker(ticker="BABA", asset_type="equity")]
     _patch_dividend_source(monkeypatch, fake_source, save_calls)
 
-    count = pipeline.ingest_dividend_events(
+    result = pipeline.ingest_dividend_events(
         conn, [fund], tracked, {"NASDAQ": None}, date(2026, 1, 1), date(2026, 1, 10)
     )
 
-    assert count == 2
+    assert result["rows_saved"] == 2
     assert len(fake_source.fetch_calls) == 1
     assert fake_source.fetch_calls[0][0] == ["AAPL", "BABA"]
 
@@ -1048,11 +1049,11 @@ def test_ingest_dividend_events_groups_by_asset_type_for_separate_save_calls(mon
 
     _patch_dividend_source(monkeypatch, fake_source, save_calls)
 
-    count = pipeline.ingest_dividend_events(
+    result = pipeline.ingest_dividend_events(
         conn, [], tracked, {}, date(2026, 1, 1), date(2026, 1, 10)
     )
 
-    assert count == 2
+    assert result["rows_saved"] == 2
     assert sorted(save_calls) == sorted(
         [("yfinance", "etf", ["IWDA.AS"]), ("yfinance", "equity", ["CSU.TO"])]
     )
@@ -1060,11 +1061,11 @@ def test_ingest_dividend_events_groups_by_asset_type_for_separate_save_calls(mon
 
 
 def test_ingest_dividend_events_returns_zero_when_no_tickers():
-    count = pipeline.ingest_dividend_events(
+    result = pipeline.ingest_dividend_events(
         object(), [], [], {}, date(2026, 1, 1), date(2026, 1, 10)
     )
 
-    assert count == 0
+    assert result["rows_saved"] == 0
 
 
 def test_ingest_dividend_events_returns_zero_when_source_has_no_data(monkeypatch):
@@ -1081,11 +1082,11 @@ def test_ingest_dividend_events_returns_zero_when_source_has_no_data(monkeypatch
     save_calls = []
     monkeypatch.setattr(pipeline, "save_dividends", lambda *a: save_calls.append(a) or len(a[-1]))
 
-    count = pipeline.ingest_dividend_events(
+    result = pipeline.ingest_dividend_events(
         conn, [], tracked, {}, date(2026, 1, 1), date(2026, 1, 10)
     )
 
-    assert count == 0
+    assert result["rows_saved"] == 0
     assert save_calls == []
 
 
@@ -1111,7 +1112,7 @@ def test_ingest_dividend_events_filters_to_only_tickers_when_given(monkeypatch):
 
     _patch_dividend_source(monkeypatch, fake_source, save_calls)
 
-    count = pipeline.ingest_dividend_events(
+    result = pipeline.ingest_dividend_events(
         conn,
         [],
         tracked,
@@ -1121,7 +1122,7 @@ def test_ingest_dividend_events_filters_to_only_tickers_when_given(monkeypatch):
         only_tickers={"MSFT"},
     )
 
-    assert count == 1
+    assert result["rows_saved"] == 1
     assert save_calls == [("yfinance", "equity", ["MSFT"])]
 
 
@@ -1288,13 +1289,13 @@ def test_backfill_dividends_skips_ticker_already_covered_to_earliest_date(monkey
     monkeypatch.setattr(pipeline, "save_dividends", lambda *a: save_calls.append(a))
     monkeypatch.setattr("data_store.pipeline.time.sleep", lambda s: None)
 
-    count = pipeline.backfill_dividend_events(
+    result = pipeline.backfill_dividend_events(
         conn, [], tracked, {}, date(1900, 1, 1), date(2026, 1, 1), delay_seconds=0
     )
 
     assert fake_source.fetch_calls == []
     assert save_calls == []
-    assert count == 0
+    assert result["rows_saved"] == 0
 
 
 def test_backfill_dividends_sleeps_after_fetched_and_failed_tickers_not_after_skips(monkeypatch):
@@ -1341,11 +1342,11 @@ def test_backfill_dividends_continues_after_one_ticker_fails(monkeypatch):
     )
     monkeypatch.setattr("data_store.pipeline.time.sleep", lambda s: None)
 
-    count = pipeline.backfill_dividend_events(
+    result = pipeline.backfill_dividend_events(
         conn, [], tracked, {}, date(1900, 1, 1), date(2026, 1, 1), delay_seconds=0
     )
 
-    assert count == 1  # only GOOD saved
+    assert result["rows_saved"] == 1  # only GOOD saved
     assert len(save_calls) == 1
 
 
@@ -1361,11 +1362,11 @@ def test_backfill_dividends_raises_on_unknown_dividend_source():
 
 
 def test_backfill_dividends_returns_zero_when_no_tickers():
-    count = pipeline.backfill_dividend_events(
+    result = pipeline.backfill_dividend_events(
         object(), [], [], {}, date(1900, 1, 1), date(2026, 1, 1), delay_seconds=0
     )
 
-    assert count == 0
+    assert result["rows_saved"] == 0
 
 
 def test_backfill_dividends_filters_to_only_tickers_when_given(monkeypatch):
@@ -1449,14 +1450,14 @@ def test_backfill_without_earliest_date_skips_tickers_that_already_have_rows(mon
     sleeps = []
     monkeypatch.setattr("data_store.pipeline.time.sleep", sleeps.append)
 
-    count = pipeline.backfill_historical_ohlcv(
+    result = pipeline.backfill_historical_ohlcv(
         conn, [], tracked, {}, None, date(2026, 1, 1), delay_seconds=10
     )
 
     assert fake_source.fetch_calls == []
     assert save_calls == []
     assert sleeps == []  # a skip must never pay the rate-limit delay
-    assert count == 0
+    assert result["rows_saved"] == 0
 
 
 def test_backfill_without_earliest_date_fetches_tickers_with_no_rows(monkeypatch):
@@ -1516,13 +1517,13 @@ def test_backfill_dividends_without_earliest_date_skips_tickers_that_already_hav
     monkeypatch.setattr(pipeline, "save_dividends", lambda *a: save_calls.append(a))
     monkeypatch.setattr("data_store.pipeline.time.sleep", lambda s: None)
 
-    count = pipeline.backfill_dividend_events(
+    result = pipeline.backfill_dividend_events(
         conn, [], tracked, {}, None, date(2026, 1, 1), delay_seconds=0
     )
 
     assert fake_source.fetch_calls == []
     assert save_calls == []
-    assert count == 0
+    assert result["rows_saved"] == 0
 
 
 def test_backfill_dividends_without_earliest_date_fetches_tickers_with_no_rows(monkeypatch):
@@ -1581,12 +1582,12 @@ def test_ingest_daily_ohlcv_continues_after_one_group_fails(monkeypatch, caplog)
     )
 
     with caplog.at_level(logging.WARNING):
-        count = pipeline.ingest_daily_ohlcv(
+        result = pipeline.ingest_daily_ohlcv(
             conn, [], tracked, {}, date(2026, 1, 1), date(2026, 1, 10)
         )
 
     assert save_calls == ["crypto"]  # the healthy group still landed
-    assert count == 1
+    assert result["rows_saved"] == 1
     assert "FAIL.AS" in caplog.text or "etf" in caplog.text
 
 
@@ -1627,32 +1628,32 @@ def test_ingest_dividend_events_continues_after_one_group_fails(monkeypatch):
         lambda conn_arg, source, asset_type, df: save_calls.append(asset_type) or len(df),
     )
 
-    count = pipeline.ingest_dividend_events(
+    result = pipeline.ingest_dividend_events(
         conn, [], tracked, {}, date(2026, 1, 1), date(2026, 1, 10)
     )
 
     assert save_calls == ["crypto"]
-    assert count == 1
+    assert result["rows_saved"] == 1
 
 
 # --- a run that did nothing must say so ----------------------------------------------------
 
 
 def test_backfill_says_so_when_nothing_resolves(capsys):
-    count = pipeline.backfill_historical_ohlcv(
+    result = pipeline.backfill_historical_ohlcv(
         object(), [], [], {}, None, date(2026, 1, 1), delay_seconds=0
     )
 
-    assert count == 0
+    assert result["rows_saved"] == 0
     assert "nothing to do" in capsys.readouterr().out.lower()
 
 
 def test_backfill_dividends_says_so_when_nothing_resolves(capsys):
-    count = pipeline.backfill_dividend_events(
+    result = pipeline.backfill_dividend_events(
         object(), [], [], {}, None, date(2026, 1, 1), delay_seconds=0
     )
 
-    assert count == 0
+    assert result["rows_saved"] == 0
     assert "nothing to do" in capsys.readouterr().out.lower()
 
 
@@ -1800,3 +1801,188 @@ def test_resolve_skips_placeholder_dash_tickers(monkeypatch):
     )
 
     assert set(resolved) == {"HSBA.L"}
+
+
+# --- flow results ---------------------------------------------------------------------------
+#
+# The four run-level flows return a structured result rather than a bare row count, so a caller
+# can tell "saved nothing because there was nothing to do" from "saved nothing because every
+# group failed" without parsing log text. Stage 4 sends this across a process boundary as an
+# Airflow XCom value, which is why the shape is deliberately plain builtins.
+
+
+def _ok_ingest(monkeypatch, tracked=None, **kwargs):
+    _patch_price_source(monkeypatch, FakePriceSource(), [])
+    tracked = tracked or [make_tracked_ticker(ticker="AAPL", asset_type="equity")]
+    return pipeline.ingest_daily_ohlcv(
+        object(), [], tracked, {}, date(2026, 1, 1), date(2026, 1, 10), **kwargs
+    )
+
+
+def test_ingest_result_reports_counts_and_ok_status(monkeypatch):
+    result = _ok_ingest(
+        monkeypatch,
+        tracked=[
+            make_tracked_ticker(ticker="AAPL", asset_type="equity"),
+            make_tracked_ticker(ticker="BTC-USD", asset_type="crypto"),
+        ],
+    )
+
+    assert result["status"] == "ok"
+    assert result["tickers_resolved"] == 2
+    assert result["groups"] == 2
+    assert result["groups_failed"] == 0
+    assert result["rows_saved"] == 2
+
+
+def test_ingest_result_distinguishes_nothing_to_do_from_a_failed_run(monkeypatch):
+    nothing = pipeline.ingest_daily_ohlcv(object(), [], [], {}, date(2026, 1, 1), date(2026, 1, 10))
+
+    assert nothing["status"] == "nothing_to_do"
+    assert nothing["tickers_resolved"] == 0
+    assert nothing["rows_saved"] == 0
+
+    fake_source = FlakyPriceSource(fail_asset_types={"etf"})
+    monkeypatch.setitem(pipeline.PRICE_SOURCES, "yfinance", lambda: fake_source)
+    monkeypatch.setattr(pipeline, "save_prices", lambda conn, source, at, df: len(df))
+    partial = pipeline.ingest_daily_ohlcv(
+        object(),
+        [],
+        [
+            make_tracked_ticker(ticker="FAIL.AS", asset_type="etf"),
+            make_tracked_ticker(ticker="BTC-USD", asset_type="crypto"),
+        ],
+        {},
+        date(2026, 1, 1),
+        date(2026, 1, 10),
+    )
+
+    # Both saved-nothing-of-note runs, but only one of them went wrong.
+    assert partial["status"] == "partial"
+    assert partial["groups_failed"] == 1
+    assert partial["rows_saved"] == 1
+
+
+def test_ingest_dividends_result_matches_the_price_flow_shape(monkeypatch):
+    fake_source = FakeDividendSource()
+    monkeypatch.setitem(pipeline.DIVIDEND_SOURCES, "yfinance", lambda: fake_source)
+    monkeypatch.setattr(pipeline, "save_dividends", lambda conn, source, at, df: len(df))
+
+    result = pipeline.ingest_dividend_events(
+        object(),
+        [],
+        [make_tracked_ticker(ticker="AAPL", asset_type="equity")],
+        {},
+        date(2026, 1, 1),
+        date(2026, 1, 10),
+    )
+
+    assert result["status"] == "ok"
+    assert result["tickers_resolved"] == 1
+    assert result["rows_saved"] == 1
+
+
+def test_backfill_result_separates_skipped_fetched_and_failed(monkeypatch):
+    fake_source = FakeSinglePriceSource(fail_tickers={"BAD"})
+    monkeypatch.setitem(pipeline.PRICE_SOURCES, "yfinance", lambda: fake_source)
+    monkeypatch.setattr(
+        pipeline,
+        "get_earliest_price_dates",
+        # DONE already has history, so it is skipped rather than fetched.
+        lambda conn, source, tickers: {"DONE": date(2020, 1, 1)},
+    )
+    monkeypatch.setattr(pipeline, "save_prices", lambda conn, source, asset_type, df: len(df))
+    monkeypatch.setattr("data_store.pipeline.time.sleep", lambda s: None)
+
+    result = pipeline.backfill_historical_ohlcv(
+        object(),
+        [],
+        [
+            make_tracked_ticker(ticker="NEW", asset_type="equity"),
+            make_tracked_ticker(ticker="DONE", asset_type="equity"),
+            make_tracked_ticker(ticker="BAD", asset_type="equity"),
+        ],
+        {},
+        None,
+        date(2026, 1, 1),
+        delay_seconds=0,
+    )
+
+    assert result["status"] == "partial"  # BAD failed
+    assert result["tickers_resolved"] == 3
+    assert result["tickers_fetched"] == 1
+    assert result["tickers_skipped"] == 1
+    assert result["tickers_failed"] == 1
+    assert result["rows_saved"] == 1
+
+
+def test_backfill_result_reports_nothing_to_do(monkeypatch):
+    result = pipeline.backfill_historical_ohlcv(
+        object(), [], [], {}, None, date(2026, 1, 1), delay_seconds=0
+    )
+
+    assert result["status"] == "nothing_to_do"
+    assert result["tickers_resolved"] == 0
+    assert result["rows_saved"] == 0
+
+
+def test_backfill_dividends_result_matches_the_price_backfill_shape(monkeypatch):
+    monkeypatch.setitem(pipeline.DIVIDEND_SOURCES, "yfinance", lambda: FakeSingleDividendSource())
+    monkeypatch.setattr(pipeline, "get_earliest_dividend_dates", lambda conn, source, tickers: {})
+    monkeypatch.setattr(pipeline, "save_dividends", lambda conn, source, asset_type, df: len(df))
+    monkeypatch.setattr("data_store.pipeline.time.sleep", lambda s: None)
+
+    result = pipeline.backfill_dividend_events(
+        object(),
+        [],
+        [make_tracked_ticker(ticker="AAPL", asset_type="equity")],
+        {},
+        None,
+        date(2026, 1, 1),
+        delay_seconds=0,
+    )
+
+    assert result["status"] == "ok"
+    assert result["tickers_fetched"] == 1
+    assert result["rows_saved"] == 1
+
+
+@pytest.mark.parametrize(
+    "flow",
+    ["ingest_ohlcv", "ingest_dividends", "backfill_ohlcv", "backfill_dividends"],
+)
+def test_every_flow_result_survives_a_process_boundary(monkeypatch, flow):
+    # Stage 4 hands this back from a separate interpreter as an Airflow XCom, pickled there and
+    # unpickled in Airflow's own environment where `data_store` is not importable. Anything
+    # richer than plain builtins -- a dataclass, an enum, a date, a numpy int -- would fail to
+    # unpickle there with ModuleNotFoundError. Keep the contract boring on purpose.
+    _patch_price_source(monkeypatch, FakePriceSource(), [])
+    monkeypatch.setitem(pipeline.DIVIDEND_SOURCES, "yfinance", lambda: FakeDividendSource())
+    monkeypatch.setattr(pipeline, "save_dividends", lambda conn, source, at, df: len(df))
+    monkeypatch.setattr(pipeline, "get_earliest_price_dates", lambda conn, source, tickers: {})
+    monkeypatch.setattr(pipeline, "get_earliest_dividend_dates", lambda conn, source, tickers: {})
+    monkeypatch.setattr("data_store.pipeline.time.sleep", lambda s: None)
+    monkeypatch.setitem(pipeline.PRICE_SOURCES, "yfinance", lambda: FakeSinglePriceSource())
+
+    tracked = [make_tracked_ticker(ticker="AAPL", asset_type="equity")]
+    args = (object(), [], tracked, {})
+    if flow == "ingest_ohlcv":
+        _patch_price_source(monkeypatch, FakePriceSource(), [])
+        result = pipeline.ingest_daily_ohlcv(*args, date(2026, 1, 1), date(2026, 1, 10))
+    elif flow == "ingest_dividends":
+        result = pipeline.ingest_dividend_events(*args, date(2026, 1, 1), date(2026, 1, 10))
+    elif flow == "backfill_ohlcv":
+        result = pipeline.backfill_historical_ohlcv(*args, None, date(2026, 1, 1), delay_seconds=0)
+    else:
+        monkeypatch.setitem(
+            pipeline.DIVIDEND_SOURCES, "yfinance", lambda: FakeSingleDividendSource()
+        )
+        result = pipeline.backfill_dividend_events(*args, None, date(2026, 1, 1), delay_seconds=0)
+
+    assert isinstance(result, dict)
+    for key, value in result.items():
+        assert type(key) is str, f"{key!r} is not a plain str"
+        assert type(value) in (int, str), f"{key}={value!r} is {type(value).__name__}"
+    assert pickle.loads(pickle.dumps(result)) == result
+    # The three keys every flow guarantees, so a caller can check any of them uniformly.
+    assert {"status", "tickers_resolved", "rows_saved"} <= result.keys()

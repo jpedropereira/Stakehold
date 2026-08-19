@@ -76,21 +76,21 @@ def test_backfill_is_idempotent_on_rerun(monkeypatch):
     monkeypatch.setitem(pipeline.PRICE_SOURCES, "yfinance", lambda: fake_source)
     tracked = [_make_tracked_ticker()]
 
-    first_count = pipeline.backfill_historical_ohlcv(
+    first_result = pipeline.backfill_historical_ohlcv(
         conn, [], tracked, {}, date(2024, 1, 1), date(2024, 1, 10), delay_seconds=0
     )
 
-    assert first_count == 10
+    assert first_result["rows_saved"] == 10
     assert fake_source.fetch_calls == [("TEST", date(2024, 1, 1), date(2024, 1, 10))]
 
-    second_count = pipeline.backfill_historical_ohlcv(
+    second_result = pipeline.backfill_historical_ohlcv(
         conn, [], tracked, {}, date(2024, 1, 1), date(2024, 1, 10), delay_seconds=0
     )
 
     # The whole earliest_date..end_date range is already covered by the first run -- the
     # second run must not re-fetch it, proving re-running after a partial/full completion is
     # cheap rather than re-downloading everything.
-    assert second_count == 0
+    assert second_result["rows_saved"] == 0
     assert len(fake_source.fetch_calls) == 1
     conn.close()
 

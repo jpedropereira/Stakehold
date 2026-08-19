@@ -37,6 +37,17 @@ def _db_init(_args: argparse.Namespace) -> int:
     return 0
 
 
+def _report(result: dict[str, int | str], noun: str) -> int:
+    """Print a flow's headline number and turn its status into an exit code.
+
+    Non-zero on "partial" so a scheduled run that half-failed doesn't report success to
+    whatever invoked it. "nothing_to_do" is a success: having nothing to do is a legitimate
+    outcome, and the flow has already said so on stdout.
+    """
+    print(f"{result['rows_saved']} {noun}")
+    return 1 if result["status"] == "partial" else 0
+
+
 def _select_funds(funds: list[FundConfig], fund_key: str | None) -> list[FundConfig]:
     if fund_key is not None:
         for fund in funds:
@@ -99,7 +110,7 @@ def _ingest_ohlcv(args: argparse.Namespace) -> int:
     start_date = end_date - timedelta(days=args.days)
     conn = get_connection(settings.database_url)
     try:
-        count = ingest_daily_ohlcv(
+        result = ingest_daily_ohlcv(
             conn,
             funds,
             tracked_tickers,
@@ -109,10 +120,10 @@ def _ingest_ohlcv(args: argparse.Namespace) -> int:
             only_tickers=only_tickers,
             ticker_overrides=ticker_overrides,
         )
-        print(f"{count} price rows")
+        exit_code = _report(result, "price rows")
     finally:
         conn.close()
-    return 0
+    return exit_code
 
 
 def _backfill_ohlcv(args: argparse.Namespace) -> int:
@@ -128,7 +139,7 @@ def _backfill_ohlcv(args: argparse.Namespace) -> int:
     )
     conn = get_connection(settings.database_url)
     try:
-        count = backfill_historical_ohlcv(
+        result = backfill_historical_ohlcv(
             conn,
             funds,
             tracked_tickers,
@@ -139,10 +150,10 @@ def _backfill_ohlcv(args: argparse.Namespace) -> int:
             only_tickers=only_tickers,
             ticker_overrides=ticker_overrides,
         )
-        print(f"{count} price rows")
+        exit_code = _report(result, "price rows")
     finally:
         conn.close()
-    return 0
+    return exit_code
 
 
 def _ingest_dividends(args: argparse.Namespace) -> int:
@@ -156,7 +167,7 @@ def _ingest_dividends(args: argparse.Namespace) -> int:
     start_date = end_date - timedelta(days=args.days)
     conn = get_connection(settings.database_url)
     try:
-        count = ingest_dividend_events(
+        result = ingest_dividend_events(
             conn,
             funds,
             tracked_tickers,
@@ -166,10 +177,10 @@ def _ingest_dividends(args: argparse.Namespace) -> int:
             only_tickers=only_tickers,
             ticker_overrides=ticker_overrides,
         )
-        print(f"{count} dividend rows")
+        exit_code = _report(result, "dividend rows")
     finally:
         conn.close()
-    return 0
+    return exit_code
 
 
 def _backfill_dividends(args: argparse.Namespace) -> int:
@@ -185,7 +196,7 @@ def _backfill_dividends(args: argparse.Namespace) -> int:
     )
     conn = get_connection(settings.database_url)
     try:
-        count = backfill_dividend_events(
+        result = backfill_dividend_events(
             conn,
             funds,
             tracked_tickers,
@@ -196,10 +207,10 @@ def _backfill_dividends(args: argparse.Namespace) -> int:
             only_tickers=only_tickers,
             ticker_overrides=ticker_overrides,
         )
-        print(f"{count} dividend rows")
+        exit_code = _report(result, "dividend rows")
     finally:
         conn.close()
-    return 0
+    return exit_code
 
 
 def _build_parser() -> argparse.ArgumentParser:

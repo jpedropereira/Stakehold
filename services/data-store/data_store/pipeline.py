@@ -22,6 +22,41 @@ logger = logging.getLogger(__name__)
 # yfinance clips to each ticker's actual listing date, so this is effectively unbounded.
 UNBOUNDED_EARLIEST_DATE = date(1900, 1, 1)
 
+# Keys every run-level flow result carries, whichever flow produced it, so a caller can check
+# any run uniformly without knowing which one it ran.
+FLOW_RESULT_KEYS = ("status", "tickers_resolved", "rows_saved")
+
+
+def _flow_result(
+    *, tickers_resolved: int, rows_saved: int, failed: int, **extra: int
+) -> dict[str, int | str]:
+    """Build a flow's return value: counts plus a derived `status`.
+
+    Deliberately a plain dict of builtins, not a dataclass. Airflow reads this back across a
+    process boundary as an XCom value -- pickled in this interpreter, unpickled in Airflow's
+    own, where `data_store` isn't importable -- so anything richer (a dataclass, an enum, a
+    date, a numpy int) would fail there with ModuleNotFoundError. See
+    test_every_flow_result_survives_a_process_boundary.
+
+    `status` exists so callers don't have to re-derive intent from counts. Zero rows saved is
+    ambiguous on its own: it's the correct outcome for a run with nothing to do, and a
+    red-alert for a run whose every group failed. These are the two the logging rules insist
+    must never look alike, and this is what lets an automated check tell them apart.
+    """
+    if tickers_resolved == 0:
+        status = "nothing_to_do"
+    elif failed:
+        status = "partial"
+    else:
+        status = "ok"
+    return {
+        "status": status,
+        "tickers_resolved": tickers_resolved,
+        "rows_saved": rows_saved,
+        **extra,
+    }
+
+
 # A new fund provider or price source is a new registry entry here, not a branch in the
 # functions below.
 SCRAPERS = {
@@ -121,7 +156,7 @@ def ingest_daily_ohlcv(
     end_date: date,
     only_tickers: set[str] | None = None,
     ticker_overrides: dict[str, str] | None = None,
-) -> int:
+) -> dict[str, int | str]:
     """Prices every fund's holdings plus every tracked ticker in one pass. Tickers are
     resolved into a single deduped map first (not fetched per-source) so a ticker that's both
     a fund holding and an explicitly tracked ticker — or held by more than one fund — is only
@@ -136,7 +171,7 @@ def ingest_daily_ohlcv(
     resolved = _apply_only_tickers(resolved, only_tickers, "ingest-ohlcv")
     if not resolved:
         print("ingest-ohlcv: no tickers to price, nothing to do.", flush=True)
-        return 0
+        return _flow_result(tickers_resolved=0, rows_saved=0, failed=0, groups=0, groups_failed=0)
 
     groups = _group_by_source_and_type(resolved)
     print(
@@ -200,7 +235,13 @@ def ingest_daily_ohlcv(
         f"{failed} group(s) failed.",
         flush=True,
     )
-    return total
+    return _flow_result(
+        tickers_resolved=len(resolved),
+        rows_saved=total,
+        failed=failed,
+        groups=len(groups),
+        groups_failed=failed,
+    )
 
 
 def ingest_dividend_events(
@@ -212,7 +253,7 @@ def ingest_dividend_events(
     end_date: date,
     only_tickers: set[str] | None = None,
     ticker_overrides: dict[str, str] | None = None,
-) -> int:
+) -> dict[str, int | str]:
     """Direct mirror of ingest_daily_ohlcv: same ticker-universe resolution
     (_resolve_priceable_tickers, _group_by_source_and_type), swapping DIVIDEND_SOURCES for
     PRICE_SOURCES and save_dividends for save_prices. `only_tickers`/`ticker_overrides` behave
@@ -228,7 +269,7 @@ def ingest_dividend_events(
     resolved = _apply_only_tickers(resolved, only_tickers, "ingest-dividends")
     if not resolved:
         print("ingest-dividends: no tickers to price, nothing to do.", flush=True)
-        return 0
+        return _flow_result(tickers_resolved=0, rows_saved=0, failed=0, groups=0, groups_failed=0)
 
     groups = _group_by_source_and_type(resolved)
     print(
@@ -289,7 +330,13 @@ def ingest_dividend_events(
         f"{failed} group(s) failed.",
         flush=True,
     )
-    return total
+    return _flow_result(
+        tickers_resolved=len(resolved),
+        rows_saved=total,
+        failed=failed,
+        groups=len(groups),
+        groups_failed=failed,
+    )
 
 
 @_yfinance_logging_silenced()
@@ -303,7 +350,7 @@ def backfill_historical_ohlcv(
     delay_seconds: float,
     only_tickers: set[str] | None = None,
     ticker_overrides: dict[str, str] | None = None,
-) -> int:
+) -> dict[str, int | str]:
     """For each priceable ticker (same resolution as ingest_daily_ohlcv), fetches and stores
     the stretch of history it's still missing — see _backfill_window for how `earliest_date`
     selects between resuming (omitted) and reaching further back than a previous run
@@ -326,7 +373,14 @@ def backfill_historical_ohlcv(
     resolved = _apply_only_tickers(resolved, only_tickers, "backfill")
     if not resolved:
         print("backfill: no tickers to fetch, nothing to do.", flush=True)
-        return 0
+        return _flow_result(
+            tickers_resolved=0,
+            rows_saved=0,
+            failed=0,
+            tickers_fetched=0,
+            tickers_skipped=0,
+            tickers_failed=0,
+        )
 
     total_rows = 0
     processed = skipped = failed = 0
@@ -382,7 +436,14 @@ def backfill_historical_ohlcv(
         f"({skipped} already covered, {failed} failed), {total_rows} rows written",
         flush=True,
     )
-    return total_rows
+    return _flow_result(
+        tickers_resolved=ticker_count,
+        rows_saved=total_rows,
+        failed=failed,
+        tickers_fetched=processed - skipped - failed,
+        tickers_skipped=skipped,
+        tickers_failed=failed,
+    )
 
 
 @_yfinance_logging_silenced()
@@ -396,7 +457,7 @@ def backfill_dividend_events(
     delay_seconds: float,
     only_tickers: set[str] | None = None,
     ticker_overrides: dict[str, str] | None = None,
-) -> int:
+) -> dict[str, int | str]:
     """Direct structural mirror of backfill_historical_ohlcv: per-ticker window computed from
     get_earliest_dividend_dates instead of get_earliest_price_dates, same optional
     `earliest_date` resume/deep-fill modes (see _backfill_window), same
@@ -409,7 +470,14 @@ def backfill_dividend_events(
     resolved = _apply_only_tickers(resolved, only_tickers, "backfill-dividends")
     if not resolved:
         print("backfill-dividends: no tickers to fetch, nothing to do.", flush=True)
-        return 0
+        return _flow_result(
+            tickers_resolved=0,
+            rows_saved=0,
+            failed=0,
+            tickers_fetched=0,
+            tickers_skipped=0,
+            tickers_failed=0,
+        )
 
     total_rows = 0
     processed = skipped = failed = 0
@@ -471,7 +539,14 @@ def backfill_dividend_events(
         f"({skipped} already covered, {failed} failed), {total_rows} rows written",
         flush=True,
     )
-    return total_rows
+    return _flow_result(
+        tickers_resolved=ticker_count,
+        rows_saved=total_rows,
+        failed=failed,
+        tickers_fetched=processed - skipped - failed,
+        tickers_skipped=skipped,
+        tickers_failed=failed,
+    )
 
 
 def _apply_only_tickers(

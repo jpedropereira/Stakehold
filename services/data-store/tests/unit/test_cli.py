@@ -33,6 +33,12 @@ def stub_load_ticker_overrides(monkeypatch):
     monkeypatch.setattr(cli, "load_ticker_overrides", lambda path: {})
 
 
+def flow_result(rows_saved=0, status="ok", **extra):
+    """Minimal stand-in for a pipeline flow's return value, for stubs that only care that the
+    CLI reads `rows_saved`/`status` off it rather than a bare int."""
+    return {"status": status, "tickers_resolved": 1, "rows_saved": rows_saved, **extra}
+
+
 def make_fund(key, enabled=True):
     return FundConfig(
         key=key,
@@ -188,7 +194,7 @@ def test_ingest_ohlcv_runs_for_all_enabled_funds_with_default_lookback(monkeypat
         calls.append(
             (passed_funds, tracked_tickers, exchange_suffixes, start_date, end_date, only_tickers)
         )
-        return 3
+        return flow_result(3)
 
     monkeypatch.setattr(cli, "ingest_daily_ohlcv", fake_ingest)
 
@@ -218,7 +224,7 @@ def test_ingest_ohlcv_respects_days_flag(monkeypatch, fake_settings):
         lambda conn, funds, tt, ex, s, e, only_tickers=None, ticker_overrides=None: calls.append(
             (s, e)
         )
-        or 1,
+        or flow_result(1),
     )
 
     cli.main(["ingest-ohlcv", "--days", "30"])
@@ -240,7 +246,7 @@ def test_ingest_ohlcv_ticker_flag_passes_only_tickers_filter(monkeypatch, fake_s
         lambda conn, funds, tt, ex, s, e, only_tickers=None, ticker_overrides=None: calls.append(
             (funds, only_tickers)
         )
-        or 0,
+        or flow_result(),
     )
 
     cli.main(["ingest-ohlcv", "--ticker", "BABA", "--ticker", "0700.HK"])
@@ -262,7 +268,7 @@ def test_ingest_ohlcv_without_ticker_flag_passes_none(monkeypatch, fake_settings
         lambda conn, funds, tt, ex, s, e, only_tickers=None, ticker_overrides=None: calls.append(
             only_tickers
         )
-        or 0,
+        or flow_result(),
     )
 
     cli.main(["ingest-ohlcv"])
@@ -289,7 +295,7 @@ def test_ingest_ohlcv_includes_enabled_tracked_tickers(monkeypatch, fake_setting
         cli,
         "ingest_daily_ohlcv",
         lambda conn, funds, tt, ex, s, e, only_tickers=None, ticker_overrides=None: calls.append(tt)
-        or 1,
+        or flow_result(1),
     )
 
     cli.main(["ingest-ohlcv"])
@@ -307,7 +313,7 @@ def test_ingest_ohlcv_treats_missing_tracked_tickers_file_as_empty(monkeypatch, 
         cli,
         "ingest_daily_ohlcv",
         lambda conn, funds, tt, ex, s, e, only_tickers=None, ticker_overrides=None: calls.append(tt)
-        or 0,
+        or flow_result(),
     )
 
     cli.main(["ingest-ohlcv"])
@@ -328,7 +334,7 @@ def test_ingest_ohlcv_loads_and_passes_exchange_suffixes(monkeypatch, fake_setti
         cli,
         "ingest_daily_ohlcv",
         lambda conn, funds, tt, ex, s, e, only_tickers=None, ticker_overrides=None: calls.append(ex)
-        or 0,
+        or flow_result(),
     )
 
     cli.main(["ingest-ohlcv"])
@@ -349,7 +355,7 @@ def test_ingest_ohlcv_loads_and_passes_ticker_overrides(monkeypatch, fake_settin
         lambda conn, funds, tt, ex, s, e, only_tickers=None, ticker_overrides=None: calls.append(
             ticker_overrides
         )
-        or 0,
+        or flow_result(),
     )
 
     cli.main(["ingest-ohlcv"])
@@ -403,7 +409,7 @@ def test_backfill_ohlcv_default_run(monkeypatch, fake_settings):
                 only_tickers,
             )
         )
-        return 3
+        return flow_result(3)
 
     monkeypatch.setattr(cli, "backfill_historical_ohlcv", fake_backfill)
 
@@ -441,7 +447,7 @@ def test_backfill_ohlcv_respects_fund_flag(monkeypatch, fake_settings):
     monkeypatch.setattr(
         cli,
         "backfill_historical_ohlcv",
-        lambda conn, funds, tt, ex, ed, end, ds, **kw: calls.append(funds) or 0,
+        lambda conn, funds, tt, ex, ed, end, ds, **kw: calls.append(funds) or flow_result(),
     )
 
     cli.main(["backfill-ohlcv", "--fund", "b"])
@@ -458,7 +464,7 @@ def test_backfill_ohlcv_respects_earliest_date_and_delay_flags(monkeypatch, fake
     monkeypatch.setattr(
         cli,
         "backfill_historical_ohlcv",
-        lambda conn, funds, tt, ex, ed, end, ds, **kw: calls.append((ed, ds)) or 0,
+        lambda conn, funds, tt, ex, ed, end, ds, **kw: calls.append((ed, ds)) or flow_result(),
     )
 
     cli.main(["backfill-ohlcv", "--earliest-date", "2000-06-15", "--delay-seconds", "3.5"])
@@ -485,7 +491,7 @@ def test_backfill_ohlcv_ticker_flag_passes_only_tickers_filter(monkeypatch, fake
         lambda conn, funds, tt, ex, ed, end, ds, only_tickers=None, **kw: calls.append(
             (funds, only_tickers)
         )
-        or 0,
+        or flow_result(),
     )
 
     cli.main(["backfill-ohlcv", "--ticker", "BABA", "--ticker", "0700.HK"])
@@ -505,7 +511,7 @@ def test_backfill_ohlcv_without_ticker_flag_passes_none(monkeypatch, fake_settin
         cli,
         "backfill_historical_ohlcv",
         lambda conn, funds, tt, ex, ed, end, ds, only_tickers=None, **kw: calls.append(only_tickers)
-        or 0,
+        or flow_result(),
     )
 
     cli.main(["backfill-ohlcv"])
@@ -522,7 +528,7 @@ def test_backfill_ohlcv_treats_missing_tracked_tickers_file_as_empty(monkeypatch
     monkeypatch.setattr(
         cli,
         "backfill_historical_ohlcv",
-        lambda conn, funds, tt, ex, ed, end, ds, **kw: calls.append(tt) or 0,
+        lambda conn, funds, tt, ex, ed, end, ds, **kw: calls.append(tt) or flow_result(),
     )
 
     cli.main(["backfill-ohlcv"])
@@ -540,7 +546,7 @@ def test_backfill_ohlcv_loads_and_passes_exchange_suffixes(monkeypatch, fake_set
     monkeypatch.setattr(
         cli,
         "backfill_historical_ohlcv",
-        lambda conn, funds, tt, ex, ed, end, ds, **kw: calls.append(ex) or 0,
+        lambda conn, funds, tt, ex, ed, end, ds, **kw: calls.append(ex) or flow_result(),
     )
 
     cli.main(["backfill-ohlcv"])
@@ -561,7 +567,7 @@ def test_backfill_ohlcv_loads_and_passes_ticker_overrides(monkeypatch, fake_sett
         lambda conn, funds, tt, ex, ed, end, ds, ticker_overrides=None, **kw: calls.append(
             ticker_overrides
         )
-        or 0,
+        or flow_result(),
     )
 
     cli.main(["backfill-ohlcv"])
@@ -608,7 +614,7 @@ def test_ingest_dividends_runs_for_all_enabled_funds_with_default_lookback(
         calls.append(
             (passed_funds, tracked_tickers, exchange_suffixes, start_date, end_date, only_tickers)
         )
-        return 3
+        return flow_result(3)
 
     monkeypatch.setattr(cli, "ingest_dividend_events", fake_ingest)
 
@@ -638,7 +644,7 @@ def test_ingest_dividends_respects_days_flag(monkeypatch, fake_settings):
         lambda conn, funds, tt, ex, s, e, only_tickers=None, ticker_overrides=None: calls.append(
             (s, e)
         )
-        or 1,
+        or flow_result(1),
     )
 
     cli.main(["ingest-dividends", "--days", "30"])
@@ -660,7 +666,7 @@ def test_ingest_dividends_ticker_flag_passes_only_tickers_filter(monkeypatch, fa
         lambda conn, funds, tt, ex, s, e, only_tickers=None, ticker_overrides=None: calls.append(
             (funds, only_tickers)
         )
-        or 0,
+        or flow_result(),
     )
 
     cli.main(["ingest-dividends", "--ticker", "CSU.TO", "--ticker", "BT-A.L"])
@@ -682,7 +688,7 @@ def test_ingest_dividends_without_ticker_flag_passes_none(monkeypatch, fake_sett
         lambda conn, funds, tt, ex, s, e, only_tickers=None, ticker_overrides=None: calls.append(
             only_tickers
         )
-        or 0,
+        or flow_result(),
     )
 
     cli.main(["ingest-dividends"])
@@ -700,7 +706,7 @@ def test_ingest_dividends_treats_missing_tracked_tickers_file_as_empty(monkeypat
         cli,
         "ingest_dividend_events",
         lambda conn, funds, tt, ex, s, e, only_tickers=None, ticker_overrides=None: calls.append(tt)
-        or 0,
+        or flow_result(),
     )
 
     cli.main(["ingest-dividends"])
@@ -719,7 +725,7 @@ def test_ingest_dividends_loads_and_passes_exchange_suffixes(monkeypatch, fake_s
         cli,
         "ingest_dividend_events",
         lambda conn, funds, tt, ex, s, e, only_tickers=None, ticker_overrides=None: calls.append(ex)
-        or 0,
+        or flow_result(),
     )
 
     cli.main(["ingest-dividends"])
@@ -740,7 +746,7 @@ def test_ingest_dividends_loads_and_passes_ticker_overrides(monkeypatch, fake_se
         lambda conn, funds, tt, ex, s, e, only_tickers=None, ticker_overrides=None: calls.append(
             ticker_overrides
         )
-        or 0,
+        or flow_result(),
     )
 
     cli.main(["ingest-dividends"])
@@ -796,7 +802,7 @@ def test_backfill_dividends_default_run(monkeypatch, fake_settings):
                 only_tickers,
             )
         )
-        return 3
+        return flow_result(3)
 
     monkeypatch.setattr(cli, "backfill_dividend_events", fake_backfill)
 
@@ -834,7 +840,7 @@ def test_backfill_dividends_respects_fund_flag(monkeypatch, fake_settings):
     monkeypatch.setattr(
         cli,
         "backfill_dividend_events",
-        lambda conn, funds, tt, ex, ed, end, ds, **kw: calls.append(funds) or 0,
+        lambda conn, funds, tt, ex, ed, end, ds, **kw: calls.append(funds) or flow_result(),
     )
 
     cli.main(["backfill-dividends", "--fund", "b"])
@@ -851,7 +857,7 @@ def test_backfill_dividends_respects_earliest_date_and_delay_flags(monkeypatch, 
     monkeypatch.setattr(
         cli,
         "backfill_dividend_events",
-        lambda conn, funds, tt, ex, ed, end, ds, **kw: calls.append((ed, ds)) or 0,
+        lambda conn, funds, tt, ex, ed, end, ds, **kw: calls.append((ed, ds)) or flow_result(),
     )
 
     cli.main(["backfill-dividends", "--earliest-date", "2000-06-15", "--delay-seconds", "3.5"])
@@ -874,7 +880,7 @@ def test_backfill_dividends_ticker_flag_passes_only_tickers_filter(monkeypatch, 
         lambda conn, funds, tt, ex, ed, end, ds, only_tickers=None, **kw: calls.append(
             (funds, only_tickers)
         )
-        or 0,
+        or flow_result(),
     )
 
     cli.main(["backfill-dividends", "--ticker", "CSU.TO", "--ticker", "BT-A.L"])
@@ -894,7 +900,7 @@ def test_backfill_dividends_without_ticker_flag_passes_none(monkeypatch, fake_se
         cli,
         "backfill_dividend_events",
         lambda conn, funds, tt, ex, ed, end, ds, only_tickers=None, **kw: calls.append(only_tickers)
-        or 0,
+        or flow_result(),
     )
 
     cli.main(["backfill-dividends"])
@@ -913,7 +919,7 @@ def test_backfill_dividends_treats_missing_tracked_tickers_file_as_empty(
     monkeypatch.setattr(
         cli,
         "backfill_dividend_events",
-        lambda conn, funds, tt, ex, ed, end, ds, **kw: calls.append(tt) or 0,
+        lambda conn, funds, tt, ex, ed, end, ds, **kw: calls.append(tt) or flow_result(),
     )
 
     cli.main(["backfill-dividends"])
@@ -931,7 +937,7 @@ def test_backfill_dividends_loads_and_passes_exchange_suffixes(monkeypatch, fake
     monkeypatch.setattr(
         cli,
         "backfill_dividend_events",
-        lambda conn, funds, tt, ex, ed, end, ds, **kw: calls.append(ex) or 0,
+        lambda conn, funds, tt, ex, ed, end, ds, **kw: calls.append(ex) or flow_result(),
     )
 
     cli.main(["backfill-dividends"])
@@ -952,7 +958,7 @@ def test_backfill_dividends_loads_and_passes_ticker_overrides(monkeypatch, fake_
         lambda conn, funds, tt, ex, ed, end, ds, ticker_overrides=None, **kw: calls.append(
             ticker_overrides
         )
-        or 0,
+        or flow_result(),
     )
 
     cli.main(["backfill-dividends"])
@@ -1022,3 +1028,50 @@ def test_tracked_tickers_file_present_but_empty_is_treated_as_none(tmp_path, mon
     path.write_text("# everything still commented out\ntickers:\n")
 
     assert cli._load_enabled_tracked_tickers(path) == []
+
+
+def test_ingest_ohlcv_exits_non_zero_when_the_run_only_partly_succeeded(
+    monkeypatch, fake_settings, capsys
+):
+    # A scheduled run that lost some groups must not report success to whatever invoked it.
+    monkeypatch.setattr(cli, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(cli, "load_funds", lambda path: [make_fund("a")])
+    monkeypatch.setattr(cli, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(
+        cli,
+        "ingest_daily_ohlcv",
+        lambda *a, **k: flow_result(5, status="partial", groups=2, groups_failed=1),
+    )
+
+    exit_code = cli.main(["ingest-ohlcv"])
+
+    assert exit_code == 1
+    assert "5 price rows" in capsys.readouterr().out
+
+
+def test_ingest_ohlcv_exits_zero_when_there_was_nothing_to_do(monkeypatch, fake_settings):
+    # Distinct from the above: having nothing to do is a legitimate success, and the flow has
+    # already said so on stdout. Failing here would make every quiet day look broken.
+    monkeypatch.setattr(cli, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(cli, "load_funds", lambda path: [make_fund("a")])
+    monkeypatch.setattr(cli, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(
+        cli,
+        "ingest_daily_ohlcv",
+        lambda *a, **k: flow_result(0, status="nothing_to_do", groups=0, groups_failed=0),
+    )
+
+    assert cli.main(["ingest-ohlcv"]) == 0
+
+
+def test_backfill_dividends_exits_non_zero_when_a_ticker_failed(monkeypatch, fake_settings):
+    monkeypatch.setattr(cli, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(cli, "load_funds", lambda path: [make_fund("a")])
+    monkeypatch.setattr(cli, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(
+        cli,
+        "backfill_dividend_events",
+        lambda *a, **k: flow_result(7, status="partial", tickers_failed=1),
+    )
+
+    assert cli.main(["backfill-dividends"]) == 1
