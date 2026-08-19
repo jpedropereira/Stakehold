@@ -275,11 +275,20 @@ def test_rejects_missing_tracked_tickers_file(tmp_path):
         load_tracked_tickers(tmp_path / "does-not-exist.yaml")
 
 
-def test_rejects_empty_tracked_tickers_list(tmp_path):
+def test_empty_tracked_tickers_list_loads_as_none_configured(tmp_path):
+    # Unlike funds, this whole file is optional, so an empty list means "none configured yet"
+    # -- a copied-but-unfilled template must behave like an absent file, not break every
+    # ingest and backfill command. A *missing* file still raises (above): only the CLI knows
+    # the path is optional, and it checks for that before calling.
     path = write_tracked_tickers_yaml(tmp_path, "tickers: []\n")
 
-    with pytest.raises(ConfigError, match="no tickers"):
-        load_tracked_tickers(path)
+    assert load_tracked_tickers(path) == []
+
+
+def test_tracked_tickers_file_with_no_tickers_key_loads_as_none_configured(tmp_path):
+    path = write_tracked_tickers_yaml(tmp_path, "# nothing uncommented yet\n")
+
+    assert load_tracked_tickers(path) == []
 
 
 def test_loads_exchange_with_string_suffix(tmp_path):

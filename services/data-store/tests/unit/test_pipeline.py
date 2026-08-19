@@ -632,10 +632,18 @@ def test_backfill_silences_yfinances_own_noisy_no_data_logging(monkeypatch):
     yf_logger.setLevel(logging.NOTSET)
 
     conn = object()
-    fake_source = FakeSinglePriceSource()
+    # Observed from inside the fetch, not after the run: the silencing is scoped to the
+    # backfill, so "still silenced afterwards" would be the leak, not the feature.
+    levels_during_fetch = []
+
+    class LevelObservingSource(FakeSinglePriceSource):
+        def fetch(self, tickers, start_date, end_date):
+            levels_during_fetch.append(logging.getLogger("yfinance").level)
+            return super().fetch(tickers, start_date, end_date)
+
     tracked = [make_tracked_ticker(ticker="AAPL", asset_type="equity")]
 
-    monkeypatch.setitem(pipeline.PRICE_SOURCES, "yfinance", lambda: fake_source)
+    monkeypatch.setitem(pipeline.PRICE_SOURCES, "yfinance", LevelObservingSource)
     monkeypatch.setattr(pipeline, "get_earliest_price_dates", lambda conn, source, tickers: {})
     monkeypatch.setattr(pipeline, "save_prices", lambda conn, source, asset_type, df: len(df))
     monkeypatch.setattr("data_store.pipeline.time.sleep", lambda s: None)
@@ -645,7 +653,7 @@ def test_backfill_silences_yfinances_own_noisy_no_data_logging(monkeypatch):
             conn, [], tracked, {}, date(1900, 1, 1), date(2026, 1, 1), delay_seconds=0
         )
 
-        assert yf_logger.level >= logging.CRITICAL
+        assert levels_during_fetch == [logging.CRITICAL]
     finally:
         yf_logger.setLevel(original_level)
 
@@ -1690,3 +1698,105 @@ def test_backfill_warns_when_a_requested_ticker_matches_nothing(monkeypatch, cap
         )
 
     assert "NOPE" in caplog.text
+
+
+def test_backfill_restores_the_yfinance_logger_level_afterwards(monkeypatch):
+    # Silencing yfinance is scoped to the backfill; leaving it silenced leaks into anything
+    # else sharing the process (a later ingest in the same run, the rest of a test session).
+    yf_logger = logging.getLogger("yfinance")
+    original_level = yf_logger.level
+    yf_logger.setLevel(logging.INFO)
+
+    monkeypatch.setitem(pipeline.PRICE_SOURCES, "yfinance", lambda: FakeSinglePriceSource())
+    monkeypatch.setattr(pipeline, "get_earliest_price_dates", lambda conn, source, tickers: {})
+    monkeypatch.setattr(pipeline, "save_prices", lambda conn, source, asset_type, df: len(df))
+    monkeypatch.setattr("data_store.pipeline.time.sleep", lambda s: None)
+
+    try:
+        pipeline.backfill_historical_ohlcv(
+            object(),
+            [],
+            [make_tracked_ticker(ticker="AAPL", asset_type="equity")],
+            {},
+            None,
+            date(2026, 1, 1),
+            delay_seconds=0,
+        )
+
+        assert yf_logger.level == logging.INFO
+    finally:
+        yf_logger.setLevel(original_level)
+
+
+def test_backfill_restores_the_yfinance_logger_level_even_when_the_run_raises(monkeypatch):
+    yf_logger = logging.getLogger("yfinance")
+    original_level = yf_logger.level
+    yf_logger.setLevel(logging.INFO)
+
+    def exploding_resolver(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(pipeline, "_resolve_priceable_tickers", exploding_resolver)
+
+    try:
+        with pytest.raises(RuntimeError):
+            pipeline.backfill_historical_ohlcv(
+                object(), [], [], {}, None, date(2026, 1, 1), delay_seconds=0
+            )
+
+        assert yf_logger.level == logging.INFO
+    finally:
+        yf_logger.setLevel(original_level)
+
+
+def test_backfill_reads_floors_under_the_same_source_identifier_it_writes(monkeypatch):
+    # The registry key and the source class's .name are two different strings that happen to
+    # agree today. Reading floors under one and writing rows under the other means a source
+    # registered under a differing key never sees its own stored data -- so it re-fetches its
+    # full history on every run, forever.
+    class AltNamedSource(FakeSinglePriceSource):
+        name = "alt-source-name"
+
+    floor_queries = []
+    save_sources = []
+
+    monkeypatch.setitem(pipeline.PRICE_SOURCES, "alt-registry-key", AltNamedSource)
+    monkeypatch.setattr(
+        pipeline,
+        "get_earliest_price_dates",
+        lambda conn, source, tickers: floor_queries.append(source) or {},
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "save_prices",
+        lambda conn, source, asset_type, df: save_sources.append(source) or len(df),
+    )
+    monkeypatch.setattr("data_store.pipeline.time.sleep", lambda s: None)
+
+    pipeline.backfill_historical_ohlcv(
+        object(),
+        [],
+        [make_tracked_ticker(ticker="AAPL", asset_type="equity", price_source="alt-registry-key")],
+        {},
+        None,
+        date(2026, 1, 1),
+        delay_seconds=0,
+    )
+
+    assert floor_queries == save_sources
+
+
+def test_resolve_skips_placeholder_dash_tickers(monkeypatch):
+    # iShares uses "-" for lines with no real symbol. It survives the emptiness guard, and if
+    # its exchange happens to be mapped it becomes a bogus request like "-.L".
+    monkeypatch.setattr(
+        pipeline,
+        "get_latest_tickers",
+        lambda conn, fund_key: [("-", "London Stock Exchange"), ("HSBA", "London Stock Exchange")],
+    )
+
+    resolved = pipeline._resolve_priceable_tickers(
+        object(), [make_fund()], [], {"London Stock Exchange": ".L"}
+    )
+
+    assert set(resolved) == {"HSBA.L"}

@@ -1,5 +1,6 @@
 import logging
 import time
+from contextlib import contextmanager
 from datetime import date
 
 from data_store.config_loader import FundConfig, TickerConfig
@@ -76,6 +77,27 @@ _TICKER_NORMALIZERS = {
     "Oslo Bors Asa": _space_to_hyphen,
     "Toronto Stock Exchange": _dot_to_hyphen,
 }
+
+
+@contextmanager
+def _yfinance_logging_silenced():
+    """Quiet yfinance's own logger for the duration of a backfill, then put it back.
+
+    yfinance logs an ERROR-level "Failed download"/"Data doesn't exist" line on every empty
+    result -- which during a backfill is the *expected* outcome for every ticker once it's
+    requested back past its actual listing date. Left alone that noise drowns out the
+    per-ticker progress below. Restoring on the way out matters because the level is global to
+    the process: leaving it at CRITICAL silences yfinance for anything sharing that process
+    (a later ingest in the same run, or the rest of a test session), which would hide the
+    genuinely interesting empty results the daily flow relies on seeing.
+    """
+    yf_logger = logging.getLogger("yfinance")
+    previous_level = yf_logger.level
+    yf_logger.setLevel(logging.CRITICAL)
+    try:
+        yield
+    finally:
+        yf_logger.setLevel(previous_level)
 
 
 def ingest_holdings(conn, fund_config: FundConfig, today: date) -> int:
@@ -270,6 +292,7 @@ def ingest_dividend_events(
     return total
 
 
+@_yfinance_logging_silenced()
 def backfill_historical_ohlcv(
     conn,
     funds: list[FundConfig],
@@ -291,15 +314,12 @@ def backfill_historical_ohlcv(
     logged and skipped, not fatal to the run. `only_tickers`, when given, restricts the run to
     exactly those final (post-suffix-resolution) tickers -- e.g. "0700.HK", not the raw "0700"
     -- so it can target holdings-derived tickers too, not just tracked_tickers entries.
-    `ticker_overrides` is forwarded to ticker resolution -- see _resolve_yfinance_ticker."""
-    # yfinance logs an ERROR-level "Failed download"/"Data doesn't exist" message on every
-    # empty result via its own 'yfinance' logger — which, here, is the expected outcome for
-    # every ticker once requested back past its actual listing date. Left alone that noise
-    # drowns out our own per-ticker progress lines below, so it's silenced for this run only
-    # (not touched for the daily flow, where an empty result is more likely to mean something
-    # actually needs attention, e.g. a delisted/mistyped ticker).
-    logging.getLogger("yfinance").setLevel(logging.CRITICAL)
+    `ticker_overrides` is forwarded to ticker resolution -- see _resolve_yfinance_ticker.
 
+    Decorated rather than the daily flow because an empty result means something different
+    here: during a backfill it's the expected end state for every ticker, whereas for
+    ingest_daily_ohlcv it more likely means a delisted or mistyped ticker worth seeing.
+    """
     resolved = _resolve_priceable_tickers(
         conn, funds, tracked_tickers, exchange_suffixes, ticker_overrides
     )
@@ -318,7 +338,9 @@ def backfill_historical_ohlcv(
             raise ValueError(f"Unknown price source: {price_source_name!r}") from None
 
         price_source = price_source_cls()
-        floors = get_earliest_price_dates(conn, price_source_name, tickers)
+        # price_source.name, not the registry key: rows are written under .name, so floors
+        # must be read under it too or a source whose key differs never finds its own data.
+        floors = get_earliest_price_dates(conn, price_source.name, tickers)
         for ticker in tickers:
             floor = floors.get(ticker)
             window = _backfill_window(floor, earliest_date, end_date)
@@ -363,6 +385,7 @@ def backfill_historical_ohlcv(
     return total_rows
 
 
+@_yfinance_logging_silenced()
 def backfill_dividend_events(
     conn,
     funds: list[FundConfig],
@@ -380,8 +403,6 @@ def backfill_dividend_events(
     silence-yfinance-logger / sleep-after-fetch-or-failure-not-skip / progress-every-25 /
     never-fatal-on-one-ticker-failure behavior. `only_tickers`/`ticker_overrides` behave
     identically to backfill_historical_ohlcv's -- see that docstring."""
-    logging.getLogger("yfinance").setLevel(logging.CRITICAL)
-
     resolved = _resolve_priceable_tickers(
         conn, funds, tracked_tickers, exchange_suffixes, ticker_overrides
     )
@@ -400,7 +421,9 @@ def backfill_dividend_events(
             raise ValueError(f"Unknown dividend source: {source_name!r}") from None
 
         dividend_source = dividend_source_cls()
-        floors = get_earliest_dividend_dates(conn, source_name, tickers)
+        # See the note in backfill_historical_ohlcv: read under the same identifier the
+        # rows are written under.
+        floors = get_earliest_dividend_dates(conn, dividend_source.name, tickers)
         for ticker in tickers:
             floor = floors.get(ticker)
             window = _backfill_window(floor, earliest_date, end_date)
@@ -531,7 +554,10 @@ def _resolve_priceable_tickers(
     for fund in funds:
         for raw_ticker, exchange in get_latest_tickers(conn, fund.key):
             ticker = (raw_ticker or "").strip()
-            if not ticker:
+            # "-" is how the source spells "this line has no symbol" (cash, some derivative
+            # legs). It survives the emptiness check, and on a mapped exchange it would be
+            # sent as a real request like "-.L".
+            if not ticker or ticker == "-":
                 continue
             yf_ticker = _resolve_yfinance_ticker(
                 ticker, exchange, exchange_suffixes, ticker_overrides
