@@ -124,6 +124,32 @@ All five live in `pipeline.py` and are exposed as CLI subcommands.
 | Price backfill | `backfill-ohlcv` | manual | `daily_ohlcv` | `daily_ohlcv` |
 | Dividend backfill | `backfill-dividends` | manual | `dividend_events` | `dividend_events` |
 
+### What a flow returns
+
+The four run-level flows return a structured result, not a row count:
+
+```python
+{"status": "ok" | "partial" | "nothing_to_do",
+ "tickers_resolved": int, "rows_saved": int, ...}   # plus per-flow counts
+```
+
+`status` carries the judgement so callers don't re-derive it from counts. Zero rows saved is
+ambiguous on its own — it is the correct outcome for a run with nothing to do, and an alarm for a
+run whose every group failed. Separating them is what lets an automated check react to the second
+without crying wolf about the first, and it's the same distinction the logging rules require of the
+human-readable output.
+
+`FLOW_RESULT_KEYS` names the three keys every flow guarantees, so a caller can inspect any run
+without knowing which flow produced it.
+
+**The value is plain builtins on purpose.** It is destined to cross a process boundary as an
+Airflow XCom — pickled in this service's interpreter and unpickled in Airflow's, where
+`data_store` is not importable. A dataclass, enum, `date` or numpy integer would fail there with
+`ModuleNotFoundError`. A test asserts the contract rather than trusting it.
+
+`ingest_holdings` is the exception: it stays a bare row count because it is a per-fund primitive,
+not a run. Run-level aggregation across funds belongs to its caller.
+
 **They are deliberately independent.** The pricing flows read whatever ticker list is currently in
 `etf_holdings`; they never trigger a scrape. So a holdings scrape failing doesn't cascade into
 prices going stale, and each flow can run on its own schedule. The coupling is through the table,
@@ -218,10 +244,15 @@ executes in production is what you can reproduce by hand. The alternative — im
 into Airflow's own interpreter — isn't currently possible anyway: the image ships Python 3.13 and
 this workspace requires 3.14.
 
-The cost of that choice is that **Airflow only learns whether the shell exited zero.** Row counts,
-skips and failures exist only as log text, so you can't alert on "the daily run saved zero rows".
-That's a known limitation with a planned fix (moving to `@task.external_python`, which returns a
-value through XCom while keeping the interpreter isolation).
+The cost of that choice is that **Airflow still only learns whether the shell exited zero.** The
+flows now produce a structured result (above), and the CLI turns a partial run into a non-zero
+exit — so a half-failed run no longer reports success. But the counts themselves stop at the
+subprocess boundary, so you cannot yet alert on "the daily run saved zero rows".
+
+Closing that is the remaining work: moving the DAG tasks to `@task.external_python`, which invokes
+the flow in this service's interpreter and hands its return value back to Airflow as an XCom, while
+keeping the dependency isolation described above. The result contract exists and is tested; only
+the transport is missing.
 
 ### Build-time vs. runtime, a real gotcha
 
@@ -248,6 +279,10 @@ and above remain correct for genuine anomalies, since those *are* visible by def
 had nothing to do and a run that failed silently must never look the same. This is why an empty
 resolved ticker set prints a line rather than returning quietly, and why a `--ticker` value matching
 nothing is warned about by name.
+
+**A partially failed run exits non-zero.** `nothing_to_do` is a success — a quiet day is not a
+broken one — but `partial` is not, so whatever scheduled the command can tell the difference
+without reading logs.
 
 **Failures are isolated at the natural unit of work** — per fund when scraping, per source-and-type
 group when ingesting, per ticker when backfilling. One failure never costs the work queued behind
