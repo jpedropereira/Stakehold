@@ -53,4 +53,14 @@ with DAG(
 
     # expect_rows=False: once every ticker is covered a rerun correctly saves nothing. That is
     # success here, unlike for the daily ingests.
-    start >> check_run(backfill(requested_tickers()), expect_rows=False) >> end
+    # Bind start to the *head* of the chain explicitly. Writing this as
+    # `start >> check_run(ingest(requested_tickers())) >> end` looks equivalent but is not:
+    # Python evaluates inside-out, so the chain is built first and the expression returns the
+    # *last* task, leaving start attached to check_run while the real work ran ahead of it,
+    # unbracketed.
+    tickers = requested_tickers()
+    result = backfill(tickers)
+    checked = check_run(result, expect_rows=False)
+
+    start >> tickers
+    checked >> end

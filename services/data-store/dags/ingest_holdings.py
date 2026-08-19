@@ -28,4 +28,13 @@ with DAG(
     start = EmptyOperator(task_id="start")
     end = EmptyOperator(task_id="end")
 
-    start >> check_run(ingest()) >> end
+    # Bind start to the *head* of the chain explicitly. Writing this as
+    # `start >> check_run(ingest(requested_tickers())) >> end` looks equivalent but is not:
+    # Python evaluates inside-out, so the chain is built first and the expression returns the
+    # *last* task, leaving start attached to check_run while the real work ran ahead of it,
+    # unbracketed.
+    result = ingest()
+    checked = check_run(result)
+
+    start >> result
+    checked >> end
