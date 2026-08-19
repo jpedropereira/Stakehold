@@ -3,6 +3,10 @@
 Scrapes iShares ETF holdings, pulls daily OHLCV price history for the constituent tickers, and
 stores both in Postgres — orchestrated by Airflow, explorable via pgAdmin.
 
+This README is the operational guide. For how the service is put together and why, see
+[`docs/architecture.md`](docs/architecture.md); for the tables themselves,
+[`docs/schema.md`](docs/schema.md).
+
 ## Fund configuration
 
 Which funds get scraped is driven by `config/etfs.yaml`, which is **gitignored, not committed**.

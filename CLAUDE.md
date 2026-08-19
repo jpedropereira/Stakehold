@@ -68,6 +68,10 @@ uv run detect-secrets audit .secrets.baseline
 
 ## Architecture
 
+`services/data-store/docs/architecture.md` covers that service's own layering, module
+boundaries, extension points and deployment topology — read it before changing anything
+structural there. What follows is workspace-level only.
+
 - **uv workspace, not independent projects**: root `pyproject.toml` sets `package = false` and
   `[tool.uv.workspace] members = ["services/*"]`; both services are listed as workspace dependencies
   of the root package. This is why there's a single `.venv` and `uv.lock` instead of one per service.
