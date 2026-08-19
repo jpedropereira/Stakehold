@@ -91,10 +91,10 @@ structural there. What follows is workspace-level only.
 ## Working practices
 
 Adapted from [AI Blindspots](https://ezyang.github.io/ai-blindspots/) by ezyang. Debugging method,
-security boundaries, testing philosophy, observability/logging, and context/session management
-live in `.claude/rules/*.md` and apply automatically — some rules are service-scoped (e.g.
-`services/data-store/.claude/rules/`), layered on top of the root-level ones. The following
-aren't covered there:
+security boundaries, testing philosophy, observability/logging, data-schema ownership,
+architecture documentation, and context/session management live in `.claude/rules/*.md` and apply
+automatically — some rules are service-scoped (e.g. `services/data-store/.claude/rules/`), layered
+on top of the root-level ones. The following aren't covered there:
 
 - **Stop digging**: after 3 failed attempts at the same approach, stop and propose an alternative
   instead of persisting.
