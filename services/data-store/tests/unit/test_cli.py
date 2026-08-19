@@ -424,7 +424,9 @@ def test_backfill_ohlcv_default_run(monkeypatch, fake_settings):
     assert tracked_tickers == []
     assert exchange_suffixes == {}
     assert only_tickers is None
-    assert earliest_date == date(1900, 1, 1)
+    # No --earliest-date means "resume": the pipeline skips tickers that already have
+    # rows rather than re-requesting each one's full history on every rerun.
+    assert earliest_date is None
     assert end_date == date.today()
     assert delay_seconds == 10.0
 
@@ -815,7 +817,9 @@ def test_backfill_dividends_default_run(monkeypatch, fake_settings):
     assert tracked_tickers == []
     assert exchange_suffixes == {}
     assert only_tickers is None
-    assert earliest_date == date(1900, 1, 1)
+    # No --earliest-date means "resume": the pipeline skips tickers that already have
+    # rows rather than re-requesting each one's full history on every rerun.
+    assert earliest_date is None
     assert end_date == date.today()
     assert delay_seconds == 10.0
 

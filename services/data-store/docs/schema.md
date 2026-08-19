@@ -70,12 +70,20 @@ of the primary key so a second price source can coexist for the same ticker/date
 collision — the schema-level hook for adding price sources beyond yfinance later.
 
 **Backfill loading pattern**: the daily `ingest-ohlcv` flow above keeps a rolling recent window
-filled. Deep history is filled separately by `backfill-ohlcv` (`pipeline.backfill_historical_ohlcv`),
-which for each ticker computes `MIN(price_date)` already stored (`get_earliest_price_dates`) and
-fetches only the stretch older than that — never re-requesting a range already covered. No
-schema change, no separate checkpoint table: `daily_ohlcv` itself is the checkpoint, since the gap
-is recomputed fresh from committed rows on every run, making a partial/interrupted backfill cheap
-to resume rather than needing to restart from scratch.
+filled. Deep history is filled separately by `backfill-ohlcv` (`pipeline.backfill_historical_ohlcv`).
+No schema change and no separate checkpoint table — `daily_ohlcv` itself is the checkpoint,
+via `get_earliest_price_dates` — but note the table records *how far back rows exist*, not *how
+far back we have looked*, so what counts as "already done" depends on the mode
+(`pipeline._backfill_window`):
+
+- **No `--earliest-date` (resume, the normal rerun)**: a ticker with any stored row is skipped.
+  Sound because a source returns a ticker's whole requested range in one call, so an interrupted
+  run leaves each ticker either fully fetched or untouched — never half-done. This is what makes
+  resuming cheap.
+- **Explicit `--earliest-date`**: fetches the stretch between that date and the ticker's stored
+  `MIN(price_date)`, for deliberately reaching further back than a previous run did. Every
+  ticker is re-requested, since the table can't say whether the older range was already found
+  empty.
 
 **Exchange-suffix resolution for holdings-derived tickers**: `etf_holdings.holding_ticker` is the
 raw, unsuffixed symbol as scraped (e.g. `"0700"`). Both `ingest-ohlcv` and `backfill-ohlcv` resolve
@@ -122,9 +130,9 @@ for the same reasons as `daily_ohlcv`: successive `ingest-dividends` runs overla
 an occasional late-announced or corrected special dividend needs to overwrite cleanly on rerun
 rather than requiring a delete-then-insert cycle.
 
-**Backfill loading pattern**: identical mechanism to `daily_ohlcv`'s — `backfill-dividends`
-(`pipeline.backfill_dividend_events`) computes each ticker's remaining gap via
-`get_earliest_dividend_dates` and fetches only the stretch older than that; `dividend_events`
+**Backfill loading pattern**: identical mechanism to `daily_ohlcv`'s, including both resume
+modes — `backfill-dividends` (`pipeline.backfill_dividend_events`) computes each ticker's window
+via `get_earliest_dividend_dates` and the same `pipeline._backfill_window`; `dividend_events`
 itself is the checkpoint, no separate table needed.
 
 **Exchange-suffix resolution and ticker normalization**: identical to `daily_ohlcv` — see that
