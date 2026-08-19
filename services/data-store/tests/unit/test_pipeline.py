@@ -571,7 +571,8 @@ def test_ingest_daily_ohlcv_applies_ticker_overrides_for_holdings_derived_ticker
     assert save_calls == [("yfinance", "equity", ["BRK-B"])]
 
 
-def test_ingest_daily_ohlcv_logs_run_summary(monkeypatch, capsys):
+def test_ingest_daily_ohlcv_logs_run_summary(monkeypatch, caplog):
+    caplog.set_level(logging.INFO)
     # Observability requirement: ingest_daily_ohlcv used to be near-silent (only the
     # unmapped-exchange warning) -- must print enough to understand what happened without
     # querying the DB, mirroring ingest_dividend_events's print-based progress.
@@ -584,12 +585,13 @@ def test_ingest_daily_ohlcv_logs_run_summary(monkeypatch, capsys):
 
     pipeline.ingest_daily_ohlcv(conn, [], tracked, {}, date(2026, 1, 1), date(2026, 1, 10))
 
-    out = capsys.readouterr().out
+    out = caplog.text
     assert "1" in out  # resolved ticker count appears somewhere in the summary
     assert "AAPL" not in out  # summary is count-based, not a per-ticker dump
 
 
-def test_ingest_daily_ohlcv_logs_no_price_data_distinctly(monkeypatch, capsys):
+def test_ingest_daily_ohlcv_logs_no_price_data_distinctly(monkeypatch, caplog):
+    caplog.set_level(logging.INFO)
     conn = object()
 
     class EmptyPriceSource:
@@ -604,7 +606,7 @@ def test_ingest_daily_ohlcv_logs_no_price_data_distinctly(monkeypatch, capsys):
 
     pipeline.ingest_daily_ohlcv(conn, [], tracked, {}, date(2026, 1, 1), date(2026, 1, 10))
 
-    assert "no price data" in capsys.readouterr().out.lower()
+    assert "no price data" in caplog.text.lower()
 
 
 class FakeSinglePriceSource:
@@ -1180,7 +1182,8 @@ def test_ingest_dividend_events_applies_ticker_overrides_for_holdings_derived_ti
     assert save_calls == [("yfinance", "equity", ["BRK-B"])]
 
 
-def test_ingest_dividend_events_logs_run_summary(monkeypatch, capsys):
+def test_ingest_dividend_events_logs_run_summary(monkeypatch, caplog):
+    caplog.set_level(logging.INFO)
     # Observability requirement: unlike ingest_daily_ohlcv (near-silent today),
     # ingest_dividend_events must print enough to understand what happened without querying the
     # DB -- resolved ticker/group counts up front, and a per-group outcome (rows found, or an
@@ -1198,12 +1201,13 @@ def test_ingest_dividend_events_logs_run_summary(monkeypatch, capsys):
 
     pipeline.ingest_dividend_events(conn, [], tracked, {}, date(2026, 1, 1), date(2026, 1, 10))
 
-    out = capsys.readouterr().out
+    out = caplog.text
     assert "1" in out  # resolved ticker count appears somewhere in the summary
     assert "IWDA.AS" not in out  # summary is count-based, not a per-ticker dump
 
 
-def test_ingest_dividend_events_logs_no_dividend_data_distinctly(monkeypatch, capsys):
+def test_ingest_dividend_events_logs_no_dividend_data_distinctly(monkeypatch, caplog):
+    caplog.set_level(logging.INFO)
     conn = object()
 
     class EmptyDividendSource:
@@ -1218,7 +1222,7 @@ def test_ingest_dividend_events_logs_no_dividend_data_distinctly(monkeypatch, ca
 
     pipeline.ingest_dividend_events(conn, [], tracked, {}, date(2026, 1, 1), date(2026, 1, 10))
 
-    assert "no dividend data" in capsys.readouterr().out.lower()
+    assert "no dividend data" in caplog.text.lower()
 
 
 class FakeSingleDividendSource:
@@ -1591,7 +1595,8 @@ def test_ingest_daily_ohlcv_continues_after_one_group_fails(monkeypatch, caplog)
     assert "FAIL.AS" in caplog.text or "etf" in caplog.text
 
 
-def test_ingest_daily_ohlcv_reports_failed_groups_in_the_summary(monkeypatch, capsys):
+def test_ingest_daily_ohlcv_reports_failed_groups_in_the_summary(monkeypatch, caplog):
+    caplog.set_level(logging.INFO)
     conn = object()
     fake_source = FlakyPriceSource(fail_asset_types={"etf"})
     tracked = [
@@ -1605,7 +1610,7 @@ def test_ingest_daily_ohlcv_reports_failed_groups_in_the_summary(monkeypatch, ca
     pipeline.ingest_daily_ohlcv(conn, [], tracked, {}, date(2026, 1, 1), date(2026, 1, 10))
 
     # A partial run must not read as a clean one.
-    assert "1 group(s) failed" in capsys.readouterr().out
+    assert "1 group(s) failed" in caplog.text
 
 
 class FlakyDividendSource(FlakyPriceSource):
@@ -1639,22 +1644,24 @@ def test_ingest_dividend_events_continues_after_one_group_fails(monkeypatch):
 # --- a run that did nothing must say so ----------------------------------------------------
 
 
-def test_backfill_says_so_when_nothing_resolves(capsys):
+def test_backfill_says_so_when_nothing_resolves(caplog):
+    caplog.set_level(logging.INFO)
     result = pipeline.backfill_historical_ohlcv(
         object(), [], [], {}, None, date(2026, 1, 1), delay_seconds=0
     )
 
     assert result["rows_saved"] == 0
-    assert "nothing to do" in capsys.readouterr().out.lower()
+    assert "nothing to do" in caplog.text.lower()
 
 
-def test_backfill_dividends_says_so_when_nothing_resolves(capsys):
+def test_backfill_dividends_says_so_when_nothing_resolves(caplog):
+    caplog.set_level(logging.INFO)
     result = pipeline.backfill_dividend_events(
         object(), [], [], {}, None, date(2026, 1, 1), delay_seconds=0
     )
 
     assert result["rows_saved"] == 0
-    assert "nothing to do" in capsys.readouterr().out.lower()
+    assert "nothing to do" in caplog.text.lower()
 
 
 def test_ingest_daily_ohlcv_warns_when_a_requested_ticker_matches_nothing(monkeypatch, caplog):

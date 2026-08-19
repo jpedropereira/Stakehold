@@ -130,22 +130,21 @@ def ingest_daily_ohlcv(
     those final (post-suffix-resolution) tickers -- e.g. "0700.HK", not the raw "0700" -- so it
     can target holdings-derived tickers too, not just tracked_tickers entries. `ticker_overrides`
     is forwarded to ticker resolution -- see _resolve_yfinance_ticker. Prints per-group progress
-    and a final summary -- see ingest_dividend_events for why print(), not logger.info."""
+    and a final summary; logging_config decides where that output lands."""
     resolved = _resolve_priceable_tickers(
         conn, funds, tracked_tickers, exchange_suffixes, ticker_overrides
     )
     resolved = _apply_only_tickers(resolved, only_tickers, "ingest-ohlcv")
     if not resolved:
-        print("ingest-ohlcv: no tickers to price, nothing to do.", flush=True)
+        logger.info("ingest-ohlcv: no tickers to price, nothing to do.")
         return build_run_result(
             units_total=0, rows_saved=0, failed=0, tickers_resolved=0, groups=0, groups_failed=0
         )
 
     groups = _group_by_source_and_type(resolved)
-    print(
+    logger.info(
         f"ingest-ohlcv: resolved {len(resolved)} ticker(s) across {len(groups)} "
-        "(source, asset_type) group(s).",
-        flush=True,
+        "(source, asset_type) group(s)."
     )
 
     total = 0
@@ -159,10 +158,9 @@ def ingest_daily_ohlcv(
             raise ValueError(f"Unknown price source: {price_source_name!r}") from None
 
         price_source = price_source_cls()
-        print(
+        logger.info(
             f"ingest-ohlcv: fetching prices for {len(tickers)} ticker(s) "
-            f"(source={price_source_name}, asset_type={asset_type}).",
-            flush=True,
+            f"(source={price_source_name}, asset_type={asset_type})."
         )
         # One group's failure must not cost the groups after it. This runs unattended on a
         # schedule, and groups saved before an escaping exception are already committed -- so
@@ -171,10 +169,9 @@ def ingest_daily_ohlcv(
         try:
             prices = price_source.fetch(tickers, start_date, end_date)
             if prices.empty:
-                print(
+                logger.info(
                     f"ingest-ohlcv: no price data for this group "
-                    f"(source={price_source_name}, asset_type={asset_type}).",
-                    flush=True,
+                    f"(source={price_source_name}, asset_type={asset_type})."
                 )
                 continue
 
@@ -191,17 +188,15 @@ def ingest_daily_ohlcv(
             )
             continue
 
-        print(
+        logger.info(
             f"ingest-ohlcv: saved {saved} price row(s) "
-            f"(source={price_source_name}, asset_type={asset_type}).",
-            flush=True,
+            f"(source={price_source_name}, asset_type={asset_type})."
         )
         total += saved
 
-    print(
+    logger.info(
         f"ingest-ohlcv complete: {total} row(s) across {len(resolved)} ticker(s), "
-        f"{failed} group(s) failed.",
-        flush=True,
+        f"{failed} group(s) failed."
     )
     return build_run_result(
         units_total=len(resolved),
@@ -227,26 +222,20 @@ def ingest_dividend_events(
     (_resolve_priceable_tickers, _group_by_source_and_type), swapping DIVIDEND_SOURCES for
     PRICE_SOURCES and save_dividends for save_prices. `only_tickers`/`ticker_overrides` behave
     identically to ingest_daily_ohlcv's -- see that docstring."""
-    # print (not logger.info) -- this codebase has no logging.basicConfig anywhere, so
-    # logger.info is silently swallowed by default (only WARNING+ reaches the console via
-    # Python's lastResort handler); print(..., flush=True) is the one style confirmed visible
-    # both in a plain CLI run and in Airflow's captured BashOperator task-log output, matching
-    # backfill_historical_ohlcv's existing progress lines.
     resolved = _resolve_priceable_tickers(
         conn, funds, tracked_tickers, exchange_suffixes, ticker_overrides
     )
     resolved = _apply_only_tickers(resolved, only_tickers, "ingest-dividends")
     if not resolved:
-        print("ingest-dividends: no tickers to price, nothing to do.", flush=True)
+        logger.info("ingest-dividends: no tickers to price, nothing to do.")
         return build_run_result(
             units_total=0, rows_saved=0, failed=0, tickers_resolved=0, groups=0, groups_failed=0
         )
 
     groups = _group_by_source_and_type(resolved)
-    print(
+    logger.info(
         f"ingest-dividends: resolved {len(resolved)} ticker(s) across {len(groups)} "
-        "(source, asset_type) group(s).",
-        flush=True,
+        "(source, asset_type) group(s)."
     )
 
     total = 0
@@ -258,21 +247,19 @@ def ingest_dividend_events(
             raise ValueError(f"Unknown dividend source: {source_name!r}") from None
 
         dividend_source = dividend_source_cls()
-        print(
+        logger.info(
             f"ingest-dividends: fetching dividends for {len(tickers)} ticker(s) "
-            f"(source={source_name}, asset_type={asset_type}).",
-            flush=True,
+            f"(source={source_name}, asset_type={asset_type})."
         )
         # Same per-group isolation as ingest_daily_ohlcv -- see the comment there.
         try:
             dividends = dividend_source.fetch(tickers, start_date, end_date)
             if dividends.empty:
-                print(
+                logger.info(
                     f"ingest-dividends: no dividend data for this group "
                     f"(source={source_name}, asset_type={asset_type}) -- either none of these "
                     f"{len(tickers)} ticker(s) paid a dividend in this window, or the fetch "
-                    "returned nothing.",
-                    flush=True,
+                    "returned nothing."
                 )
                 continue
 
@@ -289,17 +276,15 @@ def ingest_dividend_events(
             )
             continue
 
-        print(
+        logger.info(
             f"ingest-dividends: saved {saved} dividend row(s) "
-            f"(source={source_name}, asset_type={asset_type}).",
-            flush=True,
+            f"(source={source_name}, asset_type={asset_type})."
         )
         total += saved
 
-    print(
+    logger.info(
         f"ingest-dividends complete: {total} row(s) across {len(resolved)} ticker(s), "
-        f"{failed} group(s) failed.",
-        flush=True,
+        f"{failed} group(s) failed."
     )
     return build_run_result(
         units_total=len(resolved),
@@ -344,7 +329,7 @@ def backfill_historical_ohlcv(
     )
     resolved = _apply_only_tickers(resolved, only_tickers, "backfill")
     if not resolved:
-        print("backfill: no tickers to fetch, nothing to do.", flush=True)
+        logger.info("backfill: no tickers to fetch, nothing to do.")
         return build_run_result(
             units_total=0,
             tickers_resolved=0,
@@ -374,7 +359,7 @@ def backfill_historical_ohlcv(
             if window is None:
                 skipped += 1
                 processed += 1
-                print(_already_covered_message("backfill", ticker, floor), flush=True)
+                logger.info(_already_covered_message("backfill", ticker, floor))
                 continue
             fetch_start, fetch_end = window
 
@@ -389,25 +374,22 @@ def backfill_historical_ohlcv(
 
             if not prices.empty:
                 total_rows += save_prices(conn, price_source.name, asset_type, prices)
-                print(
-                    f"backfill: {ticker} -> {len(prices)} rows ({fetch_start} to {fetch_end})",
-                    flush=True,
+                logger.info(
+                    f"backfill: {ticker} -> {len(prices)} rows ({fetch_start} to {fetch_end})"
                 )
             else:
-                print(f"backfill: {ticker} -> no data ({fetch_start} to {fetch_end})", flush=True)
+                logger.info(f"backfill: {ticker} -> no data ({fetch_start} to {fetch_end})")
             time.sleep(delay_seconds)
             processed += 1
             if processed % 25 == 0:
-                print(
+                logger.info(
                     f"backfill progress: {processed}/{ticker_count} tickers, "
-                    f"{total_rows} rows so far",
-                    flush=True,
+                    f"{total_rows} rows so far"
                 )
 
-    print(
+    logger.info(
         f"backfill complete: {ticker_count} tickers "
-        f"({skipped} already covered, {failed} failed), {total_rows} rows written",
-        flush=True,
+        f"({skipped} already covered, {failed} failed), {total_rows} rows written"
     )
     return build_run_result(
         units_total=ticker_count,
@@ -443,7 +425,7 @@ def backfill_dividend_events(
     )
     resolved = _apply_only_tickers(resolved, only_tickers, "backfill-dividends")
     if not resolved:
-        print("backfill-dividends: no tickers to fetch, nothing to do.", flush=True)
+        logger.info("backfill-dividends: no tickers to fetch, nothing to do.")
         return build_run_result(
             units_total=0,
             tickers_resolved=0,
@@ -473,7 +455,7 @@ def backfill_dividend_events(
             if window is None:
                 skipped += 1
                 processed += 1
-                print(_already_covered_message("backfill-dividends", ticker, floor), flush=True)
+                logger.info(_already_covered_message("backfill-dividends", ticker, floor))
                 continue
             fetch_start, fetch_end = window
 
@@ -490,29 +472,25 @@ def backfill_dividend_events(
 
             if not dividends.empty:
                 total_rows += save_dividends(conn, dividend_source.name, asset_type, dividends)
-                print(
+                logger.info(
                     f"backfill-dividends: {ticker} -> {len(dividends)} rows "
-                    f"({fetch_start} to {fetch_end})",
-                    flush=True,
+                    f"({fetch_start} to {fetch_end})"
                 )
             else:
-                print(
-                    f"backfill-dividends: {ticker} -> no data ({fetch_start} to {fetch_end})",
-                    flush=True,
+                logger.info(
+                    f"backfill-dividends: {ticker} -> no data ({fetch_start} to {fetch_end})"
                 )
             time.sleep(delay_seconds)
             processed += 1
             if processed % 25 == 0:
-                print(
+                logger.info(
                     f"backfill-dividends progress: {processed}/{ticker_count} tickers, "
-                    f"{total_rows} rows so far",
-                    flush=True,
+                    f"{total_rows} rows so far"
                 )
 
-    print(
+    logger.info(
         f"backfill-dividends complete: {ticker_count} tickers "
-        f"({skipped} already covered, {failed} failed), {total_rows} rows written",
-        flush=True,
+        f"({skipped} already covered, {failed} failed), {total_rows} rows written"
     )
     return build_run_result(
         units_total=ticker_count,
