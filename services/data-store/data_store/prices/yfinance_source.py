@@ -27,6 +27,14 @@ def _reshape(data: pd.DataFrame) -> pd.DataFrame:
         }
     )
     stacked["price_date"] = pd.to_datetime(stacked["price_date"]).dt.date
+    # `future_stack=True` deliberately keeps every (date, ticker) combination, including the
+    # all-NaN ones -- and a multi-ticker download's index is the *union* of the batch's trading
+    # days, so every ticker gets a row for every other market's holiday, and a ticker with no
+    # data at all gets one for every date. Left in, those become rows of NULL prices that make
+    # an unpriceable ticker look priced, and (via save_prices' ON CONFLICT DO UPDATE) can
+    # overwrite a previously-correct row with NULLs. Rows with *some* OHLC are kept -- a real
+    # observation missing only volume is still a real observation.
+    stacked = stacked.dropna(subset=["open", "high", "low", "close"], how="all")
     return stacked[_OUTPUT_COLUMNS]
 
 
