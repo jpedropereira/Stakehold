@@ -8,8 +8,14 @@ class ParseError(Exception):
     """Raised when the holdings CSV table can't be located or parsed from the response text."""
 
 
+# (connect, read). The read budget is generous because the holdings export is a multi-MB CSV
+# generated on demand, but it must be finite: this runs as an Airflow task, so an untimed stall
+# holds an executor slot indefinitely without ever failing or retrying.
+_REQUEST_TIMEOUT = (10, 120)
+
+
 def fetch_holdings_csv(csv_url: str) -> pd.DataFrame:
-    response = requests.get(csv_url)
+    response = requests.get(csv_url, timeout=_REQUEST_TIMEOUT)
     response.raise_for_status()
     response.encoding = "utf-8"
     return parse_holdings_csv(response.text)

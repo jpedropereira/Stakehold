@@ -47,7 +47,7 @@ def test_fetch_holdings_csv_parses_response_text(monkeypatch):
 
     captured_url = {}
 
-    def fake_get(url):
+    def fake_get(url, **kwargs):
         captured_url["url"] = url
         return FakeResponse()
 
@@ -65,7 +65,32 @@ def test_fetch_holdings_csv_propagates_http_errors(monkeypatch):
         def raise_for_status(self):
             raise RuntimeError("404 Not Found")
 
-    monkeypatch.setattr("data_store.holdings.parser.requests.get", lambda url: FakeResponse())
+    monkeypatch.setattr(
+        "data_store.holdings.parser.requests.get", lambda url, **kwargs: FakeResponse()
+    )
 
     with pytest.raises(RuntimeError, match="404"):
         fetch_holdings_csv("https://example.com/holdings.csv")
+
+
+def test_fetch_holdings_csv_sets_a_timeout(monkeypatch):
+    # Without one, a server that accepts the connection then stalls blocks forever -- and this
+    # runs as an Airflow task, so "forever" means a slot held with no failure and no retry.
+    class FakeResponse:
+        text = PREAMBLE + CSV_TABLE
+        encoding = None
+
+        def raise_for_status(self):
+            pass
+
+    captured = {}
+
+    def fake_get(url, **kwargs):
+        captured.update(kwargs)
+        return FakeResponse()
+
+    monkeypatch.setattr("data_store.holdings.parser.requests.get", fake_get)
+
+    fetch_holdings_csv("https://example.com/holdings.csv")
+
+    assert captured.get("timeout") is not None
