@@ -20,9 +20,18 @@ x-airflow-common:
     # the CLI run from the host) with the in-network address the app postgres container is
     # reachable at from other containers on the compose network.
     DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    # The interpreter the DAGs run data_store jobs in, via @task.external_python. It has this
+    # project's dependencies and Python 3.14; Airflow's own is 3.13 and deliberately has
+    # neither. Baked in by Dockerfile.airflow.
+    DATA_STORE_PYTHON: /opt/stakehold/.venv/bin/python
   volumes:
     - ./dags:/opt/airflow/dags
     - ./logs:/opt/airflow/logs
+    # Config is mounted, not baked. The image COPYs the whole service directory, so without
+    # this a fund added to etfs.yaml or an exchange added to yfinance_exchange_suffixes.yaml
+    # would keep having no effect until someone remembered to rebuild -- config gets edited far
+    # more often than code, and silently running yesterday's config is a nasty way to find out.
+    - ./config:/opt/stakehold/services/data-store/config
   user: "${AIRFLOW_UID:-50000}:0"
   depends_on:
     &airflow-common-depends-on

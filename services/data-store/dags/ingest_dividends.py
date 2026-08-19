@@ -1,9 +1,23 @@
-import shlex
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from airflow.providers.standard.operators.bash import BashOperator
 from airflow.providers.standard.operators.empty import EmptyOperator
-from airflow.sdk import DAG, Param
+from airflow.sdk import DAG, Param, task
+from common import (
+    EXTERNAL_PYTHON_KWARGS,
+    assert_interpreter_available,
+    check_run,
+    requested_tickers,
+)
+
+assert_interpreter_available()
+
+
+@task.external_python(**EXTERNAL_PYTHON_KWARGS)
+def ingest(tickers: list[str]) -> dict:
+    from data_store.jobs import run_ingest_dividends
+
+    return run_ingest_dividends(tickers=tickers or None)
+
 
 with DAG(
     dag_id="ingest_dividends",
@@ -14,6 +28,7 @@ with DAG(
     start_date=datetime(2024, 1, 1),
     catchup=False,
     tags=["data-store", "dividends"],
+    default_args={"execution_timeout": timedelta(hours=1)},
     params={
         "tickers": Param(
             [],
@@ -26,20 +41,11 @@ with DAG(
             ),
         ),
     },
-    # shlex.quote (not raw Jinja interpolation) so a ticker value from the Trigger DAG config
-    # can never break out of its --ticker argument into the shell command.
-    user_defined_filters={"shquote": shlex.quote},
 ) as dag:
     start = EmptyOperator(task_id="start")
-
-    ingest = BashOperator(
-        task_id="ingest_dividends",
-        bash_command=(
-            "cd /opt/stakehold/services/data-store && uv run --frozen data-store ingest-dividends"
-            "{% for t in params.tickers %} --ticker {{ t | shquote }}{% endfor %}"
-        ),
-    )
-
     end = EmptyOperator(task_id="end")
 
-    start >> ingest >> end
+    # Dividends are genuinely sparse: on most days no followed ticker goes ex-dividend, and the
+    # flow reports that as "nothing to do" rather than an empty success. expect_rows stays True
+    # so an "ok" run that somehow saved nothing is still caught.
+    start >> check_run(ingest(requested_tickers())) >> end

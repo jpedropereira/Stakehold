@@ -1993,3 +1993,67 @@ def test_every_flow_result_survives_a_process_boundary(monkeypatch, flow):
     assert pickle.loads(pickle.dumps(result)) == result
     # The three keys every flow guarantees, so a caller can check any of them uniformly.
     assert {"status", "tickers_resolved", "rows_saved"} <= result.keys()
+
+
+def test_requesting_a_ticker_that_matches_nothing_is_a_failure_not_a_quiet_success(monkeypatch):
+    # Asking for a specific ticker and getting nothing is not "there was nothing to do" -- the
+    # run did not do the thing it was asked to. Reported as nothing_to_do it would show green
+    # in Airflow, which is precisely the silent success this contract exists to prevent.
+    _patch_price_source(monkeypatch, FakePriceSource(), [])
+    tracked = [make_tracked_ticker(ticker="AAPL", asset_type="equity")]
+
+    result = pipeline.ingest_daily_ohlcv(
+        object(), [], tracked, {}, date(2026, 1, 1), date(2026, 1, 10), only_tickers={"NOPE"}
+    )
+
+    assert result["status"] == "partial"
+    assert result["tickers_unmatched"] == 1
+
+
+def test_a_partly_matching_ticker_request_still_prices_what_did_match(monkeypatch):
+    save_calls = []
+    _patch_price_source(monkeypatch, FakePriceSource(), save_calls)
+    tracked = [make_tracked_ticker(ticker="AAPL", asset_type="equity")]
+
+    result = pipeline.ingest_daily_ohlcv(
+        object(),
+        [],
+        tracked,
+        {},
+        date(2026, 1, 1),
+        date(2026, 1, 10),
+        only_tickers={"AAPL", "NOPE"},
+    )
+
+    assert save_calls == [("yfinance", "equity", ["AAPL"])]  # the real one still ran
+    assert result["rows_saved"] == 1
+    assert result["tickers_unmatched"] == 1
+    assert result["status"] == "partial"  # but the run is not clean
+
+
+def test_an_empty_universe_with_no_ticker_filter_is_still_nothing_to_do():
+    result = pipeline.ingest_daily_ohlcv(object(), [], [], {}, date(2026, 1, 1), date(2026, 1, 10))
+
+    assert result["status"] == "nothing_to_do"
+    assert result["tickers_unmatched"] == 0
+
+
+def test_backfill_reports_unmatched_ticker_requests_the_same_way(monkeypatch):
+    monkeypatch.setitem(pipeline.PRICE_SOURCES, "yfinance", lambda: FakeSinglePriceSource())
+    monkeypatch.setattr(pipeline, "get_earliest_price_dates", lambda conn, source, tickers: {})
+    monkeypatch.setattr(pipeline, "save_prices", lambda conn, source, asset_type, df: len(df))
+    monkeypatch.setattr("data_store.pipeline.time.sleep", lambda s: None)
+
+    result = pipeline.backfill_historical_ohlcv(
+        object(),
+        [],
+        [make_tracked_ticker(ticker="AAPL", asset_type="equity")],
+        {},
+        None,
+        date(2026, 1, 1),
+        delay_seconds=0,
+        only_tickers={"NOPE"},
+    )
+
+    assert result["status"] == "partial"
+    assert result["tickers_unmatched"] == 1

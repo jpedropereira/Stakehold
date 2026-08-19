@@ -153,6 +153,11 @@ run whose every group failed. Separating them is what lets an automated check re
 without crying wolf about the first, and it's the same distinction the logging rules require of the
 human-readable output.
 
+A request that matches nothing is a **failure**, not an empty success: asking for
+`--ticker NOPE` and getting nothing means the run didn't do what it was asked, so it reports
+`partial` rather than `nothing_to_do`. More generally a failure outranks emptiness — a run that
+ended up with nothing to work on *because* something broke must not show green.
+
 `run_result.py` owns this contract — `RUN_RESULT_KEYS` names the two keys *every* run carries, so
 a caller can react to any of them without knowing which ran. Only two, deliberately: a pricing run
 counts tickers and a holdings run counts funds, so a shared "units" key would mean something
@@ -252,7 +257,7 @@ flowchart TB
     end
 
     API & SCHED & DAGP & TRIG --> AFDB
-    SCHED -->|"BashOperator:<br/>uv run data-store ..."| APPDB
+    SCHED -->|"@task.external_python:<br/>jobs.run_* in /opt/stakehold/.venv"| APPDB
     PGA --> APPDB
 ```
 
@@ -260,32 +265,38 @@ flowchart TB
 nothing. Airflow's is disposable; the data one is not.
 
 **Airflow runs a custom image** (`Dockerfile.airflow`) that layers `uv` and this workspace onto the
-official Airflow image. The DAGs shell out to the same `data-store` CLI you run locally, so what
-executes in production is what you can reproduce by hand. The alternative — importing `data_store`
-into Airflow's own interpreter — isn't currently possible anyway: the image ships Python 3.13 and
-this workspace requires 3.14.
+official Airflow image. The DAGs call the same `jobs.run_*` functions the CLI calls, through
+`@task.external_python`.
 
-The cost of that choice is that **Airflow still only learns whether the shell exited zero.** The
-flows now produce a structured result (above), and the CLI turns a partial run into a non-zero
-exit — so a half-failed run no longer reports success. But the counts themselves stop at the
-subprocess boundary, so you cannot yet alert on "the daily run saved zero rows".
+**Two interpreters, on purpose.** Airflow's own is Python 3.13; this workspace requires 3.14 and
+pulls in pandas, yfinance and Playwright. `@task.external_python` runs the task body in
+`/opt/stakehold/.venv` while Airflow's environment stays clean — so a dependency change here can't
+break the scheduler, and DAG parsing never imports pandas. `expect_airflow=False` is required
+because that venv deliberately has no Airflow in it.
 
-Closing that is the remaining work: moving the DAG tasks to `@task.external_python`, which invokes
-the flow in this service's interpreter and hands its return value back to Airflow as an XCom, while
-keeping the dependency isolation described above. The result contract exists and is tested; only
-the transport is missing.
+**And the task returns a value.** The operator pickles the function's return in the external
+interpreter and unpickles it in Airflow's, where it becomes the task's XCom `return_value`. That
+is why the result contract is plain builtins: `data_store` is not importable on the receiving
+side, so a dataclass or `date` would fail to unpickle. Each DAG's final `check_run` task reads
+that value and fails the run on a partial failure, or on an "ok" run that saved nothing — the
+alert that was structurally impossible when a task could only report a shell's exit code.
 
-### Build-time vs. runtime, a real gotcha
+A side effect worth noting: with no shell in the path, the `shlex.quote` escaping the old
+`BashOperator` needed for `--ticker` values is gone entirely, along with the injection surface it
+guarded.
 
-`dags/` is bind-mounted, so DAG edits are picked up live. **Everything else is baked into the image
-at build time** — including `data_store/` *and* `config/`. So:
+### Build-time vs. runtime
+
+`dags/` and `config/` are bind-mounted, so DAG edits and configuration changes take effect on the
+next run. **Application code under `data_store/` is baked into the image**, so:
 
 ```bash
-docker compose build   # required after changing application code OR config/*.yaml
+docker compose build   # required after changing data_store/ code
 ```
 
-Editing `etfs.yaml` and triggering a DAG without rebuilding runs the *old* config. This is worth
-fixing by bind-mounting `config/` the way `dags/` already is.
+`config/` is mounted rather than baked because it changes far more often than code — adding a fund
+or an exchange suffix is routine — and silently running yesterday's configuration is a
+particularly unpleasant way to discover a build step you forgot.
 
 ## Cross-cutting decisions
 

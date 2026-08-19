@@ -134,11 +134,17 @@ def ingest_daily_ohlcv(
     resolved = _resolve_priceable_tickers(
         conn, funds, tracked_tickers, exchange_suffixes, ticker_overrides
     )
-    resolved = _apply_only_tickers(resolved, only_tickers, "ingest-ohlcv")
+    resolved, unmatched = _apply_only_tickers(resolved, only_tickers, "ingest-ohlcv")
     if not resolved:
         logger.info("ingest-ohlcv: no tickers to price, nothing to do.")
         return build_run_result(
-            units_total=0, rows_saved=0, failed=0, tickers_resolved=0, groups=0, groups_failed=0
+            units_total=0,
+            rows_saved=0,
+            failed=unmatched,
+            tickers_resolved=0,
+            tickers_unmatched=unmatched,
+            groups=0,
+            groups_failed=0,
         )
 
     groups = _group_by_source_and_type(resolved)
@@ -201,8 +207,9 @@ def ingest_daily_ohlcv(
     return build_run_result(
         units_total=len(resolved),
         tickers_resolved=len(resolved),
+        tickers_unmatched=unmatched,
         rows_saved=total,
-        failed=failed,
+        failed=failed + unmatched,
         groups=len(groups),
         groups_failed=failed,
     )
@@ -225,11 +232,17 @@ def ingest_dividend_events(
     resolved = _resolve_priceable_tickers(
         conn, funds, tracked_tickers, exchange_suffixes, ticker_overrides
     )
-    resolved = _apply_only_tickers(resolved, only_tickers, "ingest-dividends")
+    resolved, unmatched = _apply_only_tickers(resolved, only_tickers, "ingest-dividends")
     if not resolved:
         logger.info("ingest-dividends: no tickers to price, nothing to do.")
         return build_run_result(
-            units_total=0, rows_saved=0, failed=0, tickers_resolved=0, groups=0, groups_failed=0
+            units_total=0,
+            rows_saved=0,
+            failed=unmatched,
+            tickers_resolved=0,
+            tickers_unmatched=unmatched,
+            groups=0,
+            groups_failed=0,
         )
 
     groups = _group_by_source_and_type(resolved)
@@ -289,8 +302,9 @@ def ingest_dividend_events(
     return build_run_result(
         units_total=len(resolved),
         tickers_resolved=len(resolved),
+        tickers_unmatched=unmatched,
         rows_saved=total,
-        failed=failed,
+        failed=failed + unmatched,
         groups=len(groups),
         groups_failed=failed,
     )
@@ -327,14 +341,15 @@ def backfill_historical_ohlcv(
     resolved = _resolve_priceable_tickers(
         conn, funds, tracked_tickers, exchange_suffixes, ticker_overrides
     )
-    resolved = _apply_only_tickers(resolved, only_tickers, "backfill")
+    resolved, unmatched = _apply_only_tickers(resolved, only_tickers, "backfill")
     if not resolved:
         logger.info("backfill: no tickers to fetch, nothing to do.")
         return build_run_result(
             units_total=0,
             tickers_resolved=0,
+            tickers_unmatched=unmatched,
             rows_saved=0,
-            failed=0,
+            failed=unmatched,
             tickers_fetched=0,
             tickers_skipped=0,
             tickers_failed=0,
@@ -394,8 +409,9 @@ def backfill_historical_ohlcv(
     return build_run_result(
         units_total=ticker_count,
         tickers_resolved=ticker_count,
+        tickers_unmatched=unmatched,
         rows_saved=total_rows,
-        failed=failed,
+        failed=failed + unmatched,
         tickers_fetched=processed - skipped - failed,
         tickers_skipped=skipped,
         tickers_failed=failed,
@@ -423,14 +439,15 @@ def backfill_dividend_events(
     resolved = _resolve_priceable_tickers(
         conn, funds, tracked_tickers, exchange_suffixes, ticker_overrides
     )
-    resolved = _apply_only_tickers(resolved, only_tickers, "backfill-dividends")
+    resolved, unmatched = _apply_only_tickers(resolved, only_tickers, "backfill-dividends")
     if not resolved:
         logger.info("backfill-dividends: no tickers to fetch, nothing to do.")
         return build_run_result(
             units_total=0,
             tickers_resolved=0,
+            tickers_unmatched=unmatched,
             rows_saved=0,
-            failed=0,
+            failed=unmatched,
             tickers_fetched=0,
             tickers_skipped=0,
             tickers_failed=0,
@@ -495,8 +512,9 @@ def backfill_dividend_events(
     return build_run_result(
         units_total=ticker_count,
         tickers_resolved=ticker_count,
+        tickers_unmatched=unmatched,
         rows_saved=total_rows,
-        failed=failed,
+        failed=failed + unmatched,
         tickers_fetched=processed - skipped - failed,
         tickers_skipped=skipped,
         tickers_failed=failed,
@@ -505,7 +523,7 @@ def backfill_dividend_events(
 
 def _apply_only_tickers(
     resolved: dict[str, tuple[str, str]], only_tickers: set[str] | None, prefix: str
-) -> dict[str, tuple[str, str]]:
+) -> tuple[dict[str, tuple[str, str]], int]:
     """Restrict a resolved universe to `only_tickers`, warning about any that matched nothing.
 
     Without the warning a typo'd --ticker and a genuinely empty universe produce identical
@@ -514,7 +532,7 @@ def _apply_only_tickers(
     default) rather than a progress print.
     """
     if only_tickers is None:
-        return resolved
+        return resolved, 0
 
     filtered = {t: v for t, v in resolved.items() if t in only_tickers}
     unmatched = sorted(only_tickers - filtered.keys())
@@ -525,7 +543,7 @@ def _apply_only_tickers(
             prefix,
             ", ".join(repr(t) for t in unmatched),
         )
-    return filtered
+    return filtered, len(unmatched)
 
 
 def _backfill_window(

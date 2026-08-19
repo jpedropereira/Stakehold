@@ -1,0 +1,3 @@
+# Shared helpers imported by the DAG files beside them, not DAG definitions themselves.
+# Without this the dag-processor scans them every parse loop and reports "no DAGs found".
+common.py
