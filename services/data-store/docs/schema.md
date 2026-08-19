@@ -19,7 +19,7 @@ from its provider (iShares, currently) on a given date.
 | `sector`         | `VARCHAR(100)`  |                                                                 |
 | `asset_class`    | `VARCHAR(100)`  |                                                                 |
 | `market_value`   | `NUMERIC(20,2)` |                                                                 |
-| `weight_percent` | `NUMERIC(6,4)`  |                                                                 |
+| `weight_percent` | `NUMERIC(9,4)`  | Wider than the data needs (weights are <100) on purpose: a snapshot loads as one `COPY`, so a single out-of-range line would abort the whole fund's load, not just that row. |
 | `notional_value` | `NUMERIC(20,2)` |                                                                 |
 | `shares`         | `NUMERIC(20,4)` | CSV "Shares".                                                  |
 | `price`          | `NUMERIC(18,6)` |                                                                 |
@@ -33,6 +33,13 @@ lookups (used by `daily_ohlcv` ingestion to find what to price).
 
 No separate `funds` reference table — `fund_key` is a plain string matching the YAML `key`. Easy to
 add later if richer per-fund metadata needs to live in the DB.
+
+**Migrations**: `schema.sql` is applied by `data-store db init` and must stay safe to rerun on
+any database, including one mid-upgrade. Every statement is therefore either `IF NOT EXISTS`-
+guarded or wrapped in a `DO $$` block testing the precondition itself — a single failing
+statement aborts the entire script, so an unguarded migration doesn't just skip its own step, it
+takes the rest of the schema with it. The `dividends` → `dividend_events` rename is the case that
+forced this: `ALTER TABLE IF EXISTS ... RENAME` still errors when *both* names exist.
 
 **Loading strategy: delete-then-insert per `(fund_key, as_of_date)`**, not upsert. A holdings pull
 is a full snapshot replacement for that date — there's no meaningful row-level merge within one
