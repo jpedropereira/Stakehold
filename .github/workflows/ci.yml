@@ -1,10 +1,10 @@
 # GitHub Actions workflow mirroring the local pre-commit hooks.
 #
-# Design note: this runs the *same* pre-commit config as local hooks (via
-# pre-commit/action), rather than re-declaring lint rules separately in CI steps.
-# One config, two enforcement points -- so there's never a case where CI and local
-# hooks disagree about what "passing" means. It exists because local hooks alone
-# only protect contributors who ran `pre-commit install` and didn't pass
+# Design note: this runs the *same* pre-commit config, with the *same* lockfile-pinned
+# pre-commit, as local hooks -- rather than re-declaring lint rules separately in CI
+# steps. One config, one tool version, two enforcement points, so there's never a case
+# where CI and local hooks disagree about what "passing" means. It exists because local
+# hooks alone only protect contributors who ran `pre-commit install` and didn't pass
 # `--no-verify`; CI is the backstop that can't be skipped.
 
 name: CI
@@ -39,18 +39,35 @@ jobs:
           --health-retries 10
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - name: Install uv and Python
-        uses: astral-sh/setup-uv@v3
-        with:
-          python-version: "3.14"
+      # Pinned to an exact patch, not a floating major: setup-uv moved to immutable
+      # releases in v8 and no longer publishes `v10`-style tags (that ref 404s).
+      #
+      # No `python-version:` here on purpose. The version lives in `.python-version` and
+      # `requires-python`, and uv reads them -- duplicating it into the workflow is the
+      # same drift trap this repo already avoids for flake8 config. (It was previously
+      # passed to setup-uv@v3, which has no such input and silently ignored it, so CI has
+      # in fact been getting its Python from `.python-version` all along.)
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.0.1
 
       - name: Install dependencies
         run: uv sync --all-extras --dev
 
+      # pre-commit is run directly rather than via pre-commit/action, for two reasons:
+      # that action pip-installs its own unpinned pre-commit -- so CI linted with a
+      # different version than the uv.lock-pinned one developers run, which is exactly the
+      # local/CI divergence this workflow exists to prevent -- and it wraps actions/cache@v4,
+      # a Node 20 action we can't pin from here.
+      - name: Cache pre-commit environments
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml', 'uv.lock') }}
+
       - name: Run pre-commit hooks
-        uses: pre-commit/action@v3.0.1
+        run: uv run pre-commit run --all-files --show-diff-on-failure --color=always
 
       # Two steps, not one, because the root pyproject deselects `integration` by default
       # (`addopts = "-m 'not integration'"`) so a plain run never touches them. Kept separate
