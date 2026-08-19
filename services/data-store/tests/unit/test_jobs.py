@@ -6,6 +6,7 @@ the ticker filter, per-fund failure isolation -- is the job's behaviour, reachab
 through argparse. test_cli.py keeps only what is genuinely about the command line.
 """
 
+import logging
 from datetime import date
 
 import pytest
@@ -154,7 +155,8 @@ def test_ingest_holdings_raises_for_unknown_fund_key(monkeypatch, fake_settings)
         jobs.run_ingest_holdings(fund="unknown_key")
 
 
-def test_ingest_holdings_prints_scrape_start_and_summary(monkeypatch, fake_settings, capsys):
+def test_ingest_holdings_prints_scrape_start_and_summary(monkeypatch, fake_settings, caplog):
+    caplog.set_level(logging.INFO)
     funds = [make_fund("a"), make_fund("c")]
 
     monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
@@ -164,7 +166,7 @@ def test_ingest_holdings_prints_scrape_start_and_summary(monkeypatch, fake_setti
 
     jobs.run_ingest_holdings()
 
-    out = capsys.readouterr().out
+    out = caplog.text
     assert "scraping a" in out
     assert "scraping c" in out
     assert "complete: 10" in out  # 5 rows per fund, 2 funds
@@ -980,7 +982,8 @@ def test_backfill_dividends_propagates_config_error_from_exchange_suffixes(
         jobs.run_backfill_dividends()
 
 
-def test_ingest_holdings_continues_after_one_fund_fails(monkeypatch, fake_settings, capsys):
+def test_ingest_holdings_continues_after_one_fund_fails(monkeypatch, fake_settings, caplog):
+    caplog.set_level(logging.INFO)
     # Scraping is the flakiest step in the service (a real browser against a third-party site).
     # One fund's failure shouldn't cost every fund queued behind it, and the run must still
     # report what happened rather than dying before its summary.
@@ -1001,7 +1004,7 @@ def test_ingest_holdings_continues_after_one_fund_fails(monkeypatch, fake_settin
     result = jobs.run_ingest_holdings()
 
     assert ingested == ["a", "c"]
-    out = capsys.readouterr().out
+    out = caplog.text
     assert "complete: 10" in out
     assert "1 fund(s) failed" in out
     # A run with a failure in it must not report success.

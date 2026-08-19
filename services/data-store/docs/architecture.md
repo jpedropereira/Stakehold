@@ -43,6 +43,7 @@ flowchart TD
         CONF["config_loader.py"]
         SET["settings.py"]
         DB["db/connection.py + schema.sql"]
+        LOG["logging_config.py · run_result.py"]
     end
 
     PG[("Postgres")]
@@ -288,12 +289,17 @@ fixing by bind-mounting `config/` the way `dags/` already is.
 
 ## Cross-cutting decisions
 
-**Output is `print(..., flush=True)`, not `logger.info`.** There's no `logging.basicConfig`
-anywhere, so `logger.info` is dropped by Python's default configuration — confirmed by a live
-Airflow task producing no output. Only stdout survives the subprocess boundary. `logger.warning`
-and above remain correct for genuine anomalies, since those *are* visible by default. See
-[`../.claude/rules/logging.md`](../.claude/rules/logging.md); this is the constraint the planned
-`@task.external_python` migration removes.
+**Logs go to stderr, results go to stdout.** Every entry point calls
+`logging_config.configure_logging()`, so `logger.info` is visible — in a plain CLI run and in
+Airflow's captured task output alike. The one remaining `print` is a command's actual result (the
+row count `cli.py` writes), which stays on stdout so the CLI is pipeable.
+
+This replaced an earlier `print(..., flush=True)` convention that existed only because nothing
+configured logging, which meant `logger.info` was silently dropped and `print` was the sole
+mechanism that worked. Configuring it once removed the constraint. A side effect worth keeping:
+progress and warnings now share one stream and are therefore ordered relative to each other —
+previously a warning could surface in a captured log nowhere near the work it concerned. See
+[`../.claude/rules/logging.md`](../.claude/rules/logging.md).
 
 **Every flow reports a completion summary, including when it did nothing.** A run that legitimately
 had nothing to do and a run that failed silently must never look the same. This is why an empty
