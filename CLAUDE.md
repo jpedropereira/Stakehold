@@ -5,11 +5,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Project overview
 
 Stakehold is an application to manage financial portfolios, calculate their returns, and identify
-possible improvements. It's a uv workspace containing two services, both currently empty scaffolding
-with no business logic yet:
+possible improvements. It's a uv workspace containing two services:
 
-- `services/data-store/` — the `data_store` package
-- `services/portfolio/` — the `portfolio` package
+- `services/data-store/` — the `data_store` package. Implemented: scrapes iShares ETF holdings
+  (Playwright + CSV), ingests daily OHLCV and dividend events from yfinance into Postgres, exposes
+  a `data-store` CLI, and is orchestrated by Airflow DAGs running in a custom image. Has its own
+  scoped rules under `services/data-store/.claude/rules/`.
+- `services/portfolio/` — the `portfolio` package. Still empty scaffolding, no business logic yet.
 
 They share one virtual environment and one lockfile (`uv.lock`) at the workspace root. Python 3.14 is
 required.
@@ -25,11 +27,24 @@ uv run pre-commit install --hook-type pre-commit --hook-type pre-push
 
 ### Tests
 
+Tests are split by marker. `pytest` defaults to unit tests only — the root `pyproject.toml` sets
+`addopts = "-m 'not integration'"` — so a plain run skips the integration suite entirely and needs
+nothing running. Don't treat a green plain run as "the suite passed".
+
 ```bash
-uv run pytest services                                                        # full suite, both services
+uv run pytest services                                                        # unit tests, both services
+uv run pytest services -m integration                                         # integration tests (needs Postgres, below)
 uv run pytest services/portfolio                                              # one service
 uv run pytest services/portfolio/tests/test_placeholder.py::test_placeholder  # single test
 uv run pytest services --testmon --tb=short -x                                # fast, testmon-scoped (what pre-commit runs on commit)
+```
+
+Integration tests hit a real Postgres (they cover `COPY` upserts, `ON CONFLICT` behaviour and
+schema-migration idempotency — the parts a fake can't cover). They read `DATABASE_URL` and create
+their own schema, so an empty database is fine:
+
+```bash
+cd services/data-store && docker compose up -d postgres  # then run -m integration from the root
 ```
 
 ### Lint/format
