@@ -1,211 +1,60 @@
 import argparse
-import logging
 import sys
-from datetime import date, timedelta
-from pathlib import Path
 
-from data_store.config_loader import (
-    FundConfig,
-    TickerConfig,
-    load_funds,
-    load_ticker_resolution,
-    load_tracked_tickers,
-)
-from data_store.db.connection import apply_schema, get_connection
-from data_store.pipeline import (
-    backfill_dividend_events,
-    backfill_historical_ohlcv,
-    ingest_daily_ohlcv,
-    ingest_dividend_events,
-    ingest_holdings,
-)
-from data_store.settings import load_settings
-
-logger = logging.getLogger(__name__)
-
-_SCHEMA_PATH = Path(__file__).parent / "db" / "schema.sql"
+from data_store import jobs
+from data_store.run_result import STATUS_PARTIAL
 
 
-def _db_init(_args: argparse.Namespace) -> int:
-    settings = load_settings()
-    conn = get_connection(settings.database_url)
-    try:
-        apply_schema(conn, _SCHEMA_PATH)
-    finally:
-        conn.close()
-    return 0
+def _exit_code(result: dict[str, int | str]) -> int:
+    """Non-zero when a run only partly succeeded, so a scheduler can tell.
+
+    "nothing_to_do" is deliberately a success: a quiet day is not a broken one, and the run has
+    already said so on stdout.
+    """
+    return 1 if result["status"] == STATUS_PARTIAL else 0
 
 
 def _report(result: dict[str, int | str], noun: str) -> int:
-    """Print a flow's headline number and turn its status into an exit code.
-
-    Non-zero on "partial" so a scheduled run that half-failed doesn't report success to
-    whatever invoked it. "nothing_to_do" is a success: having nothing to do is a legitimate
-    outcome, and the flow has already said so on stdout.
-    """
     print(f"{result['rows_saved']} {noun}")
-    return 1 if result["status"] == "partial" else 0
+    return _exit_code(result)
 
 
-def _select_funds(funds: list[FundConfig], fund_key: str | None) -> list[FundConfig]:
-    if fund_key is not None:
-        for fund in funds:
-            if fund.key == fund_key:
-                return [fund]
-        raise ValueError(f"No fund configured with key: {fund_key!r}")
-    return [fund for fund in funds if fund.enabled]
-
-
-def _load_enabled_tracked_tickers(path: Path) -> list[TickerConfig]:
-    # tracked_tickers.yaml is optional — a setup with only fund-holdings-based pricing
-    # shouldn't need to create it just to run ingest-ohlcv. "Copied the template but haven't
-    # filled it in yet" is the same situation as "never created it", so an empty file is
-    # tolerated too rather than failing all four ingest/backfill commands.
-    if not path.is_file():
-        return []
-    return [tt for tt in load_tracked_tickers(path) if tt.enabled]
+def _db_init(_args: argparse.Namespace) -> int:
+    return _exit_code(jobs.run_db_init())
 
 
 def _ingest_holdings(args: argparse.Namespace) -> int:
-    settings = load_settings()
-    funds = _select_funds(load_funds(settings.config_path), args.fund)
-    conn = get_connection(settings.database_url)
-    try:
-        total = 0
-        failed = 0
-        for fund in funds:
-            print(f"ingest-holdings: scraping {fund.key}...", flush=True)
-            # Scraping drives a real browser against a third-party site -- the flakiest step
-            # in the service. One fund's failure shouldn't cost every fund queued behind it,
-            # and the run must still reach its summary rather than dying before printing it.
-            try:
-                count = ingest_holdings(conn, fund, date.today())
-            except Exception as e:
-                failed += 1
-                logger.warning("ingest-holdings: %s failed, skipping: %s", fund.key, e)
-                continue
-            print(f"{fund.key}: {count} holdings rows")
-            total += count
-        print(
-            f"ingest-holdings complete: {total} row(s) across {len(funds)} fund(s), "
-            f"{failed} fund(s) failed.",
-            flush=True,
-        )
-    finally:
-        conn.close()
-    # Non-zero when anything failed: a scheduled run that silently half-succeeded is the
-    # failure mode this whole pass is about.
-    return 1 if failed else 0
+    return _exit_code(jobs.run_ingest_holdings(fund=args.fund))
 
 
 def _ingest_ohlcv(args: argparse.Namespace) -> int:
-    settings = load_settings()
-    funds = _select_funds(load_funds(settings.config_path), args.fund)
-    tracked_tickers = _load_enabled_tracked_tickers(settings.tracked_tickers_path)
-    resolution = load_ticker_resolution(settings.exchange_suffixes_path)
-    only_tickers = set(args.ticker) if args.ticker else None
-    end_date = date.today()
-    start_date = end_date - timedelta(days=args.days)
-    conn = get_connection(settings.database_url)
-    try:
-        result = ingest_daily_ohlcv(
-            conn,
-            funds,
-            tracked_tickers,
-            resolution.exchange_suffixes,
-            start_date,
-            end_date,
-            only_tickers=only_tickers,
-            ticker_overrides=resolution.ticker_overrides,
-        )
-        exit_code = _report(result, "price rows")
-    finally:
-        conn.close()
-    return exit_code
-
-
-def _backfill_ohlcv(args: argparse.Namespace) -> int:
-    settings = load_settings()
-    funds = _select_funds(load_funds(settings.config_path), args.fund)
-    tracked_tickers = _load_enabled_tracked_tickers(settings.tracked_tickers_path)
-    resolution = load_ticker_resolution(settings.exchange_suffixes_path)
-    only_tickers = set(args.ticker) if args.ticker else None
-    end_date = date.today()
-    earliest_date = (
-        date.fromisoformat(args.earliest_date) if args.earliest_date is not None else None
-    )
-    conn = get_connection(settings.database_url)
-    try:
-        result = backfill_historical_ohlcv(
-            conn,
-            funds,
-            tracked_tickers,
-            resolution.exchange_suffixes,
-            earliest_date,
-            end_date,
-            args.delay_seconds,
-            only_tickers=only_tickers,
-            ticker_overrides=resolution.ticker_overrides,
-        )
-        exit_code = _report(result, "price rows")
-    finally:
-        conn.close()
-    return exit_code
+    result = jobs.run_ingest_ohlcv(fund=args.fund, days=args.days, tickers=args.ticker)
+    return _report(result, "price rows")
 
 
 def _ingest_dividends(args: argparse.Namespace) -> int:
-    settings = load_settings()
-    funds = _select_funds(load_funds(settings.config_path), args.fund)
-    tracked_tickers = _load_enabled_tracked_tickers(settings.tracked_tickers_path)
-    resolution = load_ticker_resolution(settings.exchange_suffixes_path)
-    only_tickers = set(args.ticker) if args.ticker else None
-    end_date = date.today()
-    start_date = end_date - timedelta(days=args.days)
-    conn = get_connection(settings.database_url)
-    try:
-        result = ingest_dividend_events(
-            conn,
-            funds,
-            tracked_tickers,
-            resolution.exchange_suffixes,
-            start_date,
-            end_date,
-            only_tickers=only_tickers,
-            ticker_overrides=resolution.ticker_overrides,
-        )
-        exit_code = _report(result, "dividend rows")
-    finally:
-        conn.close()
-    return exit_code
+    result = jobs.run_ingest_dividends(fund=args.fund, days=args.days, tickers=args.ticker)
+    return _report(result, "dividend rows")
+
+
+def _backfill_ohlcv(args: argparse.Namespace) -> int:
+    result = jobs.run_backfill_ohlcv(
+        fund=args.fund,
+        tickers=args.ticker,
+        earliest_date=args.earliest_date,
+        delay_seconds=args.delay_seconds,
+    )
+    return _report(result, "price rows")
 
 
 def _backfill_dividends(args: argparse.Namespace) -> int:
-    settings = load_settings()
-    funds = _select_funds(load_funds(settings.config_path), args.fund)
-    tracked_tickers = _load_enabled_tracked_tickers(settings.tracked_tickers_path)
-    resolution = load_ticker_resolution(settings.exchange_suffixes_path)
-    only_tickers = set(args.ticker) if args.ticker else None
-    end_date = date.today()
-    earliest_date = (
-        date.fromisoformat(args.earliest_date) if args.earliest_date is not None else None
+    result = jobs.run_backfill_dividends(
+        fund=args.fund,
+        tickers=args.ticker,
+        earliest_date=args.earliest_date,
+        delay_seconds=args.delay_seconds,
     )
-    conn = get_connection(settings.database_url)
-    try:
-        result = backfill_dividend_events(
-            conn,
-            funds,
-            tracked_tickers,
-            resolution.exchange_suffixes,
-            earliest_date,
-            end_date,
-            args.delay_seconds,
-            only_tickers=only_tickers,
-            ticker_overrides=resolution.ticker_overrides,
-        )
-        exit_code = _report(result, "dividend rows")
-    finally:
-        conn.close()
-    return exit_code
+    return _report(result, "dividend rows")
 
 
 def _build_parser() -> argparse.ArgumentParser:
