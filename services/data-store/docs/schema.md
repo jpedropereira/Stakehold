@@ -2,7 +2,8 @@
 
 DDL lives at `data_store/db/schema.sql` and is applied via `data-store db init`. This document
 explains the *why* behind each table's grain and loading strategy; keep it in lockstep with any
-schema change (see `.claude/rules/data-schema.md`).
+schema change (see `.claude/rules/data-schema.md`). For how the service around these tables is
+structured, see [`architecture.md`](architecture.md).
 
 ## `etf_holdings`
 
