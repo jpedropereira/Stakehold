@@ -59,9 +59,17 @@ as an XCom, so each DAG ends with a `check_run` task that fails the run on a par
 on a "successful" run that saved nothing. A task reports what happened, not just that a command
 exited zero.
 
-"Nothing to do" is deliberately a *success* — no followed ticker going ex-dividend today should
-not page anyone. But a `tickers` value that matches nothing is a *failure*: the run didn't do what
-it was asked, so it goes red rather than quietly green.
+What counts as a failure differs by flow, deliberately:
+
+- **A `tickers` value that matches nothing fails.** The run didn't do what it was asked, so it
+  goes red rather than quietly green.
+- **`ingest_daily_ohlcv` fails on zero rows.** Its window spans several days, so saving nothing
+  means something is wrong even when no individual step reported an error.
+- **`ingest_dividends` does not.** Dividends are sparse: on most days no followed ticker goes
+  ex-dividend and zero rows is the correct answer. Failing on it would redden the DAG most days,
+  and a daily false alarm is worse than no alarm. The cost is that this DAG can't detect a
+  silently broken dividend fetch — within one run that looks identical to a quiet day. Catching
+  it needs a longer-horizon check (no dividend rows in N days), which needs cross-run state.
 
 Airflow runs on a **custom image** (`Dockerfile.airflow`: the official `apache/airflow` image +
 `uv` + this workspace, baked in at build time, browser included). Bring it up with Docker

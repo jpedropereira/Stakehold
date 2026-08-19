@@ -1018,3 +1018,25 @@ def test_tracked_tickers_file_present_but_empty_is_treated_as_none(tmp_path, mon
     path.write_text("# everything still commented out\ntickers:\n")
 
     assert jobs._load_enabled_tracked_tickers(path) == []
+
+
+def test_a_failed_fund_scrape_logs_its_traceback(monkeypatch, fake_settings, caplog):
+    # The exception message alone is often useless for the failure this actually catches --
+    # "Timeout 60000ms exceeded" says nothing about which selector or step timed out. Airflow
+    # task logs are the primary diagnostic artifact, so the stack trace has to reach them.
+    caplog.set_level(logging.WARNING)
+    monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(jobs, "load_funds", lambda path: [make_fund("a")])
+    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn([]))
+
+    def exploding(conn, fund, today):
+        raise RuntimeError("Timeout 60000ms exceeded")
+
+    monkeypatch.setattr(jobs, "ingest_holdings", exploding)
+
+    jobs.run_ingest_holdings()
+
+    record = next(r for r in caplog.records if "failed" in r.message)
+    assert record.exc_info is not None, "traceback was dropped"
+    assert "Timeout 60000ms exceeded" in caplog.text
+    assert "RuntimeError" in caplog.text  # from the formatted traceback

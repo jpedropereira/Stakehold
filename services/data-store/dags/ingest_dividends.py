@@ -45,9 +45,6 @@ with DAG(
     start = EmptyOperator(task_id="start")
     end = EmptyOperator(task_id="end")
 
-    # Dividends are genuinely sparse: on most days no followed ticker goes ex-dividend, and the
-    # flow reports that as "nothing to do" rather than an empty success. expect_rows stays True
-    # so an "ok" run that somehow saved nothing is still caught.
     # Bind start to the *head* of the chain explicitly. Writing this as
     # `start >> check_run(ingest(requested_tickers())) >> end` looks equivalent but is not:
     # Python evaluates inside-out, so the chain is built first and the expression returns the
@@ -55,7 +52,17 @@ with DAG(
     # unbracketed.
     tickers = requested_tickers()
     result = ingest(tickers)
-    checked = check_run(result)
+    # expect_rows=False, unlike the price ingest. Dividends are genuinely sparse: on most days
+    # no followed ticker goes ex-dividend, the source correctly returns nothing, and the run
+    # ends "ok" with zero rows. Failing on that would redden this DAG most days -- a daily
+    # false alarm is worse than no alarm, because it teaches everyone to ignore red.
+    #
+    # The cost is real and worth stating: within a single run, "no ticker paid a dividend" and
+    # "the fetch is silently broken" look identical, so this DAG cannot catch the latter. What
+    # would catch it is a longer-horizon check -- no dividend rows written in N days -- which
+    # needs cross-run state and does not belong in a per-run task. `partial` (a failed group)
+    # and an unmatched --ticker still fail here.
+    checked = check_run(result, expect_rows=False)
 
     start >> tickers
     checked >> end

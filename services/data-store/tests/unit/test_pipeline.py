@@ -2057,3 +2057,47 @@ def test_backfill_reports_unmatched_ticker_requests_the_same_way(monkeypatch):
 
     assert result["status"] == "partial"
     assert result["tickers_unmatched"] == 1
+
+
+def test_a_failed_group_logs_its_traceback(monkeypatch, caplog):
+    # Same reasoning as the job layer's: without exc_info the log says a group failed but not
+    # where, and these run unattended where the log is all you get.
+    caplog.set_level(logging.WARNING)
+    fake_source = FlakyPriceSource(fail_asset_types={"etf"})
+    monkeypatch.setitem(pipeline.PRICE_SOURCES, "yfinance", lambda: fake_source)
+    monkeypatch.setattr(pipeline, "save_prices", lambda conn, source, at, df: len(df))
+
+    pipeline.ingest_daily_ohlcv(
+        object(),
+        [],
+        [make_tracked_ticker(ticker="FAIL.AS", asset_type="etf")],
+        {},
+        date(2026, 1, 1),
+        date(2026, 1, 10),
+    )
+
+    record = next(r for r in caplog.records if "failed" in r.message)
+    assert record.exc_info is not None, "traceback was dropped"
+
+
+def test_a_failed_backfill_ticker_logs_its_traceback(monkeypatch, caplog):
+    caplog.set_level(logging.WARNING)
+    monkeypatch.setitem(
+        pipeline.PRICE_SOURCES, "yfinance", lambda: FakeSinglePriceSource(fail_tickers={"BAD"})
+    )
+    monkeypatch.setattr(pipeline, "get_earliest_price_dates", lambda conn, source, tickers: {})
+    monkeypatch.setattr(pipeline, "save_prices", lambda conn, source, asset_type, df: len(df))
+    monkeypatch.setattr("data_store.pipeline.time.sleep", lambda s: None)
+
+    pipeline.backfill_historical_ohlcv(
+        object(),
+        [],
+        [make_tracked_ticker(ticker="BAD", asset_type="equity")],
+        {},
+        None,
+        date(2026, 1, 1),
+        delay_seconds=0,
+    )
+
+    record = next(r for r in caplog.records if "failed" in r.message)
+    assert record.exc_info is not None, "traceback was dropped"
