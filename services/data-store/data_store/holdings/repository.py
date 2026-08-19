@@ -18,6 +18,13 @@ def normalize_holdings(df: pd.DataFrame) -> pd.DataFrame:
             df[db_col] = df[db_col].astype(str).str.replace(",", "", regex=False)
             df[db_col] = pd.to_numeric(df[db_col], errors="coerce")
         else:
+            # Safe only because pandas >= 3.0 (pinned in pyproject.toml) makes astype(str)
+            # yield the NA-preserving `str` dtype: an empty CSV field stays NA rather than
+            # becoming the literal "nan"/"None" it turned into under 2.x. save_holdings maps
+            # NA to SQL NULL via pd.isna(), which would not detect those strings -- a cash
+            # line's blank ticker would land in the DB as the text "nan" and then pass
+            # get_latest_tickers' `holding_ticker IS NOT NULL` filter on its way to being
+            # priced. See test_normalize_holdings_keeps_missing_string_values_missing.
             df[db_col] = df[db_col].astype(str)
 
     return df

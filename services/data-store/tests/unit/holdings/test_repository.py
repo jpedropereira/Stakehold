@@ -233,3 +233,88 @@ def test_get_latest_tickers_filters_to_equity():
     sql, _ = conn._cursor.executed[0]
     assert "asset_class" in sql
     assert "equity" in sql.lower()
+
+
+def test_normalize_holdings_keeps_missing_string_values_missing():
+    # Guards a version-dependent assumption rather than a past bug: `astype(str)` is only
+    # NA-preserving from pandas 3.0, where it yields the `str` dtype. Under 2.x it produced
+    # object dtype with the literal strings "nan"/"None", which pd.isna() does not detect --
+    # so save_holdings would have written those strings into the DB instead of NULL, and
+    # get_latest_tickers' `holding_ticker IS NOT NULL` filter would have let them through to
+    # be priced. pandas>=3.0 is pinned in pyproject.toml; this fails loudly if that slips.
+    df = make_raw_df(
+        [
+            [
+                "AAPL",
+                "APPLE INC",
+                "Technology",
+                "Equity",
+                "1",
+                "1",
+                "1",
+                "1",
+                "1",
+                "US",
+                "NYSE",
+                "USD",
+            ],
+            [
+                float("nan"),
+                "USD CASH",
+                float("nan"),
+                "Cash",
+                "1",
+                "1",
+                "1",
+                "1",
+                "1",
+                "US",
+                "-",
+                "USD",
+            ],
+        ]
+    )
+
+    result = normalize_holdings(df)
+
+    assert result["holding_ticker"][0] == "AAPL"
+    assert pd.isna(result["holding_ticker"][1])
+    assert pd.isna(result["sector"][1])
+    assert not any(
+        value in ("nan", "None", "<NA>")
+        for value in result["holding_ticker"]
+        if isinstance(value, str)
+    )
+
+
+def test_save_holdings_writes_none_for_values_missing_in_the_parsed_csv():
+    # The existing None-handling test feeds a hand-built frame containing None; a real run
+    # feeds one from pd.read_csv, where an empty field arrives as NaN instead. Both must end
+    # up as SQL NULL, so cover the path that actually happens in production.
+    conn = FakeConnection()
+    df = normalize_holdings(
+        make_raw_df(
+            [
+                [
+                    float("nan"),
+                    "USD CASH",
+                    float("nan"),
+                    "Cash",
+                    "500.00",
+                    "1.00",
+                    "500.00",
+                    "500",
+                    "1.00",
+                    "United States",
+                    "-",
+                    "USD",
+                ]
+            ]
+        )
+    )
+
+    save_holdings(conn, "my_fund", date(2026, 1, 1), df)
+
+    written_row = conn._cursor.copy_rows[0]
+    assert written_row[2] is None  # holding_ticker
+    assert written_row[4] is None  # sector
