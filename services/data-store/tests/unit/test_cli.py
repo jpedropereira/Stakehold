@@ -1013,3 +1013,12 @@ def test_ingest_holdings_returns_zero_when_every_fund_succeeds(monkeypatch, fake
     monkeypatch.setattr(cli, "ingest_holdings", lambda conn, fund, today: 5)
 
     assert cli.main(["ingest-holdings"]) == 0
+
+
+def test_tracked_tickers_file_present_but_empty_is_treated_as_none(tmp_path, monkeypatch):
+    # The README documents this file as optional; a copied-but-not-yet-filled-in template is
+    # the same situation as an absent one, not a hard error that breaks all four commands.
+    path = tmp_path / "tracked_tickers.yaml"
+    path.write_text("# everything still commented out\ntickers:\n")
+
+    assert cli._load_enabled_tracked_tickers(path) == []

@@ -48,7 +48,9 @@ def _select_funds(funds: list[FundConfig], fund_key: str | None) -> list[FundCon
 
 def _load_enabled_tracked_tickers(path: Path) -> list[TickerConfig]:
     # tracked_tickers.yaml is optional — a setup with only fund-holdings-based pricing
-    # shouldn't need to create it just to run ingest-ohlcv.
+    # shouldn't need to create it just to run ingest-ohlcv. "Copied the template but haven't
+    # filled it in yet" is the same situation as "never created it", so an empty file is
+    # tolerated too rather than failing all four ingest/backfill commands.
     if not path.is_file():
         return []
     return [tt for tt in load_tracked_tickers(path) if tt.enabled]

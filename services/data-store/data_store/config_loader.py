@@ -73,6 +73,13 @@ def load_funds(path: Path) -> list[FundConfig]:
 
 
 def load_tracked_tickers(path: Path) -> list[TickerConfig]:
+    """Directly-priced tickers, or [] when none are configured.
+
+    Unlike `load_funds`, an empty or absent `tickers:` section is not an error: this whole file
+    is optional (a setup pricing only fund holdings never needs it), so "copied the template
+    but haven't filled it in" must behave the same as "never created it" rather than breaking
+    every ingest and backfill command. Same optional-section handling as load_ticker_overrides.
+    """
     if not path.is_file():
         raise ConfigError(f"Config file not found: {path}")
 
@@ -80,8 +87,6 @@ def load_tracked_tickers(path: Path) -> list[TickerConfig]:
         data = yaml.safe_load(f) or {}
 
     entries = data.get("tickers") or []
-    if not entries:
-        raise ConfigError(f"Config file has no tickers defined: {path}")
 
     tickers = []
     seen_tickers = set()

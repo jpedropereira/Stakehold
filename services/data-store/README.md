@@ -43,9 +43,10 @@ entry's `asset_type` wins.
 
 ## Airflow
 
-Airflow orchestrates ingestion via three DAGs (`ingest_holdings`, `@weekly`; `ingest_daily_ohlcv`
-and `ingest_dividends`, both `@daily`), each a thin wrapper shelling out to the same `data-store`
-CLI already covered above —
+Airflow orchestrates ingestion via five DAGs — three scheduled (`ingest_holdings`, `@weekly`;
+`ingest_daily_ohlcv` and `ingest_dividends`, both `@daily`) and two unscheduled, manually
+triggered backfills (`backfill_historical_ohlcv`, `backfill_dividend_events`) — each a thin
+wrapper shelling out to the same `data-store` CLI already covered above —
 see `Dockerfile.airflow` for why (keeps Airflow's own Python environment free of this project's
 heavy deps, and means what runs in the DAG is byte-for-byte what you can run and test locally).
 
