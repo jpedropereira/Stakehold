@@ -173,7 +173,12 @@ def test_ingest_holdings_prints_scrape_start_and_summary(monkeypatch, fake_setti
     assert "2 fund" in out
 
 
-def test_ingest_ohlcv_runs_for_all_enabled_funds_with_default_lookback(monkeypatch, fake_settings):
+# --- run_ingest_market_data --------------------------------------------------------------------
+
+
+def test_ingest_market_data_runs_for_all_enabled_funds_with_default_lookback(
+    monkeypatch, fake_settings
+):
     funds = [make_fund("a")]
     calls = []
 
@@ -196,9 +201,9 @@ def test_ingest_ohlcv_runs_for_all_enabled_funds_with_default_lookback(monkeypat
         )
         return flow_result(3)
 
-    monkeypatch.setattr(jobs, "ingest_daily_ohlcv", fake_ingest)
+    monkeypatch.setattr(jobs, "ingest_market_data", fake_ingest)
 
-    result = jobs.run_ingest_ohlcv()
+    result = jobs.run_ingest_market_data()
 
     assert result["status"] != "partial"
     assert len(calls) == 1
@@ -211,7 +216,7 @@ def test_ingest_ohlcv_runs_for_all_enabled_funds_with_default_lookback(monkeypat
     assert (end_date - start_date).days == 7
 
 
-def test_ingest_ohlcv_respects_days_flag(monkeypatch, fake_settings):
+def test_ingest_market_data_respects_days_flag(monkeypatch, fake_settings):
     funds = [make_fund("a")]
     calls = []
 
@@ -220,20 +225,20 @@ def test_ingest_ohlcv_respects_days_flag(monkeypatch, fake_settings):
     monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn([]))
     monkeypatch.setattr(
         jobs,
-        "ingest_daily_ohlcv",
+        "ingest_market_data",
         lambda conn, funds, tt, ex, s, e, only_tickers=None, ticker_overrides=None: calls.append(
             (s, e)
         )
         or flow_result(1),
     )
 
-    jobs.run_ingest_ohlcv(days=30)
+    jobs.run_ingest_market_data(days=30)
 
     start_date, end_date = calls[0]
     assert (end_date - start_date).days == 30
 
 
-def test_ingest_ohlcv_ticker_flag_passes_only_tickers_filter(monkeypatch, fake_settings):
+def test_ingest_market_data_ticker_flag_passes_only_tickers_filter(monkeypatch, fake_settings):
     funds = [make_fund("a")]
     calls = []
 
@@ -242,21 +247,21 @@ def test_ingest_ohlcv_ticker_flag_passes_only_tickers_filter(monkeypatch, fake_s
     monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn([]))
     monkeypatch.setattr(
         jobs,
-        "ingest_daily_ohlcv",
+        "ingest_market_data",
         lambda conn, funds, tt, ex, s, e, only_tickers=None, ticker_overrides=None: calls.append(
             (funds, only_tickers)
         )
         or flow_result(),
     )
 
-    jobs.run_ingest_ohlcv(tickers=["BABA", "0700.HK"])
+    jobs.run_ingest_market_data(tickers=["BABA", "0700.HK"])
 
     passed_funds, only_tickers = calls[0]
     assert [f.key for f in passed_funds] == ["a"]
     assert only_tickers == {"BABA", "0700.HK"}
 
 
-def test_ingest_ohlcv_without_ticker_flag_passes_none(monkeypatch, fake_settings):
+def test_ingest_market_data_without_ticker_flag_passes_none(monkeypatch, fake_settings):
     calls = []
 
     monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
@@ -264,19 +269,19 @@ def test_ingest_ohlcv_without_ticker_flag_passes_none(monkeypatch, fake_settings
     monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn([]))
     monkeypatch.setattr(
         jobs,
-        "ingest_daily_ohlcv",
+        "ingest_market_data",
         lambda conn, funds, tt, ex, s, e, only_tickers=None, ticker_overrides=None: calls.append(
             only_tickers
         )
         or flow_result(),
     )
 
-    jobs.run_ingest_ohlcv()
+    jobs.run_ingest_market_data()
 
     assert calls[0] is None
 
 
-def test_ingest_ohlcv_includes_enabled_tracked_tickers(monkeypatch, fake_settings, tmp_path):
+def test_ingest_market_data_includes_enabled_tracked_tickers(monkeypatch, fake_settings, tmp_path):
     settings = Settings(
         database_url=fake_settings.database_url,
         config_path=fake_settings.config_path,
@@ -293,17 +298,19 @@ def test_ingest_ohlcv_includes_enabled_tracked_tickers(monkeypatch, fake_setting
     monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn([]))
     monkeypatch.setattr(
         jobs,
-        "ingest_daily_ohlcv",
+        "ingest_market_data",
         lambda conn, funds, tt, ex, s, e, only_tickers=None, ticker_overrides=None: calls.append(tt)
         or flow_result(1),
     )
 
-    jobs.run_ingest_ohlcv()
+    jobs.run_ingest_market_data()
 
     assert [t.ticker for t in calls[0]] == ["IWDA.AS"]  # disabled BTC-USD excluded
 
 
-def test_ingest_ohlcv_treats_missing_tracked_tickers_file_as_empty(monkeypatch, fake_settings):
+def test_ingest_market_data_treats_missing_tracked_tickers_file_as_empty(
+    monkeypatch, fake_settings
+):
     calls = []
 
     monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
@@ -311,17 +318,17 @@ def test_ingest_ohlcv_treats_missing_tracked_tickers_file_as_empty(monkeypatch, 
     monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn([]))
     monkeypatch.setattr(
         jobs,
-        "ingest_daily_ohlcv",
+        "ingest_market_data",
         lambda conn, funds, tt, ex, s, e, only_tickers=None, ticker_overrides=None: calls.append(tt)
         or flow_result(),
     )
 
-    jobs.run_ingest_ohlcv()
+    jobs.run_ingest_market_data()
 
     assert calls[0] == []
 
 
-def test_ingest_ohlcv_loads_and_passes_exchange_suffixes(monkeypatch, fake_settings):
+def test_ingest_market_data_loads_and_passes_exchange_suffixes(monkeypatch, fake_settings):
     calls = []
 
     monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
@@ -330,17 +337,17 @@ def test_ingest_ohlcv_loads_and_passes_exchange_suffixes(monkeypatch, fake_setti
     stub_resolution(monkeypatch, suffixes={"NASDAQ": None, "London Stock Exchange": ".L"})
     monkeypatch.setattr(
         jobs,
-        "ingest_daily_ohlcv",
+        "ingest_market_data",
         lambda conn, funds, tt, ex, s, e, only_tickers=None, ticker_overrides=None: calls.append(ex)
         or flow_result(),
     )
 
-    jobs.run_ingest_ohlcv()
+    jobs.run_ingest_market_data()
 
     assert calls[0] == {"NASDAQ": None, "London Stock Exchange": ".L"}
 
 
-def test_ingest_ohlcv_loads_and_passes_ticker_overrides(monkeypatch, fake_settings):
+def test_ingest_market_data_loads_and_passes_ticker_overrides(monkeypatch, fake_settings):
     calls = []
 
     monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
@@ -349,19 +356,21 @@ def test_ingest_ohlcv_loads_and_passes_ticker_overrides(monkeypatch, fake_settin
     stub_resolution(monkeypatch, overrides={"BRKB": "BRK-B"})
     monkeypatch.setattr(
         jobs,
-        "ingest_daily_ohlcv",
+        "ingest_market_data",
         lambda conn, funds, tt, ex, s, e, only_tickers=None, ticker_overrides=None: calls.append(
             ticker_overrides
         )
         or flow_result(),
     )
 
-    jobs.run_ingest_ohlcv()
+    jobs.run_ingest_market_data()
 
     assert calls[0] == {"BRKB": "BRK-B"}
 
 
-def test_ingest_ohlcv_propagates_config_error_from_exchange_suffixes(monkeypatch, fake_settings):
+def test_ingest_market_data_propagates_config_error_from_exchange_suffixes(
+    monkeypatch, fake_settings
+):
     from data_store.config_loader import ConfigError
 
     monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
@@ -374,10 +383,13 @@ def test_ingest_ohlcv_propagates_config_error_from_exchange_suffixes(monkeypatch
     monkeypatch.setattr(jobs, "load_ticker_resolution", raise_config_error)
 
     with pytest.raises(ConfigError, match="bad exchange suffixes config"):
-        jobs.run_ingest_ohlcv()
+        jobs.run_ingest_market_data()
 
 
-def test_backfill_ohlcv_default_run(monkeypatch, fake_settings):
+# --- run_backfill_market_data -------------------------------------------------------------------
+
+
+def test_backfill_market_data_default_run(monkeypatch, fake_settings):
     funds = [make_fund("a")]
     calls = []
 
@@ -409,9 +421,9 @@ def test_backfill_ohlcv_default_run(monkeypatch, fake_settings):
         )
         return flow_result(3)
 
-    monkeypatch.setattr(jobs, "backfill_historical_ohlcv", fake_backfill)
+    monkeypatch.setattr(jobs, "backfill_market_data", fake_backfill)
 
-    result = jobs.run_backfill_ohlcv()
+    result = jobs.run_backfill_market_data()
 
     assert result["status"] != "partial"
     assert len(calls) == 1
@@ -435,7 +447,7 @@ def test_backfill_ohlcv_default_run(monkeypatch, fake_settings):
     assert delay_seconds == 10.0
 
 
-def test_backfill_ohlcv_respects_fund_flag(monkeypatch, fake_settings):
+def test_backfill_market_data_respects_fund_flag(monkeypatch, fake_settings):
     funds = [make_fund("a"), make_fund("b")]
     calls = []
 
@@ -444,16 +456,16 @@ def test_backfill_ohlcv_respects_fund_flag(monkeypatch, fake_settings):
     monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn([]))
     monkeypatch.setattr(
         jobs,
-        "backfill_historical_ohlcv",
+        "backfill_market_data",
         lambda conn, funds, tt, ex, ed, end, ds, **kw: calls.append(funds) or flow_result(),
     )
 
-    jobs.run_backfill_ohlcv(fund="b")
+    jobs.run_backfill_market_data(fund="b")
 
     assert [f.key for f in calls[0]] == ["b"]
 
 
-def test_backfill_ohlcv_respects_earliest_date_and_delay_flags(monkeypatch, fake_settings):
+def test_backfill_market_data_respects_earliest_date_and_delay_flags(monkeypatch, fake_settings):
     calls = []
 
     monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
@@ -461,20 +473,20 @@ def test_backfill_ohlcv_respects_earliest_date_and_delay_flags(monkeypatch, fake
     monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn([]))
     monkeypatch.setattr(
         jobs,
-        "backfill_historical_ohlcv",
+        "backfill_market_data",
         lambda conn, funds, tt, ex, ed, end, ds, **kw: calls.append((ed, ds)) or flow_result(),
     )
 
-    jobs.run_backfill_ohlcv(earliest_date="2000-06-15", delay_seconds=3.5)
+    jobs.run_backfill_market_data(earliest_date="2000-06-15", delay_seconds=3.5)
 
     earliest_date, delay_seconds = calls[0]
     assert earliest_date == date(2000, 6, 15)
     assert delay_seconds == 3.5
 
 
-def test_backfill_ohlcv_ticker_flag_passes_only_tickers_filter(monkeypatch, fake_settings):
+def test_backfill_market_data_ticker_flag_passes_only_tickers_filter(monkeypatch, fake_settings):
     # --ticker no longer pre-filters tracked_tickers.yaml and empties funds -- it passes an
-    # only_tickers filter through to backfill_historical_ohlcv, applied *after* suffix
+    # only_tickers filter through to backfill_market_data, applied *after* suffix
     # resolution, so it can target holdings-derived tickers (e.g. "0700.HK") too, not just
     # tracked_tickers entries. funds/tracked_tickers loading stays untouched.
     funds = [make_fund("a")]
@@ -485,21 +497,21 @@ def test_backfill_ohlcv_ticker_flag_passes_only_tickers_filter(monkeypatch, fake
     monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn([]))
     monkeypatch.setattr(
         jobs,
-        "backfill_historical_ohlcv",
+        "backfill_market_data",
         lambda conn, funds, tt, ex, ed, end, ds, only_tickers=None, **kw: calls.append(
             (funds, only_tickers)
         )
         or flow_result(),
     )
 
-    jobs.run_backfill_ohlcv(tickers=["BABA", "0700.HK"])
+    jobs.run_backfill_market_data(tickers=["BABA", "0700.HK"])
 
     passed_funds, only_tickers = calls[0]
     assert [f.key for f in passed_funds] == ["a"]
     assert only_tickers == {"BABA", "0700.HK"}
 
 
-def test_backfill_ohlcv_without_ticker_flag_passes_none(monkeypatch, fake_settings):
+def test_backfill_market_data_without_ticker_flag_passes_none(monkeypatch, fake_settings):
     calls = []
 
     monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
@@ -507,17 +519,19 @@ def test_backfill_ohlcv_without_ticker_flag_passes_none(monkeypatch, fake_settin
     monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn([]))
     monkeypatch.setattr(
         jobs,
-        "backfill_historical_ohlcv",
+        "backfill_market_data",
         lambda conn, funds, tt, ex, ed, end, ds, only_tickers=None, **kw: calls.append(only_tickers)
         or flow_result(),
     )
 
-    jobs.run_backfill_ohlcv()
+    jobs.run_backfill_market_data()
 
     assert calls[0] is None
 
 
-def test_backfill_ohlcv_treats_missing_tracked_tickers_file_as_empty(monkeypatch, fake_settings):
+def test_backfill_market_data_treats_missing_tracked_tickers_file_as_empty(
+    monkeypatch, fake_settings
+):
     calls = []
 
     monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
@@ -525,16 +539,16 @@ def test_backfill_ohlcv_treats_missing_tracked_tickers_file_as_empty(monkeypatch
     monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn([]))
     monkeypatch.setattr(
         jobs,
-        "backfill_historical_ohlcv",
+        "backfill_market_data",
         lambda conn, funds, tt, ex, ed, end, ds, **kw: calls.append(tt) or flow_result(),
     )
 
-    jobs.run_backfill_ohlcv()
+    jobs.run_backfill_market_data()
 
     assert calls[0] == []
 
 
-def test_backfill_ohlcv_loads_and_passes_exchange_suffixes(monkeypatch, fake_settings):
+def test_backfill_market_data_loads_and_passes_exchange_suffixes(monkeypatch, fake_settings):
     calls = []
 
     monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
@@ -543,16 +557,16 @@ def test_backfill_ohlcv_loads_and_passes_exchange_suffixes(monkeypatch, fake_set
     stub_resolution(monkeypatch, suffixes={"NASDAQ": None})
     monkeypatch.setattr(
         jobs,
-        "backfill_historical_ohlcv",
+        "backfill_market_data",
         lambda conn, funds, tt, ex, ed, end, ds, **kw: calls.append(ex) or flow_result(),
     )
 
-    jobs.run_backfill_ohlcv()
+    jobs.run_backfill_market_data()
 
     assert calls[0] == {"NASDAQ": None}
 
 
-def test_backfill_ohlcv_loads_and_passes_ticker_overrides(monkeypatch, fake_settings):
+def test_backfill_market_data_loads_and_passes_ticker_overrides(monkeypatch, fake_settings):
     calls = []
 
     monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
@@ -561,198 +575,19 @@ def test_backfill_ohlcv_loads_and_passes_ticker_overrides(monkeypatch, fake_sett
     stub_resolution(monkeypatch, overrides={"BRKB": "BRK-B"})
     monkeypatch.setattr(
         jobs,
-        "backfill_historical_ohlcv",
+        "backfill_market_data",
         lambda conn, funds, tt, ex, ed, end, ds, ticker_overrides=None, **kw: calls.append(
             ticker_overrides
         )
         or flow_result(),
     )
 
-    jobs.run_backfill_ohlcv()
+    jobs.run_backfill_market_data()
 
     assert calls[0] == {"BRKB": "BRK-B"}
 
 
-def test_backfill_ohlcv_propagates_config_error_from_exchange_suffixes(monkeypatch, fake_settings):
-    from data_store.config_loader import ConfigError
-
-    monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
-    monkeypatch.setattr(jobs, "load_funds", lambda path: [])
-    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn([]))
-
-    def raise_config_error(path):
-        raise ConfigError("bad exchange suffixes config")
-
-    monkeypatch.setattr(jobs, "load_ticker_resolution", raise_config_error)
-
-    with pytest.raises(ConfigError, match="bad exchange suffixes config"):
-        jobs.run_backfill_ohlcv()
-
-
-def test_ingest_dividends_runs_for_all_enabled_funds_with_default_lookback(
-    monkeypatch, fake_settings
-):
-    funds = [make_fund("a")]
-    calls = []
-
-    monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
-    monkeypatch.setattr(jobs, "load_funds", lambda path: funds)
-    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn([]))
-
-    def fake_ingest(
-        conn,
-        passed_funds,
-        tracked_tickers,
-        exchange_suffixes,
-        start_date,
-        end_date,
-        only_tickers=None,
-        ticker_overrides=None,
-    ):
-        calls.append(
-            (passed_funds, tracked_tickers, exchange_suffixes, start_date, end_date, only_tickers)
-        )
-        return flow_result(3)
-
-    monkeypatch.setattr(jobs, "ingest_dividend_events", fake_ingest)
-
-    result = jobs.run_ingest_dividends()
-
-    assert result["status"] != "partial"
-    assert len(calls) == 1
-    passed_funds, tracked_tickers, exchange_suffixes, start_date, end_date, only_tickers = calls[0]
-    assert [f.key for f in passed_funds] == ["a"]
-    assert tracked_tickers == []
-    assert exchange_suffixes == {}
-    assert only_tickers is None
-    assert end_date == date.today()
-    assert (end_date - start_date).days == 7
-
-
-def test_ingest_dividends_respects_days_flag(monkeypatch, fake_settings):
-    funds = [make_fund("a")]
-    calls = []
-
-    monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
-    monkeypatch.setattr(jobs, "load_funds", lambda path: funds)
-    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn([]))
-    monkeypatch.setattr(
-        jobs,
-        "ingest_dividend_events",
-        lambda conn, funds, tt, ex, s, e, only_tickers=None, ticker_overrides=None: calls.append(
-            (s, e)
-        )
-        or flow_result(1),
-    )
-
-    jobs.run_ingest_dividends(days=30)
-
-    start_date, end_date = calls[0]
-    assert (end_date - start_date).days == 30
-
-
-def test_ingest_dividends_ticker_flag_passes_only_tickers_filter(monkeypatch, fake_settings):
-    funds = [make_fund("a")]
-    calls = []
-
-    monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
-    monkeypatch.setattr(jobs, "load_funds", lambda path: funds)
-    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn([]))
-    monkeypatch.setattr(
-        jobs,
-        "ingest_dividend_events",
-        lambda conn, funds, tt, ex, s, e, only_tickers=None, ticker_overrides=None: calls.append(
-            (funds, only_tickers)
-        )
-        or flow_result(),
-    )
-
-    jobs.run_ingest_dividends(tickers=["CSU.TO", "BT-A.L"])
-
-    passed_funds, only_tickers = calls[0]
-    assert [f.key for f in passed_funds] == ["a"]
-    assert only_tickers == {"CSU.TO", "BT-A.L"}
-
-
-def test_ingest_dividends_without_ticker_flag_passes_none(monkeypatch, fake_settings):
-    calls = []
-
-    monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
-    monkeypatch.setattr(jobs, "load_funds", lambda path: [])
-    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn([]))
-    monkeypatch.setattr(
-        jobs,
-        "ingest_dividend_events",
-        lambda conn, funds, tt, ex, s, e, only_tickers=None, ticker_overrides=None: calls.append(
-            only_tickers
-        )
-        or flow_result(),
-    )
-
-    jobs.run_ingest_dividends()
-
-    assert calls[0] is None
-
-
-def test_ingest_dividends_treats_missing_tracked_tickers_file_as_empty(monkeypatch, fake_settings):
-    calls = []
-
-    monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
-    monkeypatch.setattr(jobs, "load_funds", lambda path: [])
-    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn([]))
-    monkeypatch.setattr(
-        jobs,
-        "ingest_dividend_events",
-        lambda conn, funds, tt, ex, s, e, only_tickers=None, ticker_overrides=None: calls.append(tt)
-        or flow_result(),
-    )
-
-    jobs.run_ingest_dividends()
-
-    assert calls[0] == []
-
-
-def test_ingest_dividends_loads_and_passes_exchange_suffixes(monkeypatch, fake_settings):
-    calls = []
-
-    monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
-    monkeypatch.setattr(jobs, "load_funds", lambda path: [])
-    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn([]))
-    stub_resolution(monkeypatch, suffixes={"NASDAQ": None})
-    monkeypatch.setattr(
-        jobs,
-        "ingest_dividend_events",
-        lambda conn, funds, tt, ex, s, e, only_tickers=None, ticker_overrides=None: calls.append(ex)
-        or flow_result(),
-    )
-
-    jobs.run_ingest_dividends()
-
-    assert calls[0] == {"NASDAQ": None}
-
-
-def test_ingest_dividends_loads_and_passes_ticker_overrides(monkeypatch, fake_settings):
-    calls = []
-
-    monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
-    monkeypatch.setattr(jobs, "load_funds", lambda path: [])
-    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn([]))
-    stub_resolution(monkeypatch, overrides={"BRKB": "BRK-B"})
-    monkeypatch.setattr(
-        jobs,
-        "ingest_dividend_events",
-        lambda conn, funds, tt, ex, s, e, only_tickers=None, ticker_overrides=None: calls.append(
-            ticker_overrides
-        )
-        or flow_result(),
-    )
-
-    jobs.run_ingest_dividends()
-
-    assert calls[0] == {"BRKB": "BRK-B"}
-
-
-def test_ingest_dividends_propagates_config_error_from_exchange_suffixes(
+def test_backfill_market_data_propagates_config_error_from_exchange_suffixes(
     monkeypatch, fake_settings
 ):
     from data_store.config_loader import ConfigError
@@ -767,219 +602,7 @@ def test_ingest_dividends_propagates_config_error_from_exchange_suffixes(
     monkeypatch.setattr(jobs, "load_ticker_resolution", raise_config_error)
 
     with pytest.raises(ConfigError, match="bad exchange suffixes config"):
-        jobs.run_ingest_dividends()
-
-
-def test_backfill_dividends_default_run(monkeypatch, fake_settings):
-    funds = [make_fund("a")]
-    calls = []
-
-    monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
-    monkeypatch.setattr(jobs, "load_funds", lambda path: funds)
-    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn([]))
-
-    def fake_backfill(
-        conn,
-        passed_funds,
-        tracked_tickers,
-        exchange_suffixes,
-        earliest_date,
-        end_date,
-        delay_seconds,
-        only_tickers=None,
-        ticker_overrides=None,
-    ):
-        calls.append(
-            (
-                passed_funds,
-                tracked_tickers,
-                exchange_suffixes,
-                earliest_date,
-                end_date,
-                delay_seconds,
-                only_tickers,
-            )
-        )
-        return flow_result(3)
-
-    monkeypatch.setattr(jobs, "backfill_dividend_events", fake_backfill)
-
-    result = jobs.run_backfill_dividends()
-
-    assert result["status"] != "partial"
-    assert len(calls) == 1
-    (
-        passed_funds,
-        tracked_tickers,
-        exchange_suffixes,
-        earliest_date,
-        end_date,
-        delay_seconds,
-        only_tickers,
-    ) = calls[0]
-    assert [f.key for f in passed_funds] == ["a"]
-    assert tracked_tickers == []
-    assert exchange_suffixes == {}
-    assert only_tickers is None
-    # No --earliest-date means "resume": the pipeline skips tickers that already have
-    # rows rather than re-requesting each one's full history on every rerun.
-    assert earliest_date is None
-    assert end_date == date.today()
-    assert delay_seconds == 10.0
-
-
-def test_backfill_dividends_respects_fund_flag(monkeypatch, fake_settings):
-    funds = [make_fund("a"), make_fund("b")]
-    calls = []
-
-    monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
-    monkeypatch.setattr(jobs, "load_funds", lambda path: funds)
-    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn([]))
-    monkeypatch.setattr(
-        jobs,
-        "backfill_dividend_events",
-        lambda conn, funds, tt, ex, ed, end, ds, **kw: calls.append(funds) or flow_result(),
-    )
-
-    jobs.run_backfill_dividends(fund="b")
-
-    assert [f.key for f in calls[0]] == ["b"]
-
-
-def test_backfill_dividends_respects_earliest_date_and_delay_flags(monkeypatch, fake_settings):
-    calls = []
-
-    monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
-    monkeypatch.setattr(jobs, "load_funds", lambda path: [])
-    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn([]))
-    monkeypatch.setattr(
-        jobs,
-        "backfill_dividend_events",
-        lambda conn, funds, tt, ex, ed, end, ds, **kw: calls.append((ed, ds)) or flow_result(),
-    )
-
-    jobs.run_backfill_dividends(earliest_date="2000-06-15", delay_seconds=3.5)
-
-    earliest_date, delay_seconds = calls[0]
-    assert earliest_date == date(2000, 6, 15)
-    assert delay_seconds == 3.5
-
-
-def test_backfill_dividends_ticker_flag_passes_only_tickers_filter(monkeypatch, fake_settings):
-    funds = [make_fund("a")]
-    calls = []
-
-    monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
-    monkeypatch.setattr(jobs, "load_funds", lambda path: funds)
-    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn([]))
-    monkeypatch.setattr(
-        jobs,
-        "backfill_dividend_events",
-        lambda conn, funds, tt, ex, ed, end, ds, only_tickers=None, **kw: calls.append(
-            (funds, only_tickers)
-        )
-        or flow_result(),
-    )
-
-    jobs.run_backfill_dividends(tickers=["CSU.TO", "BT-A.L"])
-
-    passed_funds, only_tickers = calls[0]
-    assert [f.key for f in passed_funds] == ["a"]
-    assert only_tickers == {"CSU.TO", "BT-A.L"}
-
-
-def test_backfill_dividends_without_ticker_flag_passes_none(monkeypatch, fake_settings):
-    calls = []
-
-    monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
-    monkeypatch.setattr(jobs, "load_funds", lambda path: [])
-    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn([]))
-    monkeypatch.setattr(
-        jobs,
-        "backfill_dividend_events",
-        lambda conn, funds, tt, ex, ed, end, ds, only_tickers=None, **kw: calls.append(only_tickers)
-        or flow_result(),
-    )
-
-    jobs.run_backfill_dividends()
-
-    assert calls[0] is None
-
-
-def test_backfill_dividends_treats_missing_tracked_tickers_file_as_empty(
-    monkeypatch, fake_settings
-):
-    calls = []
-
-    monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
-    monkeypatch.setattr(jobs, "load_funds", lambda path: [])
-    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn([]))
-    monkeypatch.setattr(
-        jobs,
-        "backfill_dividend_events",
-        lambda conn, funds, tt, ex, ed, end, ds, **kw: calls.append(tt) or flow_result(),
-    )
-
-    jobs.run_backfill_dividends()
-
-    assert calls[0] == []
-
-
-def test_backfill_dividends_loads_and_passes_exchange_suffixes(monkeypatch, fake_settings):
-    calls = []
-
-    monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
-    monkeypatch.setattr(jobs, "load_funds", lambda path: [])
-    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn([]))
-    stub_resolution(monkeypatch, suffixes={"NASDAQ": None})
-    monkeypatch.setattr(
-        jobs,
-        "backfill_dividend_events",
-        lambda conn, funds, tt, ex, ed, end, ds, **kw: calls.append(ex) or flow_result(),
-    )
-
-    jobs.run_backfill_dividends()
-
-    assert calls[0] == {"NASDAQ": None}
-
-
-def test_backfill_dividends_loads_and_passes_ticker_overrides(monkeypatch, fake_settings):
-    calls = []
-
-    monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
-    monkeypatch.setattr(jobs, "load_funds", lambda path: [])
-    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn([]))
-    stub_resolution(monkeypatch, overrides={"BRKB": "BRK-B"})
-    monkeypatch.setattr(
-        jobs,
-        "backfill_dividend_events",
-        lambda conn, funds, tt, ex, ed, end, ds, ticker_overrides=None, **kw: calls.append(
-            ticker_overrides
-        )
-        or flow_result(),
-    )
-
-    jobs.run_backfill_dividends()
-
-    assert calls[0] == {"BRKB": "BRK-B"}
-
-
-def test_backfill_dividends_propagates_config_error_from_exchange_suffixes(
-    monkeypatch, fake_settings
-):
-    from data_store.config_loader import ConfigError
-
-    monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
-    monkeypatch.setattr(jobs, "load_funds", lambda path: [])
-    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn([]))
-
-    def raise_config_error(path):
-        raise ConfigError("bad exchange suffixes config")
-
-    monkeypatch.setattr(jobs, "load_ticker_resolution", raise_config_error)
-
-    with pytest.raises(ConfigError, match="bad exchange suffixes config"):
-        jobs.run_backfill_dividends()
+        jobs.run_backfill_market_data()
 
 
 def test_ingest_holdings_continues_after_one_fund_fails(monkeypatch, fake_settings, caplog):

@@ -25,10 +25,8 @@ def calls(monkeypatch):
 
     for name in (
         "run_ingest_holdings",
-        "run_ingest_ohlcv",
-        "run_ingest_dividends",
-        "run_backfill_ohlcv",
-        "run_backfill_dividends",
+        "run_ingest_market_data",
+        "run_backfill_market_data",
     ):
         monkeypatch.setattr(cli.jobs, name, record(name))
 
@@ -81,38 +79,39 @@ def test_ingest_holdings_passes_the_fund_flag(calls):
     assert calls["run_ingest_holdings"] == {"fund": "my_fund"}
 
 
-@pytest.mark.parametrize(
-    ("command", "job"),
-    [("ingest-ohlcv", "run_ingest_ohlcv"), ("ingest-dividends", "run_ingest_dividends")],
-)
-def test_ingest_commands_default_to_a_seven_day_window_and_no_filters(calls, command, job):
-    cli.main([command])
+def test_ingest_market_data_defaults_to_a_seven_day_window_and_no_filters(calls):
+    cli.main(["ingest-market-data"])
 
-    assert calls[job] == {"fund": None, "days": 7, "tickers": None}
+    assert calls["run_ingest_market_data"] == {"fund": None, "days": 7, "tickers": None}
 
 
-@pytest.mark.parametrize(
-    ("command", "job"),
-    [("ingest-ohlcv", "run_ingest_ohlcv"), ("ingest-dividends", "run_ingest_dividends")],
-)
-def test_ingest_commands_pass_every_flag_through(calls, command, job):
-    cli.main([command, "--fund", "f", "--days", "30", "--ticker", "AAPL", "--ticker", "0700.HK"])
+def test_ingest_market_data_passes_every_flag_through(calls):
+    cli.main(
+        [
+            "ingest-market-data",
+            "--fund",
+            "f",
+            "--days",
+            "30",
+            "--ticker",
+            "AAPL",
+            "--ticker",
+            "0700.HK",
+        ]
+    )
 
-    assert calls[job] == {"fund": "f", "days": 30, "tickers": ["AAPL", "0700.HK"]}
+    assert calls["run_ingest_market_data"] == {
+        "fund": "f",
+        "days": 30,
+        "tickers": ["AAPL", "0700.HK"],
+    }
 
 
-@pytest.mark.parametrize(
-    ("command", "job"),
-    [
-        ("backfill-ohlcv", "run_backfill_ohlcv"),
-        ("backfill-dividends", "run_backfill_dividends"),
-    ],
-)
-def test_backfill_commands_default_to_resume_mode(calls, command, job):
-    cli.main([command])
+def test_backfill_market_data_defaults_to_resume_mode(calls):
+    cli.main(["backfill-market-data"])
 
     # earliest_date=None is the resume default -- see pipeline._backfill_window.
-    assert calls[job] == {
+    assert calls["run_backfill_market_data"] == {
         "fund": None,
         "tickers": None,
         "earliest_date": None,
@@ -120,17 +119,10 @@ def test_backfill_commands_default_to_resume_mode(calls, command, job):
     }
 
 
-@pytest.mark.parametrize(
-    ("command", "job"),
-    [
-        ("backfill-ohlcv", "run_backfill_ohlcv"),
-        ("backfill-dividends", "run_backfill_dividends"),
-    ],
-)
-def test_backfill_commands_pass_every_flag_through(calls, command, job):
+def test_backfill_market_data_passes_every_flag_through(calls):
     cli.main(
         [
-            command,
+            "backfill-market-data",
             "--fund",
             "f",
             "--ticker",
@@ -142,7 +134,7 @@ def test_backfill_commands_pass_every_flag_through(calls, command, job):
         ]
     )
 
-    assert calls[job] == {
+    assert calls["run_backfill_market_data"] == {
         "fund": "f",
         "tickers": ["AAPL"],
         # Handed over as the ISO string it arrived as: the job parses it, so the DAG and the
@@ -153,15 +145,15 @@ def test_backfill_commands_pass_every_flag_through(calls, command, job):
 
 
 def test_days_flag_is_parsed_as_an_int(calls):
-    cli.main(["ingest-ohlcv", "--days", "30"])
+    cli.main(["ingest-market-data", "--days", "30"])
 
-    assert calls["run_ingest_ohlcv"]["days"] == 30
+    assert calls["run_ingest_market_data"]["days"] == 30
 
 
 def test_delay_seconds_flag_is_parsed_as_a_float(calls):
-    cli.main(["backfill-ohlcv", "--delay-seconds", "0.5"])
+    cli.main(["backfill-market-data", "--delay-seconds", "0.5"])
 
-    assert calls["run_backfill_ohlcv"]["delay_seconds"] == 0.5
+    assert calls["run_backfill_market_data"]["delay_seconds"] == 0.5
 
 
 # --- result -> exit code ---------------------------------------------------------------------
@@ -180,10 +172,10 @@ def test_delay_seconds_flag_is_parsed_as_a_float(calls):
 )
 def test_exit_code_reflects_the_run_status(monkeypatch, status, expected_code):
     monkeypatch.setattr(
-        cli.jobs, "run_ingest_ohlcv", lambda **kw: {"status": status, "rows_saved": 3}
+        cli.jobs, "run_ingest_market_data", lambda **kw: {"status": status, "rows_saved": 3}
     )
 
-    assert cli.main(["ingest-ohlcv"]) == expected_code
+    assert cli.main(["ingest-market-data"]) == expected_code
 
 
 def test_holdings_exit_code_reflects_the_run_status(monkeypatch):
@@ -195,17 +187,15 @@ def test_holdings_exit_code_reflects_the_run_status(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    ("command", "job", "noun"),
+    ("command", "job"),
     [
-        ("ingest-ohlcv", "run_ingest_ohlcv", "price rows"),
-        ("ingest-dividends", "run_ingest_dividends", "dividend rows"),
-        ("backfill-ohlcv", "run_backfill_ohlcv", "price rows"),
-        ("backfill-dividends", "run_backfill_dividends", "dividend rows"),
+        ("ingest-market-data", "run_ingest_market_data"),
+        ("backfill-market-data", "run_backfill_market_data"),
     ],
 )
-def test_commands_report_the_row_count_they_saved(monkeypatch, capsys, command, job, noun):
+def test_commands_report_the_row_count_they_saved(monkeypatch, capsys, command, job):
     monkeypatch.setattr(cli.jobs, job, lambda **kw: {"status": "ok", "rows_saved": 42})
 
     cli.main([command])
 
-    assert f"42 {noun}" in capsys.readouterr().out
+    assert "42 market data rows" in capsys.readouterr().out

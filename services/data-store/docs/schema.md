@@ -30,7 +30,7 @@ from its provider (iShares, currently) on a given date.
 | `ingested_at`    | `TIMESTAMPTZ`   | Defaults to `now()`.                                           |
 
 Indexes: `(fund_key, as_of_date)` for snapshot lookups, `(holding_ticker)` for cross-fund ticker
-lookups (used by `daily_ohlcv` ingestion to find what to price).
+lookups (used by `raw_market_data` ingestion to find what to price).
 
 No separate `funds` reference table — `fund_key` is a plain string matching the YAML `key`. Easy to
 add later if richer per-fund metadata needs to live in the DB.
@@ -47,25 +47,39 @@ is a full snapshot replacement for that date — there's no meaningful row-level
 snapshot. This is idempotent on rerun and needs no dedup-view machinery: "latest" is just
 `MAX(as_of_date)`. History across dates is preserved automatically (each date is its own partition).
 
-## `daily_ohlcv`
+## `raw_market_data`
 
-One row per `(ticker, price_date, source)` — daily OHLCV price history for tickers found in the
-most recent `etf_holdings` snapshot, plus ETFs, ETCs, commodities, and crypto tracked directly
-via `config/tracked_tickers.yaml` (not derived from any fund's holdings).
+One row per `(ticker, price_date, source)` — daily OHLCV, dividends, and stock splits for tickers
+found in the most recent `etf_holdings` snapshot, plus ETFs, ETCs, commodities, and crypto tracked
+directly via `config/tracked_tickers.yaml` (not derived from any fund's holdings). Replaces the
+former separate `daily_ohlcv`/`dividend_events` tables: one row matches one yfinance
+`Ticker.history()` response row exactly, dense rather than filtered — `dividends`/`stock_splits`
+are `0` on the overwhelming majority of days, not omitted, because this table's job is to be an
+honest, unprocessed landing zone for what the source returned. A later phase derives return
+calculations from it; this table does not compute anything.
 
-| Column        | Type            | Notes                                             |
-|---------------|-----------------|----------------------------------------------------|
-| `ticker`      | `VARCHAR(20)`   | Part of PK. For holdings-derived rows, this is the yfinance-ready ticker (raw `etf_holdings.holding_ticker` plus the exchange suffix resolved via `config/yfinance_exchange_suffixes.yaml`, e.g. `0700.HK`), not necessarily equal to `etf_holdings.holding_ticker` itself. Tracked-ticker rows already store the ticker as configured in `tracked_tickers.yaml`. |
-| `price_date`  | `DATE`          | Part of PK.                                         |
-| `source`      | `VARCHAR(20)`   | Part of PK, e.g. `'yfinance'`.                      |
-| `asset_type`  | `VARCHAR(20)`   | `equity` / `etf` / `commodity` / `crypto` / `etc`. `etc` (Exchange Traded Commodity, e.g. a gold-backed ETC) is kept distinct from `commodity` (raw futures contracts, not tracked yet) since they're different instrument wrappers. Not part of the PK — a descriptive attribute of the ticker, not part of its identity. Validated at the app layer (`config_loader.VALID_ASSET_TYPES`), not a DB `CHECK` constraint. |
-| `open`        | `NUMERIC(18,4)` |                                                      |
-| `high`        | `NUMERIC(18,4)` |                                                      |
-| `low`         | `NUMERIC(18,4)` |                                                      |
-| `close`       | `NUMERIC(18,4)` |                                                      |
-| `adj_close`   | `NUMERIC(18,4)` |                                                      |
-| `volume`      | `BIGINT`        |                                                      |
-| `ingested_at` | `TIMESTAMPTZ`   | Defaults to `now()`.                                |
+**Migrating from `daily_ohlcv`/`dividend_events`**: `schema.sql` does not drop them — a `DROP
+TABLE` for a table an old deploy might still be using doesn't belong permanently baked into the
+idempotent schema file the way the guarded `dividends` → `dividend_events` rename above does,
+since (unlike a rename) there's no future state where dropping them is still the correct action
+to take again. Drop them yourself, once, after confirming `raw_market_data` is populated
+(`backfill-market-data`): `DROP TABLE daily_ohlcv; DROP TABLE dividend_events;`.
+
+| Column         | Type             | Notes                                             |
+|----------------|------------------|----------------------------------------------------|
+| `ticker`       | `VARCHAR(20)`    | Part of PK. For holdings-derived rows, this is the yfinance-ready ticker (raw `etf_holdings.holding_ticker` plus the exchange suffix resolved via `config/yfinance_exchange_suffixes.yaml`, e.g. `0700.HK`), not necessarily equal to `etf_holdings.holding_ticker` itself. Tracked-ticker rows already store the ticker as configured in `tracked_tickers.yaml`. |
+| `price_date`   | `DATE`           | Part of PK.                                         |
+| `source`       | `VARCHAR(20)`    | Part of PK, e.g. `'yfinance'`.                      |
+| `asset_type`   | `VARCHAR(20)`    | `equity` / `etf` / `commodity` / `crypto` / `etc`. `etc` (Exchange Traded Commodity, e.g. a gold-backed ETC) is kept distinct from `commodity` (raw futures contracts, not tracked yet) since they're different instrument wrappers. Not part of the PK — a descriptive attribute of the ticker, not part of its identity. Validated at the app layer (`config_loader.VALID_ASSET_TYPES`), not a DB `CHECK` constraint. |
+| `open`         | `NUMERIC(18,4)`  | Raw, unadjusted.                                    |
+| `high`         | `NUMERIC(18,4)`  | Raw, unadjusted.                                    |
+| `low`          | `NUMERIC(18,4)`  | Raw, unadjusted.                                    |
+| `close`        | `NUMERIC(18,4)`  | Raw, unadjusted — the basis for any return calculation this service computes itself. |
+| `adj_close`    | `NUMERIC(18,4)`  | yfinance's own blackbox-adjusted close. Stored for reference/validation only; not used for return calculations, since how yfinance derives it isn't documented and has changed defaults across versions before. |
+| `volume`       | `BIGINT`         |                                                      |
+| `dividends`    | `NUMERIC(18,4)`  | Per-share cash amount, `NOT NULL DEFAULT 0`. `0` on non-event days rather than filtered out — unlike the old `dividend_events` table, this table mirrors the source dataframe's own dense grain. |
+| `stock_splits` | `NUMERIC(18,6)`  | Split ratio (e.g. `4.0` for a 4-for-1 split, `0.25` for a 1-for-4 reverse split), `NOT NULL DEFAULT 0` on non-split days. Wider precision than the price columns since ratios can be fractional. Nothing in this service currently reads this column — it's captured because it's part of the source response, ready for the later split-adjusted-returns phase. |
+| `ingested_at`  | `TIMESTAMPTZ`    | Defaults to `now()`.                                |
 
 Index: `(ticker, price_date)` for time-series lookups. No dedicated index on `asset_type` —
 low-cardinality, and the existing index already covers the primary lookup pattern; add one later
@@ -73,16 +87,17 @@ if a specific "all rows of type X" query pattern needs it.
 
 **Loading strategy: true upsert** (`INSERT ... ON CONFLICT (ticker, price_date, source) DO UPDATE`).
 Successive ingestion runs fetch overlapping date windows, and providers sometimes restate recent
-values (late settlement adjustments), so overwriting on rerun is the normal case. `source` is part
-of the primary key so a second price source can coexist for the same ticker/date without
-collision — the schema-level hook for adding price sources beyond yfinance later.
+values (late settlement adjustments, late-announced or corrected dividends), so overwriting on
+rerun is the normal case. `source` is part of the primary key so a second market-data provider can
+coexist for the same ticker/date without collision — the schema-level hook for adding sources
+beyond yfinance later.
 
-**Backfill loading pattern**: the daily `ingest-ohlcv` flow above keeps a rolling recent window
-filled. Deep history is filled separately by `backfill-ohlcv` (`pipeline.backfill_historical_ohlcv`).
-No schema change and no separate checkpoint table — `daily_ohlcv` itself is the checkpoint,
-via `get_earliest_price_dates` — but note the table records *how far back rows exist*, not *how
-far back we have looked*, so what counts as "already done" depends on the mode
-(`pipeline._backfill_window`):
+**Backfill loading pattern**: the daily `ingest-market-data` flow keeps a rolling recent window
+filled. Deep history is filled separately by `backfill-market-data`
+(`pipeline.backfill_market_data`). No schema change and no separate checkpoint table —
+`raw_market_data` itself is the checkpoint, via `get_earliest_dates` — but note the table records
+*how far back rows exist*, not *how far back we have looked*, so what counts as "already done"
+depends on the mode (`pipeline._backfill_window`):
 
 - **No `--earliest-date` (resume, the normal rerun)**: a ticker with any stored row is skipped.
   Sound because a source returns a ticker's whole requested range in one call, so an interrupted
@@ -94,15 +109,16 @@ far back we have looked*, so what counts as "already done" depends on the mode
   empty.
 
 **Exchange-suffix resolution for holdings-derived tickers**: `etf_holdings.holding_ticker` is the
-raw, unsuffixed symbol as scraped (e.g. `"0700"`). Both `ingest-ohlcv` and `backfill-ohlcv` resolve
-it into a yfinance-ready ticker via `pipeline._resolve_yfinance_ticker`, which looks up
-`etf_holdings.exchange` in `config/yfinance_exchange_suffixes.yaml` (a raw exchange string -> yfinance
-suffix mapping, e.g. `"Hong Kong Exchanges And Clearing Ltd"` -> `.HK`). An exchange with no entry
-in that mapping is not guessed at or sent bare to yfinance (which would silently return zero rows,
-not an error) — it's logged as a warning naming the ticker and raw exchange string, and that
-ticker is skipped for the run. This resolution happens at price-fetch time, not at holdings-scrape
-time, so `etf_holdings.holding_ticker` stays raw/unmodified and a mapping-table fix takes effect on
-the next pricing run with no re-scrape needed.
+raw, unsuffixed symbol as scraped (e.g. `"0700"`). Both `ingest-market-data` and
+`backfill-market-data` resolve it into a yfinance-ready ticker via
+`pipeline._resolve_yfinance_ticker`, which looks up `etf_holdings.exchange` in
+`config/yfinance_exchange_suffixes.yaml` (a raw exchange string -> yfinance suffix mapping, e.g.
+`"Hong Kong Exchanges And Clearing Ltd"` -> `.HK`). An exchange with no entry in that mapping is
+not guessed at or sent bare to yfinance (which would silently return zero rows, not an error) —
+it's logged as a warning naming the ticker and raw exchange string, and that ticker is skipped for
+the run. This resolution happens at fetch time, not at holdings-scrape time, so
+`etf_holdings.holding_ticker` stays raw/unmodified and a mapping-table fix takes effect on the next
+run with no re-scrape needed.
 
 Before appending the suffix, `_resolve_yfinance_ticker` also applies any exchange-specific raw
 ticker normalization registered in `pipeline._TICKER_NORMALIZERS` — yfinance's per-market ticker
@@ -116,34 +132,3 @@ ticker → final ticker rewrites for cases no general rule covers — either the
 tagging is simply wrong (e.g. `"HEIA"` tagged under a US exchange but actually needing
 `"HEIA.AS"`), or the raw ticker needs a full rewrite (e.g. `"BRKB"` → `"BRK-B"`). An override wins
 outright and skips exchange resolution entirely.
-
-## `dividend_events`
-
-One row per `(ticker, ex_date, source)` — dividend/distribution events for the same ticker
-universe priced into `daily_ohlcv` (fund holdings plus `config/tracked_tickers.yaml` entries).
-
-| Column        | Type            | Notes                                             |
-|---------------|-----------------|------------------------------------------------------|
-| `ticker`      | `VARCHAR(20)`   | Part of PK. Same resolved, yfinance-ready ticker as `daily_ohlcv.ticker` — see that table's exchange-suffix-resolution notes above; unchanged for `dividend_events`. |
-| `ex_date`     | `DATE`          | Part of PK. The ex-dividend date, as returned by yfinance. |
-| `source`      | `VARCHAR(20)`   | Part of PK, e.g. `'yfinance'`.                        |
-| `asset_type`  | `VARCHAR(20)`   | Same `config_loader.VALID_ASSET_TYPES` values as `daily_ohlcv.asset_type`. |
-| `amount`      | `NUMERIC(18,4)` | Per-share cash amount, in the ticker's trading currency (implicit via exchange suffix, same as `daily_ohlcv` — no separate `currency` column). `NOT NULL`: a row only exists for a real, nonzero payment — zero/NaN yfinance rows are filtered out before this table is ever written to. |
-| `ingested_at` | `TIMESTAMPTZ`   | Defaults to `now()`.                                  |
-
-Index: `(ticker, ex_date)` for time-series lookups, same rationale as `daily_ohlcv`'s index.
-
-**Loading strategy: true upsert** (`INSERT ... ON CONFLICT (ticker, ex_date, source) DO UPDATE`),
-for the same reasons as `daily_ohlcv`: successive `ingest-dividends` runs overlap date windows, and
-an occasional late-announced or corrected special dividend needs to overwrite cleanly on rerun
-rather than requiring a delete-then-insert cycle.
-
-**Backfill loading pattern**: identical mechanism to `daily_ohlcv`'s, including both resume
-modes — `backfill-dividends` (`pipeline.backfill_dividend_events`) computes each ticker's window
-via `get_earliest_dividend_dates` and the same `pipeline._backfill_window`; `dividend_events`
-itself is the checkpoint, no separate table needed.
-
-**Exchange-suffix resolution and ticker normalization**: identical to `daily_ohlcv` — see that
-table's section above. Both flows share the exact same ticker-resolution code
-(`pipeline._resolve_priceable_tickers`), so a ticker priced under `daily_ohlcv` resolves to the
-same final ticker string under `dividend_events`.
