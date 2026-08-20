@@ -5,7 +5,7 @@ handler, and its `lastResort` fallback only emits WARNING and above. That's why 
 reporting here used to be `print`. Configuring logging once at each entry point removes that
 constraint, and with it the reason for the two-mechanism split.
 
-**Logs go to stderr, results go to stdout.** `data-store ingest-ohlcv` prints its row count on
+**Logs go to stderr, results go to stdout.** `data-store ingest-market-data` prints its row count on
 stdout and everything else on stderr, so the command stays pipeable locally. Airflow sees both
 either way: its `BashOperator` runs the subprocess with `stderr=STDOUT` (verified against the
 installed `SubprocessHook`), and a `@task.external_python` task captures both streams too.

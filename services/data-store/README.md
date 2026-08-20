@@ -36,20 +36,22 @@ cp services/data-store/config/tracked_tickers.yaml.example services/data-store/c
 
 Each entry needs `ticker` (the yfinance symbol, e.g. `IWDA.AS`, `BTC-USD`), `asset_type` (one
 of `equity` / `etf` / `commodity` / `crypto` / `etc`), `display_name`, `price_source`, and
-`enabled`. If the file doesn't exist, `ingest-ohlcv` just treats it as "no tracked tickers" —
-you don't need to create it if you only care about fund-holdings-based pricing.
+`enabled`. If the file doesn't exist, `ingest-market-data` just treats it as "no tracked
+tickers" — you don't need to create it if you only care about fund-holdings-based pricing.
 
 A ticker that appears both here and in a fund's holdings (e.g. a stock you track directly that
-also happens to be a holding) is only fetched once per run, not once per source — `ingest-ohlcv`
-resolves the full ticker list across every fund's holdings and this file before fetching
-anything, deduping by ticker. If the same ticker appears in both, the `tracked_tickers.yaml`
-entry's `asset_type` wins.
+also happens to be a holding) is only fetched once per run, not once per source —
+`ingest-market-data` resolves the full ticker list across every fund's holdings and this file
+before fetching anything, deduping by ticker. If the same ticker appears in both, the
+`tracked_tickers.yaml` entry's `asset_type` wins.
 
 ## Airflow
 
-Airflow orchestrates ingestion via five DAGs — three scheduled (`ingest_holdings`, `@weekly`;
-`ingest_daily_ohlcv` and `ingest_dividends`, both `@daily`) and two unscheduled, manually
-triggered backfills (`backfill_historical_ohlcv`, `backfill_dividend_events`).
+Airflow orchestrates ingestion via three DAGs — two scheduled (`ingest_holdings`, `@weekly`;
+`ingest_market_data`, `@daily`) and one unscheduled, manually triggered backfill
+(`backfill_market_data`). `ingest_market_data`/`backfill_market_data` fetch prices, dividends and
+stock splits together in one pass — a single `Ticker.history()` call already returns all three,
+so there's no separate price/dividend DAG pair to keep in sync.
 
 Each DAG calls the same `data_store` job the CLI calls, through `@task.external_python`. That
 runs the job in this project's own interpreter — which it must, since the workspace needs Python
@@ -63,13 +65,14 @@ What counts as a failure differs by flow, deliberately:
 
 - **A `tickers` value that matches nothing fails.** The run didn't do what it was asked, so it
   goes red rather than quietly green.
-- **`ingest_daily_ohlcv` fails on zero rows.** Its window spans several days, so saving nothing
-  means something is wrong even when no individual step reported an error.
-- **`ingest_dividends` does not.** Dividends are sparse: on most days no followed ticker goes
-  ex-dividend and zero rows is the correct answer. Failing on it would redden the DAG most days,
-  and a daily false alarm is worse than no alarm. The cost is that this DAG can't detect a
-  silently broken dividend fetch — within one run that looks identical to a quiet day. Catching
-  it needs a longer-horizon check (no dividend rows in N days), which needs cross-run state.
+- **`ingest_market_data` fails on zero rows.** Its window spans several days, and `rows_saved`
+  counts rows in `raw_market_data` — present for every trading day regardless of whether any
+  ticker paid a dividend or split that day — so zero means something is wrong even when no
+  individual step reported an error. Dividends/splits being sparse (most days, no followed
+  ticker has either) doesn't change this: those are columns on a row that's there anyway, not a
+  separate save that could legitimately produce nothing.
+- **`backfill_market_data` does not.** Once every ticker is already covered, a rerun correctly
+  saves nothing — that's success, not a stall.
 
 Airflow runs on a **custom image** (`Dockerfile.airflow`: the official `apache/airflow` image +
 `uv` + this workspace, baked in at build time, browser included). Bring it up with Docker
@@ -137,61 +140,60 @@ To explore the data, register a server in pgAdmin:
    - **Maintenance database** / **Username** / **Password**: your `POSTGRES_DB` /
      `POSTGRES_USER` / `POSTGRES_PASSWORD` values from `.env`
 
-`etf_holdings`, `daily_ohlcv`, and `dividend_events` then show up under
+`etf_holdings` and `raw_market_data` then show up under
 `data-store → Databases → <your db> → Schemas → public → Tables`.
 
 ## Running ingestion via the CLI
 
-With Postgres up and the schema applied, and `config/etfs.yaml` set up (see above), run both
+With Postgres up and the schema applied, and `config/etfs.yaml` set up (see above), run the
 ingestion flows end to end:
 
 ```bash
 cd services/data-store
 docker compose up -d postgres pgadmin
 uv run data-store db init
-uv run data-store ingest-holdings          # scrapes iShares, loads etf_holdings
-uv run data-store ingest-ohlcv --days 7    # reads tickers from etf_holdings, loads daily_ohlcv
-uv run data-store ingest-dividends --days 7  # same ticker universe, loads dividend_events
+uv run data-store ingest-holdings              # scrapes iShares, loads etf_holdings
+uv run data-store ingest-market-data --days 7  # reads tickers from etf_holdings, loads raw_market_data
 ```
 
-`ingest-ohlcv` and `ingest-dividends` (and their `backfill-ohlcv`/`backfill-dividends`
-counterparts) all accept `--fund KEY` (only that fund's holdings — tracked tickers from
-`tracked_tickers.yaml` are always included regardless), `--days N` (default 7, ingest commands
-only) for the lookback window, and `--ticker TICKER` (repeatable) to restrict the run to specific
-final, post-suffix-resolution tickers (e.g. `--ticker AAPL --ticker 0700.HK`) — matches any
-currently followed ticker, fund-holdings-derived or tracked; useful for a small manual run or
+`ingest-market-data` (and its `backfill-market-data` counterpart) fetch prices, dividends and
+stock splits together — one `Ticker.history()` call per ticker returns all three, so there's no
+separate command to run for dividends. They accept `--fund KEY` (only that fund's holdings —
+tracked tickers from `tracked_tickers.yaml` are always included regardless), `--days N` (default
+7, ingest only) for the lookback window, and `--ticker TICKER` (repeatable) to restrict the run to
+specific final, post-suffix-resolution tickers (e.g. `--ticker AAPL --ticker 0700.HK`) — matches
+any currently followed ticker, fund-holdings-derived or tracked; useful for a small manual run or
 re-attempting specific tickers that previously failed. Omit it to run against everything
 followed, as before. A `--ticker` value matching nothing is logged as a warning naming it, so a
 typo doesn't quietly look like a successful run that had nothing to do.
 
 ### Rerunning a backfill
 
-Run `backfill-ohlcv` / `backfill-dividends` with no `--earliest-date` and they resume: every
-ticker that already has stored data is skipped, and only tickers with none are fetched (as far
-back as the source goes). That's what makes a rerun after an interruption cheap — a source
-returns a ticker's whole requested range in one call, so each ticker is either fully fetched or
-untouched, never half-done, and "has rows" really does mean "finished".
+Run `backfill-market-data` with no `--earliest-date` and it resumes: every ticker that already
+has stored data is skipped, and only tickers with none are fetched (as far back as the source
+goes). That's what makes a rerun after an interruption cheap — a source returns a ticker's whole
+requested range in one call, so each ticker is either fully fetched or untouched, never
+half-done, and "has rows" really does mean "finished".
 
 Pass `--earliest-date YYYY-MM-DD` only to reach *further back than a previous run did*: it
 fetches each ticker the stretch between that date and its earliest stored date. That mode
 re-requests every ticker, so it's the slow path — expect the full multi-hour walk.
 
-All three flows are independent — `ingest-ohlcv` and `ingest-dividends` always read the *current*
-ticker list from `etf_holdings` (whatever `ingest-holdings` most recently loaded), not a fresh
-scrape, so each can run on its own daily cadence without depending on a holdings scrape having
-just run.
+Holdings ingest and market data ingest are independent — `ingest-market-data` always reads the
+*current* ticker list from `etf_holdings` (whatever `ingest-holdings` most recently loaded), not
+a fresh scrape, so it can run on its own daily cadence without depending on a holdings scrape
+having just run.
 
 Non-equity holdings (futures, cash, FX lines) are excluded automatically. Non-US-listed equities
 need a yfinance exchange-suffix ticker mapping (e.g. `0700` on the Hong Kong exchange -> `0700.HK`)
 — resolved via `config/yfinance_exchange_suffixes.yaml`, a **committed** file (unlike
 `etfs.yaml`/`tracked_tickers.yaml`, since it's generic reference data, not personal fund choices).
 A holding on an exchange with no entry there is logged as a warning naming the ticker and the raw
-exchange string, and skipped for that run — `ingest-ohlcv`/`backfill-ohlcv` never send a bare or
-guessed ticker to yfinance, which would otherwise silently return zero rows instead of erroring.
-If you add a fund with holdings on an exchange not yet in that file, add an entry for it (query
-`SELECT DISTINCT exchange FROM etf_holdings` for the exact raw string — don't guess spelling).
-`ingest-dividends`/`backfill-dividends` reuse this exact same resolution — a ticker priced under
-`daily_ohlcv` resolves identically for `dividend_events`.
+exchange string, and skipped for that run — `ingest-market-data`/`backfill-market-data` never
+send a bare or guessed ticker to yfinance, which would otherwise silently return zero rows instead
+of erroring. If you add a fund with holdings on an exchange not yet in that file, add an entry for
+it (query `SELECT DISTINCT exchange FROM etf_holdings` for the exact raw string — don't guess
+spelling).
 
 yfinance's per-market ticker syntax also doesn't always match the raw symbol iShares scrapes, even
 once the right suffix is appended — e.g. Hong Kong codes need zero-padding (`"1"` → `"0001.HK"`),
@@ -210,17 +212,15 @@ UI's "Trigger DAG" button, or from a shell:
 
 ```bash
 docker exec <airflow-scheduler-container> airflow dags trigger ingest_holdings
-docker exec <airflow-scheduler-container> airflow dags trigger ingest_daily_ohlcv
-docker exec <airflow-scheduler-container> airflow dags trigger ingest_dividends
+docker exec <airflow-scheduler-container> airflow dags trigger ingest_market_data
 ```
 
 Task logs land under `services/data-store/logs/dag_id=.../run_id=.../task_id=.../attempt=N.log`
 (bind-mounted, so readable from the host — no need to shell into the container).
 
-`ingest_daily_ohlcv`/`backfill_historical_ohlcv` and `ingest_dividends`/`backfill_dividend_events`
-all accept a `tickers` param (a JSON array, default `[]`) via the UI's "Trigger DAG w/ config"
-dialog, passed to the job as an ordinary `list[str]`. Leave it empty to run against everything
-followed.
+`ingest_market_data`/`backfill_market_data` both accept a `tickers` param (a JSON array, default
+`[]`) via the UI's "Trigger DAG w/ config" dialog, passed to the job as an ordinary `list[str]`.
+Leave it empty to run against everything followed.
 
 There is no shell in the path any more, so the value is never interpolated into a command line
 and the escaping the old `BashOperator` needed is simply gone.

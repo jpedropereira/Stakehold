@@ -7,11 +7,12 @@ decisions that would otherwise look arbitrary.
 
 ## What the service is responsible for
 
-Getting external financial data into Postgres, correctly and repeatably. Three things go in:
+Getting external financial data into Postgres, correctly and repeatably. Two things go in:
 
 - **ETF holdings** — scraped from a fund provider's website (iShares today).
-- **Daily OHLCV prices** — for every ticker those holdings contain, plus directly tracked ones.
-- **Dividend events** — for that same ticker universe.
+- **Raw daily market data** — OHLCV prices, dividends and stock splits, for every ticker those
+  holdings contain plus directly tracked ones. One fetch, one table (`raw_market_data`) —
+  unprocessed, matching the source's own grain, not decomposed into a return calculation here.
 
 It does *not* calculate returns, value portfolios, or decide what's worth owning. Those belong to
 `portfolio`, which reads these tables. The dividing line is deliberate: this service's only job is
@@ -30,13 +31,12 @@ flowchart TD
 
     subgraph orch["Orchestration"]
         JOBS["jobs.py<br/><i>runnable units: config + connection + one flow</i>"]
-        PIPE["pipeline.py<br/><i>the five flows; ticker resolution</i>"]
+        PIPE["pipeline.py<br/><i>the three flows; ticker resolution</i>"]
     end
 
     subgraph domain["Domain modules"]
         HOLD["holdings/<br/>scraper · parser · repository"]
-        PRICE["prices/<br/>yfinance_source · repository"]
-        DIV["dividends/<br/>yfinance_source · repository"]
+        MKT["market_data/<br/>yfinance_source · repository"]
     end
 
     subgraph found["Foundation"]
@@ -56,14 +56,11 @@ flowchart TD
     JOBS --> SET
     JOBS --> DB
     PIPE --> HOLD
-    PIPE --> PRICE
-    PIPE --> DIV
+    PIPE --> MKT
     HOLD --> EXT
-    PRICE --> EXT
-    DIV --> EXT
+    MKT --> EXT
     HOLD --> PG
-    PRICE --> PG
-    DIV --> PG
+    MKT --> PG
     DB --> PG
 ```
 
@@ -104,43 +101,49 @@ code.
 
 ## Extension points
 
-New providers are registry entries, not new branches. All three registries live at the top of
+New providers are registry entries, not new branches. Both registries live at the top of
 `pipeline.py`:
 
 ```python
-SCRAPERS         = {"ishares": get_holdings_csv_url}
-PRICE_SOURCES    = {"yfinance": YFinancePriceSource}
-DIVIDEND_SOURCES = {"yfinance": YFinanceDividendSource}
+SCRAPERS            = {"ishares": get_holdings_csv_url}
+MARKET_DATA_SOURCES = {"yfinance": YFinanceMarketDataSource}
 ```
 
-Adding a second price provider means writing a class satisfying `prices/base.py`'s `PriceSource`
-and adding one line. No flow function changes.
+Adding a second market-data provider means writing a class satisfying `market_data/base.py`'s
+`MarketDataSource` Protocol and adding one line. No flow function changes.
 
-`PRICE_SOURCES` and `DIVIDEND_SOURCES` are kept separate even though yfinance is currently the only
-entry in both, because a price source and a dividend source are different Protocols with different
-`fetch()` shapes. Merging them would mean pulling a class out of one registry and hoping it also
-happens to expose the other's surface.
+**A disclosed trade-off of one combined registry**: before the OHLCV/dividend fetch merge, prices
+and dividends had separate registries and Protocols, because they were genuinely separate
+fetches with different `fetch()` shapes. Now that one fetch returns both, a future
+price-only or dividend-only-shaped provider (e.g. a source with prices but no dividend concept)
+has to implement the full `MarketDataSource` Protocol and return an empty/zero-filled frame for
+whichever columns it doesn't have, rather than being a narrower Protocol of its own. Accepted
+because it matches the actual shape of the one HTTP call each provider makes, and there's
+currently exactly one provider (yfinance) to generalize from.
 
 **One sharp edge if you add a source:** the registry *key* and the class's `.name` attribute are
 two different strings. `.name` is what gets stamped into the `source` column and what backfill
 floors are read under; the key is what config files reference. Keep them equal unless you have a
 reason not to.
 
-## The five flows
+## The three flows
 
-All five live in `pipeline.py` and are exposed as CLI subcommands.
+All three live in `pipeline.py` and are exposed as CLI subcommands.
 
 | Flow | Command | Cadence | Reads | Writes |
 |---|---|---|---|---|
 | Holdings ingest | `ingest-holdings` | weekly | provider site | `etf_holdings` |
-| Price ingest | `ingest-ohlcv` | daily | `etf_holdings` + config | `daily_ohlcv` |
-| Dividend ingest | `ingest-dividends` | daily | `etf_holdings` + config | `dividend_events` |
-| Price backfill | `backfill-ohlcv` | manual | `daily_ohlcv` | `daily_ohlcv` |
-| Dividend backfill | `backfill-dividends` | manual | `dividend_events` | `dividend_events` |
+| Market data ingest | `ingest-market-data` | daily | `etf_holdings` + config | `raw_market_data` |
+| Market data backfill | `backfill-market-data` | manual | `raw_market_data` | `raw_market_data` |
+
+Before this shipped, price and dividend ingest/backfill were four separate flows, each resolving
+the same ticker universe and hitting yfinance separately. They merged into one because a single
+`Ticker.history()` call already returns OHLCV, dividends and stock splits together — fetching them
+through two flows was paying for two HTTP round trips per ticker to get data that came back in one.
 
 ### What a flow returns
 
-The four run-level flows return a structured result, not a row count:
+The three run-level flows return a structured result, not a row count:
 
 ```python
 {"status": "ok" | "partial" | "nothing_to_do",
@@ -322,9 +325,13 @@ broken one — but `partial` is not, so whatever scheduled the command can tell 
 without reading logs.
 
 **Failures are isolated at the natural unit of work** — per fund when scraping, per source-and-type
-group when ingesting, per ticker when backfilling. One failure never costs the work queued behind
-it, and the summary reports the failure count. Configuration errors are the exception: an unknown
-provider is fatal, because it will fail identically on every retry.
+group when ingesting, per ticker when backfilling, and (since the market-data merge) per ticker
+within a group's *fetch* too: `YFinanceMarketDataSource` retries and gives up on one ticker at a
+time, so a single permanently-failing ticker no longer costs every other ticker fetched alongside
+it in the same group, the way one bad ticker used to fail an entire batched `yf.download()` call.
+One failure never costs the work queued behind it, and the summary reports the failure count.
+Configuration errors are the exception: an unknown provider is fatal, because it will fail
+identically on every retry.
 
 **Transactions are per flow-step.** Each `save_*` commits, so an interrupted run leaves completed
 work durable. Combined with the loading strategies in [`schema.md`](schema.md), every flow is
@@ -356,9 +363,9 @@ run's summary is as much a part of its contract as its return value.
 
 ## Where to start reading
 
-1. `pipeline.py` — the five flows; everything else is in service of these.
+1. `pipeline.py` — the three flows; everything else is in service of these.
 2. `jobs.py` — how configuration, a connection and a flow become one runnable operation.
 3. `cli.py` — how a command becomes a job. Thin on purpose; if it is growing, something belongs
    in `jobs.py` instead.
-4. One domain module end to end (`prices/` is the most representative).
+4. One domain module end to end (`market_data/` is the most representative).
 5. [`schema.md`](schema.md) — why the tables load the way they do.
