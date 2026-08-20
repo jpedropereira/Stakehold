@@ -1,8 +1,18 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from airflow.providers.standard.operators.bash import BashOperator
 from airflow.providers.standard.operators.empty import EmptyOperator
-from airflow.sdk import DAG
+from airflow.sdk import DAG, task
+from common import EXTERNAL_PYTHON_KWARGS, assert_interpreter_available, check_run
+
+assert_interpreter_available()
+
+
+@task.external_python(**EXTERNAL_PYTHON_KWARGS)
+def ingest() -> dict:
+    from data_store.jobs import run_ingest_holdings
+
+    return run_ingest_holdings()
+
 
 with DAG(
     dag_id="ingest_holdings",
@@ -11,16 +21,20 @@ with DAG(
     start_date=datetime(2024, 1, 1),
     catchup=False,
     tags=["data-store", "holdings"],
+    # Scraping drives a real browser against a third-party site. Generous, but finite: an
+    # untimed hang would hold an executor slot indefinitely without ever failing.
+    default_args={"execution_timeout": timedelta(hours=1)},
 ) as dag:
     start = EmptyOperator(task_id="start")
-
-    ingest = BashOperator(
-        task_id="ingest_holdings",
-        bash_command=(
-            "cd /opt/stakehold/services/data-store && uv run --frozen data-store ingest-holdings"
-        ),
-    )
-
     end = EmptyOperator(task_id="end")
 
-    start >> ingest >> end
+    # Bind start to the *head* of the chain explicitly. Writing this as
+    # `start >> check_run(ingest(requested_tickers())) >> end` looks equivalent but is not:
+    # Python evaluates inside-out, so the chain is built first and the expression returns the
+    # *last* task, leaving start attached to check_run while the real work ran ahead of it,
+    # unbracketed.
+    result = ingest()
+    checked = check_run(result)
+
+    start >> result
+    checked >> end
