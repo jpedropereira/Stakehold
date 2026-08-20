@@ -8,7 +8,7 @@ output.
 
 ```python
 logger = logging.getLogger(__name__)
-logger.info("ingest-ohlcv: saved %d price row(s).", saved)
+logger.info("ingest-market-data: saved %d row(s).", saved)
 ```
 
 This replaces an earlier `print(..., flush=True)` convention, which existed only because nothing
@@ -18,7 +18,7 @@ don't reintroduce `print` for progress.
 ## stdout is for results, stderr is for everything else
 
 The one legitimate `print` is a command's actual output — the row count `cli.py` writes at the
-end of a run. That goes to stdout so `data-store ingest-ohlcv` stays pipeable. Progress,
+end of a run. That goes to stdout so `data-store ingest-market-data` stays pipeable. Progress,
 warnings and errors go to stderr through the logger.
 
 Airflow sees both regardless: `BashOperator` runs the subprocess with `stderr=STDOUT` (verified

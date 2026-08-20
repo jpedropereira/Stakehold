@@ -1,5 +1,5 @@
 # Copy to tracked_tickers.yaml (in this same directory) and edit for your own tickers.
-# tracked_tickers.yaml is gitignored, and optional — ingest-ohlcv treats a missing file as
+# tracked_tickers.yaml is gitignored, and optional — ingest-market-data treats a missing file as
 # "no tracked tickers" and still prices every fund's holdings.
 #
 # Use this for prices you want tracked directly, not derived from any fund's holdings — e.g.

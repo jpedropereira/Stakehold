@@ -28,11 +28,9 @@ from data_store.config_loader import (
 from data_store.db.connection import apply_schema, get_connection
 from data_store.logging_config import configure_logging
 from data_store.pipeline import (
-    backfill_dividend_events,
-    backfill_historical_ohlcv,
-    ingest_daily_ohlcv,
-    ingest_dividend_events,
+    backfill_market_data,
     ingest_holdings,
+    ingest_market_data,
 )
 from data_store.run_result import build_run_result
 from data_store.settings import load_settings
@@ -105,63 +103,34 @@ def run_ingest_holdings(*, fund: str | None = None) -> dict[str, int | str]:
     )
 
 
-def run_ingest_ohlcv(
+def run_ingest_market_data(
     *, fund: str | None = None, days: int = 7, tickers: list[str] | None = None
 ) -> dict[str, int | str]:
-    """Price the selected funds' holdings plus every tracked ticker, over a rolling window."""
+    """Prices, dividends and stock splits for the selected funds' holdings plus every tracked
+    ticker, over a rolling window."""
     configure_logging()
     end_date = date.today()
     return _run_priced_flow(
-        ingest_daily_ohlcv,
+        ingest_market_data,
         fund=fund,
         tickers=tickers,
         positional=(end_date - timedelta(days=days), end_date),
     )
 
 
-def run_ingest_dividends(
-    *, fund: str | None = None, days: int = 7, tickers: list[str] | None = None
-) -> dict[str, int | str]:
-    """Same ticker universe as run_ingest_ohlcv, loading dividend events instead of prices."""
-    configure_logging()
-    end_date = date.today()
-    return _run_priced_flow(
-        ingest_dividend_events,
-        fund=fund,
-        tickers=tickers,
-        positional=(end_date - timedelta(days=days), end_date),
-    )
-
-
-def run_backfill_ohlcv(
+def run_backfill_market_data(
     *,
     fund: str | None = None,
     tickers: list[str] | None = None,
     earliest_date: str | None = None,
     delay_seconds: float = 10.0,
 ) -> dict[str, int | str]:
-    """Fill missing price history. `earliest_date` is an ISO date string or None -- see
-    `pipeline._backfill_window` for what omitting it means (resume rather than deepen)."""
+    """Fill missing history (prices, dividends, stock splits). `earliest_date` is an ISO date
+    string or None -- see `pipeline._backfill_window` for what omitting it means (resume rather
+    than deepen)."""
     configure_logging()
     return _run_priced_flow(
-        backfill_historical_ohlcv,
-        fund=fund,
-        tickers=tickers,
-        positional=(_parse_earliest_date(earliest_date), date.today(), delay_seconds),
-    )
-
-
-def run_backfill_dividends(
-    *,
-    fund: str | None = None,
-    tickers: list[str] | None = None,
-    earliest_date: str | None = None,
-    delay_seconds: float = 10.0,
-) -> dict[str, int | str]:
-    """Dividend-history counterpart to run_backfill_ohlcv, with identical semantics."""
-    configure_logging()
-    return _run_priced_flow(
-        backfill_dividend_events,
+        backfill_market_data,
         fund=fund,
         tickers=tickers,
         positional=(_parse_earliest_date(earliest_date), date.today(), delay_seconds),
@@ -216,9 +185,9 @@ def _select_funds(funds: list[FundConfig], fund_key: str | None) -> list[FundCon
 
 def _load_enabled_tracked_tickers(path: Path) -> list[TickerConfig]:
     # tracked_tickers.yaml is optional — a setup with only fund-holdings-based pricing
-    # shouldn't need to create it just to run ingest-ohlcv. "Copied the template but haven't
-    # filled it in yet" is the same situation as "never created it", so an empty file is
-    # tolerated too rather than failing all four ingest/backfill commands.
+    # shouldn't need to create it just to run ingest-market-data. "Copied the template but
+    # haven't filled it in yet" is the same situation as "never created it", so an empty file is
+    # tolerated too rather than failing the ingest/backfill commands.
     if not path.is_file():
         return []
     return [tt for tt in load_tracked_tickers(path) if tt.enabled]

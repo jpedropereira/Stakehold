@@ -4,8 +4,6 @@ from contextlib import contextmanager
 from datetime import date
 
 from data_store.config_loader import FundConfig, TickerConfig
-from data_store.dividends.repository import get_earliest_dividend_dates, save_dividends
-from data_store.dividends.yfinance_source import YFinanceDividendSource
 from data_store.holdings.parser import fetch_holdings_csv
 from data_store.holdings.repository import (
     get_latest_tickers,
@@ -13,8 +11,8 @@ from data_store.holdings.repository import (
     save_holdings,
 )
 from data_store.holdings.scraper import get_holdings_csv_url
-from data_store.prices.repository import get_earliest_price_dates, save_prices
-from data_store.prices.yfinance_source import YFinancePriceSource
+from data_store.market_data.repository import get_earliest_dates, save_raw_market_data
+from data_store.market_data.yfinance_source import YFinanceMarketDataSource
 from data_store.run_result import build_run_result
 
 logger = logging.getLogger(__name__)
@@ -29,17 +27,8 @@ SCRAPERS = {
     "ishares": get_holdings_csv_url,
 }
 
-PRICE_SOURCES = {
-    "yfinance": YFinancePriceSource,
-}
-
-# Kept separate from PRICE_SOURCES even though yfinance is (so far) the only entry in both:
-# a dividend source and a price source are different Protocols (see prices/base.py,
-# dividends/base.py) with different fetch() shapes, so collapsing the two registries would mean
-# picking a class out of PRICE_SOURCES and hoping it also happens to expose a dividend-fetch
-# surface -- exactly the coupling this keeps out.
-DIVIDEND_SOURCES = {
-    "yfinance": YFinanceDividendSource,
+MARKET_DATA_SOURCES = {
+    "yfinance": YFinanceMarketDataSource,
 }
 
 
@@ -113,7 +102,7 @@ def ingest_holdings(conn, fund_config: FundConfig, today: date) -> int:
     return save_holdings(conn, fund_config.key, today, normalized)
 
 
-def ingest_daily_ohlcv(
+def ingest_market_data(
     conn,
     funds: list[FundConfig],
     tracked_tickers: list[TickerConfig],
@@ -123,20 +112,22 @@ def ingest_daily_ohlcv(
     only_tickers: set[str] | None = None,
     ticker_overrides: dict[str, str] | None = None,
 ) -> dict[str, int | str]:
-    """Prices every fund's holdings plus every tracked ticker in one pass. Tickers are
-    resolved into a single deduped map first (not fetched per-source) so a ticker that's both
-    a fund holding and an explicitly tracked ticker — or held by more than one fund — is only
-    fetched once, not once per source. `only_tickers`, when given, restricts the run to exactly
-    those final (post-suffix-resolution) tickers -- e.g. "0700.HK", not the raw "0700" -- so it
-    can target holdings-derived tickers too, not just tracked_tickers entries. `ticker_overrides`
-    is forwarded to ticker resolution -- see _resolve_yfinance_ticker. Prints per-group progress
-    and a final summary; logging_config decides where that output lands."""
+    """Prices, dividends and stock splits for every fund's holdings plus every tracked ticker,
+    in one pass -- one fetch per ticker per run, since a MarketDataSource returns all three
+    together (see market_data/yfinance_source.py). Tickers are resolved into a single deduped
+    map first (not fetched per-source) so a ticker that's both a fund holding and an explicitly
+    tracked ticker — or held by more than one fund — is only fetched once, not once per source.
+    `only_tickers`, when given, restricts the run to exactly those final (post-suffix-resolution)
+    tickers -- e.g. "0700.HK", not the raw "0700" -- so it can target holdings-derived tickers
+    too, not just tracked_tickers entries. `ticker_overrides` is forwarded to ticker resolution
+    -- see _resolve_yfinance_ticker. Logs per-group progress and a final summary;
+    logging_config decides where that output lands."""
     resolved = _resolve_priceable_tickers(
         conn, funds, tracked_tickers, exchange_suffixes, ticker_overrides
     )
-    resolved, unmatched = _apply_only_tickers(resolved, only_tickers, "ingest-ohlcv")
+    resolved, unmatched = _apply_only_tickers(resolved, only_tickers, "ingest-market-data")
     if not resolved:
-        logger.info("ingest-ohlcv: no tickers to price, nothing to do.")
+        logger.info("ingest-market-data: no tickers to price, nothing to do.")
         return build_run_result(
             units_total=0,
             rows_saved=0,
@@ -149,106 +140,7 @@ def ingest_daily_ohlcv(
 
     groups = _group_by_source_and_type(resolved)
     logger.info(
-        f"ingest-ohlcv: resolved {len(resolved)} ticker(s) across {len(groups)} "
-        "(source, asset_type) group(s)."
-    )
-
-    total = 0
-    failed = 0
-    for (price_source_name, asset_type), tickers in groups.items():
-        try:
-            price_source_cls = PRICE_SOURCES[price_source_name]
-        except KeyError:
-            # A misconfigured source is a config error, not a runtime hiccup: it will fail
-            # identically on every rerun, so it stays fatal rather than being retried nightly.
-            raise ValueError(f"Unknown price source: {price_source_name!r}") from None
-
-        price_source = price_source_cls()
-        logger.info(
-            f"ingest-ohlcv: fetching prices for {len(tickers)} ticker(s) "
-            f"(source={price_source_name}, asset_type={asset_type})."
-        )
-        # One group's failure must not cost the groups after it. This runs unattended on a
-        # schedule, and groups saved before an escaping exception are already committed -- so
-        # letting it propagate turns a partial success into a wholly failed, partially written
-        # run. Mirrors the per-ticker isolation the backfills already have.
-        try:
-            prices = price_source.fetch(tickers, start_date, end_date)
-            if prices.empty:
-                logger.info(
-                    f"ingest-ohlcv: no price data for this group "
-                    f"(source={price_source_name}, asset_type={asset_type})."
-                )
-                continue
-
-            saved = save_prices(conn, price_source.name, asset_type, prices)
-        except Exception as e:
-            failed += 1
-            logger.warning(
-                "ingest-ohlcv: group (source=%s, asset_type=%s, %d ticker(s)) failed, "
-                "skipping: %s",
-                price_source_name,
-                asset_type,
-                len(tickers),
-                e,
-                exc_info=True,
-            )
-            continue
-
-        logger.info(
-            f"ingest-ohlcv: saved {saved} price row(s) "
-            f"(source={price_source_name}, asset_type={asset_type})."
-        )
-        total += saved
-
-    logger.info(
-        f"ingest-ohlcv complete: {total} row(s) across {len(resolved)} ticker(s), "
-        f"{failed} group(s) failed."
-    )
-    return build_run_result(
-        units_total=len(resolved),
-        tickers_resolved=len(resolved),
-        tickers_unmatched=unmatched,
-        rows_saved=total,
-        failed=failed + unmatched,
-        groups=len(groups),
-        groups_failed=failed,
-    )
-
-
-def ingest_dividend_events(
-    conn,
-    funds: list[FundConfig],
-    tracked_tickers: list[TickerConfig],
-    exchange_suffixes: dict[str, str | None],
-    start_date: date,
-    end_date: date,
-    only_tickers: set[str] | None = None,
-    ticker_overrides: dict[str, str] | None = None,
-) -> dict[str, int | str]:
-    """Direct mirror of ingest_daily_ohlcv: same ticker-universe resolution
-    (_resolve_priceable_tickers, _group_by_source_and_type), swapping DIVIDEND_SOURCES for
-    PRICE_SOURCES and save_dividends for save_prices. `only_tickers`/`ticker_overrides` behave
-    identically to ingest_daily_ohlcv's -- see that docstring."""
-    resolved = _resolve_priceable_tickers(
-        conn, funds, tracked_tickers, exchange_suffixes, ticker_overrides
-    )
-    resolved, unmatched = _apply_only_tickers(resolved, only_tickers, "ingest-dividends")
-    if not resolved:
-        logger.info("ingest-dividends: no tickers to price, nothing to do.")
-        return build_run_result(
-            units_total=0,
-            rows_saved=0,
-            failed=unmatched,
-            tickers_resolved=0,
-            tickers_unmatched=unmatched,
-            groups=0,
-            groups_failed=0,
-        )
-
-    groups = _group_by_source_and_type(resolved)
-    logger.info(
-        f"ingest-dividends: resolved {len(resolved)} ticker(s) across {len(groups)} "
+        f"ingest-market-data: resolved {len(resolved)} ticker(s) across {len(groups)} "
         "(source, asset_type) group(s)."
     )
 
@@ -256,32 +148,38 @@ def ingest_dividend_events(
     failed = 0
     for (source_name, asset_type), tickers in groups.items():
         try:
-            dividend_source_cls = DIVIDEND_SOURCES[source_name]
+            source_cls = MARKET_DATA_SOURCES[source_name]
         except KeyError:
-            raise ValueError(f"Unknown dividend source: {source_name!r}") from None
+            # A misconfigured source is a config error, not a runtime hiccup: it will fail
+            # identically on every rerun, so it stays fatal rather than being retried nightly.
+            raise ValueError(f"Unknown market data source: {source_name!r}") from None
 
-        dividend_source = dividend_source_cls()
+        source = source_cls()
         logger.info(
-            f"ingest-dividends: fetching dividends for {len(tickers)} ticker(s) "
+            f"ingest-market-data: fetching market data for {len(tickers)} ticker(s) "
             f"(source={source_name}, asset_type={asset_type})."
         )
-        # Same per-group isolation as ingest_daily_ohlcv -- see the comment there.
+        # One group's failure must not cost the groups after it. This runs unattended on a
+        # schedule, and groups saved before an escaping exception are already committed -- so
+        # letting it propagate turns a partial success into a wholly failed, partially written
+        # run. In practice this now mostly guards save_raw_market_data -- fetch() itself already
+        # isolates failures per ticker (see YFinanceMarketDataSource._fetch_one), so a single bad
+        # ticker no longer needs this group-level catch to avoid taking the rest of the group
+        # down with it.
         try:
-            dividends = dividend_source.fetch(tickers, start_date, end_date)
-            if dividends.empty:
+            data = source.fetch(tickers, start_date, end_date)
+            if data.empty:
                 logger.info(
-                    f"ingest-dividends: no dividend data for this group "
-                    f"(source={source_name}, asset_type={asset_type}) -- either none of these "
-                    f"{len(tickers)} ticker(s) paid a dividend in this window, or the fetch "
-                    "returned nothing."
+                    f"ingest-market-data: no data for this group "
+                    f"(source={source_name}, asset_type={asset_type})."
                 )
                 continue
 
-            saved = save_dividends(conn, dividend_source.name, asset_type, dividends)
+            saved = save_raw_market_data(conn, source.name, asset_type, data)
         except Exception as e:
             failed += 1
             logger.warning(
-                "ingest-dividends: group (source=%s, asset_type=%s, %d ticker(s)) failed, "
+                "ingest-market-data: group (source=%s, asset_type=%s, %d ticker(s)) failed, "
                 "skipping: %s",
                 source_name,
                 asset_type,
@@ -292,13 +190,13 @@ def ingest_dividend_events(
             continue
 
         logger.info(
-            f"ingest-dividends: saved {saved} dividend row(s) "
+            f"ingest-market-data: saved {saved} row(s) "
             f"(source={source_name}, asset_type={asset_type})."
         )
         total += saved
 
     logger.info(
-        f"ingest-dividends complete: {total} row(s) across {len(resolved)} ticker(s), "
+        f"ingest-market-data complete: {total} row(s) across {len(resolved)} ticker(s), "
         f"{failed} group(s) failed."
     )
     return build_run_result(
@@ -313,7 +211,7 @@ def ingest_dividend_events(
 
 
 @_yfinance_logging_silenced()
-def backfill_historical_ohlcv(
+def backfill_market_data(
     conn,
     funds: list[FundConfig],
     tracked_tickers: list[TickerConfig],
@@ -324,128 +222,31 @@ def backfill_historical_ohlcv(
     only_tickers: set[str] | None = None,
     ticker_overrides: dict[str, str] | None = None,
 ) -> dict[str, int | str]:
-    """For each priceable ticker (same resolution as ingest_daily_ohlcv), fetches and stores
+    """For each priceable ticker (same resolution as ingest_market_data), fetches and stores
     the stretch of history it's still missing — see _backfill_window for how `earliest_date`
     selects between resuming (omitted) and reaching further back than a previous run
-    (given). Either way daily_ohlcv is its own checkpoint; no separate state table is needed.
+    (given). Either way raw_market_data is its own checkpoint; no separate state table is needed.
 
     One ticker at a time, sleeping delay_seconds after each live fetch (success or failure) —
-    never after a skip. A ticker that fails after YFinancePriceSource's internal retries is
-    logged and skipped, not fatal to the run. `only_tickers`, when given, restricts the run to
+    never after a skip. A ticker that fails after YFinanceMarketDataSource's internal retries is
+    logged (inside the source itself) and simply comes back empty here rather than raising --
+    fetch() no longer distinguishes "genuinely no data" from "gave up after retries" at this
+    layer, since both now isolate at the ticker level inside the source; either way this ticker
+    contributes 0 rows and the run continues. `only_tickers`, when given, restricts the run to
     exactly those final (post-suffix-resolution) tickers -- e.g. "0700.HK", not the raw "0700"
     -- so it can target holdings-derived tickers too, not just tracked_tickers entries.
     `ticker_overrides` is forwarded to ticker resolution -- see _resolve_yfinance_ticker.
 
     Decorated rather than the daily flow because an empty result means something different
     here: during a backfill it's the expected end state for every ticker, whereas for
-    ingest_daily_ohlcv it more likely means a delisted or mistyped ticker worth seeing.
+    ingest_market_data it more likely means a delisted or mistyped ticker worth seeing.
     """
     resolved = _resolve_priceable_tickers(
         conn, funds, tracked_tickers, exchange_suffixes, ticker_overrides
     )
-    resolved, unmatched = _apply_only_tickers(resolved, only_tickers, "backfill")
+    resolved, unmatched = _apply_only_tickers(resolved, only_tickers, "backfill-market-data")
     if not resolved:
-        logger.info("backfill: no tickers to fetch, nothing to do.")
-        return build_run_result(
-            units_total=0,
-            tickers_resolved=0,
-            tickers_unmatched=unmatched,
-            rows_saved=0,
-            failed=unmatched,
-            tickers_fetched=0,
-            tickers_skipped=0,
-            tickers_failed=0,
-        )
-
-    total_rows = 0
-    processed = skipped = failed = 0
-    ticker_count = len(resolved)
-    for (price_source_name, asset_type), tickers in _group_by_source_and_type(resolved).items():
-        try:
-            price_source_cls = PRICE_SOURCES[price_source_name]
-        except KeyError:
-            raise ValueError(f"Unknown price source: {price_source_name!r}") from None
-
-        price_source = price_source_cls()
-        # price_source.name, not the registry key: rows are written under .name, so floors
-        # must be read under it too or a source whose key differs never finds its own data.
-        floors = get_earliest_price_dates(conn, price_source.name, tickers)
-        for ticker in tickers:
-            floor = floors.get(ticker)
-            window = _backfill_window(floor, earliest_date, end_date)
-            if window is None:
-                skipped += 1
-                processed += 1
-                logger.info(_already_covered_message("backfill", ticker, floor))
-                continue
-            fetch_start, fetch_end = window
-
-            try:
-                prices = price_source.fetch([ticker], fetch_start, fetch_end)
-            except Exception as e:
-                failed += 1
-                logger.warning(
-                    "backfill: %s failed after retries, skipping: %s", ticker, e, exc_info=True
-                )
-                time.sleep(delay_seconds)
-                processed += 1
-                continue
-
-            if not prices.empty:
-                total_rows += save_prices(conn, price_source.name, asset_type, prices)
-                logger.info(
-                    f"backfill: {ticker} -> {len(prices)} rows ({fetch_start} to {fetch_end})"
-                )
-            else:
-                logger.info(f"backfill: {ticker} -> no data ({fetch_start} to {fetch_end})")
-            time.sleep(delay_seconds)
-            processed += 1
-            if processed % 25 == 0:
-                logger.info(
-                    f"backfill progress: {processed}/{ticker_count} tickers, "
-                    f"{total_rows} rows so far"
-                )
-
-    logger.info(
-        f"backfill complete: {ticker_count} tickers "
-        f"({skipped} already covered, {failed} failed), {total_rows} rows written"
-    )
-    return build_run_result(
-        units_total=ticker_count,
-        tickers_resolved=ticker_count,
-        tickers_unmatched=unmatched,
-        rows_saved=total_rows,
-        failed=failed + unmatched,
-        tickers_fetched=processed - skipped - failed,
-        tickers_skipped=skipped,
-        tickers_failed=failed,
-    )
-
-
-@_yfinance_logging_silenced()
-def backfill_dividend_events(
-    conn,
-    funds: list[FundConfig],
-    tracked_tickers: list[TickerConfig],
-    exchange_suffixes: dict[str, str | None],
-    earliest_date: date | None,
-    end_date: date,
-    delay_seconds: float,
-    only_tickers: set[str] | None = None,
-    ticker_overrides: dict[str, str] | None = None,
-) -> dict[str, int | str]:
-    """Direct structural mirror of backfill_historical_ohlcv: per-ticker window computed from
-    get_earliest_dividend_dates instead of get_earliest_price_dates, same optional
-    `earliest_date` resume/deep-fill modes (see _backfill_window), same
-    silence-yfinance-logger / sleep-after-fetch-or-failure-not-skip / progress-every-25 /
-    never-fatal-on-one-ticker-failure behavior. `only_tickers`/`ticker_overrides` behave
-    identically to backfill_historical_ohlcv's -- see that docstring."""
-    resolved = _resolve_priceable_tickers(
-        conn, funds, tracked_tickers, exchange_suffixes, ticker_overrides
-    )
-    resolved, unmatched = _apply_only_tickers(resolved, only_tickers, "backfill-dividends")
-    if not resolved:
-        logger.info("backfill-dividends: no tickers to fetch, nothing to do.")
+        logger.info("backfill-market-data: no tickers to fetch, nothing to do.")
         return build_run_result(
             units_total=0,
             tickers_resolved=0,
@@ -462,58 +263,57 @@ def backfill_dividend_events(
     ticker_count = len(resolved)
     for (source_name, asset_type), tickers in _group_by_source_and_type(resolved).items():
         try:
-            dividend_source_cls = DIVIDEND_SOURCES[source_name]
+            source_cls = MARKET_DATA_SOURCES[source_name]
         except KeyError:
-            raise ValueError(f"Unknown dividend source: {source_name!r}") from None
+            raise ValueError(f"Unknown market data source: {source_name!r}") from None
 
-        dividend_source = dividend_source_cls()
-        # See the note in backfill_historical_ohlcv: read under the same identifier the
-        # rows are written under.
-        floors = get_earliest_dividend_dates(conn, dividend_source.name, tickers)
+        source = source_cls()
+        # source.name, not the registry key: rows are written under .name, so floors must be
+        # read under it too or a source whose key differs never finds its own data.
+        floors = get_earliest_dates(conn, source.name, tickers)
         for ticker in tickers:
             floor = floors.get(ticker)
             window = _backfill_window(floor, earliest_date, end_date)
             if window is None:
                 skipped += 1
                 processed += 1
-                logger.info(_already_covered_message("backfill-dividends", ticker, floor))
+                logger.info(_already_covered_message("backfill-market-data", ticker, floor))
                 continue
             fetch_start, fetch_end = window
 
             try:
-                dividends = dividend_source.fetch([ticker], fetch_start, fetch_end)
+                data = source.fetch([ticker], fetch_start, fetch_end)
             except Exception as e:
+                # A truly unexpected failure (not a per-ticker fetch problem, which the source
+                # already absorbs -- see the docstring above), e.g. a bug in the source itself.
                 failed += 1
                 logger.warning(
-                    "backfill-dividends: %s failed after retries, skipping: %s",
-                    ticker,
-                    e,
-                    exc_info=True,
+                    "backfill-market-data: %s failed, skipping: %s", ticker, e, exc_info=True
                 )
                 time.sleep(delay_seconds)
                 processed += 1
                 continue
 
-            if not dividends.empty:
-                total_rows += save_dividends(conn, dividend_source.name, asset_type, dividends)
+            if not data.empty:
+                total_rows += save_raw_market_data(conn, source.name, asset_type, data)
                 logger.info(
-                    f"backfill-dividends: {ticker} -> {len(dividends)} rows "
+                    f"backfill-market-data: {ticker} -> {len(data)} rows "
                     f"({fetch_start} to {fetch_end})"
                 )
             else:
                 logger.info(
-                    f"backfill-dividends: {ticker} -> no data ({fetch_start} to {fetch_end})"
+                    f"backfill-market-data: {ticker} -> no data ({fetch_start} to {fetch_end})"
                 )
             time.sleep(delay_seconds)
             processed += 1
             if processed % 25 == 0:
                 logger.info(
-                    f"backfill-dividends progress: {processed}/{ticker_count} tickers, "
+                    f"backfill-market-data progress: {processed}/{ticker_count} tickers, "
                     f"{total_rows} rows so far"
                 )
 
     logger.info(
-        f"backfill-dividends complete: {ticker_count} tickers "
+        f"backfill-market-data complete: {ticker_count} tickers "
         f"({skipped} already covered, {failed} failed), {total_rows} rows written"
     )
     return build_run_result(

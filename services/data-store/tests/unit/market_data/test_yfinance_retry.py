@@ -1,6 +1,6 @@
 import pytest
 import requests
-from data_store.prices._yfinance_retry import _is_transient
+from data_store.market_data._yfinance_retry import _is_transient
 
 
 class FakeCurlError(OSError):
