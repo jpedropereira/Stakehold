@@ -49,10 +49,27 @@ entry's `asset_type` wins.
 
 Airflow orchestrates ingestion via five DAGs — three scheduled (`ingest_holdings`, `@weekly`;
 `ingest_daily_ohlcv` and `ingest_dividends`, both `@daily`) and two unscheduled, manually
-triggered backfills (`backfill_historical_ohlcv`, `backfill_dividend_events`) — each a thin
-wrapper shelling out to the same `data-store` CLI already covered above —
-see `Dockerfile.airflow` for why (keeps Airflow's own Python environment free of this project's
-heavy deps, and means what runs in the DAG is byte-for-byte what you can run and test locally).
+triggered backfills (`backfill_historical_ohlcv`, `backfill_dividend_events`).
+
+Each DAG calls the same `data_store` job the CLI calls, through `@task.external_python`. That
+runs the job in this project's own interpreter — which it must, since the workspace needs Python
+3.14 and the Airflow image ships 3.13 — while keeping Airflow's environment free of this
+project's heavy dependencies. Crucially it also hands the job's **return value** back to Airflow
+as an XCom, so each DAG ends with a `check_run` task that fails the run on a partial failure, or
+on a "successful" run that saved nothing. A task reports what happened, not just that a command
+exited zero.
+
+What counts as a failure differs by flow, deliberately:
+
+- **A `tickers` value that matches nothing fails.** The run didn't do what it was asked, so it
+  goes red rather than quietly green.
+- **`ingest_daily_ohlcv` fails on zero rows.** Its window spans several days, so saving nothing
+  means something is wrong even when no individual step reported an error.
+- **`ingest_dividends` does not.** Dividends are sparse: on most days no followed ticker goes
+  ex-dividend and zero rows is the correct answer. Failing on it would redden the DAG most days,
+  and a daily false alarm is worse than no alarm. The cost is that this DAG can't detect a
+  silently broken dividend fetch — within one run that looks identical to a quiet day. Catching
+  it needs a longer-horizon check (no dividend rows in N days), which needs cross-run state.
 
 Airflow runs on a **custom image** (`Dockerfile.airflow`: the official `apache/airflow` image +
 `uv` + this workspace, baked in at build time, browser included). Bring it up with Docker
@@ -63,8 +80,9 @@ cd services/data-store
 docker compose up -d
 ```
 
-**After changing `data_store` code**, rebuild explicitly — unlike `dags/` (bind-mounted, picked
-up live), the application code baked into the image is a build-time snapshot:
+`dags/` and `config/` are bind-mounted, so DAG edits and configuration changes (a new fund, a
+new exchange suffix) take effect on the next run with no rebuild. **Application code under
+`data_store/` is baked into the image**, so after changing it, rebuild explicitly:
 
 ```bash
 docker compose build
@@ -201,9 +219,14 @@ Task logs land under `services/data-store/logs/dag_id=.../run_id=.../task_id=...
 
 `ingest_daily_ohlcv`/`backfill_historical_ohlcv` and `ingest_dividends`/`backfill_dividend_events`
 all accept a `tickers` param (a JSON array, default `[]`) via the UI's "Trigger DAG w/ config"
-dialog, mapped straight to the CLI's `--ticker` flag (each list value shell-escaped before being
-interpolated into the task's `bash_command`, so a malicious/malformed value can't break out of its
-argument). Leave it empty to run against everything followed, as before.
+dialog, passed to the job as an ordinary `list[str]`. Leave it empty to run against everything
+followed.
+
+There is no shell in the path any more, so the value is never interpolated into a command line
+and the escaping the old `BashOperator` needed is simply gone.
+
+Each run's counts are visible in the UI under the task's XCom (`return_value`) — rows saved,
+tickers resolved, groups or tickers failed — and are what `check_run` decides on.
 
 ## Tests
 

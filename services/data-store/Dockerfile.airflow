@@ -1,9 +1,10 @@
-# Extends the official Airflow image with `uv` and this repo's workspace, baked in at build
-# time, so DAG tasks can shell out to the exact same `data-store` CLI/venv/lockfile already
-# verified end-to-end outside Airflow — see README.md for the reasoning.
+# Extends the official Airflow image with `uv` and this repo's workspace, so DAG tasks can run
+# data_store jobs in this project's own interpreter via @task.external_python — the exact same
+# venv and lockfile verified end-to-end outside Airflow. Airflow's own environment stays free of
+# this project's dependencies; see README.md for the reasoning.
 #
-# Rebuild after changing services/data-store/data_store code (docker compose build):
-# unlike dags/ (bind-mounted, live), the application code here is a build-time snapshot.
+# Rebuild after changing services/data-store/data_store code (docker compose build): that code is
+# a build-time snapshot. dags/ and config/ are bind-mounted instead, so they are live.
 ARG AIRFLOW_BASE_IMAGE=apache/airflow:3.3.1
 FROM ${AIRFLOW_BASE_IMAGE}
 

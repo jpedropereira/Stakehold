@@ -29,6 +29,7 @@ flowchart TD
     end
 
     subgraph orch["Orchestration"]
+        JOBS["jobs.py<br/><i>runnable units: config + connection + one flow</i>"]
         PIPE["pipeline.py<br/><i>the five flows; ticker resolution</i>"]
     end
 
@@ -42,16 +43,18 @@ flowchart TD
         CONF["config_loader.py"]
         SET["settings.py"]
         DB["db/connection.py + schema.sql"]
+        LOG["logging_config.py · run_result.py"]
     end
 
     PG[("Postgres")]
     EXT(["External: iShares, yfinance"])
 
     DAGS -->|subprocess| CLI
-    CLI --> PIPE
-    CLI --> CONF
-    CLI --> SET
-    CLI --> DB
+    CLI --> JOBS
+    JOBS --> PIPE
+    JOBS --> CONF
+    JOBS --> SET
+    JOBS --> DB
     PIPE --> HOLD
     PIPE --> PRICE
     PIPE --> DIV
@@ -63,6 +66,17 @@ flowchart TD
     DIV --> PG
     DB --> PG
 ```
+
+**`jobs.py` is the seam that matters.** Each `run_*` there is one complete operation: load
+settings and configuration, open a connection, run the flow, close the connection, return its
+result. `cli.py` is argument parsing plus a call into it, and nothing else. An Airflow task will
+be a call into it and nothing else. Anything that lived in only one of those two would be, by
+construction, untested by the other — which is exactly how a CLI and a scheduled job drift apart.
+
+Its arguments are plain builtins, including `earliest_date` as an ISO string rather than a `date`.
+That looks like a weaker type until you notice both callers hand it over as text — argparse from
+the command line, Airflow from a DAG parameter — so parsing it inside the job keeps that
+conversion in one place instead of two.
 
 The rule that keeps this honest: **`pipeline.py` never touches SQL or HTTP directly, and the
 domain modules never decide *what* to fetch.** Orchestration knows which tickers matter and in
@@ -123,6 +137,44 @@ All five live in `pipeline.py` and are exposed as CLI subcommands.
 | Dividend ingest | `ingest-dividends` | daily | `etf_holdings` + config | `dividend_events` |
 | Price backfill | `backfill-ohlcv` | manual | `daily_ohlcv` | `daily_ohlcv` |
 | Dividend backfill | `backfill-dividends` | manual | `dividend_events` | `dividend_events` |
+
+### What a flow returns
+
+The four run-level flows return a structured result, not a row count:
+
+```python
+{"status": "ok" | "partial" | "nothing_to_do",
+ "tickers_resolved": int, "rows_saved": int, ...}   # plus per-flow counts
+```
+
+`status` carries the judgement so callers don't re-derive it from counts. Zero rows saved is
+ambiguous on its own — it is the correct outcome for a run with nothing to do, and an alarm for a
+run whose every group failed. Separating them is what lets an automated check react to the second
+without crying wolf about the first, and it's the same distinction the logging rules require of the
+human-readable output.
+
+A request that matches nothing is a **failure**, not an empty success: asking for
+`--ticker NOPE` and getting nothing means the run didn't do what it was asked, so it reports
+`partial` rather than `nothing_to_do`. More generally a failure outranks emptiness — a run that
+ended up with nothing to work on *because* something broke must not show green.
+
+`run_result.py` owns this contract — `RUN_RESULT_KEYS` names the two keys *every* run carries, so
+a caller can react to any of them without knowing which ran. Only two, deliberately: a pricing run
+counts tickers and a holdings run counts funds, so a shared "units" key would mean something
+different in each and be a trap rather than a contract. Each run adds its own named counts on top
+(`tickers_resolved`, `groups_failed`, `funds_failed`, and so on).
+
+It lives in its own module rather than in `pipeline.py` because four layers depend on it —
+`pipeline` builds these, `jobs` builds and forwards them, the CLI turns them into exit codes, and
+Airflow reads them back as XCom values. One definition is what stops those drifting.
+
+**The value is plain builtins on purpose.** It is destined to cross a process boundary as an
+Airflow XCom — pickled in this service's interpreter and unpickled in Airflow's, where
+`data_store` is not importable. A dataclass, enum, `date` or numpy integer would fail there with
+`ModuleNotFoundError`. A test asserts the contract rather than trusting it.
+
+`ingest_holdings` is the exception: it stays a bare row count because it is a per-fund primitive,
+not a run. Run-level aggregation across funds belongs to its caller.
 
 **They are deliberately independent.** The pricing flows read whatever ticker list is currently in
 `etf_holdings`; they never trigger a scrape. So a holdings scrape failing doesn't cascade into
@@ -205,7 +257,7 @@ flowchart TB
     end
 
     API & SCHED & DAGP & TRIG --> AFDB
-    SCHED -->|"BashOperator:<br/>uv run data-store ..."| APPDB
+    SCHED -->|"@task.external_python:<br/>jobs.run_* in /opt/stakehold/.venv"| APPDB
     PGA --> APPDB
 ```
 
@@ -213,41 +265,61 @@ flowchart TB
 nothing. Airflow's is disposable; the data one is not.
 
 **Airflow runs a custom image** (`Dockerfile.airflow`) that layers `uv` and this workspace onto the
-official Airflow image. The DAGs shell out to the same `data-store` CLI you run locally, so what
-executes in production is what you can reproduce by hand. The alternative — importing `data_store`
-into Airflow's own interpreter — isn't currently possible anyway: the image ships Python 3.13 and
-this workspace requires 3.14.
+official Airflow image. The DAGs call the same `jobs.run_*` functions the CLI calls, through
+`@task.external_python`.
 
-The cost of that choice is that **Airflow only learns whether the shell exited zero.** Row counts,
-skips and failures exist only as log text, so you can't alert on "the daily run saved zero rows".
-That's a known limitation with a planned fix (moving to `@task.external_python`, which returns a
-value through XCom while keeping the interpreter isolation).
+**Two interpreters, on purpose.** Airflow's own is Python 3.13; this workspace requires 3.14 and
+pulls in pandas, yfinance and Playwright. `@task.external_python` runs the task body in
+`/opt/stakehold/.venv` while Airflow's environment stays clean — so a dependency change here can't
+break the scheduler, and DAG parsing never imports pandas. `expect_airflow=False` is required
+because that venv deliberately has no Airflow in it.
 
-### Build-time vs. runtime, a real gotcha
+**And the task returns a value.** The operator pickles the function's return in the external
+interpreter and unpickles it in Airflow's, where it becomes the task's XCom `return_value`. That
+is why the result contract is plain builtins: `data_store` is not importable on the receiving
+side, so a dataclass or `date` would fail to unpickle. Each DAG's final `check_run` task reads
+that value and fails the run on a partial failure, or on an "ok" run that saved nothing — the
+alert that was structurally impossible when a task could only report a shell's exit code.
 
-`dags/` is bind-mounted, so DAG edits are picked up live. **Everything else is baked into the image
-at build time** — including `data_store/` *and* `config/`. So:
+A side effect worth noting: with no shell in the path, the `shlex.quote` escaping the old
+`BashOperator` needed for `--ticker` values is gone entirely, along with the injection surface it
+guarded.
+
+### Build-time vs. runtime
+
+`dags/` and `config/` are bind-mounted, so DAG edits and configuration changes take effect on the
+next run. **Application code under `data_store/` is baked into the image**, so:
 
 ```bash
-docker compose build   # required after changing application code OR config/*.yaml
+docker compose build   # required after changing data_store/ code
 ```
 
-Editing `etfs.yaml` and triggering a DAG without rebuilding runs the *old* config. This is worth
-fixing by bind-mounting `config/` the way `dags/` already is.
+`config/` is mounted rather than baked because it changes far more often than code — adding a fund
+or an exchange suffix is routine — and silently running yesterday's configuration is a
+particularly unpleasant way to discover a build step you forgot.
 
 ## Cross-cutting decisions
 
-**Output is `print(..., flush=True)`, not `logger.info`.** There's no `logging.basicConfig`
-anywhere, so `logger.info` is dropped by Python's default configuration — confirmed by a live
-Airflow task producing no output. Only stdout survives the subprocess boundary. `logger.warning`
-and above remain correct for genuine anomalies, since those *are* visible by default. See
-[`../.claude/rules/logging.md`](../.claude/rules/logging.md); this is the constraint the planned
-`@task.external_python` migration removes.
+**Logs go to stderr, results go to stdout.** Every entry point calls
+`logging_config.configure_logging()`, so `logger.info` is visible — in a plain CLI run and in
+Airflow's captured task output alike. The one remaining `print` is a command's actual result (the
+row count `cli.py` writes), which stays on stdout so the CLI is pipeable.
+
+This replaced an earlier `print(..., flush=True)` convention that existed only because nothing
+configured logging, which meant `logger.info` was silently dropped and `print` was the sole
+mechanism that worked. Configuring it once removed the constraint. A side effect worth keeping:
+progress and warnings now share one stream and are therefore ordered relative to each other —
+previously a warning could surface in a captured log nowhere near the work it concerned. See
+[`../.claude/rules/logging.md`](../.claude/rules/logging.md).
 
 **Every flow reports a completion summary, including when it did nothing.** A run that legitimately
 had nothing to do and a run that failed silently must never look the same. This is why an empty
 resolved ticker set prints a line rather than returning quietly, and why a `--ticker` value matching
 nothing is warned about by name.
+
+**A partially failed run exits non-zero.** `nothing_to_do` is a success — a quiet day is not a
+broken one — but `partial` is not, so whatever scheduled the command can tell the difference
+without reading logs.
 
 **Failures are isolated at the natural unit of work** — per fund when scraping, per source-and-type
 group when ingesting, per ticker when backfilling. One failure never costs the work queued behind
@@ -285,6 +357,8 @@ run's summary is as much a part of its contract as its return value.
 ## Where to start reading
 
 1. `pipeline.py` — the five flows; everything else is in service of these.
-2. `cli.py` — how a command becomes a flow, and where configuration is assembled.
-3. One domain module end to end (`prices/` is the most representative).
-4. [`schema.md`](schema.md) — why the tables load the way they do.
+2. `jobs.py` — how configuration, a connection and a flow become one runnable operation.
+3. `cli.py` — how a command becomes a job. Thin on purpose; if it is growing, something belongs
+   in `jobs.py` instead.
+4. One domain module end to end (`prices/` is the most representative).
+5. [`schema.md`](schema.md) — why the tables load the way they do.
