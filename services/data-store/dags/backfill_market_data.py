@@ -14,26 +14,26 @@ assert_interpreter_available()
 
 @task.external_python(**EXTERNAL_PYTHON_KWARGS)
 def backfill(tickers: list[str]) -> dict:
-    from data_store.jobs import run_backfill_dividends
+    from data_store.jobs import run_backfill_market_data
 
     # No earliest_date: the resume default, which skips every ticker that already has data.
     # Pass one only to reach further back than a previous run did -- see
     # pipeline._backfill_window.
-    return run_backfill_dividends(tickers=tickers or None)
+    return run_backfill_market_data(tickers=tickers or None)
 
 
 with DAG(
-    dag_id="backfill_dividend_events",
+    dag_id="backfill_market_data",
     description=(
-        "One-off/rare backfill of full dividend history for all followed tickers "
-        "(fund holdings + tracked_tickers.yaml), fetching only what each ticker is "
-        "still missing. Deliberately rate-limited and can run for hours -- trigger manually, "
-        "do not schedule."
+        "One-off/rare backfill of full historical daily OHLCV, dividends and stock splits for "
+        "all followed tickers (fund holdings + tracked_tickers.yaml), fetching only what each "
+        "ticker is still missing. Deliberately rate-limited and can run for hours -- trigger "
+        "manually, do not schedule."
     ),
     schedule=None,
     start_date=datetime(2024, 1, 1),
     catchup=False,
-    tags=["data-store", "dividends", "backfill"],
+    tags=["data-store", "prices", "dividends", "backfill"],
     default_args={"execution_timeout": timedelta(hours=12)},
     params={
         "tickers": Param(
@@ -52,7 +52,7 @@ with DAG(
     end = EmptyOperator(task_id="end")
 
     # expect_rows=False: once every ticker is covered a rerun correctly saves nothing. That is
-    # success here, unlike for the daily ingests.
+    # success here, unlike for the daily ingest.
     # Bind start to the *head* of the chain explicitly. Writing this as
     # `start >> check_run(ingest(requested_tickers())) >> end` looks equivalent but is not:
     # Python evaluates inside-out, so the chain is built first and the expression returns the

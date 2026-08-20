@@ -4,9 +4,10 @@
 #
 # `suffix: null` is an explicit, deliberate "this exchange's yfinance tickers need no suffix"
 # (e.g. NASDAQ, NYSE) -- NOT the same as the exchange being absent from this file entirely.
-# An exchange with no entry here is treated as unresolved: ingest-ohlcv/backfill-ohlcv will log
-# a warning naming the ticker and the raw exchange string, and skip that ticker for the run,
-# rather than sending it to yfinance bare (which silently returns zero rows instead of erroring).
+# An exchange with no entry here is treated as unresolved: ingest-market-data/backfill-market-data
+# will log a warning naming the ticker and the raw exchange string, and skip that ticker for the
+# run, rather than sending it to yfinance bare (which silently returns zero rows instead of
+# erroring).
 #
 # Seeded from the real, distinct `exchange` values in this deployment's own etf_holdings table
 # (SELECT exchange, COUNT(*) FROM etf_holdings GROUP BY exchange). If a fund adds a holding on
