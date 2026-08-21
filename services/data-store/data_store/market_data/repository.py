@@ -1,6 +1,9 @@
+import logging
 from datetime import date
 
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 _COLUMNS = [
     "ticker",
@@ -14,6 +17,22 @@ _COLUMNS = [
     "dividends",
     "stock_splits",
 ]
+
+# Matches the NUMERIC(18,4)/(18,6) columns tmp_raw_market_data is staged into below: precision
+# 18 digits total, so the integer part tops out at (18 - scale) digits. Yahoo's own API
+# occasionally returns a garbage adjclose (confirmed against yfinance/utils.py's parse_quotes,
+# which takes Yahoo's "adjclose" field verbatim -- no computation of its own to blame) that blows
+# past this; checked before COPY so one bad day drops just that row, not the ticker's whole
+# fetched history for the run.
+_NUMERIC_BOUNDS = {
+    "open": 10**14,
+    "high": 10**14,
+    "low": 10**14,
+    "close": 10**14,
+    "adj_close": 10**14,
+    "dividends": 10**14,
+    "stock_splits": 10**12,
+}
 
 
 def save_raw_market_data(conn, source: str, asset_type: str, df: pd.DataFrame) -> int:
@@ -35,9 +54,20 @@ def save_raw_market_data(conn, source: str, asset_type: str, df: pd.DataFrame) -
                 f"COPY tmp_raw_market_data ({', '.join(copy_columns)}) FROM STDIN"
             ) as copy:
                 for _, row in df.iterrows():
-                    values = [row["ticker"], row["price_date"], source, asset_type] + [
-                        _cast_value(column, row[column]) for column in _COLUMNS[2:]
-                    ]
+                    cast_values = [_cast_value(column, row[column]) for column in _COLUMNS[2:]]
+                    out_of_range = _first_out_of_range(_COLUMNS[2:], cast_values)
+                    if out_of_range is not None:
+                        column, value = out_of_range
+                        logger.warning(
+                            "save_raw_market_data: dropping %s %s -- %s=%s is out of range "
+                            "for its column, skipping this row.",
+                            row["ticker"],
+                            row["price_date"],
+                            column,
+                            value,
+                        )
+                        continue
+                    values = [row["ticker"], row["price_date"], source, asset_type] + cast_values
                     copy.write_row(values)
 
             cur.execute("""
@@ -81,6 +111,14 @@ def _cast_value(column: str, value):
     if column == "volume":
         return int(value)
     return value
+
+
+def _first_out_of_range(columns: list[str], values: list) -> tuple[str, object] | None:
+    for column, value in zip(columns, values):
+        bound = _NUMERIC_BOUNDS.get(column)
+        if bound is not None and value is not None and abs(value) >= bound:
+            return column, value
+    return None
 
 
 def get_earliest_dates(conn, source: str, tickers: list[str]) -> dict[str, date]:
