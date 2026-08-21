@@ -295,7 +295,23 @@ def backfill_market_data(
                 continue
 
             if not data.empty:
-                total_rows += save_raw_market_data(conn, source.name, asset_type, data)
+                try:
+                    total_rows += save_raw_market_data(conn, source.name, asset_type, data)
+                except Exception as e:
+                    # Unlike a fetch failure, this is data the source successfully returned --
+                    # it just couldn't be written, e.g. a value out of the column's range. That's
+                    # an upstream data-quality problem, not a reason to lose every ticker still
+                    # to come in this run.
+                    failed += 1
+                    logger.warning(
+                        "backfill-market-data: %s failed to save, skipping: %s",
+                        ticker,
+                        e,
+                        exc_info=True,
+                    )
+                    time.sleep(delay_seconds)
+                    processed += 1
+                    continue
                 logger.info(
                     f"backfill-market-data: {ticker} -> {len(data)} rows "
                     f"({fetch_start} to {fetch_end})"
