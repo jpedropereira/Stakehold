@@ -2,6 +2,7 @@ from datetime import date
 
 import numpy as np
 import pandas as pd
+import pytest
 from data_store.market_data.repository import get_earliest_dates, save_raw_market_data
 
 
@@ -56,12 +57,27 @@ class FakeConnection:
     def __init__(self, fetch_result=None, rowcount=None):
         self._cursor = FakeCursor(fetch_result=fetch_result, rowcount=rowcount)
         self.committed = False
+        self.rolled_back = False
 
     def cursor(self):
         return self._cursor
 
     def commit(self):
         self.committed = True
+
+    def rollback(self):
+        self.rolled_back = True
+
+
+class RaisingCopyCursor(FakeCursor):
+    def copy(self, sql):
+        raise RuntimeError("numeric field overflow")
+
+
+class RaisingCopyConnection(FakeConnection):
+    def __init__(self):
+        super().__init__()
+        self._cursor = RaisingCopyCursor()
 
 
 def make_df(rows):
@@ -193,6 +209,20 @@ def test_save_raw_market_data_reports_what_the_database_wrote_not_the_frame_leng
     )
 
     assert save_raw_market_data(conn, "yfinance", "equity", df) == 2
+
+
+def test_save_raw_market_data_rolls_back_on_failure_so_the_connection_stays_usable():
+    # A COPY failure (e.g. a value out of the column's range) leaves Postgres's transaction
+    # aborted until something rolls it back -- without that, every later call on this same
+    # connection fails too, even for tickers with perfectly good data.
+    conn = RaisingCopyConnection()
+    df = make_df([["AAPL", date(2026, 1, 1), 100.0, 101.0, 99.0, 100.5, 100.5, 1000, 0.0, 0.0]])
+
+    with pytest.raises(RuntimeError):
+        save_raw_market_data(conn, "yfinance", "equity", df)
+
+    assert conn.rolled_back is True
+    assert conn.committed is False
 
 
 def test_get_earliest_dates_returns_empty_for_no_tickers():
