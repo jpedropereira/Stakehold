@@ -3,7 +3,11 @@ from datetime import date
 import numpy as np
 import pandas as pd
 import pytest
-from data_store.market_data.repository import get_earliest_dates, save_raw_market_data
+from data_store.market_data.repository import (
+    _COLUMNS,
+    get_earliest_dates,
+    save_raw_market_data,
+)
 
 
 class FakeCopy:
@@ -209,6 +213,60 @@ def test_save_raw_market_data_reports_what_the_database_wrote_not_the_frame_leng
     )
 
     assert save_raw_market_data(conn, "yfinance", "equity", df) == 2
+
+
+@pytest.mark.parametrize(
+    "column,bad_value",
+    [
+        ("open", 1e14),
+        ("high", 1e14),
+        ("low", 1e14),
+        ("close", 1e14),
+        ("adj_close", 1e14),
+        ("dividends", 1e14),
+        ("stock_splits", 1e12),
+    ],
+)
+def test_save_raw_market_data_drops_a_row_whose_value_exceeds_its_column_range(
+    caplog, column, bad_value
+):
+    # Yahoo's own API occasionally returns a garbage adjclose (yfinance/utils.py's parse_quotes
+    # takes it verbatim) that overflows NUMERIC(18,4)/(18,6) -- one bad day out of years of
+    # history shouldn't cost the whole ticker's save.
+    caplog.set_level("WARNING")
+    conn = FakeConnection()
+    good = ["AAPL", date(2026, 1, 1), 100.0, 101.0, 99.0, 100.5, 100.5, 1000, 0.0, 0.0]
+    bad = ["AAPL", date(2026, 1, 2), 100.0, 101.0, 99.0, 100.5, 100.5, 1000, 0.0, 0.0]
+    bad[_COLUMNS.index(column)] = bad_value
+    df = make_df([good, bad])
+
+    count = save_raw_market_data(conn, "yfinance", "equity", df)
+
+    assert len(conn._cursor.copy_rows) == 1
+    assert conn._cursor.copy_rows[0][1] == date(2026, 1, 1)
+    assert count == 1
+    assert any(
+        "2026-01-02" in r.message and column in r.message for r in caplog.records
+    ), caplog.text
+
+
+@pytest.mark.parametrize(
+    "column,boundary_value",
+    [
+        ("open", 99999999999999.0),
+        ("stock_splits", 999999999999.0),
+    ],
+)
+def test_save_raw_market_data_keeps_a_value_just_inside_its_column_range(column, boundary_value):
+    conn = FakeConnection()
+    row = ["AAPL", date(2026, 1, 1), 100.0, 101.0, 99.0, 100.5, 100.5, 1000, 0.0, 0.0]
+    row[_COLUMNS.index(column)] = boundary_value
+    df = make_df([row])
+
+    count = save_raw_market_data(conn, "yfinance", "equity", df)
+
+    assert len(conn._cursor.copy_rows) == 1
+    assert count == 1
 
 
 def test_save_raw_market_data_rolls_back_on_failure_so_the_connection_stays_usable():
