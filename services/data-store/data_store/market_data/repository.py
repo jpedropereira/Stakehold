@@ -20,46 +20,57 @@ def save_raw_market_data(conn, source: str, asset_type: str, df: pd.DataFrame) -
     """Upsert into raw_market_data via a temp staging table — COPY doesn't support ON CONFLICT
     directly, and successive ingestion runs routinely overlap/restate recent dates."""
     with conn.cursor() as cur:
-        cur.execute("""
-            CREATE TEMP TABLE tmp_raw_market_data (
-                ticker VARCHAR(20), price_date DATE, source VARCHAR(20), asset_type VARCHAR(20),
-                open NUMERIC(18,4), high NUMERIC(18,4), low NUMERIC(18,4),
-                close NUMERIC(18,4), adj_close NUMERIC(18,4), volume BIGINT,
-                dividends NUMERIC(18,4), stock_splits NUMERIC(18,6)
-            ) ON COMMIT DROP
-            """)
+        try:
+            cur.execute("""
+                CREATE TEMP TABLE tmp_raw_market_data (
+                    ticker VARCHAR(20), price_date DATE, source VARCHAR(20),
+                    asset_type VARCHAR(20), open NUMERIC(18,4), high NUMERIC(18,4),
+                    low NUMERIC(18,4), close NUMERIC(18,4), adj_close NUMERIC(18,4),
+                    volume BIGINT, dividends NUMERIC(18,4), stock_splits NUMERIC(18,6)
+                ) ON COMMIT DROP
+                """)
 
-        copy_columns = ["ticker", "price_date", "source", "asset_type"] + _COLUMNS[2:]
-        with cur.copy(f"COPY tmp_raw_market_data ({', '.join(copy_columns)}) FROM STDIN") as copy:
-            for _, row in df.iterrows():
-                values = [row["ticker"], row["price_date"], source, asset_type] + [
-                    _cast_value(column, row[column]) for column in _COLUMNS[2:]
-                ]
-                copy.write_row(values)
+            copy_columns = ["ticker", "price_date", "source", "asset_type"] + _COLUMNS[2:]
+            with cur.copy(
+                f"COPY tmp_raw_market_data ({', '.join(copy_columns)}) FROM STDIN"
+            ) as copy:
+                for _, row in df.iterrows():
+                    values = [row["ticker"], row["price_date"], source, asset_type] + [
+                        _cast_value(column, row[column]) for column in _COLUMNS[2:]
+                    ]
+                    copy.write_row(values)
 
-        cur.execute("""
-            INSERT INTO raw_market_data (ticker, price_date, source, asset_type, open, high, low,
-                                          close, adj_close, volume, dividends, stock_splits)
-            SELECT ticker, price_date, source, asset_type, open, high, low, close, adj_close,
-                   volume, dividends, stock_splits
-            FROM tmp_raw_market_data
-            ON CONFLICT (ticker, price_date, source) DO UPDATE SET
-                asset_type = EXCLUDED.asset_type,
-                open = EXCLUDED.open,
-                high = EXCLUDED.high,
-                low = EXCLUDED.low,
-                close = EXCLUDED.close,
-                adj_close = EXCLUDED.adj_close,
-                volume = EXCLUDED.volume,
-                dividends = EXCLUDED.dividends,
-                stock_splits = EXCLUDED.stock_splits
-            """)
-        # rowcount, not len(df): the frame is what we asked the database to write, this is
-        # what it actually wrote. They agree today (every staged row either inserts or
-        # updates), so this is a correctness-of-source change rather than a fix to a wrong
-        # number -- but it's the value a run's summary reports, and it should come from the
-        # statement that did the work.
-        written = cur.rowcount
+            cur.execute("""
+                INSERT INTO raw_market_data (ticker, price_date, source, asset_type, open, high,
+                                              low, close, adj_close, volume, dividends,
+                                              stock_splits)
+                SELECT ticker, price_date, source, asset_type, open, high, low, close, adj_close,
+                       volume, dividends, stock_splits
+                FROM tmp_raw_market_data
+                ON CONFLICT (ticker, price_date, source) DO UPDATE SET
+                    asset_type = EXCLUDED.asset_type,
+                    open = EXCLUDED.open,
+                    high = EXCLUDED.high,
+                    low = EXCLUDED.low,
+                    close = EXCLUDED.close,
+                    adj_close = EXCLUDED.adj_close,
+                    volume = EXCLUDED.volume,
+                    dividends = EXCLUDED.dividends,
+                    stock_splits = EXCLUDED.stock_splits
+                """)
+            # rowcount, not len(df): the frame is what we asked the database to write, this is
+            # what it actually wrote. They agree today (every staged row either inserts or
+            # updates), so this is a correctness-of-source change rather than a fix to a wrong
+            # number -- but it's the value a run's summary reports, and it should come from the
+            # statement that did the work.
+            written = cur.rowcount
+        except Exception:
+            # A failure here (e.g. a value the column can't hold) leaves Postgres's transaction
+            # aborted -- every later statement on this connection would fail too until something
+            # rolls it back. Callers that isolate a bad ticker's failure and keep going (see
+            # pipeline.py) depend on this to leave the connection usable for the next one.
+            conn.rollback()
+            raise
     conn.commit()
     return written
 
