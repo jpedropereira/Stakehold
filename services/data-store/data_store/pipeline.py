@@ -296,7 +296,8 @@ def backfill_market_data(
 
             if not data.empty:
                 try:
-                    total_rows += save_raw_market_data(conn, source.name, asset_type, data)
+                    saved = save_raw_market_data(conn, source.name, asset_type, data)
+                    total_rows += saved
                 except Exception as e:
                     # Unlike a fetch failure, this is data the source successfully returned --
                     # it just couldn't be written, e.g. a value out of the column's range. That's
@@ -313,7 +314,7 @@ def backfill_market_data(
                     processed += 1
                     continue
                 logger.info(
-                    f"backfill-market-data: {ticker} -> {len(data)} rows "
+                    f"backfill-market-data: {ticker} -> {saved} rows "
                     f"({fetch_start} to {fetch_end})"
                 )
             else:
