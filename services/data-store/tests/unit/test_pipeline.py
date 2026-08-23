@@ -703,6 +703,272 @@ def test_ingest_result_distinguishes_nothing_to_do_from_a_failed_run(monkeypatch
     assert partial["rows_saved"] == 1
 
 
+# --- post-split history refresh -----------------------------------------------------------------
+#
+# Yahoo restates a ticker's *entire* price and dividend history into the new post-split scale
+# (verified against stored data: AAPL's 2020-08-28 close reads 124.8075, a quarter of the 499.23
+# it actually traded at). The daily ingest only re-fetches a rolling window, so without an
+# explicit refresh the rows outside that window keep the old scale and the series ends up on two
+# scales at once -- a ~4x cliff that reads as a several-hundred-percent one-day return.
+
+
+class SplitAwareMarketDataSource:
+    """Shaped like the real source's output, with a controllable stock_splits column."""
+
+    name = "yfinance"
+
+    def __init__(self, *, splits_on=None, fail_tickers=None, empty_tickers=None):
+        self.splits_on = splits_on or {}
+        self.fail_tickers = fail_tickers or set()
+        self.empty_tickers = empty_tickers or set()
+        self.fetch_calls = []
+
+    def fetch(self, tickers, start_date, end_date):
+        self.fetch_calls.append((sorted(tickers), start_date, end_date))
+        if any(t in self.fail_tickers for t in tickers):
+            raise RuntimeError("fetch exploded")
+        kept = [t for t in tickers if t not in self.empty_tickers]
+        if not kept:
+            return pd.DataFrame(columns=["ticker", "price_date", "stock_splits"])
+        return pd.DataFrame(
+            {
+                "ticker": kept,
+                "price_date": [start_date] * len(kept),
+                "stock_splits": [self.splits_on.get(t, 0.0) for t in kept],
+            }
+        )
+
+
+def _run_ingest_with_splits(monkeypatch, source, tracked, *, floors, save=None, start=None):
+    save_calls = []
+
+    def fake_save(conn_arg, source_name, asset_type, df):
+        save_calls.append((source_name, asset_type, sorted(df["ticker"])))
+        if save is not None:
+            return save(df)
+        return len(df)
+
+    monkeypatch.setitem(pipeline.MARKET_DATA_SOURCES, "yfinance", lambda: source)
+    monkeypatch.setattr(pipeline, "save_raw_market_data", fake_save)
+    monkeypatch.setattr(pipeline, "get_earliest_dates", lambda c, s, t: floors)
+    monkeypatch.setattr("data_store.pipeline.time.sleep", lambda s: None)
+
+    result = pipeline.ingest_market_data(
+        object(), [], tracked, {}, start or date(2026, 1, 1), date(2026, 1, 8)
+    )
+    return result, save_calls
+
+
+def test_ingest_refetches_full_history_for_a_ticker_that_just_split(monkeypatch):
+    source = SplitAwareMarketDataSource(splits_on={"AAPL": 4.0})
+    tracked = [
+        make_tracked_ticker(ticker="AAPL", asset_type="equity"),
+        make_tracked_ticker(ticker="MSFT", asset_type="equity"),
+    ]
+
+    _run_ingest_with_splits(monkeypatch, source, tracked, floors={"AAPL": date(1980, 12, 12)})
+
+    # The normal group fetch, then a full-history refetch for the split ticker only -- back to
+    # its earliest stored date, so every stale-scale row gets rewritten.
+    assert source.fetch_calls == [
+        (["AAPL", "MSFT"], date(2026, 1, 1), date(2026, 1, 8)),
+        (["AAPL"], date(1980, 12, 12), date(2026, 1, 8)),
+    ]
+
+
+def test_ingest_does_not_refetch_when_no_ticker_split(monkeypatch):
+    # The overwhelmingly common path: it must stay one fetch per group, with no extra database
+    # round trip to look up floors either.
+    source = SplitAwareMarketDataSource()
+    tracked = [make_tracked_ticker(ticker="AAPL", asset_type="equity")]
+    floor_lookups = []
+
+    monkeypatch.setitem(pipeline.MARKET_DATA_SOURCES, "yfinance", lambda: source)
+    monkeypatch.setattr(pipeline, "save_raw_market_data", lambda c, s, a, df: len(df))
+    monkeypatch.setattr(
+        pipeline,
+        "get_earliest_dates",
+        lambda c, s, t: floor_lookups.append(t) or {},
+    )
+    monkeypatch.setattr("data_store.pipeline.time.sleep", lambda s: None)
+
+    pipeline.ingest_market_data(object(), [], tracked, {}, date(2026, 1, 1), date(2026, 1, 8))
+
+    assert len(source.fetch_calls) == 1
+    assert floor_lookups == []
+
+
+def test_ingest_refetches_after_a_reverse_split(monkeypatch):
+    # 193 reverse splits are already in the stored data, so this is not a hypothetical shape.
+    source = SplitAwareMarketDataSource(splits_on={"XYZ": 0.25})
+    tracked = [make_tracked_ticker(ticker="XYZ", asset_type="equity")]
+
+    _run_ingest_with_splits(monkeypatch, source, tracked, floors={"XYZ": date(2000, 1, 1)})
+
+    assert len(source.fetch_calls) == 2
+    assert source.fetch_calls[1] == (["XYZ"], date(2000, 1, 1), date(2026, 1, 8))
+
+
+def test_ingest_refetches_every_ticker_that_split_on_the_same_day(monkeypatch):
+    source = SplitAwareMarketDataSource(splits_on={"AAPL": 4.0, "NVDA": 10.0})
+    tracked = [
+        make_tracked_ticker(ticker="AAPL", asset_type="equity"),
+        make_tracked_ticker(ticker="NVDA", asset_type="equity"),
+        make_tracked_ticker(ticker="MSFT", asset_type="equity"),
+    ]
+
+    _run_ingest_with_splits(
+        monkeypatch,
+        source,
+        tracked,
+        floors={"AAPL": date(1980, 12, 12), "NVDA": date(1999, 1, 22)},
+    )
+
+    refetched = [call[0] for call in source.fetch_calls[1:]]
+    assert refetched == [["AAPL"], ["NVDA"]]
+
+
+def test_ingest_skips_refresh_when_all_stored_history_is_inside_the_ingest_window(monkeypatch):
+    # A ticker first seen this week has nothing older than the window that could still be on the
+    # old scale -- re-fetching it would be a wasted request against a rate-limited API.
+    source = SplitAwareMarketDataSource(splits_on={"NEW": 2.0})
+    tracked = [make_tracked_ticker(ticker="NEW", asset_type="equity")]
+
+    _run_ingest_with_splits(monkeypatch, source, tracked, floors={"NEW": date(2026, 1, 3)})
+
+    assert len(source.fetch_calls) == 1
+
+
+def test_ingest_saves_the_refreshed_history_under_the_same_source_and_asset_type(monkeypatch):
+    source = SplitAwareMarketDataSource(splits_on={"BTC-USD": 2.0})
+    tracked = [make_tracked_ticker(ticker="BTC-USD", asset_type="crypto")]
+
+    _, save_calls = _run_ingest_with_splits(
+        monkeypatch, source, tracked, floors={"BTC-USD": date(2015, 1, 1)}
+    )
+
+    assert save_calls == [
+        ("yfinance", "crypto", ["BTC-USD"]),
+        ("yfinance", "crypto", ["BTC-USD"]),
+    ]
+
+
+def test_ingest_counts_refreshed_rows_in_the_runs_total(monkeypatch):
+    source = SplitAwareMarketDataSource(splits_on={"AAPL": 4.0})
+    tracked = [make_tracked_ticker(ticker="AAPL", asset_type="equity")]
+
+    result, _ = _run_ingest_with_splits(
+        monkeypatch, source, tracked, floors={"AAPL": date(1980, 12, 12)}
+    )
+
+    # One row from the daily window plus one from the refresh.
+    assert result["rows_saved"] == 2
+    assert result["splits_refreshed"] == 1
+    assert result["splits_refresh_failed"] == 0
+
+
+def test_ingest_sleeps_between_split_refresh_fetches(monkeypatch):
+    # Index-wide events make several tickers split on one day; a burst of unspaced full-history
+    # fetches is exactly what trips yfinance's rate limiter.
+    source = SplitAwareMarketDataSource(splits_on={"AAPL": 4.0, "NVDA": 10.0})
+    tracked = [
+        make_tracked_ticker(ticker="AAPL", asset_type="equity"),
+        make_tracked_ticker(ticker="NVDA", asset_type="equity"),
+    ]
+    sleeps = []
+
+    monkeypatch.setitem(pipeline.MARKET_DATA_SOURCES, "yfinance", lambda: source)
+    monkeypatch.setattr(pipeline, "save_raw_market_data", lambda c, s, a, df: len(df))
+    monkeypatch.setattr(
+        pipeline,
+        "get_earliest_dates",
+        lambda c, s, t: {"AAPL": date(1980, 12, 12), "NVDA": date(1999, 1, 22)},
+    )
+    monkeypatch.setattr("data_store.pipeline.time.sleep", lambda s: sleeps.append(s))
+
+    pipeline.ingest_market_data(object(), [], tracked, {}, date(2026, 1, 1), date(2026, 1, 8))
+
+    assert sleeps == [
+        pipeline.SPLIT_REFRESH_DELAY_SECONDS,
+        pipeline.SPLIT_REFRESH_DELAY_SECONDS,
+    ]
+
+
+def test_a_failed_split_refresh_keeps_the_runs_saved_rows_and_stays_non_fatal(monkeypatch):
+    # The day's own rows are already committed and correct; losing them because a repair fetch
+    # failed would turn a good run into a bad one.
+    source = SplitAwareMarketDataSource(splits_on={"AAPL": 4.0}, fail_tickers={"AAPL"})
+    tracked = [make_tracked_ticker(ticker="AAPL", asset_type="equity")]
+
+    # The first (group) fetch must succeed and only the refresh fetch fail, so the source fails
+    # on a single-ticker fetch only.
+    class RefreshOnlyFailure(SplitAwareMarketDataSource):
+        def fetch(self, tickers, start_date, end_date):
+            if len(tickers) == 1 and start_date < date(2026, 1, 1):
+                self.fetch_calls.append((sorted(tickers), start_date, end_date))
+                raise RuntimeError("rate limited")
+            return super().fetch(tickers, start_date, end_date)
+
+    source = RefreshOnlyFailure(splits_on={"AAPL": 4.0})
+
+    result, save_calls = _run_ingest_with_splits(
+        monkeypatch, source, tracked, floors={"AAPL": date(1980, 12, 12)}
+    )
+
+    assert result["rows_saved"] == 1
+    assert save_calls == [("yfinance", "equity", ["AAPL"])]
+    assert result["splits_refresh_failed"] == 1
+    assert result["status"] == "partial"
+
+
+def test_a_failed_split_refresh_warns_that_stored_history_is_now_inconsistent(monkeypatch, caplog):
+    # This warning is the only signal that a ticker is sitting on two price scales, and the
+    # trigger disappears once the split day leaves the rolling window -- so it has to name the
+    # ticker and say plainly what is wrong, not read as a routine skip.
+    caplog.set_level(logging.WARNING)
+
+    class RefreshOnlyFailure(SplitAwareMarketDataSource):
+        def fetch(self, tickers, start_date, end_date):
+            if len(tickers) == 1 and start_date < date(2026, 1, 1):
+                self.fetch_calls.append((sorted(tickers), start_date, end_date))
+                raise RuntimeError("rate limited")
+            return super().fetch(tickers, start_date, end_date)
+
+    source = RefreshOnlyFailure(splits_on={"AAPL": 4.0})
+    tracked = [make_tracked_ticker(ticker="AAPL", asset_type="equity")]
+
+    _run_ingest_with_splits(monkeypatch, source, tracked, floors={"AAPL": date(1980, 12, 12)})
+
+    assert "AAPL" in caplog.text
+    assert "split" in caplog.text.lower()
+    assert "--force-refresh" in caplog.text
+
+
+def test_a_split_refresh_that_cannot_be_saved_is_isolated_too(monkeypatch, caplog):
+    caplog.set_level(logging.WARNING)
+    source = SplitAwareMarketDataSource(splits_on={"AAPL": 4.0})
+    tracked = [make_tracked_ticker(ticker="AAPL", asset_type="equity")]
+    calls = []
+
+    def exploding_second_save(df):
+        calls.append(df)
+        if len(calls) > 1:
+            raise RuntimeError("numeric field overflow")
+        return len(df)
+
+    result, _ = _run_ingest_with_splits(
+        monkeypatch,
+        source,
+        tracked,
+        floors={"AAPL": date(1980, 12, 12)},
+        save=exploding_second_save,
+    )
+
+    assert result["rows_saved"] == 1
+    assert result["splits_refresh_failed"] == 1
+    assert "AAPL" in caplog.text
+
+
 # --- backfill_market_data ----------------------------------------------------------------------
 
 
@@ -1304,6 +1570,75 @@ def test_backfill_with_explicit_earliest_date_still_fills_the_gap(monkeypatch):
     )
 
     assert fake_source.fetch_calls == [("AAPL", date(1970, 1, 1), date(2010, 1, 1))]
+
+
+def _run_backfill(monkeypatch, source, tracked, *, floors, **kwargs):
+    monkeypatch.setitem(pipeline.MARKET_DATA_SOURCES, "yfinance", lambda: source)
+    monkeypatch.setattr(pipeline, "get_earliest_dates", lambda c, s, t: floors)
+    monkeypatch.setattr(pipeline, "save_raw_market_data", lambda c, s, a, df: len(df))
+    monkeypatch.setattr("data_store.pipeline.time.sleep", lambda s: None)
+    return pipeline.backfill_market_data(
+        object(),
+        [],
+        tracked,
+        {},
+        kwargs.pop("earliest_date", None),
+        date(2026, 1, 1),
+        delay_seconds=0,
+        **kwargs,
+    )
+
+
+def test_backfill_force_refresh_rewrites_a_ticker_that_already_has_data(monkeypatch):
+    # Without this there is no supported way to repair a ticker left on two price scales --
+    # plain backfill only ever extends *below* the earliest stored date.
+    source = FakeSingleMarketDataSource()
+    tracked = [make_tracked_ticker(ticker="AAPL", asset_type="equity")]
+
+    result = _run_backfill(
+        monkeypatch,
+        source,
+        tracked,
+        floors={"AAPL": date(1980, 12, 12)},
+        force_refresh=True,
+    )
+
+    assert source.fetch_calls == [("AAPL", pipeline.UNBOUNDED_EARLIEST_DATE, date(2026, 1, 1))]
+    assert result["tickers_skipped"] == 0
+
+
+def test_backfill_without_force_refresh_still_skips_a_ticker_that_has_data(monkeypatch):
+    # The property that makes a plain rerun cheap must survive the new flag.
+    source = FakeSingleMarketDataSource()
+    tracked = [make_tracked_ticker(ticker="AAPL", asset_type="equity")]
+
+    result = _run_backfill(monkeypatch, source, tracked, floors={"AAPL": date(1980, 12, 12)})
+
+    assert source.fetch_calls == []
+    assert result["tickers_skipped"] == 1
+
+
+def test_backfill_force_refresh_honours_an_explicit_earliest_date(monkeypatch):
+    source = FakeSingleMarketDataSource()
+    tracked = [make_tracked_ticker(ticker="AAPL", asset_type="equity")]
+
+    _run_backfill(
+        monkeypatch,
+        source,
+        tracked,
+        floors={"AAPL": date(2000, 1, 1)},
+        earliest_date=date(1990, 1, 1),
+        force_refresh=True,
+    )
+
+    # Whole range rewritten, not just the gap below the floor.
+    assert source.fetch_calls == [("AAPL", date(1990, 1, 1), date(2026, 1, 1))]
+
+
+def test_backfill_window_force_refresh_never_skips():
+    assert pipeline._backfill_window(
+        date(2000, 1, 1), None, date(2026, 1, 1), force_refresh=True
+    ) == (pipeline.UNBOUNDED_EARLIEST_DATE, date(2026, 1, 1))
 
 
 def test_backfill_result_separates_skipped_fetched_and_failed(monkeypatch):

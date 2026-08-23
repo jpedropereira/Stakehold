@@ -179,6 +179,23 @@ Pass `--earliest-date YYYY-MM-DD` only to reach *further back than a previous ru
 fetches each ticker the stretch between that date and its earliest stored date. That mode
 re-requests every ticker, so it's the slow path — expect the full multi-hour walk.
 
+### Repairing a ticker after a split
+
+Yahoo restates a ticker's whole price and dividend history into the new scale when it splits, so
+the daily ingest re-fetches that ticker's full history automatically whenever it sees a split
+(otherwise the rows outside its rolling window would keep the old scale, and the series would read
+as a several-hundred-percent one-day move). If that automatic refresh fails, the run logs a warning
+naming the ticker — it retries only while the split day stays inside the ingest window, so act on
+it rather than waiting:
+
+```bash
+uv run data-store backfill-market-data --ticker AAPL --force-refresh
+```
+
+`--force-refresh` rewrites the ticker's whole stored range instead of only extending below its
+earliest stored date, which neither of the modes above can do. Pair it with `--ticker`; without one
+it re-requests every followed ticker's full history.
+
 Holdings ingest and market data ingest are independent — `ingest-market-data` always reads the
 *current* ticker list from `etf_holdings` (whatever `ingest-holdings` most recently loaded), not
 a fresh scrape, so it can run on its own daily cadence without depending on a holdings scrape

@@ -21,6 +21,12 @@ logger = logging.getLogger(__name__)
 # yfinance clips to each ticker's actual listing date, so this is effectively unbounded.
 UNBOUNDED_EARLIEST_DATE = date(1900, 1, 1)
 
+# Sleep between the full-history re-fetches triggered by a split. Splits cluster (an index-wide
+# event can move several holdings on one day), and each refresh is a whole-history request, so
+# firing them back to back is exactly the shape that trips yfinance's rate limiting. Matches
+# backfill's default delay; not exposed as a parameter because nothing chooses it per run.
+SPLIT_REFRESH_DELAY_SECONDS = 10.0
+
 # A new fund provider or price source is a new registry entry here, not a branch in the
 # functions below.
 SCRAPERS = {
@@ -146,6 +152,8 @@ def ingest_market_data(
 
     total = 0
     failed = 0
+    splits_refreshed = 0
+    splits_refresh_failed = 0
     for (source_name, asset_type), tickers in groups.items():
         try:
             source_cls = MARKET_DATA_SOURCES[source_name]
@@ -195,19 +203,117 @@ def ingest_market_data(
         )
         total += saved
 
+        # A split in today's data invalidates everything stored outside this window -- see
+        # _refresh_split_histories. Deliberately outside the group try/except above: a repair
+        # failure must not be reported as the group having failed, since the group's own rows
+        # are saved and correct.
+        refresh_rows, refreshed, refresh_failed = _refresh_split_histories(
+            conn, source, asset_type, _tickers_with_splits(data), start_date, end_date
+        )
+        total += refresh_rows
+        splits_refreshed += refreshed
+        splits_refresh_failed += refresh_failed
+
     logger.info(
         f"ingest-market-data complete: {total} row(s) across {len(resolved)} ticker(s), "
-        f"{failed} group(s) failed."
+        f"{failed} group(s) failed, {splits_refreshed} post-split history refresh(es) "
+        f"({splits_refresh_failed} failed)."
     )
     return build_run_result(
         units_total=len(resolved),
         tickers_resolved=len(resolved),
         tickers_unmatched=unmatched,
         rows_saved=total,
-        failed=failed + unmatched,
+        failed=failed + unmatched + splits_refresh_failed,
         groups=len(groups),
         groups_failed=failed,
+        splits_refreshed=splits_refreshed,
+        splits_refresh_failed=splits_refresh_failed,
     )
+
+
+def _tickers_with_splits(data) -> list[str]:
+    """Tickers in a just-ingested frame that recorded a split, i.e. whose stored history is now
+    on the wrong scale.
+
+    Tolerates a frame without the column at all rather than requiring it: `stock_splits` is a
+    convention of the sources we have, not part of any interface a MarketDataSource must satisfy,
+    and a source that doesn't report splits should ingest normally instead of raising here.
+    """
+    if "stock_splits" not in getattr(data, "columns", ()):
+        return []
+    with_splits = data[data["stock_splits"].fillna(0) != 0]
+    return sorted(with_splits["ticker"].unique())
+
+
+def _refresh_split_histories(
+    conn, source, asset_type: str, tickers: list[str], start_date: date, end_date: date
+) -> tuple[int, int, int]:
+    """Re-fetch and rewrite the full stored history of each ticker that just split.
+
+    Yahoo restates a ticker's *entire* price and dividend history into the post-split scale --
+    AAPL's 2020-08-28 close reads 124.8075 against the 499.23 it actually traded at, and its
+    2014-05-08 dividend reads 0.1175 against the $3.29 declared. The daily ingest only re-fetches
+    a rolling window, so the rows outside it keep the pre-split scale and the series ends up on
+    two scales at once: a step change at the window boundary that is indistinguishable from a
+    real several-hundred-percent move, and which would silently poison every derived return.
+
+    Returns (rows_saved, refreshed, failed). Failures are isolated and never fatal -- the day's
+    own rows are already committed and correct, and losing them because a repair fetch failed
+    would turn a good run into a bad one.
+
+    Sharp edge, deliberately not solved with a durable work queue: the retry only happens while
+    the split day stays inside the rolling ingest window. Once it ages out, nothing re-triggers
+    this and the ticker is left on two scales with no further warning -- which is why the failure
+    below is a warning naming `--force-refresh`, not a routine skip.
+    """
+    if not tickers:
+        return 0, 0, 0
+
+    floors = get_earliest_dates(conn, source.name, tickers)
+    rows = refreshed = failed = 0
+    for ticker in tickers:
+        floor = floors.get(ticker)
+        if floor is None or floor >= start_date:
+            # Nothing stored below the window we just re-fetched, so nothing is left on the old
+            # scale. Skipping keeps a newly-followed ticker from costing a whole-history request.
+            continue
+
+        logger.info(
+            "ingest-market-data: %s split -- restating its stored history from %s.",
+            ticker,
+            floor,
+        )
+        try:
+            data = source.fetch([ticker], floor, end_date)
+            if data.empty:
+                raise ValueError("source returned no rows for the full history")
+            saved = save_raw_market_data(conn, source.name, asset_type, data)
+        except Exception as e:
+            failed += 1
+            logger.warning(
+                "ingest-market-data: %s split but its stored history could NOT be restated "
+                "(%s). Rows before %s are still on the pre-split scale, so this ticker's "
+                "history is inconsistent and any return derived from it will be wrong. This "
+                "retries only while the split day stays in the ingest window -- repair it with "
+                "`data-store backfill-market-data --ticker %s --force-refresh`.",
+                ticker,
+                e,
+                start_date,
+                ticker,
+                exc_info=True,
+            )
+            time.sleep(SPLIT_REFRESH_DELAY_SECONDS)
+            continue
+
+        rows += saved
+        refreshed += 1
+        logger.info(
+            f"ingest-market-data: {ticker} history restated -> {saved} row(s) "
+            f"({floor} to {end_date})."
+        )
+        time.sleep(SPLIT_REFRESH_DELAY_SECONDS)
+    return rows, refreshed, failed
 
 
 @_yfinance_logging_silenced()
@@ -221,6 +327,7 @@ def backfill_market_data(
     delay_seconds: float,
     only_tickers: set[str] | None = None,
     ticker_overrides: dict[str, str] | None = None,
+    force_refresh: bool = False,
 ) -> dict[str, int | str]:
     """For each priceable ticker (same resolution as ingest_market_data), fetches and stores
     the stretch of history it's still missing — see _backfill_window for how `earliest_date`
@@ -273,7 +380,7 @@ def backfill_market_data(
         floors = get_earliest_dates(conn, source.name, tickers)
         for ticker in tickers:
             floor = floors.get(ticker)
-            window = _backfill_window(floor, earliest_date, end_date)
+            window = _backfill_window(floor, earliest_date, end_date, force_refresh)
             if window is None:
                 skipped += 1
                 processed += 1
@@ -371,12 +478,20 @@ def _apply_only_tickers(
 
 
 def _backfill_window(
-    floor: date | None, earliest_date: date | None, end_date: date
+    floor: date | None,
+    earliest_date: date | None,
+    end_date: date,
+    force_refresh: bool = False,
 ) -> tuple[date, date] | None:
     """The (start, end) one ticker still needs fetched, or None when there's nothing left.
 
-    Two modes, because "how far back have we already looked?" is not something the data itself
+    Three modes, because "how far back have we already looked?" is not something the data itself
     records:
+
+    - `force_refresh`: rewrite the ticker's whole range, never skip. The repair path for a
+      history left on two price scales by a split the daily ingest could not restate (see
+      _refresh_split_histories). The other two modes only ever fetch *below* the earliest stored
+      date, so without this there is no supported way to rewrite rows that already exist.
 
     - `earliest_date is None` (the plain rerun): a ticker with any stored row is done. Sound
       because a source returns a ticker's whole requested range in one call -- an interrupted
@@ -391,6 +506,9 @@ def _backfill_window(
       floor already stops the day before it, and subtracting a day would silently drop the
       trading day immediately before it.
     """
+    if force_refresh:
+        return (earliest_date or UNBOUNDED_EARLIEST_DATE, end_date)
+
     if earliest_date is None:
         if floor is not None:
             return None
