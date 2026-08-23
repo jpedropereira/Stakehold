@@ -1,7 +1,7 @@
-"""Pure return arithmetic -- no I/O, no database, no provider. See
-dev/PLAN_RETURNS_CALCULATION.md and docs/schema.md ("What `close` actually contains") for why
-there is no split term here: `raw_market_data.close` is already retroactively split-adjusted by
-the provider, so a further split correction would double-adjust.
+"""Pure return arithmetic -- no I/O, no database, no provider. See docs/schema.md ("What
+`close` actually contains") for why there is no split term here: `raw_market_data.close` is
+already retroactively split-adjusted by the provider, so a further split correction would
+double-adjust.
 """
 
 import logging

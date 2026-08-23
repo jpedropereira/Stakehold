@@ -227,7 +227,7 @@ def test_save_market_returns_writes_null_for_a_series_anchor_row():
     "column,bad_value",
     [
         ("split_adjusted_close", 1e14),
-        ("future_split_factor", 1e12),
+        ("future_split_factor", 1e15),
         ("price_return", 1e10),
         ("dividend_return", 1e10),
         ("simple_return", 1e10),
@@ -236,7 +236,7 @@ def test_save_market_returns_writes_null_for_a_series_anchor_row():
 )
 def test_save_market_returns_drops_a_row_postgres_would_reject(column, bad_value):
     # Unit tests check the bound against a fake cursor; this drives an out-of-range value
-    # through save_market_returns against the real NUMERIC(18,4)/(18,6)/(18,8) schema, so a
+    # through save_market_returns against the real NUMERIC(18,4)/(30,15)/(18,8) schema, so a
     # mismatched bound surfaces here rather than as a NumericValueOutOfRange in production.
     conn = _connect()
     columns = [
@@ -261,4 +261,51 @@ def test_save_market_returns_drops_a_row_postgres_would_reject(column, bad_value
         cur.execute("SELECT COUNT(*) FROM market_returns WHERE ticker = %s", ("TEST",))
         (total,) = cur.fetchone()
     assert total == 1
+    conn.close()
+
+
+def test_save_market_returns_stores_a_cumulative_reverse_split_factor_without_underflow():
+    # The regression the column widening exists for, and one a fake cursor cannot catch: only
+    # real Postgres applies the column's scale. BMPS.MI's four reverse splits (0.01 x 0.05 x
+    # 0.01 x 0.01) multiply out to 5e-8, which the original NUMERIC(18,6) rounded to 0 --
+    # zeroing `split_adjusted_close * future_split_factor` for every row before its first split.
+    conn = _connect()
+    factor = 0.01 * 0.05 * 0.01 * 0.01
+    df = make_returns_df([["TEST", date(2010, 1, 4), 10.0, factor, 0.01, 0.0, 0.01, 0.00995]])
+
+    count = save_market_returns(conn, "yfinance", df)
+
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT future_split_factor, split_adjusted_close * future_split_factor "
+            "FROM market_returns WHERE ticker = %s AND price_date = %s",
+            ("TEST", date(2010, 1, 4)),
+        )
+        stored_factor, as_traded = cur.fetchone()
+
+    assert count == 1
+    assert float(stored_factor) == pytest.approx(5e-8, rel=1e-9)
+    assert float(as_traded) == pytest.approx(5e-7, rel=1e-9)
+    conn.close()
+
+
+def test_save_market_returns_drops_a_split_factor_that_would_round_to_zero():
+    # Below the column's scale the value would store as 0, which reads as a real factor rather
+    # than a missing one. Dropping the row keeps that ambiguity out of the table.
+    conn = _connect()
+    good = ["TEST", date(2026, 1, 1), 10.0, 1.0, 0.01, 0.0, 0.01, 0.00995]
+    bad = ["TEST", date(2026, 1, 2), 10.0, 1e-16, 0.01, 0.0, 0.01, 0.00995]
+    df = make_returns_df([good, bad])
+
+    count = save_market_returns(conn, "yfinance", df)
+
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) FROM market_returns WHERE ticker = %s AND future_split_factor = 0",
+            ("TEST",),
+        )
+        (zeroed,) = cur.fetchone()
+
+    assert count == 1
+    assert zeroed == 0
     conn.close()

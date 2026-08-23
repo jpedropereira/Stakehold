@@ -1,6 +1,6 @@
 """Unit tests for the returns arithmetic itself -- the highest-risk part of Phase 2.
 
-See dev/PLAN_RETURNS_CALCULATION.md and docs/schema.md ("What `close` actually contains") for
+See docs/schema.md ("What `close` actually contains") for
 why there is no split term in these formulas: `raw_market_data.close` is already retroactively
 split-adjusted by the provider, so applying a further split correction double-adjusts.
 """

@@ -247,7 +247,7 @@ def test_save_market_returns_reports_what_the_database_wrote_not_the_frame_lengt
     "column,bad_value",
     [
         ("split_adjusted_close", 1e14),
-        ("future_split_factor", 1e12),
+        ("future_split_factor", 1e15),
         ("price_return", 1e10),
         ("dividend_return", 1e10),
         ("simple_return", 1e10),
@@ -270,6 +270,50 @@ def test_save_market_returns_drops_a_row_whose_value_exceeds_its_column_range(
     assert conn._cursor.copy_rows[0][1] == date(2026, 1, 1)
     assert count == 1
     assert any("2026-01-02" in r.message and column in r.message for r in caplog.records)
+
+
+def test_save_market_returns_keeps_a_cumulative_reverse_split_factor():
+    """Regression: BMPS.MI's four reverse splits multiply out to 5e-8, which NUMERIC(18,6)
+    rounded to 0 -- silently breaking the documented `split_adjusted_close *
+    future_split_factor` as-traded derivation for every row before its first split."""
+    conn = FakeConnection()
+    df = make_returns_df([["BMPS.MI", date(2010, 1, 4), 100.0, 5e-8, 0.01, 0.0, 0.01, 0.00995]])
+
+    count = save_market_returns(conn, "yfinance", df)
+
+    assert count == 1
+    assert conn._cursor.copy_rows[0][_COLUMNS.index("future_split_factor") + 1] == 5e-8
+
+
+@pytest.mark.parametrize("bad_value", [1e-16, 0.0])
+def test_save_market_returns_drops_a_row_whose_split_factor_would_round_to_zero(caplog, bad_value):
+    """A split factor below the column's scale, or already collapsed to zero, must be warned
+    about and skipped rather than stored -- a stored 0 reads as a valid factor and silently
+    zeroes any as-traded price derived from it."""
+    caplog.set_level("WARNING")
+    conn = FakeConnection()
+    good = ["AAPL", date(2026, 1, 1), 100.0, 1.0, 0.01, 0.0, 0.01, 0.00995]
+    bad = ["AAPL", date(2026, 1, 2), 100.0, bad_value, 0.01, 0.0, 0.01, 0.00995]
+    df = make_returns_df([good, bad])
+
+    count = save_market_returns(conn, "yfinance", df)
+
+    assert count == 1
+    assert len(conn._cursor.copy_rows) == 1
+    assert conn._cursor.copy_rows[0][1] == date(2026, 1, 1)
+    assert any(
+        "2026-01-02" in r.message and "future_split_factor" in r.message for r in caplog.records
+    )
+
+
+def test_save_market_returns_keeps_a_zero_return_which_is_a_legitimate_flat_day():
+    """The underflow guard must apply only to future_split_factor: a return of exactly 0 is a
+    flat day, not a defect, and must survive."""
+    conn = FakeConnection()
+    df = make_returns_df([["AAPL", date(2026, 1, 2), 100.0, 1.0, 0.0, 0.0, 0.0, 0.0]])
+
+    assert save_market_returns(conn, "yfinance", df) == 1
+    assert len(conn._cursor.copy_rows) == 1
 
 
 def test_save_market_returns_rolls_back_on_failure_so_the_connection_stays_usable():
