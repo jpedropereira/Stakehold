@@ -189,7 +189,7 @@ the unprocessed landing zone.
 | `price_date`            | `DATE`           | Part of PK. |
 | `source`                | `VARCHAR(20)`    | Part of PK, e.g. `'yfinance'`. |
 | `split_adjusted_close`  | `NUMERIC(18,4)`  | Copied verbatim from `raw_market_data.close`, which is already split-adjusted by the provider (see `raw_market_data`, "What `close` actually contains"). This is the chart column. Denormalised on purpose so a chart query needs no join back to `raw_market_data`. |
-| `future_split_factor`   | `NUMERIC(18,6)`  | Product of every split ratio strictly *after* this date (`1.0` for every date after a ticker's last split). Not otherwise derivable from a single row, and self-verifying against `raw_market_data.stock_splits`. |
+| `future_split_factor`   | `NUMERIC(30,15)` | Product of every split ratio strictly *after* this date (`1.0` for every date after a ticker's last split). Not otherwise derivable from a single row, and self-verifying against `raw_market_data.stock_splits`. Never legitimately `0` — see "Why the scale is 15" below. |
 | `price_return`          | `NUMERIC(18,8)`  | `close_t / close_(t-1) - 1`. Nullable — `NULL` on a ticker's first stored date, where no prior close exists. **No split term** — see below. |
 | `dividend_return`       | `NUMERIC(18,8)`  | `dividends_t / close_(t-1)`. `0` (not `NULL`) on a non-dividend day; `NULL` only on the series-anchor row. |
 | `simple_return`         | `NUMERIC(18,8)`  | `(close_t + dividends_t) / close_(t-1) - 1`. Always equals `price_return + dividend_return` exactly — kept as its own column for query convenience, computed in the same pass so the two can never drift apart. This is the number to display directly (`"+2.3% today"`). |
@@ -197,6 +197,22 @@ the unprocessed landing zone.
 | `calculated_at`         | `TIMESTAMPTZ`    | Defaults to `now()`; also bumped on every upsert, so it reflects the last rebuild, not the first. |
 
 Index: `(ticker, price_date)`, same rationale as `raw_market_data`'s.
+
+**Why `future_split_factor`'s scale is 15.** Cumulative *reverse* splits drive this column
+towards zero, and the original `NUMERIC(18,6)` bottomed out at `1e-6`. `BMPS.MI` has four reverse
+splits (`0.01 x 0.05 x 0.01 x 0.01`) that multiply out to `5e-8`, so 3,814 of its rows stored
+`0` — which reads as a valid factor rather than a missing one, and silently zeroed the
+`split_adjusted_close x future_split_factor` derivation below. Measured across the real 1,278-ticker
+dataset the column has to span `5e-8` to `1e4`; `NUMERIC(30,15)` covers `1e-15` to `1e15`, roughly
+seven decimal orders of headroom below today's worst case. Fifteen fractional digits is also as
+much as the `float64` the factor is computed in can distinguish, so a wider scale would store
+false precision rather than more information.
+
+No fixed scale is underflow-proof, so the scale is paired with a guard:
+`returns/repository.py`'s `_NUMERIC_MIN_MAGNITUDE` warns about and skips a row whose factor would
+still round to zero, rather than storing an indistinguishable `0`. That lower bound applies only
+to this column — every other numeric column here is a return, for which exactly `0` is a flat day
+rather than a defect.
 
 **No stored as-traded price column, deliberately.** An earlier design also stored
 `as_traded_close` — the genuinely raw, historically-traded price (`split_adjusted_close ×
@@ -228,10 +244,21 @@ date of that ticker — an incremental design that only appended new dates would
 values for the rest of the series after a split, which is worse than recomputing everything on a
 cadence generous enough to be cheap (the full 8.95M-row table rebuilds in minutes, not hours).
 
-**Known limitation: upsert never deletes.** If rows are removed from `raw_market_data` (not a
-normal occurrence today), the corresponding `market_returns` rows are not cleaned up
-automatically and become orphaned. "Full rebuild self-heals" is true for changed and added rows,
-not for deleted ones.
+**Known limitation: upsert never deletes.** The loader only ever inserts or updates, so a row
+that stops being produced is left behind at whatever value it last held. Three paths reach that
+state, not one:
+
+- A row is removed from `raw_market_data` (not a normal occurrence today).
+- `compute_returns` drops a row whose `close` is missing or non-positive.
+- `save_market_returns` skips a row whose computed value is out of range for its column.
+
+The last two are live on real data — a full rebuild of the dev database drops tens of rows per
+batch for non-positive/missing `close`. In all three cases "full rebuild self-heals" holds for
+changed and added rows, but not for rows that disappear from the output: a previously written
+`market_returns` row for that `(ticker, price_date, source)` survives the rebuild untouched, and
+its `calculated_at` still advances only when it *is* rewritten, so staleness isn't visible from
+the row itself. Cleaning this up needs a delete pass keyed on what the rebuild actually wrote —
+not implemented here.
 
 **Batched by ticker, not one table-wide query.** `raw_market_data` is 8.95M rows across 1,278
 tickers, and this can run inside an Airflow worker. Returns are purely per-ticker (see

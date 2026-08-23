@@ -23,11 +23,22 @@ _COLUMNS = [
 # COPY.
 _NUMERIC_BOUNDS = {
     "split_adjusted_close": 10**14,
-    "future_split_factor": 10**12,
+    "future_split_factor": 10**15,
     "price_return": 10**10,
     "dividend_return": 10**10,
     "simple_return": 10**10,
     "log_return": 10**10,
+}
+
+# The matching *lower* bound, and only for future_split_factor -- every other column here is a
+# return, for which exactly 0 is a flat day rather than a defect. A split factor is a product of
+# positive ratios, so it is never legitimately 0: a 0 means the value underflowed the column's
+# scale on the way in, and a stored 0 is indistinguishable from a real factor while silently
+# zeroing any as-traded price derived from it (BMPS.MI, 3,814 rows, under the old NUMERIC(18,6)).
+# No fixed scale is underflow-proof -- NUMERIC(30,15) puts the threshold far out of reach of real
+# cumulative reverse splits, and this guard makes crossing it loud rather than silent.
+_NUMERIC_MIN_MAGNITUDE = {
+    "future_split_factor": 1e-15,
 }
 
 
@@ -87,7 +98,7 @@ def save_market_returns(conn, source: str, df: pd.DataFrame) -> int:
             cur.execute("""
                 CREATE TEMP TABLE tmp_market_returns (
                     ticker VARCHAR(20), price_date DATE, source VARCHAR(20),
-                    split_adjusted_close NUMERIC(18,4), future_split_factor NUMERIC(18,6),
+                    split_adjusted_close NUMERIC(18,4), future_split_factor NUMERIC(30,15),
                     price_return NUMERIC(18,8), dividend_return NUMERIC(18,8),
                     simple_return NUMERIC(18,8), log_return NUMERIC(18,8)
                 ) ON COMMIT DROP
@@ -146,7 +157,12 @@ def _cast_value(value):
 
 def _first_out_of_range(columns: list[str], values: list) -> tuple[str, object] | None:
     for column, value in zip(columns, values):
+        if value is None:
+            continue
         bound = _NUMERIC_BOUNDS.get(column)
-        if bound is not None and value is not None and abs(value) >= bound:
+        if bound is not None and abs(value) >= bound:
+            return column, value
+        floor = _NUMERIC_MIN_MAGNITUDE.get(column)
+        if floor is not None and abs(value) < floor:
             return column, value
     return None

@@ -58,17 +58,38 @@ CREATE TABLE IF NOT EXISTS raw_market_data (
 CREATE INDEX IF NOT EXISTS idx_raw_market_data_ticker_date ON raw_market_data (ticker, price_date);
 
 CREATE TABLE IF NOT EXISTS market_returns (
-    ticker                VARCHAR(20)   NOT NULL,
-    price_date            DATE          NOT NULL,
-    source                VARCHAR(20)   NOT NULL,
-    split_adjusted_close  NUMERIC(18,4) NOT NULL,
-    future_split_factor   NUMERIC(18,6) NOT NULL,
+    ticker                VARCHAR(20)    NOT NULL,
+    price_date            DATE           NOT NULL,
+    source                VARCHAR(20)    NOT NULL,
+    split_adjusted_close  NUMERIC(18,4)  NOT NULL,
+    future_split_factor   NUMERIC(30,15) NOT NULL,
     price_return          NUMERIC(18,8),
     dividend_return       NUMERIC(18,8),
     simple_return         NUMERIC(18,8),
     log_return            NUMERIC(18,8),
-    calculated_at         TIMESTAMPTZ   NOT NULL DEFAULT now(),
+    calculated_at         TIMESTAMPTZ    NOT NULL DEFAULT now(),
     PRIMARY KEY (ticker, price_date, source)
 );
+
+-- Widens future_split_factor on databases created before this change. NUMERIC(18,6) bottomed
+-- out at 1e-6, so a ticker with cumulative reverse splits underflowed to a stored 0 -- BMPS.MI's
+-- four reverse splits multiply out to 5e-8, and 3,814 of its rows were stored as 0. That reads
+-- as a valid factor rather than a missing one, and silently zeroes the documented
+-- `split_adjusted_close * future_split_factor` as-traded derivation. NUMERIC(30,15) also matches
+-- the float64 the factor is computed in, so it stores no false precision. Widening only: every
+-- value that fit before still fits. Guarded on the current precision so a rerun is a no-op.
+-- Rerun `data-store calculate-returns` after this to rewrite any already-zeroed rows.
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT FROM information_schema.columns
+        WHERE table_name = 'market_returns'
+          AND column_name = 'future_split_factor'
+          AND numeric_precision = 18
+    ) THEN
+        ALTER TABLE market_returns ALTER COLUMN future_split_factor TYPE NUMERIC(30,15);
+    END IF;
+END
+$$;
 
 CREATE INDEX IF NOT EXISTS idx_market_returns_ticker_date ON market_returns (ticker, price_date);
