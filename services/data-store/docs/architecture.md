@@ -14,8 +14,8 @@ Getting external financial data into Postgres, correctly and repeatably. Two thi
   holdings contain plus directly tracked ones. One fetch, one table (`raw_market_data`) —
   unprocessed, matching the source's own grain, not decomposed into a return calculation there.
 
-One thing is derived, not fetched: **`market_returns`** — split-adjusted price, as-traded price,
-and price/dividend/simple/log returns, rebuilt from `raw_market_data` by `calculate-returns`. This
+One thing is derived, not fetched: **`market_returns`** — split-adjusted price and
+price/dividend/simple/log returns, rebuilt from `raw_market_data` by `calculate-returns`. This
 still fits the service's remit because it involves no judgment about portfolios or holdings — it's
 arithmetic on data already landed here, kept in this service so `raw_market_data`'s sharp edges
 (the split-restatement behaviour below) are handled once, next to the table that has them, rather

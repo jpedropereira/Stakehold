@@ -139,10 +139,9 @@ def _build_parser() -> argparse.ArgumentParser:
     calculate_returns_parser = subparsers.add_parser(
         "calculate-returns",
         help=(
-            "Rebuild market_returns (split-adjusted price, as-traded price, and price/"
-            "dividend/simple/log returns) from raw_market_data. Always a full rebuild -- a "
-            "split retroactively changes the correct value of every earlier row for that "
-            "ticker."
+            "Rebuild market_returns (split-adjusted price and price/dividend/simple/log "
+            "returns) from raw_market_data. Always a full rebuild -- a split retroactively "
+            "changes the correct value of every earlier row for that ticker."
         ),
     )
     calculate_returns_parser.add_argument(

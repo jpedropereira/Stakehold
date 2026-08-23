@@ -29,7 +29,6 @@ def identity_compute_returns(batch):
     # tests/unit/returns/test_calculator.py's job.
     out = batch[["ticker", "price_date"]].copy()
     out["split_adjusted_close"] = batch["close"]
-    out["as_traded_close"] = batch["close"]
     out["future_split_factor"] = 1.0
     out["price_return"] = None
     out["dividend_return"] = None

@@ -199,8 +199,8 @@ it re-requests every followed ticker's full history.
 
 ### Calculating returns
 
-`calculate-returns` rebuilds `market_returns` — split-adjusted price, as-traded price, and
-price/dividend/simple/log returns — from whatever is currently in `raw_market_data`. Run it after
+`calculate-returns` rebuilds `market_returns` — split-adjusted price and price/dividend/simple/log
+returns — from whatever is currently in `raw_market_data`. Run it after
 `ingest-market-data`/`backfill-market-data` land new data:
 
 ```bash

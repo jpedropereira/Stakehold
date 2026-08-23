@@ -62,7 +62,6 @@ CREATE TABLE IF NOT EXISTS market_returns (
     price_date            DATE          NOT NULL,
     source                VARCHAR(20)   NOT NULL,
     split_adjusted_close  NUMERIC(18,4) NOT NULL,
-    as_traded_close       NUMERIC(18,4) NOT NULL,
     future_split_factor   NUMERIC(18,6) NOT NULL,
     price_return          NUMERIC(18,8),
     dividend_return       NUMERIC(18,8),

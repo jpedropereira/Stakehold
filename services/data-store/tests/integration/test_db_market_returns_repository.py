@@ -54,7 +54,6 @@ def make_returns_df(rows):
             "ticker",
             "price_date",
             "split_adjusted_close",
-            "as_traded_close",
             "future_split_factor",
             "price_return",
             "dividend_return",
@@ -162,33 +161,28 @@ def test_iter_price_series_splits_many_tickers_into_batches():
 
 def test_save_market_returns_inserts_new_rows():
     conn = _connect()
-    df = make_returns_df([["TEST", date(2026, 1, 1), 10.0, 10.0, 1.0, 0.01, 0.0, 0.01, 0.00995]])
+    df = make_returns_df([["TEST", date(2026, 1, 1), 10.0, 1.0, 0.01, 0.0, 0.01, 0.00995]])
 
     count = save_market_returns(conn, "yfinance", df)
 
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT split_adjusted_close, as_traded_close, price_return "
+            "SELECT split_adjusted_close, price_return "
             "FROM market_returns WHERE ticker = %s AND price_date = %s AND source = %s",
             ("TEST", date(2026, 1, 1), "yfinance"),
         )
-        split_adjusted_close, as_traded_close, price_return = cur.fetchone()
+        split_adjusted_close, price_return = cur.fetchone()
 
     assert count == 1
     assert float(split_adjusted_close) == 10.0
-    assert float(as_traded_close) == 10.0
     assert float(price_return) == pytest.approx(0.01)
     conn.close()
 
 
 def test_save_market_returns_upserts_on_rerun():
     conn = _connect()
-    original = make_returns_df(
-        [["TEST", date(2026, 1, 1), 10.0, 10.0, 1.0, 0.01, 0.0, 0.01, 0.00995]]
-    )
-    recomputed = make_returns_df(
-        [["TEST", date(2026, 1, 1), 12.0, 12.0, 1.0, 0.05, 0.0, 0.05, 0.0488]]
-    )
+    original = make_returns_df([["TEST", date(2026, 1, 1), 10.0, 1.0, 0.01, 0.0, 0.01, 0.00995]])
+    recomputed = make_returns_df([["TEST", date(2026, 1, 1), 12.0, 1.0, 0.05, 0.0, 0.05, 0.0488]])
 
     save_market_returns(conn, "yfinance", original)
     save_market_returns(conn, "yfinance", recomputed)
@@ -213,7 +207,7 @@ def test_save_market_returns_upserts_on_rerun():
 
 def test_save_market_returns_writes_null_for_a_series_anchor_row():
     conn = _connect()
-    df = make_returns_df([["TEST", date(2026, 1, 1), 10.0, 10.0, 1.0, None, None, None, None]])
+    df = make_returns_df([["TEST", date(2026, 1, 1), 10.0, 1.0, None, None, None, None]])
 
     save_market_returns(conn, "yfinance", df)
 
@@ -233,7 +227,6 @@ def test_save_market_returns_writes_null_for_a_series_anchor_row():
     "column,bad_value",
     [
         ("split_adjusted_close", 1e14),
-        ("as_traded_close", 1e14),
         ("future_split_factor", 1e12),
         ("price_return", 1e10),
         ("dividend_return", 1e10),
@@ -250,15 +243,14 @@ def test_save_market_returns_drops_a_row_postgres_would_reject(column, bad_value
         "ticker",
         "price_date",
         "split_adjusted_close",
-        "as_traded_close",
         "future_split_factor",
         "price_return",
         "dividend_return",
         "simple_return",
         "log_return",
     ]
-    good = ["TEST", date(2026, 1, 1), 10.0, 10.0, 1.0, 0.01, 0.0, 0.01, 0.00995]
-    bad = ["TEST", date(2026, 1, 2), 10.0, 10.0, 1.0, 0.01, 0.0, 0.01, 0.00995]
+    good = ["TEST", date(2026, 1, 1), 10.0, 1.0, 0.01, 0.0, 0.01, 0.00995]
+    bad = ["TEST", date(2026, 1, 2), 10.0, 1.0, 0.01, 0.0, 0.01, 0.00995]
     bad[columns.index(column)] = bad_value
     df = make_returns_df([good, bad])
 

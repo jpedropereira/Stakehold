@@ -92,7 +92,6 @@ def make_returns_df(rows):
             "ticker",
             "price_date",
             "split_adjusted_close",
-            "as_traded_close",
             "future_split_factor",
             "price_return",
             "dividend_return",
@@ -190,7 +189,7 @@ def test_iter_price_series_returns_no_batches_when_there_are_no_tickers():
 
 def test_save_market_returns_creates_temp_table_copies_and_upserts():
     conn = FakeConnection()
-    df = make_returns_df([["AAPL", date(2026, 1, 1), 100.0, 100.0, 1.0, None, None, None, None]])
+    df = make_returns_df([["AAPL", date(2026, 1, 1), 100.0, 1.0, None, None, None, None]])
 
     count = save_market_returns(conn, "yfinance", df)
 
@@ -210,8 +209,8 @@ def test_save_market_returns_stamps_source_on_each_row():
     conn = FakeConnection()
     df = make_returns_df(
         [
-            ["AAPL", date(2026, 1, 1), 100.0, 100.0, 1.0, None, None, None, None],
-            ["MSFT", date(2026, 1, 1), 200.0, 200.0, 1.0, None, None, None, None],
+            ["AAPL", date(2026, 1, 1), 100.0, 1.0, None, None, None, None],
+            ["MSFT", date(2026, 1, 1), 200.0, 1.0, None, None, None, None],
         ]
     )
 
@@ -223,9 +222,7 @@ def test_save_market_returns_stamps_source_on_each_row():
 
 def test_save_market_returns_writes_none_for_null_returns_on_a_first_date_row():
     conn = FakeConnection()
-    df = make_returns_df(
-        [["AAPL", date(2026, 1, 1), 100.0, 100.0, 1.0, np.nan, np.nan, np.nan, np.nan]]
-    )
+    df = make_returns_df([["AAPL", date(2026, 1, 1), 100.0, 1.0, np.nan, np.nan, np.nan, np.nan]])
 
     save_market_returns(conn, "yfinance", df)
 
@@ -237,9 +234,9 @@ def test_save_market_returns_reports_what_the_database_wrote_not_the_frame_lengt
     conn = FakeConnection(rowcount=2)
     df = make_returns_df(
         [
-            ["AAPL", date(2026, 1, 1), 100.0, 100.0, 1.0, None, None, None, None],
-            ["AAPL", date(2026, 1, 2), 101.0, 101.0, 1.0, 0.01, 0.0, 0.01, 0.00995],
-            ["AAPL", date(2026, 1, 3), 102.0, 102.0, 1.0, 0.0099, 0.0, 0.0099, 0.00985],
+            ["AAPL", date(2026, 1, 1), 100.0, 1.0, None, None, None, None],
+            ["AAPL", date(2026, 1, 2), 101.0, 1.0, 0.01, 0.0, 0.01, 0.00995],
+            ["AAPL", date(2026, 1, 3), 102.0, 1.0, 0.0099, 0.0, 0.0099, 0.00985],
         ]
     )
 
@@ -250,7 +247,6 @@ def test_save_market_returns_reports_what_the_database_wrote_not_the_frame_lengt
     "column,bad_value",
     [
         ("split_adjusted_close", 1e14),
-        ("as_traded_close", 1e14),
         ("future_split_factor", 1e12),
         ("price_return", 1e10),
         ("dividend_return", 1e10),
@@ -263,8 +259,8 @@ def test_save_market_returns_drops_a_row_whose_value_exceeds_its_column_range(
 ):
     caplog.set_level("WARNING")
     conn = FakeConnection()
-    good = ["AAPL", date(2026, 1, 1), 100.0, 100.0, 1.0, 0.01, 0.0, 0.01, 0.00995]
-    bad = ["AAPL", date(2026, 1, 2), 100.0, 100.0, 1.0, 0.01, 0.0, 0.01, 0.00995]
+    good = ["AAPL", date(2026, 1, 1), 100.0, 1.0, 0.01, 0.0, 0.01, 0.00995]
+    bad = ["AAPL", date(2026, 1, 2), 100.0, 1.0, 0.01, 0.0, 0.01, 0.00995]
     bad[_COLUMNS.index(column)] = bad_value
     df = make_returns_df([good, bad])
 
@@ -278,7 +274,7 @@ def test_save_market_returns_drops_a_row_whose_value_exceeds_its_column_range(
 
 def test_save_market_returns_rolls_back_on_failure_so_the_connection_stays_usable():
     conn = RaisingCopyConnection()
-    df = make_returns_df([["AAPL", date(2026, 1, 1), 100.0, 100.0, 1.0, None, None, None, None]])
+    df = make_returns_df([["AAPL", date(2026, 1, 1), 100.0, 1.0, None, None, None, None]])
 
     with pytest.raises(RuntimeError):
         save_market_returns(conn, "yfinance", df)
