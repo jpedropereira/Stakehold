@@ -407,6 +407,7 @@ def test_backfill_market_data_default_run(monkeypatch, fake_settings):
         delay_seconds,
         only_tickers=None,
         ticker_overrides=None,
+        force_refresh=False,
     ):
         calls.append(
             (
@@ -482,6 +483,25 @@ def test_backfill_market_data_respects_earliest_date_and_delay_flags(monkeypatch
     earliest_date, delay_seconds = calls[0]
     assert earliest_date == date(2000, 6, 15)
     assert delay_seconds == 3.5
+
+
+def test_backfill_market_data_forwards_force_refresh(monkeypatch, fake_settings):
+    calls = []
+
+    monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(jobs, "load_funds", lambda path: [])
+    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(
+        jobs,
+        "backfill_market_data",
+        lambda conn, funds, tt, ex, ed, end, ds, **kw: calls.append(kw) or flow_result(),
+    )
+
+    jobs.run_backfill_market_data(force_refresh=True)
+    jobs.run_backfill_market_data()
+
+    assert calls[0]["force_refresh"] is True
+    assert calls[1]["force_refresh"] is False
 
 
 def test_backfill_market_data_ticker_flag_passes_only_tickers_filter(monkeypatch, fake_settings):

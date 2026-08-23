@@ -124,16 +124,18 @@ def run_backfill_market_data(
     tickers: list[str] | None = None,
     earliest_date: str | None = None,
     delay_seconds: float = 10.0,
+    force_refresh: bool = False,
 ) -> dict[str, int | str]:
     """Fill missing history (prices, dividends, stock splits). `earliest_date` is an ISO date
     string or None -- see `pipeline._backfill_window` for what omitting it means (resume rather
-    than deepen)."""
+    than deepen), and what `force_refresh` overrides (rewrite rows that already exist)."""
     configure_logging()
     return _run_priced_flow(
         backfill_market_data,
         fund=fund,
         tickers=tickers,
         positional=(_parse_earliest_date(earliest_date), date.today(), delay_seconds),
+        extra_kwargs={"force_refresh": force_refresh},
     )
 
 
@@ -143,13 +145,15 @@ def _run_priced_flow(
     fund: str | None,
     tickers: list[str] | None,
     positional: tuple,
+    extra_kwargs: dict | None = None,
 ) -> dict[str, int | str]:
     """Assemble the inputs the four ticker-universe flows all take, then run one.
 
     They differ only in which flow function is called and in the date/delay arguments that
     follow the universe; everything before that -- settings, fund selection, tracked tickers,
     ticker resolution, the --ticker filter, the connection lifecycle -- is identical, and was
-    copy-pasted four times before this.
+    copy-pasted four times before this. `extra_kwargs` carries the options only one flow has
+    (currently backfill's `force_refresh`), keeping them out of the shared positional tuple.
     """
     settings = load_settings()
     funds = _select_funds(load_funds(settings.config_path), fund)
@@ -165,6 +169,7 @@ def _run_priced_flow(
             *positional,
             only_tickers=set(tickers) if tickers else None,
             ticker_overrides=resolution.ticker_overrides,
+            **(extra_kwargs or {}),
         )
     finally:
         conn.close()
