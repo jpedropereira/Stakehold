@@ -934,6 +934,36 @@ def test_backfill_continues_after_one_ticker_fails(monkeypatch):
     assert len(save_calls) == 1
 
 
+def test_backfill_continues_after_one_ticker_fails_to_save(monkeypatch, caplog):
+    caplog.set_level(logging.WARNING)
+    conn = object()
+    fake_source = FakeSingleMarketDataSource()
+    tracked = [
+        make_tracked_ticker(ticker="BAD", asset_type="equity"),
+        make_tracked_ticker(ticker="GOOD", asset_type="equity"),
+    ]
+
+    monkeypatch.setitem(pipeline.MARKET_DATA_SOURCES, "yfinance", lambda: fake_source)
+    monkeypatch.setattr(pipeline, "get_earliest_dates", lambda conn, source, tickers: {})
+
+    def fake_save(conn, source, asset_type, df):
+        if df["ticker"].iloc[0] == "BAD":
+            raise RuntimeError("numeric field overflow")
+        return len(df)
+
+    monkeypatch.setattr(pipeline, "save_raw_market_data", fake_save)
+    monkeypatch.setattr("data_store.pipeline.time.sleep", lambda s: None)
+
+    result = pipeline.backfill_market_data(
+        conn, [], tracked, {}, date(1900, 1, 1), date(2026, 1, 1), delay_seconds=0
+    )
+
+    assert result["rows_saved"] == 1  # only GOOD saved
+    assert result["tickers_failed"] == 1
+    record = next(r for r in caplog.records if "BAD" in r.message and "failed" in r.message)
+    assert record.exc_info is not None, "traceback was dropped"
+
+
 def test_a_failed_backfill_ticker_logs_its_traceback(monkeypatch, caplog):
     caplog.set_level(logging.WARNING)
     monkeypatch.setitem(

@@ -145,6 +145,57 @@ def test_save_raw_market_data_stores_non_equity_asset_types():
     conn.close()
 
 
+@pytest.mark.parametrize(
+    "column,bad_value",
+    [
+        ("open", 1e14),
+        ("high", 1e14),
+        ("low", 1e14),
+        ("close", 1e14),
+        ("adj_close", 1e14),
+        ("volume", 2**63),
+        ("dividends", 1e14),
+        ("stock_splits", 1e12),
+    ],
+)
+def test_save_raw_market_data_drops_a_row_postgres_would_reject(column, bad_value):
+    # The unit-test equivalent of this (test_repository.py) only checks the Python-side
+    # comparison against _NUMERIC_BOUNDS with a fake cursor -- it can't catch the bounds being
+    # wrong relative to the real column types. This drives a value right at each bound through
+    # save_raw_market_data against a live NUMERIC(18,4)/(18,6)/BIGINT schema, so a mismatch
+    # would surface here as an assertion failure instead of a NumericValueOutOfRange in
+    # production.
+    conn = _connect()
+    columns = [
+        "ticker",
+        "price_date",
+        "open",
+        "high",
+        "low",
+        "close",
+        "adj_close",
+        "volume",
+        "dividends",
+        "stock_splits",
+    ]
+    good = ["TEST", date(2026, 1, 1), 100.0, 101.0, 99.0, 100.5, 100.5, 1000, 0.0, 0.0]
+    bad = ["TEST", date(2026, 1, 2), 100.0, 101.0, 99.0, 100.5, 100.5, 1000, 0.0, 0.0]
+    bad[columns.index(column)] = bad_value
+    df = make_df([good, bad])
+
+    count = save_raw_market_data(conn, "yfinance", "equity", df)
+
+    assert count == 1
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) FROM raw_market_data WHERE ticker = %s",
+            ("TEST",),
+        )
+        (total,) = cur.fetchone()
+    assert total == 1
+    conn.close()
+
+
 def test_get_earliest_dates_returns_min_date_per_ticker_and_source():
     conn = _connect()
     save_raw_market_data(
