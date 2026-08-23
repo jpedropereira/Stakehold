@@ -136,10 +136,21 @@ All three live in `pipeline.py` and are exposed as CLI subcommands.
 | Market data ingest | `ingest-market-data` | daily | `etf_holdings` + config | `raw_market_data` |
 | Market data backfill | `backfill-market-data` | manual | `raw_market_data` | `raw_market_data` |
 
-Before this shipped, price and dividend ingest/backfill were four separate flows, each resolving
-the same ticker universe and hitting yfinance separately. They merged into one because a single
-`Ticker.history()` call already returns OHLCV, dividends and stock splits together — fetching them
-through two flows was paying for two HTTP round trips per ticker to get data that came back in one.
+Before the market-data merge shipped, price and dividend ingest/backfill were four separate flows,
+each resolving the same ticker universe and hitting yfinance separately. They merged into one
+because a single `Ticker.history()` call already returns OHLCV, dividends and stock splits together
+— fetching them through two flows was paying for two HTTP round trips per ticker to get data that
+came back in one.
+
+**Market data ingest has a second, conditional fetch.** Normally it is one fetch per
+(source, asset_type) group. But the provider retroactively rescales a ticker's *entire* price and
+dividend history when that ticker splits (see [`schema.md`](schema.md), "What `close` actually
+contains"), while this flow only re-fetches a rolling window — so a split would leave one ticker's
+stored rows on two different scales, a step change indistinguishable from a real
+several-hundred-percent move. When an ingested batch contains a non-zero `stock_splits`, the flow
+therefore re-fetches that ticker's full stored range and rewrites it
+(`pipeline._refresh_split_histories`). This is the one place the daily flow issues an unbounded
+historical request rather than a windowed one; splits are rare enough that the cost is negligible.
 
 ### What a flow returns
 
@@ -332,6 +343,16 @@ it in the same group, the way one bad ticker used to fail an entire batched `yf.
 One failure never costs the work queued behind it, and the summary reports the failure count.
 Configuration errors are the exception: an unknown provider is fatal, because it will fail
 identically on every retry.
+
+The post-split history refresh sits deliberately *outside* its group's `try`/`except`, as its own
+isolation boundary. A repair fetch failing is not the group failing: the group's own rows are
+already fetched, saved and correct, and attributing the failure to the group would misreport a
+good day's ingest as a bad one. It is counted separately (`splits_refresh_failed`) and still makes
+the run `partial`, because the ticker really is left in an inconsistent state. This is also the one
+failure the flow cannot retry indefinitely — the trigger is the split row itself, which disappears
+once it ages out of the rolling window — so the warning names the `--force-refresh` recovery path
+rather than relying on a later run to notice. A durable pending-refresh table was considered and
+rejected as disproportionate for an event this rare.
 
 **Transactions are per flow-step.** Each `save_*` commits, so an interrupted run leaves completed
 work durable. Combined with the loading strategies in [`schema.md`](schema.md), every flow is
