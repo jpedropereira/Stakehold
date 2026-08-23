@@ -116,6 +116,9 @@ def test_backfill_market_data_defaults_to_resume_mode(calls):
         "tickers": None,
         "earliest_date": None,
         "delay_seconds": 10.0,
+        # Rewriting rows that already exist is never the default -- it would make every rerun
+        # re-request every ticker's whole history.
+        "force_refresh": False,
     }
 
 
@@ -131,6 +134,7 @@ def test_backfill_market_data_passes_every_flag_through(calls):
             "2000-06-15",
             "--delay-seconds",
             "3.5",
+            "--force-refresh",
         ]
     )
 
@@ -141,7 +145,17 @@ def test_backfill_market_data_passes_every_flag_through(calls):
         # CLI don't each need their own copy of that conversion.
         "earliest_date": "2000-06-15",
         "delay_seconds": 3.5,
+        "force_refresh": True,
     }
+
+
+def test_force_refresh_is_a_flag_not_a_value(calls):
+    # The repair path for a ticker left on two price scales by a split -- see
+    # pipeline._refresh_split_histories.
+    cli.main(["backfill-market-data", "--ticker", "AAPL", "--force-refresh"])
+
+    assert calls["run_backfill_market_data"]["force_refresh"] is True
+    assert calls["run_backfill_market_data"]["tickers"] == ["AAPL"]
 
 
 def test_days_flag_is_parsed_as_an_int(calls):

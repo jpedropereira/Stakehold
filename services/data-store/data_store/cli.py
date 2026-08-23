@@ -38,6 +38,7 @@ def _backfill_market_data(args: argparse.Namespace) -> int:
         tickers=args.ticker,
         earliest_date=args.earliest_date,
         delay_seconds=args.delay_seconds,
+        force_refresh=args.force_refresh,
     )
     return _report(result, "market data rows")
 
@@ -116,6 +117,17 @@ def _build_parser() -> argparse.ArgumentParser:
         type=float,
         default=10.0,
         help="Seconds to sleep after each ticker's fetch, to stay under yfinance's rate limiting.",
+    )
+    backfill_market_data_parser.add_argument(
+        "--force-refresh",
+        action="store_true",
+        help=(
+            "Re-fetch and rewrite each ticker's whole stored range instead of only the stretch "
+            "below its earliest stored date. The repair path for a history left on two price "
+            "scales -- when a ticker splits, the provider restates its entire history into the "
+            "new scale, and any row the daily ingest did not re-fetch keeps the old one. Pair "
+            "it with --ticker; without one it re-requests every followed ticker's full history."
+        ),
     )
     backfill_market_data_parser.set_defaults(handler=_backfill_market_data)
 
