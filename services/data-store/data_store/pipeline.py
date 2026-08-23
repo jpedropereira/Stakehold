@@ -13,6 +13,13 @@ from data_store.holdings.repository import (
 from data_store.holdings.scraper import get_holdings_csv_url
 from data_store.market_data.repository import get_earliest_dates, save_raw_market_data
 from data_store.market_data.yfinance_source import YFinanceMarketDataSource
+from data_store.returns.calculator import compute_returns
+from data_store.returns.repository import (
+    get_sources,
+    get_tickers,
+    iter_price_series,
+    save_market_returns,
+)
 from data_store.run_result import build_run_result
 
 logger = logging.getLogger(__name__)
@@ -26,6 +33,11 @@ UNBOUNDED_EARLIEST_DATE = date(1900, 1, 1)
 # firing them back to back is exactly the shape that trips yfinance's rate limiting. Matches
 # backfill's default delay; not exposed as a parameter because nothing chooses it per run.
 SPLIT_REFRESH_DELAY_SECONDS = 10.0
+
+# Tickers per calculate_returns batch. Returns are purely per-ticker, so this is the unit that
+# keeps a full-table rebuild's memory bounded -- the table is 8.95M rows across 1,278 tickers,
+# far past what "one SELECT, one DataFrame" can hold comfortably in an Airflow worker.
+RETURNS_BATCH_SIZE = 250
 
 # A new fund provider or price source is a new registry entry here, not a branch in the
 # functions below.
@@ -314,6 +326,83 @@ def _refresh_split_histories(
         )
         time.sleep(SPLIT_REFRESH_DELAY_SECONDS)
     return rows, refreshed, failed
+
+
+def calculate_returns(conn, only_tickers: set[str] | None = None) -> dict[str, int | str]:
+    """Full rebuild of `market_returns` from `raw_market_data`, batched by ticker.
+
+    Full rebuild, not incremental: a split retroactively changes the correct value of every
+    earlier row for that ticker (see returns/calculator.py), so an incremental design would be
+    actively wrong on a rerun, not merely wasteful. Sources are discovered from the data itself
+    (`get_sources`) rather than the market-data fetch registry -- this reads what's already
+    stored, and never needs to know how to fetch anything.
+
+    No ticker resolution, no config: operates on exactly what `raw_market_data` already
+    contains. `only_tickers`, when given, restricts the run and follows the same convention as
+    the pricing flows -- a name that matches nothing in any source is a failure, not silence.
+
+    Batching is the failure-isolation unit: one batch's save failing (e.g. a bounds-violating
+    computed value) is warned about and skipped, and does not cost the batches around it.
+    """
+    sources = get_sources(conn)
+    if not sources:
+        logger.info("calculate-returns: no market data in raw_market_data, nothing to do.")
+
+    matched_tickers: set[str] = set()
+    total_rows = 0
+    batches = 0
+    batches_failed = 0
+
+    for source in sources:
+        tickers = get_tickers(conn, source)
+        if only_tickers is not None:
+            tickers = [t for t in tickers if t in only_tickers]
+        if not tickers:
+            continue
+        matched_tickers.update(tickers)
+
+        logger.info(
+            "calculate-returns: recalculating %d ticker(s) for source=%s.", len(tickers), source
+        )
+        for batch in iter_price_series(conn, source, tickers, RETURNS_BATCH_SIZE):
+            batches += 1
+            if batch.empty:
+                continue
+            try:
+                computed = compute_returns(batch)
+                saved = save_market_returns(conn, source, computed)
+            except Exception as e:
+                batches_failed += 1
+                logger.warning(
+                    "calculate-returns: a batch failed for source=%s, skipping: %s",
+                    source,
+                    e,
+                    exc_info=True,
+                )
+                continue
+            total_rows += saved
+
+    unmatched_tickers = (only_tickers - matched_tickers) if only_tickers is not None else set()
+    if unmatched_tickers:
+        logger.warning(
+            "calculate-returns: no stored data matches %s.",
+            ", ".join(repr(t) for t in sorted(unmatched_tickers)),
+        )
+
+    logger.info(
+        f"calculate-returns complete: {total_rows} row(s) across {len(matched_tickers)} "
+        f"ticker(s), {batches} batch(es) ({batches_failed} failed), "
+        f"{len(unmatched_tickers)} ticker(s) unmatched."
+    )
+    return build_run_result(
+        units_total=len(matched_tickers),
+        rows_saved=total_rows,
+        failed=batches_failed + len(unmatched_tickers),
+        tickers_processed=len(matched_tickers),
+        tickers_unmatched=len(unmatched_tickers),
+        batches=batches,
+        batches_failed=batches_failed,
+    )
 
 
 @_yfinance_logging_silenced()
