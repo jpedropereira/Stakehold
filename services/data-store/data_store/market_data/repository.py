@@ -18,18 +18,20 @@ _COLUMNS = [
     "stock_splits",
 ]
 
-# Matches the NUMERIC(18,4)/(18,6) columns tmp_raw_market_data is staged into below: precision
-# 18 digits total, so the integer part tops out at (18 - scale) digits. Yahoo's own API
-# occasionally returns a garbage adjclose (confirmed against yfinance/utils.py's parse_quotes,
-# which takes Yahoo's "adjclose" field verbatim -- no computation of its own to blame) that blows
-# past this; checked before COPY so one bad day drops just that row, not the ticker's whole
-# fetched history for the run.
+# Matches the columns tmp_raw_market_data is staged into below. The NUMERIC(18,4)/(18,6) bounds
+# come from that precision: 18 digits total, so the integer part tops out at (18 - scale) digits.
+# Yahoo's own API occasionally returns a garbage adjclose (confirmed against yfinance/utils.py's
+# parse_quotes, which takes Yahoo's "adjclose" field verbatim -- no computation of its own to
+# blame) that blows past this; checked before COPY so one bad day drops just that row, not the
+# ticker's whole fetched history for the run. volume's bound is BIGINT's own range for the same
+# reason -- it isn't NUMERIC, but it can overflow its column just the same.
 _NUMERIC_BOUNDS = {
     "open": 10**14,
     "high": 10**14,
     "low": 10**14,
     "close": 10**14,
     "adj_close": 10**14,
+    "volume": 2**63,
     "dividends": 10**14,
     "stock_splits": 10**12,
 }

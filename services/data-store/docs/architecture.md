@@ -335,7 +335,17 @@ identically on every retry.
 
 **Transactions are per flow-step.** Each `save_*` commits, so an interrupted run leaves completed
 work durable. Combined with the loading strategies in [`schema.md`](schema.md), every flow is
-re-runnable without cleanup.
+re-runnable without cleanup. On failure, `save_raw_market_data` rolls back before re-raising —
+Postgres leaves a transaction aborted after an error, so without an explicit rollback every later
+statement on that connection would fail too, breaking the per-ticker isolation described above.
+Callers that catch a save failure and keep going (backfill's per-ticker loop) depend on this to
+leave the connection usable for the next ticker.
+
+**Row-level validation guards COPY, not just fetch.** `save_raw_market_data` checks each row
+against its columns' numeric ranges before handing it to `COPY`, dropping (and warning about) any
+row that would overflow — e.g. a garbage `adjclose` Yahoo's API occasionally returns. `COPY` has no
+partial-failure mode: one bad value aborts the whole staged batch, which would otherwise cost a
+ticker's entire fetched history for the run over a single bad day.
 
 ## Testing
 
