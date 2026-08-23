@@ -175,3 +175,111 @@ ticker → final ticker rewrites for cases no general rule covers — either the
 tagging is simply wrong (e.g. `"HEIA"` tagged under a US exchange but actually needing
 `"HEIA.AS"`), or the raw ticker needs a full rewrite (e.g. `"BRKB"` → `"BRK-B"`). An override wins
 outright and skips exchange resolution entirely.
+
+## `market_returns`
+
+One row per `(ticker, price_date, source)` — the derived, ready-to-chart counterpart of
+`raw_market_data`, rebuilt from it by `pipeline.calculate_returns` (`data-store
+calculate-returns`). This is the table a portfolio or chart should read; `raw_market_data` stays
+the unprocessed landing zone.
+
+| Column                 | Type             | Notes |
+|-------------------------|------------------|-------|
+| `ticker`                | `VARCHAR(20)`    | Part of PK. Same value as `raw_market_data.ticker`. |
+| `price_date`            | `DATE`           | Part of PK. |
+| `source`                | `VARCHAR(20)`    | Part of PK, e.g. `'yfinance'`. |
+| `split_adjusted_close`  | `NUMERIC(18,4)`  | Copied verbatim from `raw_market_data.close`, which is already split-adjusted by the provider (see `raw_market_data`, "What `close` actually contains"). This is the chart column. Denormalised on purpose so a chart query needs no join back to `raw_market_data`. |
+| `future_split_factor`   | `NUMERIC(30,15)` | Product of every split ratio strictly *after* this date (`1.0` for every date after a ticker's last split). Not otherwise derivable from a single row, and self-verifying against `raw_market_data.stock_splits`. Never legitimately `0` — see "Why the scale is 15" below. |
+| `price_return`          | `NUMERIC(18,8)`  | `close_t / close_(t-1) - 1`. Nullable — `NULL` on a ticker's first stored date, where no prior close exists. **No split term** — see below. |
+| `dividend_return`       | `NUMERIC(18,8)`  | `dividends_t / close_(t-1)`. `0` (not `NULL`) on a non-dividend day; `NULL` only on the series-anchor row. |
+| `simple_return`         | `NUMERIC(18,8)`  | `(close_t + dividends_t) / close_(t-1) - 1`. Always equals `price_return + dividend_return` exactly — kept as its own column for query convenience, computed in the same pass so the two can never drift apart. This is the number to display directly (`"+2.3% today"`). |
+| `log_return`            | `NUMERIC(18,8)`  | `ln((close_t + dividends_t) / close_(t-1))`, equivalently `ln(1 + simple_return)`. What gets summed across days for a cumulative/charted return, since log returns compound additively and simple returns don't. |
+| `calculated_at`         | `TIMESTAMPTZ`    | Defaults to `now()`; also bumped on every upsert, so it reflects the last rebuild, not the first. |
+
+Index: `(ticker, price_date)`, same rationale as `raw_market_data`'s.
+
+**Why `future_split_factor`'s scale is 15.** Cumulative *reverse* splits drive this column
+towards zero, and the original `NUMERIC(18,6)` bottomed out at `1e-6`. `BMPS.MI` has four reverse
+splits (`0.01 x 0.05 x 0.01 x 0.01`) that multiply out to `5e-8`, so 3,814 of its rows stored
+`0` — which reads as a valid factor rather than a missing one, and silently zeroed the
+`split_adjusted_close x future_split_factor` derivation below. Measured across the real 1,278-ticker
+dataset the column has to span `5e-8` to `1e4`; `NUMERIC(30,15)` covers `1e-15` to `1e15`, roughly
+seven decimal orders of headroom below today's worst case. Fifteen fractional digits is also as
+much as the `float64` the factor is computed in can distinguish, so a wider scale would store
+false precision rather than more information.
+
+No fixed scale is underflow-proof, so the scale is paired with a guard:
+`returns/repository.py`'s `_NUMERIC_MIN_MAGNITUDE` warns about and skips a row whose factor would
+still round to zero, rather than storing an indistinguishable `0`. That lower bound applies only
+to this column — every other numeric column here is a return, for which exactly `0` is a flat day
+rather than a defect.
+
+**No stored as-traded price column, deliberately.** An earlier design also stored
+`as_traded_close` — the genuinely raw, historically-traded price (`split_adjusted_close ×
+future_split_factor`), for reconciling against brokerage statements and filings, which quote
+prices as actually traded. Dropped before merge: nothing in this service reads it (not the
+return formulas, not the charting use case that motivated `split_adjusted_close`), it's a
+one-multiplication derivation from two columns already stored, and its only justification was a
+brokerage-transaction-reconciliation feature `portfolio` doesn't have yet. If that need arises,
+compute it in the query that needs it — `split_adjusted_close * future_split_factor` — rather
+than paying to store and maintain a column with no current reader. It also carried a correctness
+caveat worth avoiding: it would only be right if every split between a date and today were
+present in `raw_market_data`, which is exactly what the post-split history restatement
+(`raw_market_data`, "Post-split history restatement") exists to guarantee, but is a sharper edge
+than a table with no consumers should carry.
+
+**Why there is no split term in the return formulas.** The obvious-looking design — divide the
+prior day's close by that day's split ratio before comparing — assumes `close` is the as-traded
+price. It isn't (see `raw_market_data`, "What `close` actually contains"): the provider already
+retroactively split-adjusts `close`, so that correction double-adjusts and produces a
+triple-digit fake return on every split day. Confirmed against real AAPL data before this
+shipped: the corrected formula above matches Yahoo's independently-derived `adj_close` series to
+a maximum 0.018% (mean 0.00054%) over 5,441 rows spanning two splits and 21 years — `NUMERIC(18,4)`
+rounding, not coincidence.
+
+**Loading strategy: full rebuild, not incremental append or upsert-on-new-rows-only.**
+`calculate_returns` recomputes and upserts every row for the tickers it's asked about, every
+run. A split retroactively changes the correct value of `future_split_factor` for every earlier
+date of that ticker — an incremental design that only appended new dates would serve stale, wrong
+values for the rest of the series after a split, which is worse than recomputing everything on a
+cadence generous enough to be cheap (the full 8.95M-row table rebuilds in minutes, not hours).
+
+**Known limitation: upsert never deletes.** The loader only ever inserts or updates, so a row
+that stops being produced is left behind at whatever value it last held. Three paths reach that
+state, not one:
+
+- A row is removed from `raw_market_data` (not a normal occurrence today).
+- `compute_returns` drops a row whose `close` is missing or non-positive.
+- `save_market_returns` skips a row whose computed value is out of range for its column.
+
+The last two are live on real data — a full rebuild of the dev database drops tens of rows per
+batch for non-positive/missing `close`. In all three cases "full rebuild self-heals" holds for
+changed and added rows, but not for rows that disappear from the output: a previously written
+`market_returns` row for that `(ticker, price_date, source)` survives the rebuild untouched, and
+its `calculated_at` still advances only when it *is* rewritten, so staleness isn't visible from
+the row itself. Cleaning this up needs a delete pass keyed on what the rebuild actually wrote —
+not implemented here.
+
+**Batched by ticker, not one table-wide query.** `raw_market_data` is 8.95M rows across 1,278
+tickers, and this can run inside an Airflow worker. Returns are purely per-ticker (see
+`returns/calculator.py`), so `pipeline.calculate_returns` batches a few hundred tickers at a time
+(`returns/repository.py`'s `iter_price_series`, `RETURNS_BATCH_SIZE = 250`) and isolates a batch's
+save failure from the batches around it, the same failure-isolation pattern `raw_market_data` uses
+per ticker. Measured on a full unfiltered rebuild of the real dev data: ~3.5GB peak RSS, 3m28s —
+bounded and well short of what one unbatched DataFrame over the whole table would need, but
+notably more than a naive per-column `float64` estimate suggests, since `save_market_returns`'s
+row-by-row `COPY` staging (mirroring `save_raw_market_data`'s) allocates a Python object per cell
+per row. Acceptable for an on-demand/scheduled rebuild; revisit the batch size or the `COPY`
+staging loop if this needs to run somewhere more memory-constrained than a modern worker.
+
+**No ticker resolution or config coupling.** Unlike the pricing flows, `calculate_returns`
+doesn't read `etf_holdings` or any config file — it operates on exactly what's already stored in
+`raw_market_data`, discovering both sources (`SELECT DISTINCT source`) and tickers
+(`SELECT DISTINCT ticker`) from the data itself. This also means it keeps working for a source
+that has since been retired but still has stored rows.
+
+**Precision inherited from `raw_market_data`, not improved on.** `raw_market_data` stores prices
+as `NUMERIC(18,4)`, which represents a sub-cent price like `PLS.AX`'s `0.0093` with only two
+significant figures. `split_adjusted_close` copies that value directly, so a return computed for
+such a ticker inherits the same quantisation. Out of scope to fix here since it originates in the
+upstream table.

@@ -154,6 +154,7 @@ docker compose up -d postgres pgadmin
 uv run data-store db init
 uv run data-store ingest-holdings              # scrapes iShares, loads etf_holdings
 uv run data-store ingest-market-data --days 7  # reads tickers from etf_holdings, loads raw_market_data
+uv run data-store calculate-returns            # rebuilds market_returns from raw_market_data
 ```
 
 `ingest-market-data` (and its `backfill-market-data` counterpart) fetch prices, dividends and
@@ -196,6 +197,24 @@ uv run data-store backfill-market-data --ticker AAPL --force-refresh
 earliest stored date, which neither of the modes above can do. Pair it with `--ticker`; without one
 it re-requests every followed ticker's full history.
 
+### Calculating returns
+
+`calculate-returns` rebuilds `market_returns` — split-adjusted price and price/dividend/simple/log
+returns — from whatever is currently in `raw_market_data`. Run it after
+`ingest-market-data`/`backfill-market-data` land new data:
+
+```bash
+uv run data-store calculate-returns                # every ticker with stored market data
+uv run data-store calculate-returns --ticker AAPL   # just this ticker (repeatable)
+```
+
+Unlike the other flows it reads no config and does no ticker resolution — it discovers sources and
+tickers directly from `raw_market_data`. It's also always a **full rebuild** of whatever tickers
+it's asked about, never an incremental append: a split changes the correct value of every earlier
+row for that ticker, so recomputing everything is what keeps the table correct after one, not just
+faster to run. See `docs/schema.md`'s `market_returns` section for the formulas and why there is
+no split term in them.
+
 Holdings ingest and market data ingest are independent — `ingest-market-data` always reads the
 *current* ticker list from `etf_holdings` (whatever `ingest-holdings` most recently loaded), not
 a fresh scrape, so it can run on its own daily cadence without depending on a holdings scrape
@@ -230,14 +249,16 @@ UI's "Trigger DAG" button, or from a shell:
 ```bash
 docker exec <airflow-scheduler-container> airflow dags trigger ingest_holdings
 docker exec <airflow-scheduler-container> airflow dags trigger ingest_market_data
+docker exec <airflow-scheduler-container> airflow dags trigger calculate_returns
 ```
 
 Task logs land under `services/data-store/logs/dag_id=.../run_id=.../task_id=.../attempt=N.log`
 (bind-mounted, so readable from the host — no need to shell into the container).
 
-`ingest_market_data`/`backfill_market_data` both accept a `tickers` param (a JSON array, default
-`[]`) via the UI's "Trigger DAG w/ config" dialog, passed to the job as an ordinary `list[str]`.
-Leave it empty to run against everything followed.
+`ingest_market_data`/`backfill_market_data`/`calculate_returns` all accept a `tickers` param (a
+JSON array, default `[]`) via the UI's "Trigger DAG w/ config" dialog, passed to the job as an
+ordinary `list[str]`. Leave it empty to run against everything followed (or, for
+`calculate_returns`, everything with stored market data).
 
 There is no shell in the path any more, so the value is never interpolated into a command line
 and the escaping the old `BashOperator` needed is simply gone.

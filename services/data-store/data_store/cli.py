@@ -43,6 +43,11 @@ def _backfill_market_data(args: argparse.Namespace) -> int:
     return _report(result, "market data rows")
 
 
+def _calculate_returns(args: argparse.Namespace) -> int:
+    result = jobs.run_calculate_returns(tickers=args.ticker)
+    return _report(result, "return rows")
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="data-store")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -130,6 +135,24 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     backfill_market_data_parser.set_defaults(handler=_backfill_market_data)
+
+    calculate_returns_parser = subparsers.add_parser(
+        "calculate-returns",
+        help=(
+            "Rebuild market_returns (split-adjusted price and price/dividend/simple/log "
+            "returns) from raw_market_data. Always a full rebuild -- a split retroactively "
+            "changes the correct value of every earlier row for that ticker."
+        ),
+    )
+    calculate_returns_parser.add_argument(
+        "--ticker",
+        action="append",
+        help=(
+            "Restrict to this ticker (repeatable), as stored in raw_market_data. "
+            "Default: every ticker with stored market data."
+        ),
+    )
+    calculate_returns_parser.set_defaults(handler=_calculate_returns)
 
     return parser
 
