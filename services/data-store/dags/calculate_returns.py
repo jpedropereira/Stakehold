@@ -22,8 +22,8 @@ def calculate(tickers: list[str]) -> dict:
 with DAG(
     dag_id="calculate_returns",
     description=(
-        "Full rebuild of market_returns (split-adjusted price, as-traded price, and price/"
-        "dividend/simple/log returns) from raw_market_data. Manual trigger for now -- run "
+        "Full rebuild of market_returns (split-adjusted price and price/dividend/simple/log "
+        "returns) from raw_market_data. Manual trigger for now -- run "
         "after ingest-market-data or backfill-market-data land new data."
     ),
     schedule=None,

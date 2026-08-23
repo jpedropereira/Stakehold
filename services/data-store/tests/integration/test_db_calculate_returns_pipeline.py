@@ -62,8 +62,8 @@ def clean_tables():
 def _returns_for(conn, ticker):
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT price_date, split_adjusted_close, as_traded_close, future_split_factor, "
-            "price_return FROM market_returns WHERE ticker = %s ORDER BY price_date",
+            "SELECT price_date, split_adjusted_close, future_split_factor, price_return "
+            "FROM market_returns WHERE ticker = %s ORDER BY price_date",
             (ticker,),
         )
         return cur.fetchall()
@@ -93,18 +93,16 @@ def test_calculate_returns_end_to_end_over_a_split(caplog):
     assert len(rows) == 3
 
     day1, day2, day3 = rows
-    assert day1[4] is None  # series anchor: no prior close
+    assert day1[3] is None  # series anchor: no prior close
 
     assert float(day2[1]) == pytest.approx(124.8075)  # split_adjusted_close == raw close
-    assert float(day2[2]) == pytest.approx(499.23, abs=1e-2)  # as-traded, reconstructed
-    assert float(day2[3]) == pytest.approx(4.0)  # future_split_factor: one split still ahead
-    assert float(day2[4]) == pytest.approx(124.8075 / 100.0 - 1)
+    assert float(day2[2]) == pytest.approx(4.0)  # future_split_factor: one split still ahead
+    assert float(day2[3]) == pytest.approx(124.8075 / 100.0 - 1)
 
     # The split day itself: no split-term double-adjustment (the +313% bug this whole
     # design exists to avoid) -- just close-over-close.
-    assert float(day3[2]) == pytest.approx(129.04)  # already at the traded scale
-    assert float(day3[3]) == pytest.approx(1.0)  # no splits remain ahead of this date
-    assert float(day3[4]) == pytest.approx(129.04 / 124.8075 - 1, abs=1e-4)
+    assert float(day3[2]) == pytest.approx(1.0)  # no splits remain ahead of this date
+    assert float(day3[3]) == pytest.approx(129.04 / 124.8075 - 1, abs=1e-4)
     conn.close()
 
 
@@ -126,7 +124,7 @@ def test_calculate_returns_is_a_full_rebuild_that_reflects_a_changed_raw_row():
     )
     calculate_returns(conn, only_tickers={"TEST"})
     first_return = dict(
-        (row[0], float(row[4])) for row in _returns_for(conn, "TEST") if row[4] is not None
+        (row[0], float(row[3])) for row in _returns_for(conn, "TEST") if row[3] is not None
     )
     assert first_return[date(2026, 1, 2)] == pytest.approx(0.10)
 
@@ -147,7 +145,7 @@ def test_calculate_returns_is_a_full_rebuild_that_reflects_a_changed_raw_row():
     calculate_returns(conn, only_tickers={"TEST"})
 
     second_return = dict(
-        (row[0], float(row[4])) for row in _returns_for(conn, "TEST") if row[4] is not None
+        (row[0], float(row[3])) for row in _returns_for(conn, "TEST") if row[3] is not None
     )
     assert second_return[date(2026, 1, 2)] == pytest.approx(110.0 / 105.0 - 1)
     conn.close()

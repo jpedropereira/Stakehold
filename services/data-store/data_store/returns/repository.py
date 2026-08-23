@@ -10,7 +10,6 @@ _COLUMNS = [
     "ticker",
     "price_date",
     "split_adjusted_close",
-    "as_traded_close",
     "future_split_factor",
     "price_return",
     "dividend_return",
@@ -24,7 +23,6 @@ _COLUMNS = [
 # COPY.
 _NUMERIC_BOUNDS = {
     "split_adjusted_close": 10**14,
-    "as_traded_close": 10**14,
     "future_split_factor": 10**12,
     "price_return": 10**10,
     "dividend_return": 10**10,
@@ -89,10 +87,9 @@ def save_market_returns(conn, source: str, df: pd.DataFrame) -> int:
             cur.execute("""
                 CREATE TEMP TABLE tmp_market_returns (
                     ticker VARCHAR(20), price_date DATE, source VARCHAR(20),
-                    split_adjusted_close NUMERIC(18,4), as_traded_close NUMERIC(18,4),
-                    future_split_factor NUMERIC(18,6), price_return NUMERIC(18,8),
-                    dividend_return NUMERIC(18,8), simple_return NUMERIC(18,8),
-                    log_return NUMERIC(18,8)
+                    split_adjusted_close NUMERIC(18,4), future_split_factor NUMERIC(18,6),
+                    price_return NUMERIC(18,8), dividend_return NUMERIC(18,8),
+                    simple_return NUMERIC(18,8), log_return NUMERIC(18,8)
                 ) ON COMMIT DROP
                 """)
 
@@ -119,15 +116,13 @@ def save_market_returns(conn, source: str, df: pd.DataFrame) -> int:
 
             cur.execute("""
                 INSERT INTO market_returns (ticker, price_date, source, split_adjusted_close,
-                                             as_traded_close, future_split_factor, price_return,
-                                             dividend_return, simple_return, log_return)
-                SELECT ticker, price_date, source, split_adjusted_close, as_traded_close,
-                       future_split_factor, price_return, dividend_return, simple_return,
-                       log_return
+                                             future_split_factor, price_return, dividend_return,
+                                             simple_return, log_return)
+                SELECT ticker, price_date, source, split_adjusted_close, future_split_factor,
+                       price_return, dividend_return, simple_return, log_return
                 FROM tmp_market_returns
                 ON CONFLICT (ticker, price_date, source) DO UPDATE SET
                     split_adjusted_close = EXCLUDED.split_adjusted_close,
-                    as_traded_close = EXCLUDED.as_traded_close,
                     future_split_factor = EXCLUDED.future_split_factor,
                     price_return = EXCLUDED.price_return,
                     dividend_return = EXCLUDED.dividend_return,

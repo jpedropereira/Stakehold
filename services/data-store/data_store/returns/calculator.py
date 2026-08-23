@@ -15,7 +15,6 @@ _OUTPUT_COLUMNS = [
     "ticker",
     "price_date",
     "split_adjusted_close",
-    "as_traded_close",
     "future_split_factor",
     "price_return",
     "dividend_return",
@@ -28,9 +27,9 @@ def compute_returns(prices: pd.DataFrame) -> pd.DataFrame:
     """prices: ticker, price_date, close, dividends, stock_splits (any row order).
 
     One output row per input row that has a usable close, ordered by (ticker, price_date).
-    `split_adjusted_close` / `future_split_factor` / `as_traded_close` are always populated; the
-    four return columns are null on each ticker's first stored date, since no prior close exists
-    to compute a return from.
+    `split_adjusted_close` / `future_split_factor` are always populated; the four return columns
+    are null on each ticker's first stored date, since no prior close exists to compute a return
+    from.
     """
     df = prices.sort_values(["ticker", "price_date"]).reset_index(drop=True)
 
@@ -58,7 +57,6 @@ def compute_returns(prices: pd.DataFrame) -> pd.DataFrame:
     )
 
     df["split_adjusted_close"] = df["close"]
-    df["as_traded_close"] = df["close"] * df["future_split_factor"]
 
     prior_close = df.groupby("ticker")["_working_close"].shift(1)
     working_close = df["_working_close"]

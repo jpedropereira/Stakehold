@@ -72,7 +72,6 @@ def test_first_date_of_a_ticker_has_populated_prices_but_null_returns():
     row = compute_returns(prices).iloc[0]
 
     assert row["split_adjusted_close"] == 100.0
-    assert row["as_traded_close"] == 100.0
     assert pd.isna(row["price_return"])
     assert pd.isna(row["dividend_return"])
     assert pd.isna(row["simple_return"])
@@ -170,24 +169,6 @@ def test_future_split_factor_handles_a_reverse_split():
     result = compute_returns(prices).set_index("price_date")
 
     assert list(result.loc[dates, "future_split_factor"]) == [0.25, 1.0, 1.0]
-
-
-def test_as_traded_close_reconstructs_the_real_historical_price():
-    # Verified against real AAPL trading history: 124.8075 * 4 = 499.23 (the 2020-08-31 4:1
-    # split), and 23.0561 * 28 = 645.5708 (both the 2014 7:1 and 2020 4:1 splits still ahead).
-    prices = make_prices(
-        [
-            ["AAPL", "2014-06-06", 23.0561, 0.0, 0.0],
-            ["AAPL", "2014-06-09", 161.4, 0.0, 7.0],
-            ["AAPL", "2020-08-28", 124.8075, 0.0, 0.0],
-            ["AAPL", "2020-08-31", 129.04, 0.0, 4.0],
-        ]
-    )
-
-    result = by_date(compute_returns(prices))
-
-    assert result["2014-06-06"].as_traded_close == pytest.approx(645.5708, abs=1e-3)
-    assert result["2020-08-28"].as_traded_close == pytest.approx(499.23, abs=1e-2)
 
 
 def test_two_interleaved_tickers_compute_independently():
