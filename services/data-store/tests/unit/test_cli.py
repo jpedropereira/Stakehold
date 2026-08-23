@@ -27,6 +27,7 @@ def calls(monkeypatch):
         "run_ingest_holdings",
         "run_ingest_market_data",
         "run_backfill_market_data",
+        "run_calculate_returns",
     ):
         monkeypatch.setattr(cli.jobs, name, record(name))
 
@@ -158,6 +159,18 @@ def test_force_refresh_is_a_flag_not_a_value(calls):
     assert calls["run_backfill_market_data"]["tickers"] == ["AAPL"]
 
 
+def test_calculate_returns_passes_no_ticker_filter_by_default(calls):
+    cli.main(["calculate-returns"])
+
+    assert calls["run_calculate_returns"] == {"tickers": None}
+
+
+def test_calculate_returns_passes_the_ticker_flag(calls):
+    cli.main(["calculate-returns", "--ticker", "AAPL", "--ticker", "0700.HK"])
+
+    assert calls["run_calculate_returns"] == {"tickers": ["AAPL", "0700.HK"]}
+
+
 def test_days_flag_is_parsed_as_an_int(calls):
     cli.main(["ingest-market-data", "--days", "30"])
 
@@ -213,3 +226,13 @@ def test_commands_report_the_row_count_they_saved(monkeypatch, capsys, command, 
     cli.main([command])
 
     assert "42 market data rows" in capsys.readouterr().out
+
+
+def test_calculate_returns_reports_the_row_count_it_saved(monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli.jobs, "run_calculate_returns", lambda **kw: {"status": "ok", "rows_saved": 42}
+    )
+
+    cli.main(["calculate-returns"])
+
+    assert "42 return rows" in capsys.readouterr().out

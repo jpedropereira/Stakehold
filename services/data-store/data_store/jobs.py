@@ -29,6 +29,7 @@ from data_store.db.connection import apply_schema, get_connection
 from data_store.logging_config import configure_logging
 from data_store.pipeline import (
     backfill_market_data,
+    calculate_returns,
     ingest_holdings,
     ingest_market_data,
 )
@@ -137,6 +138,22 @@ def run_backfill_market_data(
         positional=(_parse_earliest_date(earliest_date), date.today(), delay_seconds),
         extra_kwargs={"force_refresh": force_refresh},
     )
+
+
+def run_calculate_returns(*, tickers: list[str] | None = None) -> dict[str, int | str]:
+    """Rebuild market_returns from whatever is currently in raw_market_data.
+
+    Much simpler than the pricing flows: no funds, no tracked tickers, no ticker resolution --
+    calculate_returns reads only what raw_market_data already contains, so this is just
+    settings, a connection, and the flow call.
+    """
+    configure_logging()
+    settings = load_settings()
+    conn = get_connection(settings.database_url)
+    try:
+        return calculate_returns(conn, only_tickers=set(tickers) if tickers else None)
+    finally:
+        conn.close()
 
 
 def _run_priced_flow(

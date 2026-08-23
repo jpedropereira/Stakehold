@@ -12,11 +12,19 @@ Getting external financial data into Postgres, correctly and repeatably. Two thi
 - **ETF holdings** — scraped from a fund provider's website (iShares today).
 - **Raw daily market data** — OHLCV prices, dividends and stock splits, for every ticker those
   holdings contain plus directly tracked ones. One fetch, one table (`raw_market_data`) —
-  unprocessed, matching the source's own grain, not decomposed into a return calculation here.
+  unprocessed, matching the source's own grain, not decomposed into a return calculation there.
 
-It does *not* calculate returns, value portfolios, or decide what's worth owning. Those belong to
-`portfolio`, which reads these tables. The dividing line is deliberate: this service's only job is
-that the data in Postgres is a faithful, complete record of what the sources said.
+One thing is derived, not fetched: **`market_returns`** — split-adjusted price, as-traded price,
+and price/dividend/simple/log returns, rebuilt from `raw_market_data` by `calculate-returns`. This
+still fits the service's remit because it involves no judgment about portfolios or holdings — it's
+arithmetic on data already landed here, kept in this service so `raw_market_data`'s sharp edges
+(the split-restatement behaviour below) are handled once, next to the table that has them, rather
+than relearned by every consumer.
+
+It does *not* value portfolios or decide what's worth owning — that belongs to `portfolio`, which
+reads `market_returns`. The dividing line is deliberate: this service's job is that the data in
+Postgres is a faithful, complete record of what the sources said, plus the one derived table close
+enough to that record to need no portfolio-level context.
 
 ## Layering
 
@@ -37,6 +45,7 @@ flowchart TD
     subgraph domain["Domain modules"]
         HOLD["holdings/<br/>scraper · parser · repository"]
         MKT["market_data/<br/>yfinance_source · repository"]
+        RET["returns/<br/>calculator · repository"]
     end
 
     subgraph found["Foundation"]
@@ -57,10 +66,12 @@ flowchart TD
     JOBS --> DB
     PIPE --> HOLD
     PIPE --> MKT
+    PIPE --> RET
     HOLD --> EXT
     MKT --> EXT
     HOLD --> PG
     MKT --> PG
+    RET --> PG
     DB --> PG
 ```
 
@@ -99,6 +110,12 @@ browser dependency stays confined to the one function that genuinely needs it.
 and types. A provider renaming a column is a one-line change there, not a hunt through parsing
 code.
 
+`returns/` deviates the other way: just `calculator.py` (pure arithmetic, no I/O) and
+`repository.py`. There is no `base.py` because there's no provider Protocol to satisfy, and no
+`*_source.py` because there's no external call — the input is `raw_market_data`, this service's
+own table. Disclosed rather than silently different: a domain reading another domain's table
+instead of an external source is a shape the original three-file split didn't anticipate.
+
 ## Extension points
 
 New providers are registry entries, not new branches. Both registries live at the top of
@@ -126,15 +143,26 @@ two different strings. `.name` is what gets stamped into the `source` column and
 floors are read under; the key is what config files reference. Keep them equal unless you have a
 reason not to.
 
-## The three flows
+## The four flows
 
-All three live in `pipeline.py` and are exposed as CLI subcommands.
+All four live in `pipeline.py` and are exposed as CLI subcommands.
 
 | Flow | Command | Cadence | Reads | Writes |
 |---|---|---|---|---|
 | Holdings ingest | `ingest-holdings` | weekly | provider site | `etf_holdings` |
 | Market data ingest | `ingest-market-data` | daily | `etf_holdings` + config | `raw_market_data` |
 | Market data backfill | `backfill-market-data` | manual | `raw_market_data` | `raw_market_data` |
+| Returns calculation | `calculate-returns` | after new data lands | `raw_market_data` | `market_returns` |
+
+**Returns calculation is the odd one out**: it reads no config and does no ticker resolution — it
+discovers both sources and tickers directly from `raw_market_data` (`returns/repository.py`'s
+`get_sources`/`get_tickers`), and is always a **full rebuild** of whatever tickers it's asked
+about, never an incremental append. A split retroactively changes the correct value of every
+earlier row for that ticker (see `docs/schema.md`, `market_returns`), so an incremental design
+would serve stale values after a split rather than merely being slower to catch up. It's batched
+by ticker (`RETURNS_BATCH_SIZE`, a few hundred at a time) rather than loaded as one DataFrame,
+since `raw_market_data` is 8.95M rows — and a batch's save failure is isolated from the batches
+around it the same way a ticker's failure is isolated in backfill.
 
 Before the market-data merge shipped, price and dividend ingest/backfill were four separate flows,
 each resolving the same ticker universe and hitting yfinance separately. They merged into one
@@ -336,13 +364,19 @@ broken one — but `partial` is not, so whatever scheduled the command can tell 
 without reading logs.
 
 **Failures are isolated at the natural unit of work** — per fund when scraping, per source-and-type
-group when ingesting, per ticker when backfilling, and (since the market-data merge) per ticker
-within a group's *fetch* too: `YFinanceMarketDataSource` retries and gives up on one ticker at a
-time, so a single permanently-failing ticker no longer costs every other ticker fetched alongside
-it in the same group, the way one bad ticker used to fail an entire batched `yf.download()` call.
-One failure never costs the work queued behind it, and the summary reports the failure count.
-Configuration errors are the exception: an unknown provider is fatal, because it will fail
-identically on every retry.
+group when ingesting, per ticker when backfilling, per ticker-batch when calculating returns, and
+(since the market-data merge) per ticker within a group's *fetch* too: `YFinanceMarketDataSource`
+retries and gives up on one ticker at a time, so a single permanently-failing ticker no longer
+costs every other ticker fetched alongside it in the same group, the way one bad ticker used to
+fail an entire batched `yf.download()` call. One failure never costs the work queued behind it, and
+the summary reports the failure count. Configuration errors are the exception: an unknown provider
+is fatal, because it will fail identically on every retry.
+
+**`market_returns`'s upsert never deletes.** A full rebuild self-heals any row whose inputs changed
+or whose ticker is newly followed, but a row removed from `raw_market_data` leaves an orphaned row
+behind in `market_returns` rather than being cleaned up. Not a normal occurrence today (rows aren't
+currently deleted from `raw_market_data`), but worth stating plainly rather than overselling "full
+rebuild" as a complete self-healing guarantee.
 
 The post-split history refresh sits deliberately *outside* its group's `try`/`except`, as its own
 isolation boundary. A repair fetch failing is not the group failing: the group's own rows are
@@ -394,9 +428,10 @@ run's summary is as much a part of its contract as its return value.
 
 ## Where to start reading
 
-1. `pipeline.py` — the three flows; everything else is in service of these.
+1. `pipeline.py` — the four flows; everything else is in service of these.
 2. `jobs.py` — how configuration, a connection and a flow become one runnable operation.
 3. `cli.py` — how a command becomes a job. Thin on purpose; if it is growing, something belongs
    in `jobs.py` instead.
-4. One domain module end to end (`market_data/` is the most representative).
+4. One domain module end to end (`market_data/` is the most representative of a
+   provider-backed one; `returns/` is the most representative of a derived one).
 5. [`schema.md`](schema.md) — why the tables load the way they do.
