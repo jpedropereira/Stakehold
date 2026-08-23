@@ -56,3 +56,20 @@ CREATE TABLE IF NOT EXISTS raw_market_data (
 );
 
 CREATE INDEX IF NOT EXISTS idx_raw_market_data_ticker_date ON raw_market_data (ticker, price_date);
+
+CREATE TABLE IF NOT EXISTS market_returns (
+    ticker                VARCHAR(20)   NOT NULL,
+    price_date            DATE          NOT NULL,
+    source                VARCHAR(20)   NOT NULL,
+    split_adjusted_close  NUMERIC(18,4) NOT NULL,
+    as_traded_close       NUMERIC(18,4) NOT NULL,
+    future_split_factor   NUMERIC(18,6) NOT NULL,
+    price_return          NUMERIC(18,8),
+    dividend_return       NUMERIC(18,8),
+    simple_return         NUMERIC(18,8),
+    log_return            NUMERIC(18,8),
+    calculated_at         TIMESTAMPTZ   NOT NULL DEFAULT now(),
+    PRIMARY KEY (ticker, price_date, source)
+);
+
+CREATE INDEX IF NOT EXISTS idx_market_returns_ticker_date ON market_returns (ticker, price_date);

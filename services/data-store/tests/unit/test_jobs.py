@@ -663,6 +663,71 @@ def test_tracked_tickers_file_present_but_empty_is_treated_as_none(tmp_path, mon
     assert jobs._load_enabled_tracked_tickers(path) == []
 
 
+# --- run_calculate_returns --------------------------------------------------------------------
+
+
+def test_calculate_returns_opens_and_closes_a_connection(monkeypatch, fake_settings):
+    closed = []
+
+    monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn(closed))
+    monkeypatch.setattr(jobs, "calculate_returns", lambda conn, only_tickers=None: flow_result(5))
+
+    result = jobs.run_calculate_returns()
+
+    assert result["status"] != "partial"
+    assert closed == [True]
+
+
+def test_calculate_returns_passes_no_ticker_filter_by_default(monkeypatch, fake_settings):
+    calls = []
+
+    monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(
+        jobs,
+        "calculate_returns",
+        lambda conn, only_tickers=None: calls.append(only_tickers) or flow_result(),
+    )
+
+    jobs.run_calculate_returns()
+
+    assert calls == [None]
+
+
+def test_calculate_returns_ticker_flag_passes_only_tickers_filter(monkeypatch, fake_settings):
+    calls = []
+
+    monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(
+        jobs,
+        "calculate_returns",
+        lambda conn, only_tickers=None: calls.append(only_tickers) or flow_result(),
+    )
+
+    jobs.run_calculate_returns(tickers=["AAPL", "0700.HK"])
+
+    assert calls == [{"AAPL", "0700.HK"}]
+
+
+def test_calculate_returns_does_not_load_funds_or_tracked_tickers(monkeypatch, fake_settings):
+    # Unlike the pricing flows, calculate-returns reads only what's already in
+    # raw_market_data -- no fund/ticker-config coupling at all.
+    monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(jobs, "calculate_returns", lambda conn, only_tickers=None: flow_result())
+
+    def fail(*args, **kwargs):
+        raise AssertionError("should not be called")
+
+    monkeypatch.setattr(jobs, "load_funds", fail)
+    monkeypatch.setattr(jobs, "load_tracked_tickers", fail)
+    monkeypatch.setattr(jobs, "load_ticker_resolution", fail)
+
+    jobs.run_calculate_returns()
+
+
 def test_a_failed_fund_scrape_logs_its_traceback(monkeypatch, fake_settings, caplog):
     # The exception message alone is often useless for the failure this actually catches --
     # "Timeout 60000ms exceeded" says nothing about which selector or step timed out. Airflow
