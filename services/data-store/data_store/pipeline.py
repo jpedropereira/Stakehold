@@ -2,6 +2,7 @@ import logging
 import time
 from contextlib import contextmanager
 from datetime import date
+from pathlib import Path
 
 from data_store.config_loader import FundConfig, TickerConfig
 from data_store.holdings.parser import fetch_holdings_csv
@@ -13,6 +14,8 @@ from data_store.holdings.repository import (
 from data_store.holdings.scraper import get_holdings_csv_url
 from data_store.market_data.repository import get_earliest_dates, save_raw_market_data
 from data_store.market_data.yfinance_source import YFinanceMarketDataSource
+from data_store.regimes.loader import load_regimes
+from data_store.regimes.repository import save_regimes
 from data_store.returns.calculator import compute_returns
 from data_store.returns.repository import (
     get_sources,
@@ -403,6 +406,26 @@ def calculate_returns(conn, only_tickers: set[str] | None = None) -> dict[str, i
         batches=batches,
         batches_failed=batches_failed,
     )
+
+
+def ingest_regimes(conn, csv_path: Path) -> dict[str, int | str]:
+    """Load regimes from a local CSV file into the regimes table.
+
+    Full sync: the table is replaced each run from the CSV. Each run is a single transaction:
+    DELETE all existing rows, then COPY the CSV's rows in. No upserts, no merge.
+
+    csv_path is absolute or relative to the service root (resolved via settings._resolve).
+    """
+    logger.info(f"ingest-regimes: loading regimes from {csv_path}")
+    regimes = load_regimes(csv_path)
+    logger.info(f"ingest-regimes: loaded {len(regimes)} regime(s) from CSV")
+
+    if regimes:
+        logger.info("ingest-regimes: writing to database")
+    saved = save_regimes(conn, regimes)
+
+    logger.info(f"ingest-regimes complete: {saved} regime row(s)")
+    return build_run_result(units_total=len(regimes), rows_saved=saved, failed=0)
 
 
 @_yfinance_logging_silenced()

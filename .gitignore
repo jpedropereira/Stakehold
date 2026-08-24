@@ -39,5 +39,8 @@ services/data-store/.data/
 services/data-store/config/etfs.yaml
 services/data-store/config/tracked_tickers.yaml
 
+# Regimes config (services/data-store) — hand-curated, unversioned
+services/data-store/config/regimes.csv
+
 # Claude Code
 .claude/settings.local.json
