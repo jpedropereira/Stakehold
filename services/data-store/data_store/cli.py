@@ -48,6 +48,11 @@ def _calculate_returns(args: argparse.Namespace) -> int:
     return _report(result, "return rows")
 
 
+def _ingest_regimes(_args: argparse.Namespace) -> int:
+    result = jobs.run_ingest_regimes()
+    return _report(result, "regime rows")
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="data-store")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -153,6 +158,11 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     calculate_returns_parser.set_defaults(handler=_calculate_returns)
+
+    ingest_regimes_parser = subparsers.add_parser(
+        "ingest-regimes", help="Load economic/market regimes from CSV"
+    )
+    ingest_regimes_parser.set_defaults(handler=_ingest_regimes)
 
     return parser
 

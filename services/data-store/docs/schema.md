@@ -318,3 +318,40 @@ as `NUMERIC(18,4)`, which represents a sub-cent price like `PLS.AX`'s `0.0093` w
 significant figures. `split_adjusted_close` copies that value directly, so a return computed for
 such a ticker inherits the same quantisation. Out of scope to fix here since it originates in the
 upstream table.
+
+## `regimes`
+
+One row per unique regime identifier — a historical market/economic event or condition (recession,
+bear market, monetary policy cycle, commodity shock, geopolitical event) annotated with its scope
+(US equity, global, Euro area, etc.), dimension (business cycle, drawdown, inflation, etc.), date
+range, severity, and source citation. A reference table for backtesting and analysis queries like
+"what was the drawdown during the GFC?".
+
+| Column        | Type            | Notes                                                       |
+|---------------|-----------------|---------------------------------------------------------------|
+| `regime_id`   | `VARCHAR(50)`   | Natural key, e.g. `'gfc'`, `'us_rec_2007'`, `'spx_bear_1980'`. |
+| `dimension`   | `VARCHAR(30)`   | Category: `'business_cycle'`, `'drawdown'`, `'inflation'`, etc. |
+| `scope`       | `VARCHAR(20)`   | Geographic or market scope: `'US'`, `'Global'`, `'EA'`, `'SPX'`, etc. |
+| `name`        | `VARCHAR(200)`  | Human-readable title, e.g. `'Great Recession'` or `'COVID recession'`. |
+| `start_date`  | `DATE`          | Regime start, required.                                      |
+| `end_date`    | `DATE`          | Regime end, nullable — ongoing regimes have no end date.    |
+| `known_from`  | `DATE`          | Date this regime was identified/announced, nullable — some historical regimes are defined only in retrospect. |
+| `severity`    | `VARCHAR(20)`   | Scalar severity: `'mild'`, `'moderate'`, `'severe'`, `'extreme'`, nullable. Validated at app layer, not a DB `CHECK`. |
+| `source`      | `VARCHAR(50)`   | Citation/authority: `'NBER'`, `'CEPR-EABCDC'`, `'manual_approx'`, etc., required. |
+| `notes`       | `TEXT`          | Free-form annotations, nullable.                             |
+| `ingested_at` | `TIMESTAMPTZ`   | Defaults to `now()`.                                         |
+
+Indexes: `(dimension, scope)` for queries like "all EA recessions", `(start_date)` for date-range
+joins against price data.
+
+No surrogate key — `regime_id` is the natural key and stable across reruns.
+
+**Loading strategy: full sync (DELETE then COPY), not upsert.** The source is a hand-curated
+CSV (`config/regimes.csv`, gitignored). Each `ingest-regimes` run replaces the entire table from
+the current CSV. Unlike append-only event tables like `raw_market_data`, regime definitions can
+be edited, split, merged, or removed as curation improves — the DB should mirror the file exactly,
+not accumulate stale rows. Full-sync design is simple, idempotent, and enforces the invariant:
+"the DB always matches the source file".
+
+**Ingestion**: triggered manually via `data-store ingest-regimes` after editing the CSV, not on a
+schedule. Rare, hand-curated data needs no automation.

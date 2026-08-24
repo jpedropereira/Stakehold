@@ -1,0 +1,5 @@
+regime_id,dimension,scope,name,start_date,end_date,known_from,severity,source,notes
+us_rec_2007,business_cycle,US,Great Recession,2008-01-01,2009-06-30,2010-09-20,extreme,NBER,NBER peak 2007-12 trough 2009-06
+us_rec_2020,business_cycle,US,COVID recession,2020-03-01,2020-04-30,2021-07-19,severe,NBER,NBER peak 2020-02 trough 2020-04; shortest on record
+spx_bear_1973,drawdown,SPX,1973-74 bear market,1973-01-11,1974-10-03,1974-10-03,extreme,manual_approx,about -48%
+ea_rec_2008,business_cycle,EA,Euro area recession 2008-09,2008-04-01,2009-06-30,2010-10-04,extreme,CEPR-EABCDC,peak 2008Q1 trough 2009Q2

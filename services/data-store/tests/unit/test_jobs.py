@@ -24,6 +24,7 @@ def fake_settings(tmp_path):
         # most jobs.py tests shouldn't need to care about it.
         tracked_tickers_path=tmp_path / "does-not-exist.yaml",
         exchange_suffixes_path=tmp_path / "yfinance_exchange_suffixes.yaml",
+        regimes_csv_path=tmp_path / "regimes.csv",
     )
 
 
@@ -287,6 +288,7 @@ def test_ingest_market_data_includes_enabled_tracked_tickers(monkeypatch, fake_s
         config_path=fake_settings.config_path,
         tracked_tickers_path=tmp_path / "tracked_tickers.yaml",
         exchange_suffixes_path=fake_settings.exchange_suffixes_path,
+        regimes_csv_path=fake_settings.regimes_csv_path,
     )
     (tmp_path / "tracked_tickers.yaml").write_text("tickers: []\n")  # just needs to exist
     tracked = [make_tracked_ticker("IWDA.AS"), make_tracked_ticker("BTC-USD", enabled=False)]
