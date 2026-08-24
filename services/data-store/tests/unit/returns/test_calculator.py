@@ -14,9 +14,14 @@ import pytest
 from data_store.returns.calculator import compute_returns
 
 
-def make_prices(rows):
+def make_prices(rows, default_volume=1000.0):
+    """rows may be 5-element (ticker, price_date, close, dividends, stock_splits), which get
+    `default_volume` appended, or 6-element with volume already given explicitly -- lets the
+    existing behavioral tests stay untouched by the implausible-return filter (which needs a
+    concrete zero volume to fire) while new tests can set volume precisely."""
+    rows = [list(row) + [default_volume] if len(row) == 5 else list(row) for row in rows]
     return pd.DataFrame(
-        rows, columns=["ticker", "price_date", "close", "dividends", "stock_splits"]
+        rows, columns=["ticker", "price_date", "close", "dividends", "stock_splits", "volume"]
     )
 
 
@@ -236,6 +241,107 @@ def test_nan_close_is_dropped_and_logged(caplog):
 
     assert list(result["price_date"]) == ["2026-01-01"]
     assert "dropping" in caplog.text
+
+
+def _assert_all_returns_null(row):
+    assert pd.isna(row["price_return"])
+    assert pd.isna(row["dividend_return"])
+    assert pd.isna(row["simple_return"])
+    assert pd.isna(row["log_return"])
+
+
+def test_zero_volume_on_the_flagged_day_nulls_all_four_return_columns_and_logs(caplog):
+    caplog.set_level(logging.WARNING)
+    prices = make_prices(
+        [
+            ["AAPL", "2026-01-01", 100.0, 0.0, 0.0, 1000.0],
+            ["AAPL", "2026-01-02", 17300.0, 0.0, 0.0, 0.0],  # ~173x jump, no trades that day
+        ]
+    )
+
+    day2 = compute_returns(prices).set_index("price_date").loc["2026-01-02"]
+
+    _assert_all_returns_null(day2)
+    assert "nulling return columns for 1 row" in caplog.text
+
+
+def test_zero_volume_on_the_prior_day_nulls_the_return_computed_against_it(caplog):
+    caplog.set_level(logging.WARNING)
+    prices = make_prices(
+        [
+            ["AAPL", "2026-01-01", 6.50, 0.0, 0.0, 0.0],  # bad holiday placeholder, no trades
+            ["AAPL", "2026-01-02", 198.25, 0.0, 0.0, 5_000_000.0],  # real volume, real price
+        ]
+    )
+
+    day2 = compute_returns(prices).set_index("price_date").loc["2026-01-02"]
+
+    _assert_all_returns_null(day2)
+    assert "nulling return columns for 1 row" in caplog.text
+
+
+def test_dividend_magnitude_glitch_nulls_all_four_return_columns_even_with_real_volume(caplog):
+    caplog.set_level(logging.WARNING)
+    prices = make_prices(
+        [
+            ["AAPL", "2026-01-01", 100.0, 0.0, 0.0, 1000.0],
+            # normal +3% price move, but a dividend larger than the prior close itself
+            ["AAPL", "2026-01-02", 103.0, 150.0, 0.0, 1000.0],
+        ]
+    )
+
+    day2 = compute_returns(prices).set_index("price_date").loc["2026-01-02"]
+
+    _assert_all_returns_null(day2)
+    assert "nulling return columns for 1 row" in caplog.text
+
+
+def test_large_return_with_real_volume_and_no_dividend_is_not_suppressed():
+    # Guards against over-suppression: a real move with real trading on both sides (e.g. a
+    # biotech catalyst day) must survive even though it crosses the same magnitude threshold.
+    prices = make_prices(
+        [
+            ["INSM", "2026-01-01", 10.0, 0.0, 0.0, 1000.0],
+            ["INSM", "2026-01-02", 25.0, 0.0, 0.0, 5000.0],  # +150%, real volume both days
+        ]
+    )
+
+    day2 = compute_returns(prices).set_index("price_date").loc["2026-01-02"]
+
+    assert day2["simple_return"] == pytest.approx(1.5)
+
+
+def test_normal_sized_return_on_a_zero_volume_day_is_not_suppressed():
+    # Guards against blanket-nulling every zero-volume row: most zero-volume days are
+    # unremarkable (no trades, no real price change) and must not lose a legitimate return.
+    prices = make_prices(
+        [
+            ["AAPL", "2026-01-01", 100.0, 0.0, 0.0, 1000.0],
+            ["AAPL", "2026-01-02", 100.5, 0.0, 0.0, 0.0],  # zero volume, but a tiny, plausible move
+        ]
+    )
+
+    day2 = compute_returns(prices).set_index("price_date").loc["2026-01-02"]
+
+    assert day2["simple_return"] == pytest.approx(0.005)
+
+
+def test_day_after_a_bad_close_is_unaffected_by_the_implausible_return_filter(caplog):
+    caplog.set_level(logging.WARNING)
+    prices = make_prices(
+        [
+            ["AAPL", "2026-01-01", 100.0, 0.0, 0.0, 1000.0],
+            ["AAPL", "2026-01-02", 0.0, 0.0, 0.0, 1000.0],  # bad close, dropped
+            ["AAPL", "2026-01-03", 105.0, 0.0, 0.0, 0.0],  # zero volume, but already null upstream
+        ]
+    )
+
+    result = compute_returns(prices)
+
+    day3 = result[result["price_date"] == "2026-01-03"].iloc[0]
+    _assert_all_returns_null(day3)
+    assert "dropping" in caplog.text
+    assert "nulling return columns" not in caplog.text
 
 
 def test_decimal_valued_columns_are_handled_without_error_or_object_dtype():

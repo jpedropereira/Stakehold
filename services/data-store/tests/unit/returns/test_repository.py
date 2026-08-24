@@ -122,7 +122,7 @@ def test_iter_price_series_discovers_tickers_when_none_given():
     conn = FakeConnection(
         fetch_results=[
             [("AAPL",), ("MSFT",)],  # ticker discovery query
-            [("AAPL", date(2026, 1, 1), 100.0, 0.0, 0.0)],  # batch 1
+            [("AAPL", date(2026, 1, 1), 100.0, 0.0, 0.0, 1000)],  # batch 1
         ]
     )
 
@@ -135,7 +135,7 @@ def test_iter_price_series_discovers_tickers_when_none_given():
 
 
 def test_iter_price_series_uses_given_tickers_without_a_discovery_query():
-    conn = FakeConnection(fetch_results=[[("AAPL", date(2026, 1, 1), 100.0, 0.0, 0.0)]])
+    conn = FakeConnection(fetch_results=[[("AAPL", date(2026, 1, 1), 100.0, 0.0, 0.0, 1000)]])
 
     list(iter_price_series(conn, "yfinance", ["AAPL"], batch_size=10))
 
@@ -159,11 +159,18 @@ def test_iter_price_series_batches_tickers():
 
 
 def test_iter_price_series_yields_a_dataframe_with_expected_columns():
-    conn = FakeConnection(fetch_results=[[("AAPL", date(2026, 1, 1), 100.0, 0.5, 0.0)]])
+    conn = FakeConnection(fetch_results=[[("AAPL", date(2026, 1, 1), 100.0, 0.5, 0.0, 1000)]])
 
     (batch,) = list(iter_price_series(conn, "yfinance", ["AAPL"], batch_size=10))
 
-    assert list(batch.columns) == ["ticker", "price_date", "close", "dividends", "stock_splits"]
+    assert list(batch.columns) == [
+        "ticker",
+        "price_date",
+        "close",
+        "dividends",
+        "stock_splits",
+        "volume",
+    ]
     assert batch.iloc[0]["ticker"] == "AAPL"
 
 
