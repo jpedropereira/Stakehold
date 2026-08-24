@@ -190,10 +190,10 @@ the unprocessed landing zone.
 | `source`                | `VARCHAR(20)`    | Part of PK, e.g. `'yfinance'`. |
 | `split_adjusted_close`  | `NUMERIC(18,4)`  | Copied verbatim from `raw_market_data.close`, which is already split-adjusted by the provider (see `raw_market_data`, "What `close` actually contains"). This is the chart column. Denormalised on purpose so a chart query needs no join back to `raw_market_data`. |
 | `future_split_factor`   | `NUMERIC(30,15)` | Product of every split ratio strictly *after* this date (`1.0` for every date after a ticker's last split). Not otherwise derivable from a single row, and self-verifying against `raw_market_data.stock_splits`. Never legitimately `0` — see "Why the scale is 15" below. |
-| `price_return`          | `NUMERIC(18,8)`  | `close_t / close_(t-1) - 1`. Nullable — `NULL` on a ticker's first stored date, where no prior close exists. **No split term** — see below. |
-| `dividend_return`       | `NUMERIC(18,8)`  | `dividends_t / close_(t-1)`. `0` (not `NULL`) on a non-dividend day; `NULL` only on the series-anchor row. |
-| `simple_return`         | `NUMERIC(18,8)`  | `(close_t + dividends_t) / close_(t-1) - 1`. Always equals `price_return + dividend_return` exactly — kept as its own column for query convenience, computed in the same pass so the two can never drift apart. This is the number to display directly (`"+2.3% today"`). |
-| `log_return`            | `NUMERIC(18,8)`  | `ln((close_t + dividends_t) / close_(t-1))`, equivalently `ln(1 + simple_return)`. What gets summed across days for a cumulative/charted return, since log returns compound additively and simple returns don't. |
+| `price_return`          | `NUMERIC(18,8)`  | `close_t / close_(t-1) - 1`. Nullable — `NULL` on a ticker's first stored date, where no prior close exists, or when the row is flagged as an implausible single-day return — see "Implausible single-day returns are suppressed, not corrected" below. **No split term** — see below. |
+| `dividend_return`       | `NUMERIC(18,8)`  | `dividends_t / close_(t-1)`. `0` (not `NULL`) on a non-dividend day; `NULL` on the series-anchor row, or when the row is flagged as an implausible single-day return — see below. |
+| `simple_return`         | `NUMERIC(18,8)`  | `(close_t + dividends_t) / close_(t-1) - 1`. Always equals `price_return + dividend_return` exactly when both are non-null — kept as its own column for query convenience, computed in the same pass so the two can never drift apart. This is the number to display directly (`"+2.3% today"`). Nullable — same two cases as `price_return`. |
+| `log_return`            | `NUMERIC(18,8)`  | `ln((close_t + dividends_t) / close_(t-1))`, equivalently `ln(1 + simple_return)`. What gets summed across days for a cumulative/charted return, since log returns compound additively and simple returns don't. Nullable — same two cases as `price_return`. |
 | `calculated_at`         | `TIMESTAMPTZ`    | Defaults to `now()`; also bumped on every upsert, so it reflects the last rebuild, not the first. |
 
 Index: `(ticker, price_date)`, same rationale as `raw_market_data`'s.
@@ -236,6 +236,41 @@ triple-digit fake return on every split day. Confirmed against real AAPL data be
 shipped: the corrected formula above matches Yahoo's independently-derived `adj_close` series to
 a maximum 0.018% (mean 0.00054%) over 5,441 rows spanning two splits and 21 years — `NUMERIC(18,4)`
 rounding, not coincidence.
+
+**Implausible single-day returns are suppressed, not corrected.** A 460-row / 45-ticker
+investigation against the real dataset found `abs(simple_return) > 100%` in a single day, and
+root-caused all of them:
+
+- **428 rows (~35 tickers)**: the return spans a day where `raw_market_data.volume = 0`, either
+  on the return's own date or the immediately preceding one. On these no-trade days (mostly
+  exchange holidays), the provider's `close` is a garbage value at a roughly-constant-but-wrong
+  per-ticker scale rather than a real quote — e.g. `ULVR.L` prints ~52x on 51 of its 52 such
+  rows, all on UK bank holidays with `volume = 0`.
+- **15 rows (6 tickers)**: `dividends` alone implies a >100% one-day yield while the price barely
+  moved — a dividend-field magnitude glitch, unrelated to volume.
+- **17 rows (15 tickers)**: no mechanical signature (real volume both days, no dividend
+  anomaly) — a genuine mix of likely-real moves (e.g. a biotech catalyst day) and likely-still-
+  defective ones. These are **deliberately left untouched**: a reader querying `market_returns`
+  for extreme returns should know some known-suspect rows remain by design, not by oversight.
+
+`returns/calculator.py`'s `compute_returns` nulls `price_return`, `dividend_return`,
+`simple_return`, and `log_return` together (never just one, to keep the
+`simple_return == price_return + dividend_return` invariant intact) whenever a row's
+`simple_return` exceeds `_IMPLAUSIBLE_RETURN_THRESHOLD` (100%) **and** either its own or the
+prior day's `raw_market_data.volume` is exactly `0`, or `dividend_return` alone exceeds the same
+threshold. A `NULL` volume is not treated as zero — the signature confirmed by the investigation
+is specifically `volume = 0`, not "volume missing."
+
+Two things this does **not** do, worth stating plainly:
+
+- It never touches `raw_market_data` or `split_adjusted_close`. A price chart built from
+  `split_adjusted_close` will still show the garbage spike on these dates (e.g. `ULVR.L`'s ~52x
+  print) even though the *return* computed across it is now suppressed — this fix addresses
+  returns, not the underlying price.
+- It has a false-positive risk it doesn't try to eliminate: a genuine trading halt and
+  reopening (zero volume on the halt day, a real large move the next day) would also be nulled.
+  The 93% concentration found in the investigation is why this trade-off was accepted rather
+  than building a more targeted (and more complex) halt-vs-defect detector.
 
 **Loading strategy: full rebuild, not incremental append or upsert-on-new-rows-only.**
 `calculate_returns` recomputes and upserts every row for the tickers it's asked about, every

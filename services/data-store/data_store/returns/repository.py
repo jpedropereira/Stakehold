@@ -4,7 +4,7 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-_PRICE_COLUMNS = ["ticker", "price_date", "close", "dividends", "stock_splits"]
+_PRICE_COLUMNS = ["ticker", "price_date", "close", "dividends", "stock_splits", "volume"]
 
 _COLUMNS = [
     "ticker",
@@ -63,8 +63,8 @@ def get_tickers(conn, source: str) -> list[str]:
 
 
 def iter_price_series(conn, source: str, tickers: list[str] | None, batch_size: int):
-    """Yields one DataFrame (ticker, price_date, close, dividends, stock_splits) per batch of
-    up to `batch_size` tickers, ordered by (ticker, price_date).
+    """Yields one DataFrame (ticker, price_date, close, dividends, stock_splits, volume) per
+    batch of up to `batch_size` tickers, ordered by (ticker, price_date).
 
     Returns are purely per-ticker, so batching this way keeps memory bounded on the full
     9M-row table without any cross-batch bookkeeping. `tickers=None` discovers every ticker
@@ -78,7 +78,7 @@ def iter_price_series(conn, source: str, tickers: list[str] | None, batch_size: 
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT ticker, price_date, close, dividends, stock_splits
+                SELECT ticker, price_date, close, dividends, stock_splits, volume
                 FROM raw_market_data
                 WHERE source = %s AND ticker = ANY(%s)
                 ORDER BY ticker, price_date
