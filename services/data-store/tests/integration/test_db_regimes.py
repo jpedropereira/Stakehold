@@ -19,9 +19,9 @@ def postgres_conn():
     return conn
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def reset_regimes_table(postgres_conn):
-    """Reset the regimes table before each test."""
+    """Reset the regimes table before and after a test."""
     with postgres_conn.cursor() as cur:
         cur.execute("DELETE FROM regimes;")
     postgres_conn.commit()
@@ -31,7 +31,7 @@ def reset_regimes_table(postgres_conn):
     postgres_conn.commit()
 
 
-def test_save_regimes_full_sync_replaces_data(postgres_conn):
+def test_save_regimes_full_sync_replaces_data(postgres_conn, reset_regimes_table):
     """Full sync: inserting new rows removes old ones."""
     rows_1 = [
         RegimeConfig(
@@ -91,7 +91,7 @@ def test_save_regimes_full_sync_replaces_data(postgres_conn):
         assert cur.fetchone()[0] == "gfc"
 
 
-def test_save_regimes_is_idempotent(postgres_conn):
+def test_save_regimes_is_idempotent(postgres_conn, reset_regimes_table):
     """Rerunning with the same data produces the same table."""
     rows = [
         RegimeConfig(
@@ -123,7 +123,7 @@ def test_save_regimes_is_idempotent(postgres_conn):
     assert row1 == row2
 
 
-def test_save_regimes_nullable_fields_roundtrip(postgres_conn):
+def test_save_regimes_nullable_fields_roundtrip(postgres_conn, reset_regimes_table):
     """NULL fields in the CSV are stored as NULL in the database."""
     rows = [
         RegimeConfig(
