@@ -4,6 +4,14 @@ import pytest
 from data_store import settings as settings_module
 from data_store.settings import SettingsError, load_settings
 
+# Computed independently of settings.py's own _SERVICE_ROOT logic: this file lives at
+# services/data-store/tests/unit/test_settings.py, three levels below services/data-store.
+# Deriving the expectation the same way the implementation does would make these tests
+# tautological -- they'd pass even if _SERVICE_ROOT pointed at the wrong directory, which is
+# exactly what happened when the package moved under src/ and _SERVICE_ROOT wasn't updated to
+# match.
+_SERVICE_ROOT = Path(__file__).resolve().parents[2]
+
 
 @pytest.fixture(autouse=True)
 def no_dotenv(monkeypatch):
@@ -26,10 +34,7 @@ def test_config_path_defaults_to_config_etfs_yaml(monkeypatch):
 
     result = load_settings()
 
-    assert (
-        result.config_path
-        == Path(settings_module.__file__).resolve().parent.parent / "config/etfs.yaml"
-    )
+    assert result.config_path == _SERVICE_ROOT / "config/etfs.yaml"
 
 
 def test_config_path_overridable_via_env(monkeypatch, tmp_path):
@@ -54,10 +59,7 @@ def test_tracked_tickers_path_defaults_to_config_tracked_tickers_yaml(monkeypatc
 
     result = load_settings()
 
-    assert (
-        result.tracked_tickers_path
-        == Path(settings_module.__file__).resolve().parent.parent / "config/tracked_tickers.yaml"
-    )
+    assert result.tracked_tickers_path == _SERVICE_ROOT / "config/tracked_tickers.yaml"
 
 
 def test_tracked_tickers_path_overridable_via_env(monkeypatch, tmp_path):
@@ -75,11 +77,7 @@ def test_exchange_suffixes_path_defaults_to_config_yfinance_exchange_suffixes_ya
 
     result = load_settings()
 
-    assert (
-        result.exchange_suffixes_path
-        == Path(settings_module.__file__).resolve().parent.parent
-        / "config/yfinance_exchange_suffixes.yaml"
-    )
+    assert result.exchange_suffixes_path == _SERVICE_ROOT / "config/yfinance_exchange_suffixes.yaml"
 
 
 def test_exchange_suffixes_path_overridable_via_env(monkeypatch, tmp_path):
@@ -108,7 +106,7 @@ def test_relative_config_paths_resolve_against_the_service_root_not_the_cwd(monk
 
     result = load_settings()
 
-    service_root = Path(settings_module.__file__).resolve().parent.parent
+    service_root = _SERVICE_ROOT
     assert result.config_path == service_root / "config/etfs.yaml"
     assert result.tracked_tickers_path == service_root / "config/tracked_tickers.yaml"
     assert result.exchange_suffixes_path == service_root / "config/yfinance_exchange_suffixes.yaml"
@@ -122,7 +120,7 @@ def test_relative_override_paths_also_resolve_against_the_service_root(monkeypat
 
     result = load_settings()
 
-    service_root = Path(settings_module.__file__).resolve().parent.parent
+    service_root = _SERVICE_ROOT
     assert result.config_path == service_root / "somewhere/funds.yaml"
 
 
@@ -139,10 +137,7 @@ def test_regimes_csv_path_defaults_to_config_regimes_csv(monkeypatch):
 
     result = load_settings()
 
-    assert (
-        result.regimes_csv_path
-        == Path(settings_module.__file__).resolve().parent.parent / "config/regimes.csv"
-    )
+    assert result.regimes_csv_path == _SERVICE_ROOT / "config/regimes.csv"
 
 
 def test_regimes_csv_path_overridable_via_env(monkeypatch, tmp_path):
