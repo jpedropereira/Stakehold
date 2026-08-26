@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 # Airflow DAGs used to prefix `cd /opt/stakehold/services/data-store &&` to a shell command,
 # which made the relative defaults work by accident and broke the moment a job was called
 # directly rather than through a shell.
-_SERVICE_ROOT = Path(__file__).resolve().parent.parent
+_SERVICE_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
 def _resolve(raw_path: str) -> Path:
