@@ -11,7 +11,7 @@ from data_store.db.connection import apply_schema
 
 pytestmark = pytest.mark.integration
 
-SCHEMA_PATH = Path(__file__).parents[2] / "data_store" / "db" / "schema.sql"
+SCHEMA_PATH = Path(__file__).parents[2] / "src" / "data_store" / "db" / "schema.sql"
 
 FUND_KEY = "guardrail_test_fund"
 
