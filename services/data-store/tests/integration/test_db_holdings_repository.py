@@ -10,7 +10,7 @@ from data_store.holdings.repository import get_latest_tickers, save_holdings
 
 pytestmark = pytest.mark.integration
 
-SCHEMA_PATH = Path(__file__).parents[2] / "data_store" / "db" / "schema.sql"
+SCHEMA_PATH = Path(__file__).parents[2] / "src" / "data_store" / "db" / "schema.sql"
 
 RAW_DB_COLUMNS = [
     "holding_ticker",

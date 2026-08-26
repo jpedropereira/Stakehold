@@ -85,7 +85,7 @@ docker compose up -d
 
 `dags/` and `config/` are bind-mounted, so DAG edits and configuration changes (a new fund, a
 new exchange suffix) take effect on the next run with no rebuild. **Application code under
-`data_store/` is baked into the image**, so after changing it, rebuild explicitly:
+`src/data_store/` is baked into the image**, so after changing it, rebuild explicitly:
 
 ```bash
 docker compose build
@@ -114,7 +114,7 @@ Postgres and pgAdmin are also brought up by the same Docker Compose stack:
 ```bash
 cd services/data-store
 docker compose up -d postgres pgadmin
-uv run data-store db init  # applies data_store/db/schema.sql
+uv run data-store db init  # applies src/data_store/db/schema.sql
 ```
 
 pgAdmin is at [http://localhost:5050](http://localhost:5050) (port configurable via

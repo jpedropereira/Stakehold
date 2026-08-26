@@ -345,10 +345,10 @@ guarded.
 ### Build-time vs. runtime
 
 `dags/` and `config/` are bind-mounted, so DAG edits and configuration changes take effect on the
-next run. **Application code under `data_store/` is baked into the image**, so:
+next run. **Application code under `src/data_store/` is baked into the image**, so:
 
 ```bash
-docker compose build   # required after changing data_store/ code
+docker compose build   # required after changing src/data_store/ code
 ```
 
 `config/` is mounted rather than baked because it changes far more often than code — adding a fund
