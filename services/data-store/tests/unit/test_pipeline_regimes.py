@@ -58,6 +58,26 @@ def test_ingest_regimes_calls_loader(caplog):
         mock_load.assert_called_once_with(csv_path)
 
 
+def test_ingest_regimes_logs_nothing_to_do(caplog):
+    import logging
+
+    caplog.set_level(logging.INFO)
+    conn = MagicMock()
+    csv_path = Path("test.csv")
+
+    with (
+        patch("data_store.pipeline.load_regimes") as mock_load,
+        patch("data_store.pipeline.save_regimes") as mock_save,
+    ):
+        mock_load.return_value = []
+        mock_save.return_value = 0
+
+        result = ingest_regimes(conn, csv_path)
+
+        assert "nothing to do" in caplog.text
+        assert result["status"] == "nothing_to_do"
+
+
 def test_ingest_regimes_calls_repository(caplog):
     import logging
 

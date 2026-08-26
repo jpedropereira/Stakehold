@@ -49,44 +49,57 @@ def load_regimes(path: Path) -> list[RegimeConfig]:
             seen_ids = set()
 
             for row_num, row in enumerate(reader, start=2):
-                regime_id = row["regime_id"].strip()
+                # `row.get(field) or ""` rather than `row.get(field, "")`: a ragged row (fewer
+                # trailing columns than the header) makes DictReader fill the missing ones with
+                # None, and dict.get's default only applies when the key is absent, not when it
+                # maps to None -- so a plain `.get(field, "")` would still hand None downstream.
+                regime_id = (row.get("regime_id") or "").strip()
+                dimension = (row.get("dimension") or "").strip()
+                scope = (row.get("scope") or "").strip()
+                name = (row.get("name") or "").strip()
+                source = (row.get("source") or "").strip()
 
-                if not regime_id:
-                    raise ConfigError(f"Row {row_num}: regime_id is required")
+                for field, value in (
+                    ("regime_id", regime_id),
+                    ("dimension", dimension),
+                    ("scope", scope),
+                    ("name", name),
+                    ("source", source),
+                ):
+                    if not value:
+                        raise ConfigError(f"Row {row_num}: {field} is required")
 
                 if regime_id in seen_ids:
                     raise ConfigError(f"Row {row_num}: duplicate regime_id '{regime_id}'")
                 seen_ids.add(regime_id)
 
                 try:
-                    start_date = _parse_date(row["start_date"], "start_date", row_num)
-                    end_date = _parse_optional_date(row.get("end_date", ""), "end_date", row_num)
-                    known_from = _parse_optional_date(
-                        row.get("known_from", ""), "known_from", row_num
-                    )
+                    start_date = _parse_date(row.get("start_date"), "start_date", row_num)
+                    end_date = _parse_optional_date(row.get("end_date"), "end_date", row_num)
+                    known_from = _parse_optional_date(row.get("known_from"), "known_from", row_num)
                 except ValueError as e:
                     raise ConfigError(str(e))
 
-                severity = row.get("severity", "").strip() or None
+                severity = (row.get("severity") or "").strip() or None
                 if severity is not None and severity not in VALID_SEVERITIES:
                     raise ConfigError(
                         f"Row {row_num}: invalid severity '{severity}'. "
                         f"Must be one of: {', '.join(sorted(VALID_SEVERITIES))}"
                     )
 
-                notes = row.get("notes", "").strip() or None
+                notes = (row.get("notes") or "").strip() or None
 
                 regimes.append(
                     RegimeConfig(
                         regime_id=regime_id,
-                        dimension=row["dimension"].strip(),
-                        scope=row["scope"].strip(),
-                        name=row["name"].strip(),
+                        dimension=dimension,
+                        scope=scope,
+                        name=name,
                         start_date=start_date,
                         end_date=end_date,
                         known_from=known_from,
                         severity=severity,
-                        source=row["source"].strip(),
+                        source=source,
                         notes=notes,
                     )
                 )
@@ -95,22 +108,19 @@ def load_regimes(path: Path) -> list[RegimeConfig]:
 
     except ConfigError:
         raise
-    except Exception as e:
+    except (OSError, csv.Error) as e:
         raise ConfigError(f"Failed to parse regimes CSV: {e}")
 
 
-def _parse_date(value: str, field: str, row_num: int) -> date:
-    value = value.strip()
-    if not value:
+def _parse_date(value: str | None, field: str, row_num: int) -> date:
+    parsed = _parse_optional_date(value, field, row_num)
+    if parsed is None:
         raise ValueError(f"Row {row_num}: {field} is required")
-    try:
-        return date.fromisoformat(value)
-    except ValueError:
-        raise ValueError(f"Row {row_num}: {field} has invalid date format: {value}")
+    return parsed
 
 
-def _parse_optional_date(value: str, field: str, row_num: int) -> date | None:
-    value = value.strip()
+def _parse_optional_date(value: str | None, field: str, row_num: int) -> date | None:
+    value = (value or "").strip()
     if not value:
         return None
     try:
