@@ -131,3 +131,24 @@ def test_absolute_override_paths_are_left_alone(monkeypatch):
     monkeypatch.setenv("DATA_STORE_CONFIG_PATH", "/etc/stakehold/funds.yaml")
 
     assert load_settings().config_path == Path("/etc/stakehold/funds.yaml")
+
+
+def test_regimes_csv_path_defaults_to_config_regimes_csv(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost/db")
+    monkeypatch.delenv("DATA_STORE_REGIMES_PATH", raising=False)
+
+    result = load_settings()
+
+    assert (
+        result.regimes_csv_path
+        == Path(settings_module.__file__).resolve().parent.parent / "config/regimes.csv"
+    )
+
+
+def test_regimes_csv_path_overridable_via_env(monkeypatch, tmp_path):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost/db")
+    monkeypatch.setenv("DATA_STORE_REGIMES_PATH", str(tmp_path / "custom.csv"))
+
+    result = load_settings()
+
+    assert result.regimes_csv_path == tmp_path / "custom.csv"

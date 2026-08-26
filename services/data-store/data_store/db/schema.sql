@@ -93,3 +93,20 @@ END
 $$;
 
 CREATE INDEX IF NOT EXISTS idx_market_returns_ticker_date ON market_returns (ticker, price_date);
+
+CREATE TABLE IF NOT EXISTS regimes (
+    regime_id   VARCHAR(50)   PRIMARY KEY,
+    dimension   VARCHAR(30)   NOT NULL,
+    scope       VARCHAR(20)   NOT NULL,
+    name        VARCHAR(200)  NOT NULL,
+    start_date  DATE          NOT NULL,
+    end_date    DATE,
+    known_from  DATE,
+    severity    VARCHAR(20),
+    source      VARCHAR(50)   NOT NULL,
+    notes       TEXT,
+    ingested_at TIMESTAMPTZ   NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_regimes_dimension_scope ON regimes (dimension, scope);
+CREATE INDEX IF NOT EXISTS idx_regimes_start_date        ON regimes (start_date);

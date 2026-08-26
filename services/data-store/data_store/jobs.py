@@ -32,6 +32,7 @@ from data_store.pipeline import (
     calculate_returns,
     ingest_holdings,
     ingest_market_data,
+    ingest_regimes,
 )
 from data_store.run_result import build_run_result
 from data_store.settings import load_settings
@@ -152,6 +153,17 @@ def run_calculate_returns(*, tickers: list[str] | None = None) -> dict[str, int 
     conn = get_connection(settings.database_url)
     try:
         return calculate_returns(conn, only_tickers=set(tickers) if tickers else None)
+    finally:
+        conn.close()
+
+
+def run_ingest_regimes() -> dict[str, int | str]:
+    """Load regimes from the configured CSV file into the database."""
+    configure_logging()
+    settings = load_settings()
+    conn = get_connection(settings.database_url)
+    try:
+        return ingest_regimes(conn, settings.regimes_csv_path)
     finally:
         conn.close()
 

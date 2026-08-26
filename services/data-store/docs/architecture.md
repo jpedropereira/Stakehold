@@ -39,13 +39,14 @@ flowchart TD
 
     subgraph orch["Orchestration"]
         JOBS["jobs.py<br/><i>runnable units: config + connection + one flow</i>"]
-        PIPE["pipeline.py<br/><i>the three flows; ticker resolution</i>"]
+        PIPE["pipeline.py<br/><i>the four run-level flows; ticker resolution</i>"]
     end
 
     subgraph domain["Domain modules"]
         HOLD["holdings/<br/>scraper · parser · repository"]
         MKT["market_data/<br/>yfinance_source · repository"]
         RET["returns/<br/>calculator · repository"]
+        REG["regimes/<br/>loader · repository"]
     end
 
     subgraph found["Foundation"]
@@ -67,11 +68,13 @@ flowchart TD
     PIPE --> HOLD
     PIPE --> MKT
     PIPE --> RET
+    PIPE --> REG
     HOLD --> EXT
     MKT --> EXT
     HOLD --> PG
     MKT --> PG
     RET --> PG
+    REG --> PG
     DB --> PG
 ```
 
@@ -116,6 +119,11 @@ code.
 own table. Disclosed rather than silently different: a domain reading another domain's table
 instead of an external source is a shape the original three-file split didn't anticipate.
 
+`regimes/` has a similar two-file shape: `loader.py` (reads and validates a local CSV into
+`RegimeConfig` dataclasses, following the `config_loader.py` vocabulary for errors and validation)
+and `repository.py` (writes to the `regimes` table). There is no external provider — the only
+source is a hand-curated CSV in `config/`, updated manually — and no base Protocol.
+
 ## Extension points
 
 New providers are registry entries, not new branches. Both registries live at the top of
@@ -143,9 +151,9 @@ two different strings. `.name` is what gets stamped into the `source` column and
 floors are read under; the key is what config files reference. Keep them equal unless you have a
 reason not to.
 
-## The four flows
+## The five flows
 
-All four live in `pipeline.py` and are exposed as CLI subcommands.
+All five live in `pipeline.py` and are exposed as CLI subcommands.
 
 | Flow | Command | Cadence | Reads | Writes |
 |---|---|---|---|---|
@@ -153,6 +161,7 @@ All four live in `pipeline.py` and are exposed as CLI subcommands.
 | Market data ingest | `ingest-market-data` | daily | `etf_holdings` + config | `raw_market_data` |
 | Market data backfill | `backfill-market-data` | manual | `raw_market_data` | `raw_market_data` |
 | Returns calculation | `calculate-returns` | after new data lands | `raw_market_data` | `market_returns` |
+| Regimes ingest | `ingest-regimes` | manual | `config/regimes.csv` | `regimes` |
 
 **Returns calculation is the odd one out**: it reads no config and does no ticker resolution — it
 discovers both sources and tickers directly from `raw_market_data` (`returns/repository.py`'s
@@ -180,9 +189,15 @@ therefore re-fetches that ticker's full stored range and rewrites it
 (`pipeline._refresh_split_histories`). This is the one place the daily flow issues an unbounded
 historical request rather than a windowed one; splits are rare enough that the cost is negligible.
 
+**Regimes ingest is CLI-only, not scheduled.** The source is a hand-curated CSV, edited manually
+when new market events occur or existing regime definitions change — no automation needed. Each
+`ingest-regimes` run replaces the entire `regimes` table from the current CSV file. Unlike the
+data-source flows above, this has no Airflow DAG, no schedule, and no provider integration — it's
+a manual operation, run after editing `config/regimes.csv`.
+
 ### What a flow returns
 
-The three run-level flows return a structured result, not a row count:
+The four run-level flows return a structured result, not a row count:
 
 ```python
 {"status": "ok" | "partial" | "nothing_to_do",
@@ -428,7 +443,7 @@ run's summary is as much a part of its contract as its return value.
 
 ## Where to start reading
 
-1. `pipeline.py` — the four flows; everything else is in service of these.
+1. `pipeline.py` — the five flows; everything else is in service of these.
 2. `jobs.py` — how configuration, a connection and a flow become one runnable operation.
 3. `cli.py` — how a command becomes a job. Thin on purpose; if it is growing, something belongs
    in `jobs.py` instead.
