@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Stakehold — Brand Charter</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --stone:#2B2B28;
+    --stone-600:#6B6A62;
+    --gold:#C99A3E;
+    --forest:#33523E;
+    --oxblood:#7A2E2E;
+    --parchment:#F3EEE3;
+    --parchment-deep:#E9E0CC;
+    --hairline: rgba(43,43,40,0.16);
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    background:var(--parchment);
+    color:var(--stone);
+    font-family:'Inter',sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .page{
+    max-width:880px;
+    margin:0 auto;
+    padding:0 40px 120px;
+  }
+
+  /* ---- cover ---- */
+  .cover{
+    padding:100px 0 60px;
+    text-align:center;
+    border-bottom:1px solid var(--hairline);
+  }
+  .cover .eyebrow{
+    font-family:'IBM Plex Mono',monospace;
+    font-size:12px;
+    letter-spacing:0.18em;
+    text-transform:uppercase;
+    color:var(--stone-600);
+    margin-bottom:28px;
+  }
+  .cover .mark{ width:88px; height:88px; margin:0 auto 32px; display:block; }
+  .cover h1{
+    font-family:'Fraunces',serif;
+    font-weight:700;
+    font-size:56px;
+    letter-spacing:0.05em;
+    margin:0;
+  }
+  .cover .tagline{
+    font-family:'Fraunces',serif;
+    font-style:italic;
+    font-weight:500;
+    color:var(--stone-600);
+    font-size:18px;
+    margin-top:14px;
+  }
+  .cover .meta{
+    font-family:'IBM Plex Mono',monospace;
+    font-size:12px;
+    color:var(--stone-600);
+    margin-top:36px;
+  }
+
+  /* ---- divider: ascending bars, the signature element ---- */
+  .rule{ display:flex; align-items:center; justify-content:center; gap:14px; margin:96px 0 56px; }
+  .rule .line{ flex:1; height:1px; background:var(--hairline); }
+  .rule .bars{ display:flex; align-items:flex-end; gap:3px; height:20px; }
+  .rule .bars span{ width:4px; background:var(--gold); display:block; }
+  .rule .bars span:nth-child(1){height:6px;}
+  .rule .bars span:nth-child(2){height:10px;}
+  .rule .bars span:nth-child(3){height:14px;}
+  .rule .bars span:nth-child(4){height:18px;}
+  .rule .bars span:nth-child(5){height:20px;}
+
+  /* ---- section chrome ---- */
+  section{ scroll-margin-top:40px; }
+  .chapter-label{
+    font-family:'IBM Plex Mono',monospace;
+    font-size:12px;
+    letter-spacing:0.14em;
+    color:var(--gold);
+    text-transform:uppercase;
+    margin-bottom:10px;
+  }
+  h2{
+    font-family:'Fraunces',serif;
+    font-weight:600;
+    font-size:34px;
+    margin:0 0 18px;
+    letter-spacing:0.01em;
+  }
+  .lede{
+    font-size:16px;
+    line-height:1.7;
+    color:var(--stone-600);
+    max-width:600px;
+    margin-bottom:44px;
+  }
+  h3{
+    font-family:'Fraunces',serif;
+    font-weight:600;
+    font-size:17px;
+    margin:0 0 6px;
+  }
+  p{ line-height:1.65; font-size:15px; }
+
+  /* ---- mark section ---- */
+  .mark-display{
+    background:var(--stone);
+    border-radius:6px;
+    padding:64px 0;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    margin-bottom:28px;
+  }
+  .mark-display svg{ width:120px; height:auto; }
+  .clearspace{
+    background:var(--parchment-deep);
+    border-radius:6px;
+    padding:48px 0;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    margin-bottom:28px;
+  }
+  .clearspace svg{ width:140px; height:auto; }
+
+  .grid-2{ display:grid; grid-template-columns:1fr 1fr; gap:24px; margin-bottom:20px; }
+  .rule-card{
+    border:1px solid var(--hairline);
+    border-radius:6px;
+    padding:20px 22px;
+  }
+  .rule-card.dont{ border-color:rgba(122,46,46,0.35); }
+  .rule-card .tag{
+    font-family:'IBM Plex Mono',monospace;
+    font-size:11px;
+    letter-spacing:0.1em;
+    text-transform:uppercase;
+    display:inline-block;
+    margin-bottom:8px;
+  }
+  .rule-card.do .tag{ color:var(--forest); }
+  .rule-card.dont .tag{ color:var(--oxblood); }
+  .rule-card p{ margin:0; font-size:14px; color:var(--stone-600); }
+
+  .sizes{ display:flex; align-items:flex-end; gap:40px; margin:36px 0; flex-wrap:wrap; }
+  .sizes .item{ text-align:center; }
+  .sizes .item svg{ display:block; margin:0 auto 10px; }
+  .sizes .item .cap{ font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--stone-600); }
+
+  /* ---- palette ---- */
+  .palette{ display:grid; grid-template-columns:repeat(5,1fr); gap:16px; margin-bottom:16px; }
+  .swatch{ border-radius:6px; overflow:hidden; border:1px solid var(--hairline); }
+  .swatch .fill{ height:96px; }
+  .swatch .info{ padding:12px 14px; background:var(--parchment-deep); }
+  .swatch .name{ font-family:'Fraunces',serif; font-weight:600; font-size:14px; }
+  .swatch .hex{ font-family:'IBM Plex Mono',monospace; font-size:11.5px; color:var(--stone-600); margin-top:2px; }
+  .swatch .use{ font-size:12px; color:var(--stone-600); margin-top:8px; line-height:1.5; }
+
+  /* ---- type specimen ---- */
+  .specimen{ border-top:1px solid var(--hairline); padding:26px 0; }
+  .specimen:last-child{ border-bottom:1px solid var(--hairline); }
+  .specimen .row{ display:flex; align-items:baseline; justify-content:space-between; gap:24px; }
+  .specimen .label{ font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--stone-600); min-width:120px; }
+  .specimen .sample{ flex:1; }
+  .specimen .meta{ font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--stone-600); text-align:right; min-width:150px; }
+
+  .disp1{ font-family:'Fraunces',serif; font-weight:700; font-size:44px; letter-spacing:0.01em; }
+  .disp2{ font-family:'Fraunces',serif; font-weight:600; font-size:30px; }
+  .disp3{ font-family:'Fraunces',serif; font-weight:600; font-size:22px; }
+  .body1{ font-family:'Inter',sans-serif; font-size:16px; line-height:1.6; }
+  .body2{ font-family:'Inter',sans-serif; font-size:14px; color:var(--stone-600); }
+  .mono1{ font-family:'IBM Plex Mono',monospace; font-size:15px; }
+
+  /* ---- voice ---- */
+  .principles{ display:grid; grid-template-columns:1fr 1fr; gap:28px 32px; }
+  .principle .num{ font-family:'IBM Plex Mono',monospace; color:var(--gold); font-size:12px; margin-bottom:6px; }
+  .principle h3{ margin-bottom:8px; }
+  .principle p{ color:var(--stone-600); font-size:14px; }
+
+  /* ---- application ---- */
+  .app-mock{
+    background:var(--stone);
+    border-radius:8px;
+    padding:28px;
+    max-width:340px;
+  }
+  .app-mock .row1{ display:flex; justify-content:space-between; align-items:center; margin-bottom:4px; }
+  .app-mock .name{ font-family:'Fraunces',serif; font-weight:600; color:var(--parchment); font-size:17px; }
+  .app-mock .ticker{ font-family:'IBM Plex Mono',monospace; font-size:13px; color:rgba(243,238,227,0.55); }
+  .app-mock .value{ font-family:'IBM Plex Mono',monospace; font-size:28px; color:var(--parchment); margin:10px 0 6px; }
+  .app-mock .delta{ font-family:'IBM Plex Mono',monospace; font-size:14px; }
+  .app-mock .delta.up{ color:#8FBF9F; }
+  .app-mock .delta.down{ color:#E39A9A; }
+
+  footer{ text-align:center; margin-top:100px; }
+  footer .bars{ display:flex; align-items:flex-end; justify-content:center; gap:3px; height:20px; margin-bottom:16px; }
+  footer .bars span{ width:4px; background:var(--gold); display:block; }
+  footer .bars span:nth-child(1){height:6px;} footer .bars span:nth-child(2){height:10px;}
+  footer .bars span:nth-child(3){height:14px;} footer .bars span:nth-child(4){height:18px;} footer .bars span:nth-child(5){height:20px;}
+  footer p{ font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--stone-600); }
+
+  @media(max-width:640px){
+    .cover h1{ font-size:38px; }
+    .palette{ grid-template-columns:repeat(2,1fr); }
+    .grid-2{ grid-template-columns:1fr; }
+    .principles{ grid-template-columns:1fr; }
+    .specimen .row{ flex-direction:column; align-items:flex-start; gap:6px; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- COVER -->
+  <div class="cover">
+    <div class="eyebrow">Brand charter · v1</div>
+    <svg class="mark" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+      <rect x="65" y="90" width="70" height="90" fill="var(--gold)" style="fill:#C99A3E"/>
+      <rect x="90" y="155" width="20" height="25" style="fill:#F3EEE3"/>
+      <rect x="67" y="76" width="10" height="14" style="fill:#C99A3E"/>
+      <rect x="81" y="70" width="10" height="20" style="fill:#C99A3E"/>
+      <rect x="95" y="64" width="10" height="26" style="fill:#C99A3E"/>
+      <rect x="109" y="58" width="10" height="32" style="fill:#C99A3E"/>
+      <rect x="123" y="52" width="10" height="38" style="fill:#C99A3E"/>
+      <line x1="128" y1="52" x2="128" y2="30" stroke="#C99A3E" stroke-width="4"/>
+      <path d="M 128 30 L 152 40 L 128 50 Z" style="fill:#C99A3E"/>
+    </svg>
+    <h1>STAKEHOLD</h1>
+    <div class="tagline">hold the line. build the keep.</div>
+    <div class="meta">investment tracking, fortified</div>
+  </div>
+
+  <!-- I. THE MARK -->
+  <section id="mark">
+    <div class="chapter-label">I. The mark</div>
+    <h2>The keep</h2>
+    <p class="lede">Battlements that ascend like a bar chart. The mark reads as a small stronghold at any size, and as a growth chart to anyone who looks twice — the same shape carries both ideas at once.</p>
+
+    <div class="mark-display">
+      <svg viewBox="0 0 200 260" xmlns="http://www.w3.org/2000/svg">
+        <rect x="65" y="90" width="70" height="90" fill="#C99A3E"/>
+        <path d="M 90 180 L 90 162 A 10 10 0 0 1 110 162 L 110 180 Z" fill="#2B2B28"/>
+        <rect x="67" y="76" width="10" height="14" fill="#C99A3E"/>
+        <rect x="81" y="70" width="10" height="20" fill="#C99A3E"/>
+        <rect x="95" y="64" width="10" height="26" fill="#C99A3E"/>
+        <rect x="109" y="58" width="10" height="32" fill="#C99A3E"/>
+        <rect x="123" y="52" width="10" height="38" fill="#C99A3E"/>
+        <line x1="128" y1="52" x2="128" y2="30" stroke="#C99A3E" stroke-width="3"/>
+        <path d="M 128 30 L 150 39 L 128 48 Z" fill="#C99A3E"/>
+      </svg>
+    </div>
+
+    <h3 style="margin-top:8px;">Clear space and minimum size</h3>
+    <p class="body2" style="margin-bottom:18px;">Give the mark breathing room equal to the width of one merlon on every side. Below 24px, drop the flag and door detail — see the app icon crop.</p>
+    <div class="clearspace">
+      <svg viewBox="0 0 260 200" xmlns="http://www.w3.org/2000/svg">
+        <rect x="10" y="10" width="240" height="180" fill="none" stroke="#C99A3E" stroke-width="1" stroke-dasharray="4 4" opacity="0.5"/>
+        <g transform="translate(65,25)">
+          <rect x="0" y="0" width="70" height="90" fill="#2B2B28"/>
+          <path d="M 25 90 L 25 72 A 10 10 0 0 1 45 72 L 45 90 Z" fill="#F3EEE3"/>
+          <rect x="2" y="-14" width="10" height="14" fill="#2B2B28"/>
+          <rect x="16" y="-20" width="10" height="20" fill="#2B2B28"/>
+          <rect x="30" y="-26" width="10" height="26" fill="#2B2B28"/>
+          <rect x="44" y="-32" width="10" height="32" fill="#2B2B28"/>
+          <rect x="58" y="-38" width="10" height="38" fill="#2B2B28"/>
+          <line x1="63" y1="-38" x2="63" y2="-60" stroke="#2B2B28" stroke-width="3"/>
+          <path d="M 63 -60 L 85 -51 L 63 -42 Z" fill="#2B2B28"/>
+        </g>
+      </svg>
+    </div>
+
+    <div class="sizes">
+      <div class="item">
+        <svg width="72" height="72" viewBox="0 0 200 200"><rect width="200" height="200" rx="44" fill="#2B2B28"/><rect x="65" y="90" width="70" height="90" fill="#C99A3E"/><rect x="90" y="155" width="20" height="25" fill="#2B2B28"/><rect x="67" y="76" width="10" height="14" fill="#C99A3E"/><rect x="81" y="70" width="10" height="20" fill="#C99A3E"/><rect x="95" y="64" width="10" height="26" fill="#C99A3E"/><rect x="109" y="58" width="10" height="32" fill="#C99A3E"/><rect x="123" y="52" width="10" height="38" fill="#C99A3E"/><line x1="128" y1="52" x2="128" y2="30" stroke="#C99A3E" stroke-width="4"/><path d="M 128 30 L 152 40 L 128 50 Z" fill="#C99A3E"/></svg>
+        <div class="cap">512px — full detail</div>
+      </div>
+      <div class="item">
+        <svg width="40" height="40" viewBox="0 0 200 200"><rect width="200" height="200" rx="44" fill="#2B2B28"/><rect x="65" y="90" width="70" height="90" fill="#C99A3E"/><rect x="90" y="155" width="20" height="25" fill="#2B2B28"/><rect x="67" y="76" width="10" height="14" fill="#C99A3E"/><rect x="81" y="70" width="10" height="20" fill="#C99A3E"/><rect x="95" y="64" width="10" height="26" fill="#C99A3E"/><rect x="109" y="58" width="10" height="32" fill="#C99A3E"/><rect x="123" y="52" width="10" height="38" fill="#C99A3E"/><line x1="128" y1="52" x2="128" y2="30" stroke="#C99A3E" stroke-width="4"/><path d="M 128 30 L 152 40 L 128 50 Z" fill="#C99A3E"/></svg>
+        <div class="cap">60px — home screen</div>
+      </div>
+      <div class="item">
+        <svg width="20" height="20" viewBox="0 0 200 200"><rect width="200" height="200" rx="44" fill="#2B2B28"/><rect x="60" y="85" width="80" height="95" fill="#C99A3E"/><rect x="60" y="70" width="14" height="20" fill="#C99A3E"/><rect x="78" y="60" width="14" height="30" fill="#C99A3E"/><rect x="96" y="50" width="14" height="40" fill="#C99A3E"/><rect x="114" y="40" width="14" height="50" fill="#C99A3E"/></svg>
+        <div class="cap">16px — favicon, no flag</div>
+      </div>
+    </div>
+
+    <div class="grid-2" style="margin-top:24px;">
+      <div class="rule-card do">
+        <span class="tag">Do</span>
+        <p>Place the gold mark on stone, or the stone mark on parchment. Keep the two-tone contrast.</p>
+      </div>
+      <div class="rule-card dont">
+        <span class="tag">Don't</span>
+        <p>Recolor the mark in an accent hue, add a drop shadow, or set it on a busy photo background.</p>
+      </div>
+      <div class="rule-card do">
+        <span class="tag">Do</span>
+        <p>Simplify at small sizes — drop the door notch and flag first, the battlements last.</p>
+      </div>
+      <div class="rule-card dont">
+        <span class="tag">Don't</span>
+        <p>Stretch, skew, or rotate the mark. It stands upright, like the thing it depicts.</p>
+      </div>
+    </div>
+  </section>
+
+  <div class="rule"><div class="line"></div><div class="bars"><span></span><span></span><span></span><span></span><span></span></div><div class="line"></div></div>
+
+  <!-- II. PALETTE -->
+  <section id="palette">
+    <div class="chapter-label">II. Palette</div>
+    <h2>Stone, gold, and two ledgers</h2>
+    <p class="lede">Five colors. Stone and parchment carry the structure; gold is the single accent. Forest and oxblood are reserved strictly for gains and losses — they never appear decoratively.</p>
+
+    <div class="palette">
+      <div class="swatch">
+        <div class="fill" style="background:#2B2B28;"></div>
+        <div class="info">
+          <div class="name">Stone</div>
+          <div class="hex">#2B2B28</div>
+          <div class="use">Ink, primary text, dark surfaces</div>
+        </div>
+      </div>
+      <div class="swatch">
+        <div class="fill" style="background:#C99A3E;"></div>
+        <div class="info">
+          <div class="name">Gold</div>
+          <div class="hex">#C99A3E</div>
+          <div class="use">The one accent — marks, CTAs, highlights</div>
+        </div>
+      </div>
+      <div class="swatch">
+        <div class="fill" style="background:#33523E;"></div>
+        <div class="info">
+          <div class="name">Forest</div>
+          <div class="hex">#33523E</div>
+          <div class="use">Gains only. Never decorative</div>
+        </div>
+      </div>
+      <div class="swatch">
+        <div class="fill" style="background:#7A2E2E;"></div>
+        <div class="info">
+          <div class="name">Oxblood</div>
+          <div class="hex">#7A2E2E</div>
+          <div class="use">Losses only. Never decorative</div>
+        </div>
+      </div>
+      <div class="swatch">
+        <div class="fill" style="background:#F3EEE3; border-bottom:1px solid var(--hairline);"></div>
+        <div class="info">
+          <div class="name">Parchment</div>
+          <div class="hex">#F3EEE3</div>
+          <div class="use">Page and card background</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div class="rule"><div class="line"></div><div class="bars"><span></span><span></span><span></span><span></span><span></span></div><div class="line"></div></div>
+
+  <!-- III. TYPE -->
+  <section id="type">
+    <div class="chapter-label">III. Type</div>
+    <h2>Carved headlines, plain ledgers</h2>
+    <p class="lede">Fraunces for anything that announces itself — headlines, the wordmark, moments of emphasis. Inter for everything you read in bulk. Plex Mono for every number, so figures line up like a proper ledger.</p>
+
+    <div class="specimen">
+      <div class="row">
+        <div class="label">Display / H1</div>
+        <div class="sample"><span class="disp1">Your holdings</span></div>
+        <div class="meta">Fraunces 700 · 44px</div>
+      </div>
+    </div>
+    <div class="specimen">
+      <div class="row">
+        <div class="label">Display / H2</div>
+        <div class="sample"><span class="disp2">The treasury</span></div>
+        <div class="meta">Fraunces 600 · 30px</div>
+      </div>
+    </div>
+    <div class="specimen">
+      <div class="row">
+        <div class="label">Display / H3</div>
+        <div class="sample"><span class="disp3">Watchlist</span></div>
+        <div class="meta">Fraunces 600 · 22px</div>
+      </div>
+    </div>
+    <div class="specimen">
+      <div class="row">
+        <div class="label">Body</div>
+        <div class="sample"><span class="body1">Track positions and review your holdings without the noise.</span></div>
+        <div class="meta">Inter 400 · 16px</div>
+      </div>
+    </div>
+    <div class="specimen">
+      <div class="row">
+        <div class="label">Caption</div>
+        <div class="sample"><span class="body2">Last updated 2 minutes ago</span></div>
+        <div class="meta">Inter 400 · 14px</div>
+      </div>
+    </div>
+    <div class="specimen">
+      <div class="row">
+        <div class="label">Figures</div>
+        <div class="sample"><span class="mono1">AAPL &nbsp; 214.32 &nbsp; <span style="color:#33523E;">+1.84%</span></span></div>
+        <div class="meta">IBM Plex Mono 500 · 15px</div>
+      </div>
+    </div>
+  </section>
+
+  <div class="rule"><div class="line"></div><div class="bars"><span></span><span></span><span></span><span></span><span></span></div><div class="line"></div></div>
+
+  <!-- IV. VOICE -->
+  <section id="voice">
+    <div class="chapter-label">IV. Voice</div>
+    <h2>Steady, plain, unhurried</h2>
+    <p class="lede">Stakehold talks like someone who's managed money through a few bad quarters and didn't panic. Confident without hype, precise without jargon.</p>
+
+    <div class="principles">
+      <div class="principle">
+        <div class="num">01</div>
+        <h3>Plain verbs</h3>
+        <p>"Add a position," not "Initiate a holding action." Say what happens.</p>
+      </div>
+      <div class="principle">
+        <div class="num">02</div>
+        <h3>No panic, no hype</h3>
+        <p>Losses are stated flatly. Gains aren't celebrated with exclamation points.</p>
+      </div>
+      <div class="principle">
+        <div class="num">03</div>
+        <h3>Numbers do the talking</h3>
+        <p>Let the figure carry the weight. Don't editorialize a red number.</p>
+      </div>
+      <div class="principle">
+        <div class="num">04</div>
+        <h3>Light on the theme</h3>
+        <p>One or two words per screen at most — "the keep," "the watch." Never a full bit.</p>
+      </div>
+    </div>
+  </section>
+
+  <div class="rule"><div class="line"></div><div class="bars"><span></span><span></span><span></span><span></span><span></span></div><div class="line"></div></div>
+
+  <!-- V. IN USE -->
+  <section id="use">
+    <div class="chapter-label">V. In use</div>
+    <h2>A position, rendered</h2>
+    <p class="lede">The system in miniature: stone surface, parchment text, gold reserved for the label, mono figures, forest for the gain.</p>
+
+    <div class="app-mock">
+      <div class="row1">
+        <span class="name">Apple Inc.</span>
+        <span class="ticker">AAPL</span>
+      </div>
+      <div class="value">$214.32</div>
+      <div class="delta up">▲ +1.84% today</div>
+    </div>
+  </section>
+
+  <footer>
+    <div class="bars"><span></span><span></span><span></span><span></span><span></span></div>
+    <p>STAKEHOLD BRAND CHARTER — V1 — 2026</p>
+  </footer>
+
+</div>
+</body>
+</html>
