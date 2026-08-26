@@ -5,6 +5,8 @@ from data_store.db.connection import get_connection
 from data_store.regimes.loader import RegimeConfig
 from data_store.regimes.repository import save_regimes
 
+pytestmark = pytest.mark.integration
+
 
 @pytest.fixture(scope="session")
 def postgres_conn():
