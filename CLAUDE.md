@@ -111,3 +111,28 @@ on top of the root-level ones. The following aren't covered there:
   rather than relying on generated claims.
 - **Stateless commands**: each terminal command should be independently runnable and not depend on
   prior shell state (e.g. an earlier `cd`).
+
+
+## Brand
+
+Stakehold's visual identity is defined in `brand/brand-charter.html`. Design
+tokens are in `brand/tokens.css` — import it once and use the CSS custom
+properties, don't hardcode hex values.
+
+- Colors: 5 total. `--stone` (ink/dark surfaces), `--parchment` (background),
+  `--gold` (the ONLY accent — buttons, highlights, the logo). `--forest` and
+  `--oxblood` are reserved strictly for gains and losses in figures — never
+  used decoratively.
+- Type: `--font-display` (Fraunces) for headlines and emphasis only,
+  `--font-body` (Inter) for everything read in bulk, `--font-mono`
+  (IBM Plex Mono) for every number — prices, tickers, percentage deltas.
+- Logo: use `brand/logos/logo-gold.svg` on dark/stone surfaces,
+  `brand/logos/logo-stone.svg` on light/parchment surfaces, and
+  `brand/logos/app-icon.svg` for the favicon/home-screen icon. Never
+  recolor, stretch, or add a shadow to the mark.
+- Voice: plain verbs, no hype on gains, no panic on losses, numbers do the
+  talking. See chapter IV of the brand charter for the full principles.
+
+When building a new component, check the brand charter's relevant chapter
+first (I: mark, II: palette, III: type, IV: voice, V: applied example)
+rather than guessing.
