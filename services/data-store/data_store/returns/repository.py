@@ -1,6 +1,7 @@
 import logging
 
 import pandas as pd
+from data_store.db.connection import transaction
 
 logger = logging.getLogger(__name__)
 
@@ -93,61 +94,52 @@ def save_market_returns(conn, source: str, df: pd.DataFrame) -> int:
     """Upsert into market_returns via a temp staging table, mirroring
     market_data.repository.save_raw_market_data's shape -- COPY doesn't support ON CONFLICT
     directly, and a full rebuild routinely restates rows it has already written."""
-    with conn.cursor() as cur:
-        try:
-            cur.execute("""
-                CREATE TEMP TABLE tmp_market_returns (
-                    ticker VARCHAR(20), price_date DATE, source VARCHAR(20),
-                    split_adjusted_close NUMERIC(18,4), future_split_factor NUMERIC(30,15),
-                    price_return NUMERIC(18,8), dividend_return NUMERIC(18,8),
-                    simple_return NUMERIC(18,8), log_return NUMERIC(18,8)
-                ) ON COMMIT DROP
-                """)
+    with transaction(conn), conn.cursor() as cur:
+        cur.execute("""
+            CREATE TEMP TABLE tmp_market_returns (
+                ticker VARCHAR(20), price_date DATE, source VARCHAR(20),
+                split_adjusted_close NUMERIC(18,4), future_split_factor NUMERIC(30,15),
+                price_return NUMERIC(18,8), dividend_return NUMERIC(18,8),
+                simple_return NUMERIC(18,8), log_return NUMERIC(18,8)
+            ) ON COMMIT DROP
+            """)
 
-            copy_columns = ["ticker", "price_date", "source"] + _COLUMNS[2:]
-            with cur.copy(
-                f"COPY tmp_market_returns ({', '.join(copy_columns)}) FROM STDIN"
-            ) as copy:
-                for _, row in df.iterrows():
-                    cast_values = [_cast_value(row[column]) for column in _COLUMNS[2:]]
-                    out_of_range = _first_out_of_range(_COLUMNS[2:], cast_values)
-                    if out_of_range is not None:
-                        column, value = out_of_range
-                        logger.warning(
-                            "save_market_returns: dropping %s %s -- %s=%s is out of range for "
-                            "its column, skipping this row.",
-                            row["ticker"],
-                            row["price_date"],
-                            column,
-                            value,
-                        )
-                        continue
-                    values = [row["ticker"], row["price_date"], source] + cast_values
-                    copy.write_row(values)
+        copy_columns = ["ticker", "price_date", "source"] + _COLUMNS[2:]
+        with cur.copy(f"COPY tmp_market_returns ({', '.join(copy_columns)}) FROM STDIN") as copy:
+            for _, row in df.iterrows():
+                cast_values = [_cast_value(row[column]) for column in _COLUMNS[2:]]
+                out_of_range = _first_out_of_range(_COLUMNS[2:], cast_values)
+                if out_of_range is not None:
+                    column, value = out_of_range
+                    logger.warning(
+                        "save_market_returns: dropping %s %s -- %s=%s is out of range for "
+                        "its column, skipping this row.",
+                        row["ticker"],
+                        row["price_date"],
+                        column,
+                        value,
+                    )
+                    continue
+                values = [row["ticker"], row["price_date"], source] + cast_values
+                copy.write_row(values)
 
-            cur.execute("""
-                INSERT INTO market_returns (ticker, price_date, source, split_adjusted_close,
-                                             future_split_factor, price_return, dividend_return,
-                                             simple_return, log_return)
-                SELECT ticker, price_date, source, split_adjusted_close, future_split_factor,
-                       price_return, dividend_return, simple_return, log_return
-                FROM tmp_market_returns
-                ON CONFLICT (ticker, price_date, source) DO UPDATE SET
-                    split_adjusted_close = EXCLUDED.split_adjusted_close,
-                    future_split_factor = EXCLUDED.future_split_factor,
-                    price_return = EXCLUDED.price_return,
-                    dividend_return = EXCLUDED.dividend_return,
-                    simple_return = EXCLUDED.simple_return,
-                    log_return = EXCLUDED.log_return,
-                    calculated_at = now()
-                """)
-            written = cur.rowcount
-        except Exception:
-            # Leaves the connection usable for the next batch -- see
-            # save_raw_market_data's identical rollback for why this matters for isolation.
-            conn.rollback()
-            raise
-    conn.commit()
+        cur.execute("""
+            INSERT INTO market_returns (ticker, price_date, source, split_adjusted_close,
+                                         future_split_factor, price_return, dividend_return,
+                                         simple_return, log_return)
+            SELECT ticker, price_date, source, split_adjusted_close, future_split_factor,
+                   price_return, dividend_return, simple_return, log_return
+            FROM tmp_market_returns
+            ON CONFLICT (ticker, price_date, source) DO UPDATE SET
+                split_adjusted_close = EXCLUDED.split_adjusted_close,
+                future_split_factor = EXCLUDED.future_split_factor,
+                price_return = EXCLUDED.price_return,
+                dividend_return = EXCLUDED.dividend_return,
+                simple_return = EXCLUDED.simple_return,
+                log_return = EXCLUDED.log_return,
+                calculated_at = now()
+            """)
+        written = cur.rowcount
     return written
 
 

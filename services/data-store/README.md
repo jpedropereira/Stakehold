@@ -215,7 +215,35 @@ row for that ticker, so recomputing everything is what keeps the table correct a
 faster to run. See `docs/schema.md`'s `market_returns` section for the formulas and why there is
 no split term in them.
 
-Holdings ingest and market data ingest are independent — `ingest-market-data` always reads the
+### Loading market regimes (optional)
+
+`config/regimes.csv` — also gitignored, like `etfs.yaml` — is a hand-curated reference list of
+historical market and economic regimes (recessions, bear markets, monetary policy cycles, commodity
+shocks, geopolitical events), annotated with their scope, dimension, date range, severity and source
+citation. Use it to categorize backtests (e.g. "what was the drawdown during the GFC?") and
+correlate portfolio behaviour with external conditions.
+
+This file is **optional** — if you don't create it, `ingest-regimes` succeeds and leaves the table
+empty. To use it, copy the template and edit:
+
+```bash
+cp services/data-store/config/regimes.csv.example services/data-store/config/regimes.csv
+```
+
+then edit it to add or modify regime entries — see `regimes.csv.example` for the column definitions
+and some sample events. Load it into the database:
+
+```bash
+uv run data-store ingest-regimes
+```
+
+Each `ingest-regimes` run replaces the entire `regimes` table from the CSV file — full sync, not
+upsert. Because the source is hand-curated and changes infrequently, there is no scheduled Airflow
+DAG; run it manually after editing the CSV.
+
+### Holdings ingest and market data ingest are independent
+
+`ingest-market-data` always reads the
 *current* ticker list from `etf_holdings` (whatever `ingest-holdings` most recently loaded), not
 a fresh scrape, so it can run on its own daily cadence without depending on a holdings scrape
 having just run.
