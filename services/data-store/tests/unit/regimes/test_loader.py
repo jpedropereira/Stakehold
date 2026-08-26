@@ -66,6 +66,30 @@ ea_rec_1974,Economic,US,1973-11-01,1975-03-01,1975-03-01,severe,NBER,
         load_regimes(path)
 
 
+def test_rejects_blank_required_field(tmp_path):
+    path = write_csv(
+        tmp_path,
+        """regime_id,dimension,scope,name,start_date,end_date,known_from,severity,source,notes
+ea_rec_1974,,US,,1973-11-01,1975-03-01,1975-03-01,severe,NBER,
+""",
+    )
+
+    with pytest.raises(ConfigError, match="dimension"):
+        load_regimes(path)
+
+
+def test_rejects_ragged_row_with_missing_trailing_columns(tmp_path):
+    path = write_csv(
+        tmp_path,
+        """regime_id,dimension,scope,name,start_date,end_date,known_from,severity,source,notes
+ea_rec_1974,Economic,US,Oil Crisis Recession,1973-11-01
+""",
+    )
+
+    with pytest.raises(ConfigError, match="(?i)source"):
+        load_regimes(path)
+
+
 def test_rejects_duplicate_regime_ids(tmp_path):
     path = write_csv(
         tmp_path,

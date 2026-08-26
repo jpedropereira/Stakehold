@@ -418,9 +418,11 @@ def ingest_regimes(conn, csv_path: Path) -> dict[str, int | str]:
     """
     logger.info(f"ingest-regimes: loading regimes from {csv_path}")
     regimes = load_regimes(csv_path)
-    logger.info(f"ingest-regimes: loaded {len(regimes)} regime(s) from CSV")
 
-    if regimes:
+    if not regimes:
+        logger.info("ingest-regimes: no regimes found in CSV, nothing to do.")
+    else:
+        logger.info(f"ingest-regimes: loaded {len(regimes)} regime(s) from CSV")
         logger.info("ingest-regimes: writing to database")
     saved = save_regimes(conn, regimes)
 

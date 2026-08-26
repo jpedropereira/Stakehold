@@ -39,7 +39,7 @@ flowchart TD
 
     subgraph orch["Orchestration"]
         JOBS["jobs.py<br/><i>runnable units: config + connection + one flow</i>"]
-        PIPE["pipeline.py<br/><i>the three flows; ticker resolution</i>"]
+        PIPE["pipeline.py<br/><i>the four run-level flows; ticker resolution</i>"]
     end
 
     subgraph domain["Domain modules"]
@@ -197,7 +197,7 @@ a manual operation, run after editing `config/regimes.csv`.
 
 ### What a flow returns
 
-The three run-level flows return a structured result, not a row count:
+The four run-level flows return a structured result, not a row count:
 
 ```python
 {"status": "ok" | "partial" | "nothing_to_do",
@@ -443,7 +443,7 @@ run's summary is as much a part of its contract as its return value.
 
 ## Where to start reading
 
-1. `pipeline.py` — the four flows; everything else is in service of these.
+1. `pipeline.py` — the five flows; everything else is in service of these.
 2. `jobs.py` — how configuration, a connection and a flow become one runnable operation.
 3. `cli.py` — how a command becomes a job. Thin on purpose; if it is growing, something belongs
    in `jobs.py` instead.
