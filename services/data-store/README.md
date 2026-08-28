@@ -286,17 +286,17 @@ UI's "Trigger DAG" button, or from a shell:
 
 ```bash
 docker exec <airflow-scheduler-container> airflow dags trigger ingest_holdings
-docker exec <airflow-scheduler-container> airflow dags trigger ingest_market_data
-docker exec <airflow-scheduler-container> airflow dags trigger calculate_returns
+docker exec <airflow-scheduler-container> airflow dags trigger daily_pipeline
+docker exec <airflow-scheduler-container> airflow dags trigger backfill_market_data
 ```
 
 Task logs land under `services/data-store/logs/dag_id=.../run_id=.../task_id=.../attempt=N.log`
 (bind-mounted, so readable from the host — no need to shell into the container).
 
-`ingest_market_data`/`backfill_market_data`/`calculate_returns` all accept a `tickers` param (a
-JSON array, default `[]`) via the UI's "Trigger DAG w/ config" dialog, passed to the job as an
-ordinary `list[str]`. Leave it empty to run against everything followed (or, for
-`calculate_returns`, everything with stored market data).
+`daily_pipeline`/`backfill_market_data` both accept a `tickers` param (a JSON array, default `[]`)
+via the UI's "Trigger DAG w/ config" dialog, passed to the job as an ordinary `list[str]`. Leave it
+empty to run against everything followed. On `daily_pipeline` this restricts both the
+market-data-ingest and returns-calculation tasks together (it has no effect on regimes ingest).
 
 There is no shell in the path any more, so the value is never interpolated into a command line
 and the escaping the old `BashOperator` needed is simply gone.
