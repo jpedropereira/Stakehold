@@ -353,5 +353,7 @@ be edited, split, merged, or removed as curation improves — the DB should mirr
 not accumulate stale rows. Full-sync design is simple, idempotent, and enforces the invariant:
 "the DB always matches the source file".
 
-**Ingestion**: triggered manually via `data-store ingest-regimes` after editing the CSV, not on a
-schedule. Rare, hand-curated data needs no automation.
+**Ingestion**: runs daily via the `daily_pipeline` DAG's `ingest_regimes` task, alongside market
+data ingest. Since the CSV is hand-curated and rarely changes, most days this just replaces the
+table with the same rows; it can still be triggered manually via `data-store ingest-regimes` right
+after editing the CSV, without waiting for the next scheduled run.
