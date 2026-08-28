@@ -10,7 +10,7 @@ from data_store.market_data.repository import get_earliest_dates, save_raw_marke
 
 pytestmark = pytest.mark.integration
 
-SCHEMA_PATH = Path(__file__).parents[2] / "data_store" / "db" / "schema.sql"
+SCHEMA_PATH = Path(__file__).parents[2] / "src" / "data_store" / "db" / "schema.sql"
 
 
 def _connect():
