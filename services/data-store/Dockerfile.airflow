@@ -3,7 +3,7 @@
 # venv and lockfile verified end-to-end outside Airflow. Airflow's own environment stays free of
 # this project's dependencies; see README.md for the reasoning.
 #
-# Rebuild after changing services/data-store/data_store code (docker compose build): that code is
+# Rebuild after changing services/data-store/src/data_store code (docker compose build): that code is
 # a build-time snapshot. dags/ and config/ are bind-mounted instead, so they are live.
 ARG AIRFLOW_BASE_IMAGE=apache/airflow:3.3.1
 FROM ${AIRFLOW_BASE_IMAGE}
