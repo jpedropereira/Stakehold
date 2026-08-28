@@ -158,10 +158,10 @@ All five live in `pipeline.py` and are exposed as CLI subcommands.
 | Flow | Command | Cadence | Reads | Writes |
 |---|---|---|---|---|
 | Holdings ingest | `ingest-holdings` | weekly | provider site | `etf_holdings` |
-| Market data ingest | `ingest-market-data` | daily | `etf_holdings` + config | `raw_market_data` |
+| Market data ingest | `ingest-market-data` | daily, in parallel with regimes ingest | `etf_holdings` + config | `raw_market_data` |
 | Market data backfill | `backfill-market-data` | manual | `raw_market_data` | `raw_market_data` |
-| Returns calculation | `calculate-returns` | after new data lands | `raw_market_data` | `market_returns` |
-| Regimes ingest | `ingest-regimes` | manual | `config/regimes.csv` | `regimes` |
+| Returns calculation | `calculate-returns` | daily, immediately after market data ingest succeeds (same run) | `raw_market_data` | `market_returns` |
+| Regimes ingest | `ingest-regimes` | daily, in parallel with market data ingest | `config/regimes.csv` | `regimes` |
 
 **Returns calculation is the odd one out**: it reads no config and does no ticker resolution — it
 discovers both sources and tickers directly from `raw_market_data` (`returns/repository.py`'s
@@ -189,11 +189,19 @@ therefore re-fetches that ticker's full stored range and rewrites it
 (`pipeline._refresh_split_histories`). This is the one place the daily flow issues an unbounded
 historical request rather than a windowed one; splits are rare enough that the cost is negligible.
 
-**Regimes ingest is CLI-only, not scheduled.** The source is a hand-curated CSV, edited manually
-when new market events occur or existing regime definitions change — no automation needed. Each
-`ingest-regimes` run replaces the entire `regimes` table from the current CSV file. Unlike the
-data-source flows above, this has no Airflow DAG, no schedule, and no provider integration — it's
-a manual operation, run after editing `config/regimes.csv`.
+**Market data ingest, regimes ingest and returns calculation share one DAG, `daily_pipeline`.**
+`ingest-market-data` and `ingest-regimes` start together with no dependency between them — a
+hand-curated CSV of market regimes has nothing to do with fetching prices, so there is no reason
+for one to wait on the other, and running them in parallel gets both done faster. `calculate-
+returns` runs afterward, but is gated specifically on `ingest-market-data`'s result check
+succeeding, not merely on the task finishing: it rebuilds `market_returns` from whatever
+`ingest-market-data` just landed in `raw_market_data`, so an "ok" ingest that silently saved zero
+rows must not unlock a returns rebuild any more than a raised exception would. It has no
+dependency on the regimes branch, which touches a different, unrelated table. Each
+`ingest-regimes` run still replaces the entire `regimes` table from the current CSV file — the
+source is still a hand-curated CSV, edited manually when new market events occur or existing
+regime definitions change, but the load into the database is now scheduled daily like the other
+data-source flows rather than triggered by hand after every edit.
 
 ### What a flow returns
 

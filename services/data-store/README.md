@@ -48,10 +48,17 @@ before fetching anything, deduping by ticker. If the same ticker appears in both
 ## Airflow
 
 Airflow orchestrates ingestion via three DAGs — two scheduled (`ingest_holdings`, `@weekly`;
-`ingest_market_data`, `@daily`) and one unscheduled, manually triggered backfill
-(`backfill_market_data`). `ingest_market_data`/`backfill_market_data` fetch prices, dividends and
-stock splits together in one pass — a single `Ticker.history()` call already returns all three,
-so there's no separate price/dividend DAG pair to keep in sync.
+`daily_pipeline`, `@daily`) and one unscheduled, manually triggered backfill
+(`backfill_market_data`).
+
+`daily_pipeline` runs three flows: `ingest-market-data` and `ingest-regimes` start together with
+no dependency between them — a hand-curated regimes CSV has nothing to do with fetching prices —
+and `calculate-returns` runs afterward, gated on `ingest-market-data`'s `check_run` succeeding
+(not merely finishing), since it rebuilds `market_returns` from whatever `ingest-market-data`
+just landed. It does not wait on the regimes branch, which writes to an unrelated table.
+`ingest-market-data`/`backfill_market_data` fetch prices, dividends and stock splits together in
+one pass — a single `Ticker.history()` call already returns all three, so there's no separate
+price/dividend DAG pair to keep in sync.
 
 Each DAG calls the same `data_store` job the CLI calls, through `@task.external_python`. That
 runs the job in this project's own interpreter — which it must, since the workspace needs Python
@@ -71,6 +78,9 @@ What counts as a failure differs by flow, deliberately:
   individual step reported an error. Dividends/splits being sparse (most days, no followed
   ticker has either) doesn't change this: those are columns on a row that's there anyway, not a
   separate save that could legitimately produce nothing.
+- **`ingest_regimes` also fails on zero rows saved, but only when the CSV had entries to save.**
+  An empty `regimes.csv` is reported as `nothing_to_do`, not a false alarm; a non-empty CSV that
+  silently wrote nothing is exactly the anomaly this check exists to catch.
 - **`backfill_market_data` does not.** Once every ticker is already covered, a rerun correctly
   saves nothing — that's success, not a stall.
 
