@@ -26,7 +26,7 @@ def ingest_market_data(tickers: list[str]) -> dict:
     return run_ingest_market_data(tickers=tickers or None)
 
 
-@task.external_python(**EXTERNAL_PYTHON_KWARGS, execution_timeout=timedelta(hours=2))
+@task.external_python(**EXTERNAL_PYTHON_KWARGS)
 def calculate_returns(tickers: list[str]) -> dict:
     from data_store.jobs import run_calculate_returns
 
