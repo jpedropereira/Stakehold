@@ -11,7 +11,13 @@ from datetime import date
 
 import pytest
 from data_store import jobs
-from data_store.config_loader import FundConfig, TickerConfig, TickerResolution
+from data_store.config_loader import (
+    CurrenciesConfig,
+    CurrencyConfig,
+    FundConfig,
+    TickerConfig,
+    TickerResolution,
+)
 from data_store.settings import Settings
 
 
@@ -25,6 +31,7 @@ def fake_settings(tmp_path):
         tracked_tickers_path=tmp_path / "does-not-exist.yaml",
         exchange_suffixes_path=tmp_path / "yfinance_exchange_suffixes.yaml",
         regimes_csv_path=tmp_path / "regimes.csv",
+        currencies_path=tmp_path / "currencies.yaml",
     )
 
 
@@ -62,6 +69,13 @@ def make_fund(key, enabled=True):
         isin=None,
         price_source="yfinance",
         enabled=enabled,
+    )
+
+
+def make_currencies(*, base="EUR", codes=("EUR", "USD", "GBP"), disabled=()):
+    return CurrenciesConfig(
+        base_currency=base,
+        currencies=[CurrencyConfig(code=c, enabled=c not in disabled) for c in codes],
     )
 
 
@@ -289,6 +303,7 @@ def test_ingest_market_data_includes_enabled_tracked_tickers(monkeypatch, fake_s
         tracked_tickers_path=tmp_path / "tracked_tickers.yaml",
         exchange_suffixes_path=fake_settings.exchange_suffixes_path,
         regimes_csv_path=fake_settings.regimes_csv_path,
+        currencies_path=fake_settings.currencies_path,
     )
     (tmp_path / "tracked_tickers.yaml").write_text("tickers: []\n")  # just needs to exist
     tracked = [make_tracked_ticker("IWDA.AS"), make_tracked_ticker("BTC-USD", enabled=False)]
@@ -750,3 +765,227 @@ def test_a_failed_fund_scrape_logs_its_traceback(monkeypatch, fake_settings, cap
     assert record.exc_info is not None, "traceback was dropped"
     assert "Timeout 60000ms exceeded" in caplog.text
     assert "RuntimeError" in caplog.text  # from the formatted traceback
+
+
+# --- run_ingest_fx_rates -------------------------------------------------------------------------
+
+
+def test_ingest_fx_rates_loads_currencies_and_uses_default_seven_day_window(
+    monkeypatch, fake_settings
+):
+    currencies = make_currencies()
+    calls = []
+
+    monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(jobs, "load_currencies", lambda path: currencies)
+    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(
+        jobs,
+        "ingest_fx_rates",
+        lambda conn, c, s, e, only_currencies=None: calls.append((c, s, e, only_currencies))
+        or flow_result(3),
+    )
+
+    result = jobs.run_ingest_fx_rates()
+
+    assert result["status"] != "partial"
+    assert len(calls) == 1
+    passed_currencies, start_date, end_date, only_currencies = calls[0]
+    assert passed_currencies is currencies
+    assert only_currencies is None
+    assert end_date == date.today()
+    assert (end_date - start_date).days == 7
+
+
+def test_ingest_fx_rates_respects_days_flag(monkeypatch, fake_settings):
+    calls = []
+
+    monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(jobs, "load_currencies", lambda path: make_currencies())
+    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(
+        jobs,
+        "ingest_fx_rates",
+        lambda conn, c, s, e, only_currencies=None: calls.append((s, e)) or flow_result(1),
+    )
+
+    jobs.run_ingest_fx_rates(days=30)
+
+    start_date, end_date = calls[0]
+    assert (end_date - start_date).days == 30
+
+
+def test_ingest_fx_rates_currency_flag_passes_only_currencies_filter(monkeypatch, fake_settings):
+    calls = []
+
+    monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(jobs, "load_currencies", lambda path: make_currencies())
+    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(
+        jobs,
+        "ingest_fx_rates",
+        lambda conn, c, s, e, only_currencies=None: calls.append(only_currencies) or flow_result(),
+    )
+
+    jobs.run_ingest_fx_rates(currencies=["USD", "GBP"])
+
+    assert calls[0] == {"USD", "GBP"}
+
+
+def test_ingest_fx_rates_without_currency_flag_passes_none(monkeypatch, fake_settings):
+    calls = []
+
+    monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(jobs, "load_currencies", lambda path: make_currencies())
+    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(
+        jobs,
+        "ingest_fx_rates",
+        lambda conn, c, s, e, only_currencies=None: calls.append(only_currencies) or flow_result(),
+    )
+
+    jobs.run_ingest_fx_rates()
+
+    assert calls[0] is None
+
+
+def test_ingest_fx_rates_closes_the_connection(monkeypatch, fake_settings):
+    closed = []
+
+    monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(jobs, "load_currencies", lambda path: make_currencies())
+    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn(closed))
+    monkeypatch.setattr(
+        jobs, "ingest_fx_rates", lambda conn, c, s, e, only_currencies=None: flow_result(1)
+    )
+
+    jobs.run_ingest_fx_rates()
+
+    assert closed == [True]
+
+
+# --- run_backfill_fx_rates -----------------------------------------------------------------------
+
+
+def test_backfill_fx_rates_default_run(monkeypatch, fake_settings):
+    currencies = make_currencies()
+    calls = []
+
+    monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(jobs, "load_currencies", lambda path: currencies)
+    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn([]))
+
+    def fake_backfill(
+        conn,
+        passed_currencies,
+        earliest_date,
+        end_date,
+        delay_seconds,
+        only_currencies=None,
+        force_refresh=False,
+    ):
+        calls.append((passed_currencies, earliest_date, end_date, delay_seconds, only_currencies))
+        return flow_result(3)
+
+    monkeypatch.setattr(jobs, "backfill_fx_rates", fake_backfill)
+
+    result = jobs.run_backfill_fx_rates()
+
+    assert result["status"] != "partial"
+    assert len(calls) == 1
+    passed_currencies, earliest_date, end_date, delay_seconds, only_currencies = calls[0]
+    assert passed_currencies is currencies
+    assert only_currencies is None
+    # No --earliest-date means "resume" -- see pipeline._backfill_window.
+    assert earliest_date is None
+    assert end_date == date.today()
+    assert delay_seconds == 10.0
+
+
+def test_backfill_fx_rates_respects_earliest_date_and_delay_flags(monkeypatch, fake_settings):
+    calls = []
+
+    monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(jobs, "load_currencies", lambda path: make_currencies())
+    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(
+        jobs,
+        "backfill_fx_rates",
+        lambda conn, c, ed, end, ds, **kw: calls.append((ed, ds)) or flow_result(),
+    )
+
+    jobs.run_backfill_fx_rates(earliest_date="2000-06-15", delay_seconds=3.5)
+
+    earliest_date, delay_seconds = calls[0]
+    assert earliest_date == date(2000, 6, 15)
+    assert delay_seconds == 3.5
+
+
+def test_backfill_fx_rates_forwards_force_refresh(monkeypatch, fake_settings):
+    calls = []
+
+    monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(jobs, "load_currencies", lambda path: make_currencies())
+    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(
+        jobs,
+        "backfill_fx_rates",
+        lambda conn, c, ed, end, ds, **kw: calls.append(kw) or flow_result(),
+    )
+
+    jobs.run_backfill_fx_rates(force_refresh=True)
+    jobs.run_backfill_fx_rates()
+
+    assert calls[0]["force_refresh"] is True
+    assert calls[1]["force_refresh"] is False
+
+
+def test_backfill_fx_rates_currency_flag_passes_only_currencies_filter(monkeypatch, fake_settings):
+    calls = []
+
+    monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(jobs, "load_currencies", lambda path: make_currencies())
+    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(
+        jobs,
+        "backfill_fx_rates",
+        lambda conn, c, ed, end, ds, only_currencies=None, **kw: calls.append(only_currencies)
+        or flow_result(),
+    )
+
+    jobs.run_backfill_fx_rates(currencies=["USD"])
+
+    assert calls[0] == {"USD"}
+
+
+def test_backfill_fx_rates_without_currency_flag_passes_none(monkeypatch, fake_settings):
+    calls = []
+
+    monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(jobs, "load_currencies", lambda path: make_currencies())
+    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(
+        jobs,
+        "backfill_fx_rates",
+        lambda conn, c, ed, end, ds, only_currencies=None, **kw: calls.append(only_currencies)
+        or flow_result(),
+    )
+
+    jobs.run_backfill_fx_rates()
+
+    assert calls[0] is None
+
+
+def test_backfill_fx_rates_closes_the_connection(monkeypatch, fake_settings):
+    closed = []
+
+    monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(jobs, "load_currencies", lambda path: make_currencies())
+    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn(closed))
+    monkeypatch.setattr(
+        jobs, "backfill_fx_rates", lambda conn, c, ed, end, ds, **kw: flow_result(1)
+    )
+
+    jobs.run_backfill_fx_rates()
+
+    assert closed == [True]

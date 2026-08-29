@@ -147,3 +147,21 @@ def test_regimes_csv_path_overridable_via_env(monkeypatch, tmp_path):
     result = load_settings()
 
     assert result.regimes_csv_path == tmp_path / "custom.csv"
+
+
+def test_currencies_path_defaults_to_config_currencies_yaml(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost/db")
+    monkeypatch.delenv("DATA_STORE_CURRENCIES_PATH", raising=False)
+
+    result = load_settings()
+
+    assert result.currencies_path == _SERVICE_ROOT / "config/currencies.yaml"
+
+
+def test_currencies_path_overridable_via_env(monkeypatch, tmp_path):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost/db")
+    monkeypatch.setenv("DATA_STORE_CURRENCIES_PATH", str(tmp_path / "custom.yaml"))
+
+    result = load_settings()
+
+    assert result.currencies_path == tmp_path / "custom.yaml"

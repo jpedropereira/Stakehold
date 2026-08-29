@@ -21,6 +21,7 @@ from pathlib import Path
 from data_store.config_loader import (
     FundConfig,
     TickerConfig,
+    load_currencies,
     load_funds,
     load_ticker_resolution,
     load_tracked_tickers,
@@ -28,8 +29,10 @@ from data_store.config_loader import (
 from data_store.db.connection import apply_schema, get_connection
 from data_store.logging_config import configure_logging
 from data_store.pipeline import (
+    backfill_fx_rates,
     backfill_market_data,
     calculate_returns,
+    ingest_fx_rates,
     ingest_holdings,
     ingest_market_data,
     ingest_regimes,
@@ -153,6 +156,56 @@ def run_calculate_returns(*, tickers: list[str] | None = None) -> dict[str, int 
     conn = get_connection(settings.database_url)
     try:
         return calculate_returns(conn, only_tickers=set(tickers) if tickers else None)
+    finally:
+        conn.close()
+
+
+def run_ingest_fx_rates(
+    *, days: int = 7, currencies: list[str] | None = None
+) -> dict[str, int | str]:
+    """Currency-conversion rates for every enabled currency in config/currencies.yaml against
+    its base_currency, over a rolling window."""
+    configure_logging()
+    settings = load_settings()
+    currencies_config = load_currencies(settings.currencies_path)
+    end_date = date.today()
+    conn = get_connection(settings.database_url)
+    try:
+        return ingest_fx_rates(
+            conn,
+            currencies_config,
+            end_date - timedelta(days=days),
+            end_date,
+            only_currencies=set(currencies) if currencies else None,
+        )
+    finally:
+        conn.close()
+
+
+def run_backfill_fx_rates(
+    *,
+    currencies: list[str] | None = None,
+    earliest_date: str | None = None,
+    delay_seconds: float = 10.0,
+    force_refresh: bool = False,
+) -> dict[str, int | str]:
+    """Fill missing FX rate history. `earliest_date` is an ISO date string or None -- see
+    `pipeline._backfill_window` for what omitting it means (resume rather than deepen), and what
+    `force_refresh` overrides (rewrite rows that already exist)."""
+    configure_logging()
+    settings = load_settings()
+    currencies_config = load_currencies(settings.currencies_path)
+    conn = get_connection(settings.database_url)
+    try:
+        return backfill_fx_rates(
+            conn,
+            currencies_config,
+            _parse_earliest_date(earliest_date),
+            date.today(),
+            delay_seconds,
+            only_currencies=set(currencies) if currencies else None,
+            force_refresh=force_refresh,
+        )
     finally:
         conn.close()
 
