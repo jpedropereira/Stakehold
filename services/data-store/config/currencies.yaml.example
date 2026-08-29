@@ -1,0 +1,19 @@
+# Copy to currencies.yaml (in this same directory) and edit for your own tracked currencies.
+# currencies.yaml is gitignored — see services/data-store/README.md for why.
+#
+# `base_currency` must name one of the codes below and that entry must be `enabled: true`.
+# Every other enabled currency is tracked as a rate against it (e.g. base EUR, currency USD ->
+# yfinance ticker "EURUSD=X", rate = USD per 1 EUR). Cross-rates between two non-base currencies
+# (e.g. GBP -> CHF) are not stored -- derive them by division from their rates against the base.
+base_currency: EUR
+currencies:
+  - code: EUR
+    enabled: true
+  - code: USD
+    enabled: true
+  - code: GBP
+    enabled: true
+  - code: CHF
+    enabled: true
+  - code: PLN
+    enabled: true

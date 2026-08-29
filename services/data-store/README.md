@@ -45,17 +45,38 @@ also happens to be a holding) is only fetched once per run, not once per source 
 before fetching anything, deduping by ticker. If the same ticker appears in both, the
 `tracked_tickers.yaml` entry's `asset_type` wins.
 
+## Currency configuration
+
+`config/currencies.yaml` lists the currencies tracked for FX conversion rates, fetched from
+yfinance — gitignored, same as `etfs.yaml`/`tracked_tickers.yaml`. Set yours up by copying the
+template:
+
+```bash
+cp services/data-store/config/currencies.yaml.example services/data-store/config/currencies.yaml
+```
+
+It names one `base_currency` and lists every currency to track, each with `code` and `enabled`.
+Every other *enabled* currency is fetched as a rate against `base_currency` (e.g. base `EUR`,
+currency `USD` → yfinance ticker `EURUSD=X`) — cross-rates between two non-base currencies (e.g.
+GBP → CHF) aren't fetched or stored directly; derive them by division through the shared base. See
+[`docs/schema.md`](docs/schema.md)'s `fx_rates` section for the exact rate convention.
+
+Unlike `tracked_tickers.yaml`, this file is **required** — `ingest-fx-rates`/`backfill-fx-rates`
+raise a config error if it's missing, since there's no sensible "not configured yet" state for the
+currency list an FX ingest needs to run at all.
+
 ## Airflow
 
-Airflow orchestrates ingestion via three DAGs — two scheduled (`ingest_holdings`, `@weekly`;
-`daily_pipeline`, `@daily`) and one unscheduled, manually triggered backfill
-(`backfill_market_data`).
+Airflow orchestrates ingestion via four DAGs — two scheduled (`ingest_holdings`, `@weekly`;
+`daily_pipeline`, `@daily`) and two unscheduled, manually triggered backfills
+(`backfill_market_data`, `backfill_fx_rates`).
 
-`daily_pipeline` runs three flows: `ingest-market-data` and `ingest-regimes` start together with
-no dependency between them — a hand-curated regimes CSV has nothing to do with fetching prices —
-and `calculate-returns` runs afterward, gated on `ingest-market-data`'s `check_run` succeeding
-(not merely finishing), since it rebuilds `market_returns` from whatever `ingest-market-data`
-just landed. It does not wait on the regimes branch, which writes to an unrelated table.
+`daily_pipeline` runs four flows: `ingest-market-data`, `ingest-regimes` and `ingest-fx-rates`
+start together with no dependency between any pair of them — a hand-curated regimes CSV, a
+currency-conversion rate, and a security's price have nothing to do with each other — and
+`calculate-returns` runs afterward, gated on `ingest-market-data`'s `check_run` succeeding (not
+merely finishing), since it rebuilds `market_returns` from whatever `ingest-market-data` just
+landed. It does not wait on the regimes or FX branches, which write to unrelated tables.
 `ingest-market-data`/`backfill_market_data` fetch prices, dividends and stock splits together in
 one pass — a single `Ticker.history()` call already returns all three, so there's no separate
 price/dividend DAG pair to keep in sync.
@@ -83,6 +104,12 @@ What counts as a failure differs by flow, deliberately:
   silently wrote nothing is exactly the anomaly this check exists to catch.
 - **`backfill_market_data` does not.** Once every ticker is already covered, a rerun correctly
   saves nothing — that's success, not a stall.
+- **`ingest_fx_rates` fails on zero rows for the same reason `ingest_market_data` does.**
+  `config/currencies.yaml` always has at least the base currency plus whatever else is enabled, so
+  an "ok" run saving nothing means something upstream (e.g. every currency pair's fetch failing)
+  went wrong.
+- **`backfill_fx_rates` does not**, for the same reason `backfill_market_data` doesn't — a rerun
+  once every pair is covered correctly saves nothing.
 
 Airflow runs on a **custom image** (`Dockerfile.airflow`: the official `apache/airflow` image +
 `uv` + this workspace, baked in at build time, browser included). Bring it up with Docker
@@ -225,6 +252,29 @@ row for that ticker, so recomputing everything is what keeps the table correct a
 faster to run. See `docs/schema.md`'s `market_returns` section for the formulas and why there is
 no split term in them.
 
+### Loading FX rates
+
+`ingest-fx-rates` fetches daily currency-conversion rates for every enabled currency in
+`config/currencies.yaml` against its `base_currency`:
+
+```bash
+uv run data-store ingest-fx-rates --days 7   # rolling window, same default as ingest-market-data
+```
+
+It accepts `--days N` (default 7) and `--currency CODE` (repeatable) to restrict the run to
+specific quote currencies, e.g. `--currency USD --currency GBP`. A `--currency` value matching
+nothing configured is logged as a warning naming it, same convention as `--ticker`.
+
+`backfill-fx-rates` fills full historical rates, one currency pair at a time with a deliberate
+delay between fetches — the same resume/`--earliest-date`/`--force-refresh` semantics as
+`backfill-market-data`:
+
+```bash
+uv run data-store backfill-fx-rates                       # resume: fetch whatever's missing
+uv run data-store backfill-fx-rates --currency USD         # just the EUR/USD pair (or your base's)
+uv run data-store backfill-fx-rates --earliest-date 2010-01-01   # reach further back than before
+```
+
 ### Loading market regimes (optional)
 
 `config/regimes.csv` — also gitignored, like `etfs.yaml` — is a hand-curated reference list of
@@ -288,6 +338,7 @@ UI's "Trigger DAG" button, or from a shell:
 docker exec <airflow-scheduler-container> airflow dags trigger ingest_holdings
 docker exec <airflow-scheduler-container> airflow dags trigger daily_pipeline
 docker exec <airflow-scheduler-container> airflow dags trigger backfill_market_data
+docker exec <airflow-scheduler-container> airflow dags trigger backfill_fx_rates
 ```
 
 Task logs land under `services/data-store/logs/dag_id=.../run_id=.../task_id=.../attempt=N.log`
@@ -296,7 +347,10 @@ Task logs land under `services/data-store/logs/dag_id=.../run_id=.../task_id=...
 `daily_pipeline`/`backfill_market_data` both accept a `tickers` param (a JSON array, default `[]`)
 via the UI's "Trigger DAG w/ config" dialog, passed to the job as an ordinary `list[str]`. Leave it
 empty to run against everything followed. On `daily_pipeline` this restricts both the
-market-data-ingest and returns-calculation tasks together (it has no effect on regimes ingest).
+market-data-ingest and returns-calculation tasks together (it has no effect on regimes ingest or
+FX rate ingest, neither of which has a ticker concept). `backfill_fx_rates` accepts its own
+`currencies` param (also a JSON array, default `[]`) restricting the run to specific quote
+currency codes, e.g. `["USD", "GBP"]`.
 
 There is no shell in the path any more, so the value is never interpolated into a command line
 and the escaping the old `BashOperator` needed is simply gone.

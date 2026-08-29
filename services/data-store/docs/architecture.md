@@ -7,12 +7,16 @@ decisions that would otherwise look arbitrary.
 
 ## What the service is responsible for
 
-Getting external financial data into Postgres, correctly and repeatably. Two things go in:
+Getting external financial data into Postgres, correctly and repeatably. Three things go in:
 
 - **ETF holdings** — scraped from a fund provider's website (iShares today).
 - **Raw daily market data** — OHLCV prices, dividends and stock splits, for every ticker those
   holdings contain plus directly tracked ones. One fetch, one table (`raw_market_data`) —
   unprocessed, matching the source's own grain, not decomposed into a return calculation there.
+- **Daily FX rates** — currency-conversion rates for every currency in `config/currencies.yaml`
+  against its `base_currency`, landed in `fx_rates`. Kept separate from `raw_market_data`
+  deliberately — an FX rate isn't a security's price and has no OHLC, dividends, or splits to
+  carry.
 
 One thing is derived, not fetched: **`market_returns`** — split-adjusted price and
 price/dividend/simple/log returns, rebuilt from `raw_market_data` by `calculate-returns`. This
@@ -39,12 +43,13 @@ flowchart TD
 
     subgraph orch["Orchestration"]
         JOBS["jobs.py<br/><i>runnable units: config + connection + one flow</i>"]
-        PIPE["pipeline.py<br/><i>the four run-level flows; ticker resolution</i>"]
+        PIPE["pipeline.py<br/><i>the run-level flows; ticker/currency resolution</i>"]
     end
 
     subgraph domain["Domain modules"]
         HOLD["holdings/<br/>scraper · parser · repository"]
         MKT["market_data/<br/>yfinance_source · repository"]
+        FX["fx/<br/>yfinance_source · repository"]
         RET["returns/<br/>calculator · repository"]
         REG["regimes/<br/>loader · repository"]
     end
@@ -54,6 +59,7 @@ flowchart TD
         SET["settings.py"]
         DB["db/connection.py + schema.sql"]
         LOG["logging_config.py · run_result.py"]
+        RETRY["yfinance_retry.py<br/><i>shared transient-error classifier</i>"]
     end
 
     PG[("Postgres")]
@@ -67,12 +73,17 @@ flowchart TD
     JOBS --> DB
     PIPE --> HOLD
     PIPE --> MKT
+    PIPE --> FX
     PIPE --> RET
     PIPE --> REG
     HOLD --> EXT
     MKT --> EXT
+    FX --> EXT
+    MKT --> RETRY
+    FX --> RETRY
     HOLD --> PG
     MKT --> PG
+    FX --> PG
     RET --> PG
     REG --> PG
     DB --> PG
@@ -124,18 +135,34 @@ instead of an external source is a shape the original three-file split didn't an
 and `repository.py` (writes to the `regimes` table). There is no external provider — the only
 source is a hand-curated CSV in `config/`, updated manually — and no base Protocol.
 
+`fx/` follows the standard three-file shape exactly, and is the second implementation of it (after
+`market_data/`) rather than the first — deliberately kept as a *separate* domain rather than folded
+into `market_data/`: an FX rate has no OHLC, dividends, or splits, so reusing `raw_market_data`'s
+table and Protocol would mean either forcing zero-filled columns onto data that doesn't have that
+shape, or narrowing the `MarketDataSource` Protocol in a way the trade-off below already explains
+isn't free. `fx/yfinance_source.py` and `market_data/yfinance_source.py` do share one thing:
+`yfinance_retry.py`'s `_is_transient` classifier, promoted out of `market_data/_yfinance_retry.py`
+to a foundation module (not under either domain package) when `fx/` needed it too — sibling domain
+modules reaching into each other's private helpers wasn't a foundation worth building on.
+
 ## Extension points
 
-New providers are registry entries, not new branches. Both registries live at the top of
+New providers are registry entries, not new branches. All three registries live at the top of
 `pipeline.py`:
 
 ```python
 SCRAPERS            = {"ishares": get_holdings_csv_url}
 MARKET_DATA_SOURCES = {"yfinance": YFinanceMarketDataSource}
+FX_RATE_SOURCES      = {"yfinance": YFinanceFxRateSource}
 ```
 
-Adding a second market-data provider means writing a class satisfying `market_data/base.py`'s
-`MarketDataSource` Protocol and adding one line. No flow function changes.
+Adding a second market-data (or FX-rate) provider means writing a class satisfying
+`market_data/base.py`'s `MarketDataSource` (or `fx/base.py`'s `FxRateSource`) Protocol and adding
+one line. No flow function changes. `FX_RATE_SOURCES` has one entry today and, unlike
+`MARKET_DATA_SOURCES`, its key isn't selected from user config (`config/currencies.yaml` has no
+per-currency `price_source` field — there was nothing to choose between yet) — `ingest_fx_rates`
+and `backfill_fx_rates` both look it up under the literal `"yfinance"` key. Revisit that the day a
+second FX source actually exists.
 
 **A disclosed trade-off of one combined registry**: before the OHLCV/dividend fetch merge, prices
 and dividends had separate registries and Protocols, because they were genuinely separate
@@ -151,17 +178,19 @@ two different strings. `.name` is what gets stamped into the `source` column and
 floors are read under; the key is what config files reference. Keep them equal unless you have a
 reason not to.
 
-## The five flows
+## The seven flows
 
-All five live in `pipeline.py` and are exposed as CLI subcommands.
+All seven live in `pipeline.py` and are exposed as CLI subcommands.
 
 | Flow | Command | Cadence | Reads | Writes |
 |---|---|---|---|---|
 | Holdings ingest | `ingest-holdings` | weekly | provider site | `etf_holdings` |
-| Market data ingest | `ingest-market-data` | daily, in parallel with regimes ingest | `etf_holdings` + config | `raw_market_data` |
+| Market data ingest | `ingest-market-data` | daily, in parallel with regimes and FX ingest | `etf_holdings` + config | `raw_market_data` |
 | Market data backfill | `backfill-market-data` | manual | `raw_market_data` | `raw_market_data` |
 | Returns calculation | `calculate-returns` | daily, immediately after market data ingest succeeds (same run) | `raw_market_data` | `market_returns` |
-| Regimes ingest | `ingest-regimes` | daily, in parallel with market data ingest | `config/regimes.csv` | `regimes` |
+| Regimes ingest | `ingest-regimes` | daily, in parallel with market data and FX ingest | `config/regimes.csv` | `regimes` |
+| FX rates ingest | `ingest-fx-rates` | daily, in parallel with market data and regimes ingest | `config/currencies.yaml` | `fx_rates` |
+| FX rates backfill | `backfill-fx-rates` | manual | `fx_rates` | `fx_rates` |
 
 **Returns calculation is the odd one out**: it reads no config and does no ticker resolution — it
 discovers both sources and tickers directly from `raw_market_data` (`returns/repository.py`'s
@@ -189,19 +218,24 @@ therefore re-fetches that ticker's full stored range and rewrites it
 (`pipeline._refresh_split_histories`). This is the one place the daily flow issues an unbounded
 historical request rather than a windowed one; splits are rare enough that the cost is negligible.
 
-**Market data ingest, regimes ingest and returns calculation share one DAG, `daily_pipeline`.**
-`ingest-market-data` and `ingest-regimes` start together with no dependency between them — a
-hand-curated CSV of market regimes has nothing to do with fetching prices, so there is no reason
-for one to wait on the other, and running them in parallel gets both done faster. `calculate-
-returns` runs afterward, but is gated specifically on `ingest-market-data`'s result check
-succeeding, not merely on the task finishing: it rebuilds `market_returns` from whatever
+**Market data ingest, regimes ingest, FX rates ingest and returns calculation share one DAG,
+`daily_pipeline`.** `ingest-market-data`, `ingest-regimes` and `ingest-fx-rates` start together
+with no dependency between any pair of them — a hand-curated CSV of market regimes, a currency
+conversion rate, and a security's price have nothing to do with each other, so there is no reason
+for one to wait on another, and running them in parallel gets all three done faster.
+`calculate-returns` runs afterward, but is gated specifically on `ingest-market-data`'s result
+check succeeding, not merely on the task finishing: it rebuilds `market_returns` from whatever
 `ingest-market-data` just landed in `raw_market_data`, so an "ok" ingest that silently saved zero
 rows must not unlock a returns rebuild any more than a raised exception would. It has no
-dependency on the regimes branch, which touches a different, unrelated table. Each
+dependency on the regimes or FX branches, which touch different, unrelated tables. Each
 `ingest-regimes` run still replaces the entire `regimes` table from the current CSV file — the
 source is still a hand-curated CSV, edited manually when new market events occur or existing
 regime definitions change, but the load into the database is now scheduled daily like the other
-data-source flows rather than triggered by hand after every edit.
+data-source flows rather than triggered by hand after every edit. `ingest-fx-rates` has its own
+manual-trigger counterpart, `backfill-fx-rates` (DAG `backfill_fx_rates`), mirroring
+`backfill-market-data`'s shape — one currency pair at a time, rate-limited, using `fx_rates` itself
+as the checkpoint via `get_earliest_fx_dates` — but without market data's split-restatement
+concern, since an FX rate has no split to restate.
 
 ### What a flow returns
 
@@ -288,17 +322,25 @@ Full details in [`schema.md`](schema.md).
 
 ## Configuration
 
-Three files, split by whether they're personal or reference data:
+Four files, split by whether they're personal or reference data:
 
 | File | Committed? | Why |
 |---|---|---|
 | `config/etfs.yaml` | no — gitignored | Someone's actual holdings |
 | `config/tracked_tickers.yaml` | no — gitignored | Same, and optional |
+| `config/currencies.yaml` | no — gitignored | Someone's own base/tracked currencies |
 | `config/yfinance_exchange_suffixes.yaml` | **yes** | Generic reference data, useful to everyone |
 
-`.example` templates are committed for the first two. Paths are environment-overridable via
+`.example` templates are committed for the first three. Paths are environment-overridable via
 `settings.py`, which is also where `DATABASE_URL` comes from — no credential is ever read from a
 config file or hardcoded.
+
+`config/currencies.yaml` sits between the other two gitignored files in one way: it's required,
+not optional (`load_currencies` raises `ConfigError` on a missing file, the same as `load_funds`)
+— unlike `tracked_tickers.yaml`, there's no sensible "not configured yet" state for the currency
+list an FX ingest needs to run at all. It names one `base_currency` and every other enabled
+currency is tracked as a rate against it; see [`schema.md`](schema.md)'s `fx_rates` section for
+the exact convention.
 
 `config_loader.py` validates on load and raises `ConfigError` with the specific problem. Two
 loaders read the same file: `load_exchange_suffixes` and `load_ticker_overrides` take different

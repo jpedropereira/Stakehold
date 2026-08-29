@@ -53,6 +53,21 @@ def _ingest_regimes(_args: argparse.Namespace) -> int:
     return _report(result, "regime rows")
 
 
+def _ingest_fx_rates(args: argparse.Namespace) -> int:
+    result = jobs.run_ingest_fx_rates(days=args.days, currencies=args.currency)
+    return _report(result, "fx rate rows")
+
+
+def _backfill_fx_rates(args: argparse.Namespace) -> int:
+    result = jobs.run_backfill_fx_rates(
+        currencies=args.currency,
+        earliest_date=args.earliest_date,
+        delay_seconds=args.delay_seconds,
+        force_refresh=args.force_refresh,
+    )
+    return _report(result, "fx rate rows")
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="data-store")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -163,6 +178,66 @@ def _build_parser() -> argparse.ArgumentParser:
         "ingest-regimes", help="Load economic/market regimes from CSV"
     )
     ingest_regimes_parser.set_defaults(handler=_ingest_regimes)
+
+    ingest_fx_rates_parser = subparsers.add_parser(
+        "ingest-fx-rates",
+        help="Fetch and load daily currency-conversion rates for config/currencies.yaml",
+    )
+    ingest_fx_rates_parser.add_argument(
+        "--days", type=int, default=7, help="Lookback window in days (default: 7)"
+    )
+    ingest_fx_rates_parser.add_argument(
+        "--currency",
+        action="append",
+        help=(
+            "Restrict to this quote currency code (repeatable), e.g. 'USD' -- matches any "
+            "currently tracked currency from config/currencies.yaml. Default: every enabled "
+            "currency against base_currency."
+        ),
+    )
+    ingest_fx_rates_parser.set_defaults(handler=_ingest_fx_rates)
+
+    backfill_fx_rates_parser = subparsers.add_parser(
+        "backfill-fx-rates",
+        help=(
+            "Backfill full historical currency-conversion rates for every currency in "
+            "config/currencies.yaml, filling only what's missing before each pair's earliest "
+            "stored date. Deliberately slow; intended for rare, manual/on-demand runs."
+        ),
+    )
+    backfill_fx_rates_parser.add_argument(
+        "--currency",
+        action="append",
+        help=(
+            "Restrict to this quote currency code (repeatable), e.g. 'USD'. Intended for small "
+            "manual dry runs, or re-backfilling specific currencies that previously failed."
+        ),
+    )
+    backfill_fx_rates_parser.add_argument(
+        "--earliest-date",
+        help=(
+            "Reach further back than a previous run did: fetches each pair the stretch between "
+            "this date and its earliest stored date. Omit it for the normal case -- every pair "
+            "that already has data is skipped, and pairs with none are fetched as far back as "
+            "the source goes, which is what makes a rerun cheap."
+        ),
+    )
+    backfill_fx_rates_parser.add_argument(
+        "--delay-seconds",
+        type=float,
+        default=10.0,
+        help="Seconds to sleep after each pair's fetch, to stay under yfinance's rate limiting.",
+    )
+    backfill_fx_rates_parser.add_argument(
+        "--force-refresh",
+        action="store_true",
+        help=(
+            "Re-fetch and rewrite each pair's whole stored range instead of only the stretch "
+            "below its earliest stored date. Pair it with --currency; without one it "
+            "re-requests every tracked currency's full history."
+        ),
+    )
+    backfill_fx_rates_parser.set_defaults(handler=_backfill_fx_rates)
 
     return parser
 

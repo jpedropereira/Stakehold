@@ -29,6 +29,7 @@ class Settings:
     tracked_tickers_path: Path
     exchange_suffixes_path: Path
     regimes_csv_path: Path
+    currencies_path: Path
 
 
 def load_settings() -> Settings:
@@ -48,6 +49,9 @@ def load_settings() -> Settings:
         )
     )
     regimes_csv_path = _resolve(os.environ.get("DATA_STORE_REGIMES_PATH", "config/regimes.csv"))
+    currencies_path = _resolve(
+        os.environ.get("DATA_STORE_CURRENCIES_PATH", "config/currencies.yaml")
+    )
 
     return Settings(
         database_url=database_url,
@@ -55,4 +59,5 @@ def load_settings() -> Settings:
         tracked_tickers_path=tracked_tickers_path,
         exchange_suffixes_path=exchange_suffixes_path,
         regimes_csv_path=regimes_csv_path,
+        currencies_path=currencies_path,
     )

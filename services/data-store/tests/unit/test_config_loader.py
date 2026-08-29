@@ -5,6 +5,7 @@ from data_store.config_loader import (
     ConfigError,
     FundConfig,
     TickerConfig,
+    load_currencies,
     load_funds,
     load_ticker_resolution,
     load_tracked_tickers,
@@ -13,6 +14,12 @@ from data_store.config_loader import (
 
 def write_yaml(tmp_path, content):
     path = tmp_path / "etfs.yaml"
+    path.write_text(content)
+    return path
+
+
+def write_currencies_yaml(tmp_path, content):
+    path = tmp_path / "currencies.yaml"
     path.write_text(content)
     return path
 
@@ -560,3 +567,132 @@ def test_ticker_resolution_still_rejects_an_empty_exchanges_section(tmp_path):
 def test_ticker_resolution_rejects_a_missing_file(tmp_path):
     with pytest.raises(ConfigError, match="not found"):
         load_ticker_resolution(tmp_path / "nope.yaml")
+
+
+# --- load_currencies ---------------------------------------------------------------------------
+
+
+def test_loads_currencies_with_base(tmp_path):
+    path = write_currencies_yaml(
+        tmp_path,
+        """
+        base_currency: EUR
+        currencies:
+          - code: EUR
+            enabled: true
+          - code: USD
+            enabled: true
+          - code: GBP
+            enabled: false
+        """,
+    )
+
+    currencies = load_currencies(path)
+
+    assert currencies.base_currency == "EUR"
+    assert [c.code for c in currencies.currencies] == ["EUR", "USD", "GBP"]
+    assert currencies.currencies[2].enabled is False
+
+
+def test_rejects_missing_currencies_file(tmp_path):
+    with pytest.raises(ConfigError, match="not found"):
+        load_currencies(tmp_path / "does-not-exist.yaml")
+
+
+def test_rejects_empty_currencies_list(tmp_path):
+    path = write_currencies_yaml(tmp_path, "base_currency: EUR\ncurrencies: []\n")
+
+    with pytest.raises(ConfigError, match="no currencies"):
+        load_currencies(path)
+
+
+def test_rejects_duplicate_currency_codes(tmp_path):
+    path = write_currencies_yaml(
+        tmp_path,
+        """
+        base_currency: EUR
+        currencies:
+          - code: EUR
+            enabled: true
+          - code: EUR
+            enabled: true
+        """,
+    )
+
+    with pytest.raises(ConfigError, match="(?i)duplicate"):
+        load_currencies(path)
+
+
+@pytest.mark.parametrize("missing_field", ["code", "enabled"])
+def test_rejects_currency_entry_missing_required_field(tmp_path, missing_field):
+    fields = {"code": "EUR", "enabled": True}
+    del fields[missing_field]
+    entry_lines = "\n".join(f"            {k}: {_yaml_value(v)}" for k, v in fields.items())
+    path = write_currencies_yaml(
+        tmp_path, f"base_currency: EUR\ncurrencies:\n          - {entry_lines.strip()}\n"
+    )
+
+    with pytest.raises(ConfigError, match=missing_field):
+        load_currencies(path)
+
+
+def test_rejects_missing_base_currency_field(tmp_path):
+    path = write_currencies_yaml(
+        tmp_path,
+        """
+        currencies:
+          - code: EUR
+            enabled: true
+        """,
+    )
+
+    with pytest.raises(ConfigError, match="base_currency"):
+        load_currencies(path)
+
+
+def test_rejects_base_currency_not_present_in_currencies_list(tmp_path):
+    path = write_currencies_yaml(
+        tmp_path,
+        """
+        base_currency: USD
+        currencies:
+          - code: EUR
+            enabled: true
+        """,
+    )
+
+    with pytest.raises(ConfigError, match="USD"):
+        load_currencies(path)
+
+
+def test_rejects_base_currency_not_enabled(tmp_path):
+    path = write_currencies_yaml(
+        tmp_path,
+        """
+        base_currency: EUR
+        currencies:
+          - code: EUR
+            enabled: false
+          - code: USD
+            enabled: true
+        """,
+    )
+
+    with pytest.raises(ConfigError, match="(?i)not enabled"):
+        load_currencies(path)
+
+
+@pytest.mark.parametrize("bad_code", ["EU", "EURO", "eur", "12A"])
+def test_rejects_currency_code_not_three_uppercase_letters(tmp_path, bad_code):
+    path = write_currencies_yaml(
+        tmp_path,
+        f"""
+        base_currency: {bad_code}
+        currencies:
+          - code: "{bad_code}"
+            enabled: true
+        """,
+    )
+
+    with pytest.raises(ConfigError, match="Invalid currency code"):
+        load_currencies(path)

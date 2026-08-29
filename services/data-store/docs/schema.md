@@ -319,6 +319,45 @@ significant figures. `split_adjusted_close` copies that value directly, so a ret
 such a ticker inherits the same quantisation. Out of scope to fix here since it originates in the
 upstream table.
 
+## `fx_rates`
+
+One row per `(base_currency, quote_currency, rate_date, source)` — a daily currency-conversion
+rate fetched from yfinance, for every currency configured in `config/currencies.yaml` against
+that file's `base_currency`. A separate table from `raw_market_data`, deliberately: an FX rate
+has no OHLC, dividends, or splits, and forcing that shape onto it would mix currency-conversion
+lookups with `raw_market_data`'s unrelated split-restatement machinery for no benefit — nothing
+here needs a price chart, just a single daily number to convert with.
+
+| Column           | Type            | Notes                                                     |
+|------------------|-----------------|--------------------------------------------------------------|
+| `base_currency`  | `VARCHAR(3)`    | Part of PK. The `base_currency` from `config/currencies.yaml` (e.g. `EUR`) at the time this row was fetched. |
+| `quote_currency` | `VARCHAR(3)`    | Part of PK. Any other enabled currency from that file (e.g. `USD`).  |
+| `rate_date`      | `DATE`          | Part of PK.                                                   |
+| `source`         | `VARCHAR(20)`   | Part of PK, e.g. `'yfinance'`. Same rationale as `raw_market_data.source` — a second FX provider can coexist for the same pair/date without collision. |
+| `rate`           | `NUMERIC(18,8)` | Units of `quote_currency` per 1 unit of `base_currency` — standard FX quoting convention, and exactly what the source ticker returns: pair `(EUR, USD)` fetches yfinance ticker `EURUSD=X`, whose `Close` is USD per 1 EUR, stored here verbatim as `rate`. To convert an amount from `quote_currency` to `base_currency`, divide by `rate`; the other direction, multiply. |
+| `ingested_at`    | `TIMESTAMPTZ`   | Defaults to `now()`.                                          |
+
+Index: `(rate_date)` for "give me every pair's rate on date X" lookups — the primary key already
+covers "give me this pair's history".
+
+**No cross-rates stored.** A rate between two non-base currencies (e.g. GBP → CHF) is not fetched
+or stored directly — it's derived downstream by division through the shared base
+(`rate(GBP, CHF) = rate(EUR, CHF) / rate(EUR, GBP)` when `EUR` is the base). This keeps the
+number of yfinance tickers fetched at `len(currencies) - 1` rather than every directed pair, and
+avoids the sparser data some exotic direct crosses have on yfinance.
+
+**Loading strategy: true upsert** (`INSERT ... ON CONFLICT (base_currency, quote_currency,
+rate_date, source) DO UPDATE`), same rationale as `raw_market_data`: successive ingestion runs
+fetch overlapping date windows, and a provider may restate a recent rate.
+
+**Backfill loading pattern**: identical in shape to `raw_market_data`'s — `data-store
+backfill-fx-rates` fills the stretch of history each pair is still missing, using `fx_rates`
+itself as the checkpoint (`get_earliest_fx_dates`, the FX equivalent of `get_earliest_dates`). The
+same three modes apply (resume / reach further back via `--earliest-date` / `--force-refresh`),
+for the same reasons documented under `raw_market_data`'s "Backfill loading pattern" above — FX
+rates have no split-restatement concern, so `--force-refresh` exists here only for symmetry and
+general repair, not a specific known failure mode the way it does for `raw_market_data`.
+
 ## `regimes`
 
 One row per unique regime identifier — a historical market/economic event or condition (recession,
