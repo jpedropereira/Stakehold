@@ -1,3 +1,4 @@
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -7,7 +8,9 @@ _REQUIRED_FIELDS = ("key", "display_name", "provider", "url", "price_source", "e
 _TICKER_REQUIRED_FIELDS = ("ticker", "display_name", "asset_type", "price_source", "enabled")
 _EXCHANGE_SUFFIX_REQUIRED_FIELDS = ("exchange", "suffix")
 _TICKER_OVERRIDE_REQUIRED_FIELDS = ("raw_ticker", "ticker")
+_CURRENCY_REQUIRED_FIELDS = ("code", "enabled")
 VALID_ASSET_TYPES = {"equity", "etf", "commodity", "crypto", "etc"}
+_CURRENCY_CODE_RE = re.compile(r"^[A-Z]{3}$")
 
 
 class ConfigError(Exception):
@@ -46,6 +49,18 @@ class TickerConfig:
     asset_type: str
     price_source: str
     enabled: bool
+
+
+@dataclass(frozen=True)
+class CurrencyConfig:
+    code: str
+    enabled: bool
+
+
+@dataclass(frozen=True)
+class CurrenciesConfig:
+    base_currency: str
+    currencies: list[CurrencyConfig]
 
 
 def load_funds(path: Path) -> list[FundConfig]:
@@ -132,6 +147,52 @@ def load_tracked_tickers(path: Path) -> list[TickerConfig]:
         )
 
     return tickers
+
+
+def load_currencies(path: Path) -> CurrenciesConfig:
+    """The supported-currency list plus which one every other currency is tracked against.
+
+    Unlike `load_tracked_tickers`, this file is required, not optional: there's no sensible
+    "not configured yet" state for the currency list an FX ingest needs to run at all, the same
+    reasoning that makes `load_funds` required rather than optional.
+    """
+    if not path.is_file():
+        raise ConfigError(f"Config file not found: {path}")
+
+    with path.open() as f:
+        data = yaml.safe_load(f) or {}
+
+    if "base_currency" not in data:
+        raise ConfigError(f"Config file has no base_currency defined: {path}")
+    base_currency = data["base_currency"]
+
+    entries = data.get("currencies") or []
+    if not entries:
+        raise ConfigError(f"Config file has no currencies defined: {path}")
+
+    currencies = []
+    seen_codes = set()
+    for entry in entries:
+        missing = [field for field in _CURRENCY_REQUIRED_FIELDS if field not in entry]
+        if missing:
+            raise ConfigError(f"Currency entry missing required field(s): {', '.join(missing)}")
+
+        code = entry["code"]
+        if not _CURRENCY_CODE_RE.match(code):
+            raise ConfigError(f"Invalid currency code {code!r}; must be 3 uppercase letters")
+        if code in seen_codes:
+            raise ConfigError(f"Duplicate currency code: {code}")
+        seen_codes.add(code)
+
+        currencies.append(CurrencyConfig(code=code, enabled=entry["enabled"]))
+
+    base_entry = next((c for c in currencies if c.code == base_currency), None)
+    if base_entry is None:
+        raise ConfigError(f"base_currency {base_currency!r} is not one of the configured codes")
+    if not base_entry.enabled:
+        raise ConfigError(f"base_currency {base_currency!r} is not enabled")
+
+    return CurrenciesConfig(base_currency=base_currency, currencies=currencies)
 
 
 def load_ticker_resolution(path: Path) -> TickerResolution:

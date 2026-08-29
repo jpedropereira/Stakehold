@@ -4,7 +4,9 @@ from contextlib import contextmanager
 from datetime import date
 from pathlib import Path
 
-from data_store.config_loader import FundConfig, TickerConfig
+from data_store.config_loader import CurrenciesConfig, FundConfig, TickerConfig
+from data_store.fx.repository import get_earliest_fx_dates, save_fx_rates
+from data_store.fx.yfinance_source import YFinanceFxRateSource
 from data_store.holdings.parser import fetch_holdings_csv
 from data_store.holdings.repository import (
     get_latest_tickers,
@@ -50,6 +52,10 @@ SCRAPERS = {
 
 MARKET_DATA_SOURCES = {
     "yfinance": YFinanceMarketDataSource,
+}
+
+FX_RATE_SOURCES = {
+    "yfinance": YFinanceFxRateSource,
 }
 
 
@@ -428,6 +434,170 @@ def ingest_regimes(conn, csv_path: Path) -> dict[str, int | str]:
 
     logger.info(f"ingest-regimes complete: {saved} regime row(s)")
     return build_run_result(units_total=len(regimes), rows_saved=saved, failed=0)
+
+
+def _resolve_fx_pairs(currencies: CurrenciesConfig) -> list[tuple[str, str]]:
+    """Every enabled currency (other than the base itself) paired against `base_currency`, in
+    the (base, quote) shape both FxRateSource.fetch and fx_rates itself use."""
+    base = currencies.base_currency
+    return [(base, c.code) for c in currencies.currencies if c.enabled and c.code != base]
+
+
+def _apply_only_currencies(
+    pairs: list[tuple[str, str]], only_currencies: set[str] | None, prefix: str
+) -> tuple[list[tuple[str, str]], int]:
+    """Restrict `pairs` to those whose quote currency is in `only_currencies`, warning about any
+    requested code that matched nothing -- same convention as _apply_only_tickers."""
+    if only_currencies is None:
+        return pairs, 0
+
+    filtered = [(base, quote) for base, quote in pairs if quote in only_currencies]
+    matched = {quote for _, quote in filtered}
+    unmatched = sorted(only_currencies - matched)
+    if unmatched:
+        logger.warning(
+            "%s: no currently tracked currency matches %s.",
+            prefix,
+            ", ".join(repr(c) for c in unmatched),
+        )
+    return filtered, len(unmatched)
+
+
+def ingest_fx_rates(
+    conn,
+    currencies: CurrenciesConfig,
+    start_date: date,
+    end_date: date,
+    only_currencies: set[str] | None = None,
+) -> dict[str, int | str]:
+    """Currency-conversion rates for every enabled currency against `currencies.base_currency`,
+    in one pass -- one fetch, since a single FxRateSource call covers every pair. Simpler than
+    ingest_market_data: one fixed source, no exchange resolution, no fund coupling, no
+    split-restatement pass -- none of those concerns apply to FX rates."""
+    pairs = _resolve_fx_pairs(currencies)
+    pairs, unmatched = _apply_only_currencies(pairs, only_currencies, "ingest-fx-rates")
+    if not pairs:
+        logger.info("ingest-fx-rates: no currency pairs to price, nothing to do.")
+        return build_run_result(
+            units_total=0,
+            rows_saved=0,
+            failed=unmatched,
+            currencies_resolved=0,
+            currencies_unmatched=unmatched,
+        )
+
+    source = FX_RATE_SOURCES["yfinance"]()
+    logger.info(f"ingest-fx-rates: fetching {len(pairs)} currency pair(s) (source=yfinance).")
+    data = source.fetch(pairs, start_date, end_date)
+    if data.empty:
+        logger.info("ingest-fx-rates: no data returned.")
+        saved = 0
+    else:
+        saved = save_fx_rates(conn, source.name, data)
+
+    logger.info(f"ingest-fx-rates complete: {saved} row(s) across {len(pairs)} currency pair(s).")
+    return build_run_result(
+        units_total=len(pairs),
+        currencies_resolved=len(pairs),
+        currencies_unmatched=unmatched,
+        rows_saved=saved,
+        failed=unmatched,
+    )
+
+
+@_yfinance_logging_silenced()
+def backfill_fx_rates(
+    conn,
+    currencies: CurrenciesConfig,
+    earliest_date: date | None,
+    end_date: date,
+    delay_seconds: float,
+    only_currencies: set[str] | None = None,
+    force_refresh: bool = False,
+) -> dict[str, int | str]:
+    """For each currency pair (same resolution as ingest_fx_rates), fetches and stores the
+    stretch of history it's still missing -- same three-mode semantics as
+    backfill_market_data/_backfill_window, with fx_rates as its own checkpoint via
+    get_earliest_fx_dates. One pair at a time, sleeping delay_seconds after each live fetch
+    (success or failure), never after a skip."""
+    pairs = _resolve_fx_pairs(currencies)
+    pairs, unmatched = _apply_only_currencies(pairs, only_currencies, "backfill-fx-rates")
+    if not pairs:
+        logger.info("backfill-fx-rates: no currency pairs to fetch, nothing to do.")
+        return build_run_result(
+            units_total=0,
+            currencies_resolved=0,
+            currencies_unmatched=unmatched,
+            rows_saved=0,
+            failed=unmatched,
+            currencies_fetched=0,
+            currencies_skipped=0,
+            currencies_failed=0,
+        )
+
+    source = FX_RATE_SOURCES["yfinance"]()
+    floors = get_earliest_fx_dates(conn, source.name, pairs)
+
+    total_rows = 0
+    processed = skipped = failed = 0
+    pair_count = len(pairs)
+    for base, quote in pairs:
+        label = f"{base}/{quote}"
+        floor = floors.get((base, quote))
+        window = _backfill_window(floor, earliest_date, end_date, force_refresh)
+        if window is None:
+            skipped += 1
+            processed += 1
+            logger.info(_already_covered_message("backfill-fx-rates", label, floor))
+            continue
+        fetch_start, fetch_end = window
+
+        try:
+            data = source.fetch([(base, quote)], fetch_start, fetch_end)
+        except Exception as e:
+            failed += 1
+            logger.warning("backfill-fx-rates: %s failed, skipping: %s", label, e, exc_info=True)
+            time.sleep(delay_seconds)
+            processed += 1
+            continue
+
+        if not data.empty:
+            try:
+                saved = save_fx_rates(conn, source.name, data)
+                total_rows += saved
+            except Exception as e:
+                failed += 1
+                logger.warning(
+                    "backfill-fx-rates: %s failed to save, skipping: %s",
+                    label,
+                    e,
+                    exc_info=True,
+                )
+                time.sleep(delay_seconds)
+                processed += 1
+                continue
+            logger.info(
+                f"backfill-fx-rates: {label} -> {saved} rows ({fetch_start} to {fetch_end})"
+            )
+        else:
+            logger.info(f"backfill-fx-rates: {label} -> no data ({fetch_start} to {fetch_end})")
+        time.sleep(delay_seconds)
+        processed += 1
+
+    logger.info(
+        f"backfill-fx-rates complete: {pair_count} pair(s) "
+        f"({skipped} already covered, {failed} failed), {total_rows} rows written"
+    )
+    return build_run_result(
+        units_total=pair_count,
+        currencies_resolved=pair_count,
+        currencies_unmatched=unmatched,
+        rows_saved=total_rows,
+        failed=failed + unmatched,
+        currencies_fetched=processed - skipped - failed,
+        currencies_skipped=skipped,
+        currencies_failed=failed,
+    )
 
 
 @_yfinance_logging_silenced()

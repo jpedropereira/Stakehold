@@ -39,6 +39,10 @@ services/data-store/.data/
 services/data-store/config/etfs.yaml
 services/data-store/config/tracked_tickers.yaml
 
+# Currency config (services/data-store) — see README.md for why and the currencies.yaml.example
+# template
+services/data-store/config/currencies.yaml
+
 # Regimes config (services/data-store) — hand-curated, unversioned
 services/data-store/config/regimes.csv
 
