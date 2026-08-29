@@ -60,3 +60,23 @@ def test_returns_depends_on_market_data_check_not_regimes(dagbag):
 
     assert checked_market_data.task_id in returns_task.upstream_task_ids
     assert checked_regimes.task_id not in returns_task.upstream_task_ids
+
+
+def test_fx_rates_has_no_dependency_on_market_data_or_regimes(dagbag):
+    dag = dagbag.dags["daily_pipeline"]
+    fx_task = dag.get_task("ingest_fx_rates")
+    market_task = dag.get_task("ingest_market_data")
+    regimes_task = dag.get_task("ingest_regimes")
+
+    assert market_task.task_id not in fx_task.downstream_task_ids
+    assert market_task.task_id not in fx_task.upstream_task_ids
+    assert regimes_task.task_id not in fx_task.downstream_task_ids
+    assert regimes_task.task_id not in fx_task.upstream_task_ids
+
+
+def test_returns_does_not_depend_on_fx_rates_check(dagbag):
+    dag = dagbag.dags["daily_pipeline"]
+    returns_task = dag.get_task("calculate_returns")
+    checked_fx_rates = dag.get_task("check_fx_rates_run")
+
+    assert checked_fx_rates.task_id not in returns_task.upstream_task_ids

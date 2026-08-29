@@ -28,6 +28,8 @@ def calls(monkeypatch):
         "run_ingest_market_data",
         "run_backfill_market_data",
         "run_calculate_returns",
+        "run_ingest_fx_rates",
+        "run_backfill_fx_rates",
     ):
         monkeypatch.setattr(cli.jobs, name, record(name))
 
@@ -236,3 +238,79 @@ def test_calculate_returns_reports_the_row_count_it_saved(monkeypatch, capsys):
     cli.main(["calculate-returns"])
 
     assert "42 return rows" in capsys.readouterr().out
+
+
+# --- ingest-fx-rates / backfill-fx-rates --------------------------------------------------------
+
+
+def test_ingest_fx_rates_defaults_to_a_seven_day_window_and_no_filter(calls):
+    cli.main(["ingest-fx-rates"])
+
+    assert calls["run_ingest_fx_rates"] == {"days": 7, "currencies": None}
+
+
+def test_ingest_fx_rates_passes_every_flag_through(calls):
+    cli.main(["ingest-fx-rates", "--days", "30", "--currency", "USD", "--currency", "GBP"])
+
+    assert calls["run_ingest_fx_rates"] == {"days": 30, "currencies": ["USD", "GBP"]}
+
+
+def test_backfill_fx_rates_defaults_to_resume_mode(calls):
+    cli.main(["backfill-fx-rates"])
+
+    assert calls["run_backfill_fx_rates"] == {
+        "currencies": None,
+        "earliest_date": None,
+        "delay_seconds": 10.0,
+        "force_refresh": False,
+    }
+
+
+def test_backfill_fx_rates_passes_every_flag_through(calls):
+    cli.main(
+        [
+            "backfill-fx-rates",
+            "--currency",
+            "USD",
+            "--earliest-date",
+            "2000-06-15",
+            "--delay-seconds",
+            "3.5",
+            "--force-refresh",
+        ]
+    )
+
+    assert calls["run_backfill_fx_rates"] == {
+        "currencies": ["USD"],
+        "earliest_date": "2000-06-15",
+        "delay_seconds": 3.5,
+        "force_refresh": True,
+    }
+
+
+def test_ingest_fx_rates_exit_code_reflects_the_run_status(monkeypatch):
+    monkeypatch.setattr(
+        cli.jobs, "run_ingest_fx_rates", lambda **kw: {"status": "partial", "rows_saved": 1}
+    )
+
+    assert cli.main(["ingest-fx-rates"]) == 1
+
+
+def test_ingest_fx_rates_reports_the_row_count_it_saved(monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli.jobs, "run_ingest_fx_rates", lambda **kw: {"status": "ok", "rows_saved": 4}
+    )
+
+    cli.main(["ingest-fx-rates"])
+
+    assert "4 fx rate rows" in capsys.readouterr().out
+
+
+def test_backfill_fx_rates_reports_the_row_count_it_saved(monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli.jobs, "run_backfill_fx_rates", lambda **kw: {"status": "ok", "rows_saved": 4}
+    )
+
+    cli.main(["backfill-fx-rates"])
+
+    assert "4 fx rate rows" in capsys.readouterr().out

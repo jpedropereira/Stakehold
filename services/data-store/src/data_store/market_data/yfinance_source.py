@@ -6,7 +6,7 @@ from datetime import date
 
 import pandas as pd
 import yfinance as yf
-from data_store.market_data._yfinance_retry import _is_transient
+from data_store.yfinance_retry import _is_transient
 
 logger = logging.getLogger(__name__)
 
