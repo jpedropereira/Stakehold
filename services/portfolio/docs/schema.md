@@ -10,7 +10,7 @@ it in lockstep with any future schema change, the same discipline
 out this way*, see [`architecture.md`](architecture.md), which this document turns from a
 conceptual entity model into concrete tables.
 
-Six tables: `users` and `accounts` (who owns what), `transactions` (the immutable ledger), and
+Five tables: `users` and `accounts` (who owns what), `transactions` (the immutable ledger), and
 `position_snapshots` / `return_snapshots` (derived, materialized, rebuildable). The manual
 broker-instrument → `data-store`-ticker mapping is **not** a table here — it's defined in a YAML
 config file for now; see "Ticker mappings — not a table here" below.
@@ -18,8 +18,9 @@ config file for now; see "Ticker mappings — not a table here" below.
 ## `users`
 
 Deliberately minimal. No identity/authentication service exists anywhere in this application yet,
-so this table exists only so `accounts.user_id` has something real to reference — portfolio does
-not otherwise own identity, per `architecture.md`'s non-goals.
+so this table is a bootstrap identity stand-in — enough for `accounts.user_id` to reference
+something real and human-readable — not a real profile/identity store. Portfolio still doesn't own
+*authentication* (credentials, sessions, login), per `architecture.md`'s non-goals.
 
 | Column | Type | Notes |
 |---|---|---|
@@ -161,6 +162,13 @@ historical transaction can add, remove, or shift which dates count as position-c
 this is a full snapshot replacement, the same shape as `etf_holdings`'s delete-then-insert, just
 keyed by `(account_id, canonical_ticker)` instead of `(fund_key, as_of_date)`.
 
+**Each `(account_id, canonical_ticker)`'s delete-then-insert runs inside one transaction**, so a
+concurrent reader — `rebuild-returns`, or a future HTTP API — never observes that key with zero rows;
+it sees either the pre-rebuild snapshot set or the post-rebuild one, never a transient gap. Rebuild
+scope is still per account (per `architecture.md`'s "Both rebuilds are full rebuilds" note), so
+different accounts' rebuilds aren't serialized against each other — only the delete+insert for a
+single `(account_id, canonical_ticker)` is atomic, not the whole rebuild run.
+
 **No realized-gains table yet.** A `SELL` under average-cost produces a realized gain/loss the
 instant it happens, but `architecture.md` didn't pin down where that gets recorded, and inventing a
 shape for it here would be scope creep beyond what was asked for. Left as an explicit, open gap
@@ -181,15 +189,19 @@ Derived, materialized, rebuildable.
 | `market_value_eur` | `NUMERIC(20,4) NOT NULL` | Converted using `data-store`'s FX rate series for `price_date` — see `architecture.md`'s cross-service prerequisite. |
 | `cost_basis_eur` | `NUMERIC(20,4) NOT NULL` | Carried from `position_snapshots.cost_basis_eur`. |
 | `unrealized_return_eur` | `NUMERIC(20,4) NOT NULL` | `market_value_eur - cost_basis_eur`. |
-| `unrealized_return_pct` | `NUMERIC(18,8)` | `unrealized_return_eur / cost_basis_eur`. Nullable — undefined (not zero) when `cost_basis_eur = 0`, e.g. a fully closed position still being priced for historical charting. |
+| `unrealized_return_pct` | `NUMERIC(18,8)` | `unrealized_return_eur / cost_basis_eur`. Nullable — undefined (not zero) when `cost_basis_eur = 0`, i.e. the row for the trading day a position sells down to zero quantity. That row is still written (the position was open that day), but no further rows follow it — see `architecture.md`'s bounded-grain note on `ReturnSnapshot`. |
 | `calculated_at` | `TIMESTAMPTZ NOT NULL DEFAULT now()` | Bumped on every upsert, same convention as `market_returns.calculated_at` — reflects the last rebuild, not the first. |
 
 `PRIMARY KEY (account_id, canonical_ticker, price_date)`.
 
 **Loading strategy: true upsert (`INSERT ... ON CONFLICT ... DO UPDATE`), matching
-`market_returns` exactly** — unlike `position_snapshots`, the set of `price_date`s here comes from
-`data-store`'s external price series, a stable calendar grid that `rebuild-returns` doesn't invent.
-Only the *values* at each date are ever rewritten on a rebuild, never the set of dates itself.
+`market_returns` exactly** — unlike `position_snapshots`, the trading-day calendar itself comes from
+`data-store`'s external price series, not something `rebuild-returns` invents, so the *values* at an
+already-written date are only ever overwritten, never shifted to a different date. This is a stable
+grid, not a fixed one, though: which dates get a row for a given `(account_id, canonical_ticker)` is
+still bounded by the open-window rule in `architecture.md`'s `ReturnSnapshot` note — `rebuild-returns`
+stops adding new dates for a position once it closes to zero, even as `data-store`'s calendar keeps
+extending past that point.
 
 ## Open items, carried forward rather than resolved here
 
