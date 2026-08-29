@@ -42,8 +42,10 @@ machinery. See "Cross-service prerequisite" below.
 - Not (yet) an HTTP service — CLI only, though the design keeps that door open.
 - Not a place that guesses a ticker mapping. An unmapped instrument blocks its own calculation,
   visibly, never a silent skip.
-- Not the owner of user identity. Portfolio scopes every account to a `user_id`, but who that user
-  is — name, email, credentials, authentication — belongs to another part of the application.
+- Not the owner of *authentication* — credentials, sessions, login — that belongs to another part
+  of the application. Portfolio does bootstrap a minimal identity stand-in (`users.email`,
+  `display_name`) so `accounts.user_id` has something real and human-readable to reference before a
+  dedicated identity service exists; see `schema.md`'s `users` table for the handoff plan.
 
 ## Layering
 
@@ -244,10 +246,12 @@ also the backstop for import-time computation when the companion-row match is am
 Per [`data-schema.md`](../../../.claude/rules/data-schema.md), this is the entity shape and
 identity — not column-level DDL, which needs its own sign-off pass.
 
-- **User** — identified by a surrogate id. How the application identifies a user at all
-  (authentication/identity) is out of scope for this document. Portfolio does not own profile data
-  (name, email, credentials) — it only holds a `user_id` reference on `Account`, the same way it
-  holds a `canonical_ticker` reference into `data-store`'s world rather than owning it.
+- **User** — identified by a surrogate id, with `email` and `display_name` as a minimal bootstrap
+  identity stand-in (see "Explicit non-goals" above). Authentication — credentials, sessions, login
+  — is out of scope for this document and belongs to another part of the application. `Account`
+  holds a `user_id` reference the same way it holds a `canonical_ticker` reference into
+  `data-store`'s world rather than owning that data outright — the difference is that `users` is
+  expected to be handed off to a dedicated identity service later, per `schema.md`.
 - **Broker** — identified by a short key (`"acme"`, `"globex"`, ...). The same set as
   `broker_import`'s registry keys; effectively reference data, not user-editable.
 - **Account** — identified by a user-chosen id/label; references one Broker and exactly one User.
@@ -287,7 +291,12 @@ identity — not column-level DDL, which needs its own sign-off pass.
   PositionSnapshot plus `data-store` prices/FX; wholly derived, rebuildable. **Proposed grain,
   flagged for schema sign-off**: daily — one row per priced trading day the position was open,
   since a *return* changes every day the price moves even with zero transactions, so it can't be
-  event-driven the same way. Mirrors `market_returns`'s own daily grain in data-store.
+  event-driven the same way. Mirrors `market_returns`'s own daily grain in data-store. **Bounded,
+  not open-ended**: "was open" means from the position's first non-zero `PositionSnapshot` through
+  the trading day it closes to zero, inclusive — `rebuild-returns` stops generating new rows for a
+  ticker once the latest `PositionSnapshot` shows zero quantity with no later re-opening
+  transaction. Rows already written for the open window are never deleted, so they remain available
+  for historical charting; the grain just doesn't grow forever for a position nobody still holds.
 
 ## The flows
 
@@ -299,7 +308,7 @@ identity — not column-level DDL, which needs its own sign-off pass.
 | Manual transaction entry | `add-transaction` | ad hoc | — | `transactions` |
 | Broker file import | `import-transactions --broker <key> --file <path> --account <id>` | manual, on demand | export file | `transactions` (idempotent on `(broker, broker_transaction_ref)`) |
 | Positions rebuild | `rebuild-positions` | after transactions change | `transactions`, `configs/ticker_mappings.yaml` | `position_snapshots` |
-| Returns rebuild | `rebuild-returns` | after positions rebuild or new prices land | `position_snapshots`, `configs/ticker_mappings.yaml`, `data-store` read API | `return_snapshots` |
+| Returns rebuild | `rebuild-returns` | after positions rebuild or new prices land | `position_snapshots`, `data-store` read API | `return_snapshots` |
 
 **A load-bearing consequence of the entity model above, worth stating directly:** `rebuild-positions`
 needs no price data at all — quantity and average cost are pure functions of the transaction log.
