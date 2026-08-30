@@ -1,0 +1,134 @@
+# Tasks
+
+Roadmap to a basic, working walking skeleton across all four services: a user registers and logs
+in (`auth`), manually enters or uploads their portfolio (`portfolio`), and views it by account and
+by value/returns in a basic web UI (`web`), with prices/FX sourced from `data-store`.
+
+Each task implements what's already specified in that service's `docs/architecture.md` (and
+`docs/schema.md` where one exists) — this file only sequences the work and tracks status. Update
+the status table and the per-task notes as work completes; this is a living tracker, not a
+one-time snapshot.
+
+**Status** is one of:
+- `done` — implemented, tested, merged.
+- `ready` — every dependency is `done`; can be started now.
+- `blocked` — waiting on at least one dependency.
+
+## Status table
+
+| ID | Task | Depends on | Status |
+|----|------|-------------|--------|
+| 1 | [Auth schema & foundation](#1-auth-schema--foundation) | — | ready |
+| 2 | [Auth identity API](#2-auth-identity-api) | 1 | blocked |
+| 3 | [Data-store read API](#3-data-store-read-api) | — | ready |
+| 4 | [Portfolio foundation & schema sign-off](#4-portfolio-foundation--schema-sign-off) | — | ready |
+| 5 | [Accounts & manual transactions](#5-accounts--manual-transactions) | 4 | blocked |
+| 6 | [Broker import](#6-broker-import) | 5 | blocked |
+| 7 | [Positions](#7-positions) | 6 | blocked |
+| 8 | [Returns](#8-returns) | 7, 3 | blocked |
+| 9 | [Portfolio HTTP API](#9-portfolio-http-api) | 5, 6, 7, 8 | blocked |
+| 10 | [Web foundation & auth pages](#10-web-foundation--auth-pages) | 2 | blocked |
+| 11 | [Portfolio entry UI](#11-portfolio-entry-ui) | 10, 9 | blocked |
+| 12 | [Portfolio view UI](#12-portfolio-view-ui) | 11 | blocked |
+| 13 | [End-to-end integration & smoke test](#13-end-to-end-integration--smoke-test) | 12 | blocked |
+
+Three tasks are `ready` in parallel today: **1** (auth), **3** (data-store), **4** (portfolio) —
+none of them depend on each other.
+
+## Tasks
+
+### 1. Auth schema & foundation
+
+Write `services/auth/docs/schema.md` — column-level DDL for `users` and `sessions` (currently only
+described conceptually in `architecture.md`) — and get explicit sign-off per
+[`data-schema.md`](.claude/rules/data-schema.md) before writing any model/migration code. Then:
+`settings.py`, `db/connection.py` + `schema.sql`, dedicated `auth-postgres` wired into the
+deployment (isolated from `app-postgres`, per `auth/docs/architecture.md`'s deployment reasoning).
+
+### 2. Auth identity API
+
+FastAPI app exposing the expected endpoint surface: signup, login, logout, session validation.
+Argon2id password hashing (`argon2-cffi`). Opaque session cookies (`httpOnly`, `Secure`,
+`SameSite=Lax`), sliding renewal on validation. Shared-secret check for internal server-to-server
+callers. Unit + integration tests (`tests/integration/` needs live Postgres).
+
+### 3. Data-store read API
+
+Not yet designed anywhere — this task both designs and implements it. Three read operations over
+existing tables, no new tables: price series for a canonical ticker (`market_returns`/
+`raw_market_data`), FX rate series for a currency pair (`fx_rates`), and a ticker existence/
+validity check. Shared-secret protected, matching the trust model `auth`/`portfolio` already use.
+Update `services/data-store/docs/architecture.md` — this is a new entry point per the
+[architecture rule](.claude/rules/architecture.md). Tests.
+
+### 4. Portfolio foundation & schema sign-off
+
+`services/portfolio/docs/schema.md` is already drafted in detail but is explicitly marked
+"proposal, not yet implemented" — confirm it (or amend) with the user before writing
+`schema.sql`, per [`data-schema.md`](.claude/rules/data-schema.md). Then: `settings.py`,
+`db/connection.py` + `schema.sql`, `jobs.py`/`pipeline.py` skeleton, `run_result.py` (same
+`{"status", "rows_saved"}` contract as data-store's), `cli.py` skeleton, `app-postgres` wiring.
+
+### 5. Accounts & manual transactions
+
+`accounts/repository.py` (the multi-user isolation chokepoint — every other module's queries pass
+through it), `transactions/base.py` (the `CanonicalTransaction` shape) + `repository.py`
+(idempotent insert, `ON CONFLICT ... DO NOTHING`). CLI flows: `account add`, `add-transaction`.
+Tests (unit: pure logic; integration: idempotent-import semantics against live Postgres).
+
+### 6. Broker import
+
+`ticker_mapping/loader.py` (reads/validates `configs/ticker_mappings.yaml`). `broker_import/
+base.py` (the `BrokerParser` Protocol) + `acme.py` + `globex.py`. Flows: `import-transactions
+--broker <key> --file <path> --account <id>`, `list-unmapped-instruments`. Tests against fixture
+files for both parsers, including the Globex content-hash dedup logic.
+
+### 7. Positions
+
+`positions/calculator.py` (pure function replaying the transaction log) + `repository.py`
+(delete-then-insert per `(account_id, canonical_ticker)`, each pair's replacement atomic). Flow:
+`rebuild-positions`. An unmapped instrument blocks its own rebuild with a `partial` status, never a
+silent skip. Tests.
+
+### 8. Returns
+
+`datastore_client/base.py` (the `DataStoreClient` Protocol) + `http_client.py` (the real
+implementation, calling task 3's API). `returns/calculator.py` (pure, takes prices/FX as plain
+data) + `repository.py` (true upsert, matching `market_returns`'s grid shape). Flow:
+`rebuild-returns`. Tests (a stub `DataStoreClient` covers everything except the real HTTP client
+against a live task-3 endpoint).
+
+### 9. Portfolio HTTP API
+
+Not yet designed anywhere — `portfolio/docs/architecture.md` only shows it as a future box in the
+layering diagram. FastAPI routes that are argument-parsing-plus-a-call into `jobs.py`, same as
+`cli.py` — accounts, transactions (manual entry + import), positions, returns. Shared-secret check
+for `web`'s server-to-server calls. Update `services/portfolio/docs/architecture.md` (new entry
+point per the [architecture rule](.claude/rules/architecture.md)).
+
+### 10. Web foundation & auth pages
+
+FastAPI + Jinja2 + htmx scaffold, no build step. Base layout using the brand tokens
+(`brand/tokens.css`) — Fraunces headlines, Inter body, IBM Plex Mono for numbers. Register, login,
+logout pages calling task 2's auth API server-to-server; session identity forwarded as a cookie,
+never exposed to browser JS. CSRF protection on state-changing routes (web's own responsibility,
+per its architecture doc).
+
+### 11. Portfolio entry UI
+
+Pages/forms calling task 9's portfolio API: create an account, manually enter a transaction,
+upload a broker export file. htmx partial updates for form submission feedback.
+
+### 12. Portfolio view UI
+
+Views of the portfolio by account and by value/returns: position listing per account, return-over-
+time chart (the lightweight JS charting library named in `web/docs/architecture.md`), calling
+task 9's positions/returns endpoints. Gains/losses rendered with `--forest`/`--oxblood` per the
+brand charter, numbers in `--font-mono`.
+
+### 13. End-to-end integration & smoke test
+
+Full deployment wiring: all four services, three Postgres instances (`auth-postgres`,
+`app-postgres`, `data-store-postgres`), shared internal secrets between services. Manual smoke
+test of the whole flow: register → login → add account → enter/import transactions → rebuild
+positions/returns → view in the web UI.
