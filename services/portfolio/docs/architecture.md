@@ -42,10 +42,11 @@ machinery. See "Cross-service prerequisite" below.
 - Not (yet) an HTTP service — CLI only, though the design keeps that door open.
 - Not a place that guesses a ticker mapping. An unmapped instrument blocks its own calculation,
   visibly, never a silent skip.
-- Not the owner of *authentication* — credentials, sessions, login — that belongs to another part
-  of the application. Portfolio does bootstrap a minimal identity stand-in (`users.email`,
-  `display_name`) so `accounts.user_id` has something real and human-readable to reference before a
-  dedicated identity service exists; see `schema.md`'s `users` table for the handoff plan.
+- Not the owner of *authentication or user identity* — credentials, sessions, login, and the
+  `users` record itself belong to `auth` from the start (see
+  [`auth/docs/architecture.md`](../../auth/docs/architecture.md)). Portfolio keeps no local `users`
+  table, not even a placeholder — `accounts.user_id` is a plain UUID column holding the id `auth`
+  issues at signup.
 
 ## Layering
 
@@ -246,15 +247,17 @@ also the backstop for import-time computation when the companion-row match is am
 Per [`data-schema.md`](../../../.claude/rules/data-schema.md), this is the entity shape and
 identity — not column-level DDL, which needs its own sign-off pass.
 
-- **User** — identified by a surrogate id, with `email` and `display_name` as a minimal bootstrap
-  identity stand-in (see "Explicit non-goals" above). Authentication — credentials, sessions, login
-  — is out of scope for this document and belongs to another part of the application. `Account`
-  holds a `user_id` reference the same way it holds a `canonical_ticker` reference into
-  `data-store`'s world rather than owning that data outright — the difference is that `users` is
-  expected to be handed off to a dedicated identity service later, per `schema.md`.
+- **User** — owned entirely by `auth`, not portfolio (see "Explicit non-goals" above). There is no
+  `users` table here, not even a stand-in: `Account` holds `user_id` as a plain UUID column
+  referencing the id `auth` issues at signup — the same non-owning reference shape used for
+  `canonical_ticker` into `data-store`'s world, except there's no local row backing it at all.
+  Nothing here enforces the UUID is real; it's trusted input, the same way a `canonical_ticker` is
+  trusted without a foreign key. Authentication — credentials, sessions, login — is out of scope for
+  this document and belongs to `auth`.
 - **Broker** — identified by a short key (`"degiro"`, `"ibkr"`, ...). The same set as
   `broker_import`'s registry keys; effectively reference data, not user-editable.
-- **Account** — identified by a user-chosen id/label; references one Broker and exactly one User.
+- **Account** — identified by a user-chosen id/label; references one Broker and exactly one User (an
+  `auth`-issued UUID, not a local row).
   Any broker-side account identifier (e.g. IBKR's masked `U***57423`) is stored for
   display/traceability only, never used to match — a file never self-identifies its account (see
   Degiro above), so this is always supplied by the caller. Every downstream entity (Transaction,
