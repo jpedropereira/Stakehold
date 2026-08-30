@@ -1,0 +1,24 @@
+# A lean sibling of Dockerfile.airflow for the read API: same uv-based workspace sync, but a
+# slim Python base instead of Airflow's own image, and no Playwright browser install -- the API
+# never scrapes, so paying for Chromium here would be pure waste.
+#
+# Rebuild after changing services/data-store/src/data_store code (docker compose build): that
+# code is a build-time snapshot, the same convention Dockerfile.airflow uses.
+FROM python:3.14-slim
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
+
+WORKDIR /opt/stakehold
+
+COPY pyproject.toml uv.lock ./
+# Every workspace member, not just data-store: the root pyproject.toml lists all four services
+# (auth, data-store, portfolio, web) as dependencies of the (virtual, package = false) root
+# project, so `uv sync` needs each one's source present to place it, even though the API only
+# imports data_store itself.
+COPY services services
+
+RUN uv sync --frozen
+
+EXPOSE 8000
+
+CMD ["uv", "run", "--frozen", "uvicorn", "data_store.api.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]

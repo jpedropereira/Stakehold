@@ -30,6 +30,10 @@ class Settings:
     exchange_suffixes_path: Path
     regimes_csv_path: Path
     currencies_path: Path
+    # Optional: every CLI/Airflow caller has no need of it, so making it required here would
+    # break them. The read API checks it is set at its own startup instead -- see
+    # data_store.api.app.
+    internal_api_secret: str | None = None
 
 
 def load_settings() -> Settings:
@@ -60,4 +64,5 @@ def load_settings() -> Settings:
         exchange_suffixes_path=exchange_suffixes_path,
         regimes_csv_path=regimes_csv_path,
         currencies_path=currencies_path,
+        internal_api_secret=os.environ.get("INTERNAL_API_SECRET") or None,
     )

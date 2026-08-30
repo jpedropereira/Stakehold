@@ -332,37 +332,45 @@ repo-wide logging rule: "nothing to do" must never look like "something failed s
 
 ## Cross-service prerequisite: the data-store read API
 
-**This section describes what portfolio needs, not how `data-store` should build it** — that's
-`data-store`'s own `architecture.md` concern when it happens.
+**This section describes what portfolio needs from it; `data-store`'s own `docs/architecture.md`
+("Read API" section) owns the design and is authoritative on the current shape.** Built as task 3
+of the cross-service roadmap (`tasks.md`) — no longer a future dependency, but `http_client.py`
+below hasn't been written against it yet.
 
 `returns/` (and any future "current market value of a position" feature) needs, conceptually,
-three read operations against `data-store`:
+three read operations against `data-store`, all of which now exist:
 
-1. **Price series for a canonical ticker** over a date range — the daily series
-   `returns/calculator.py` needs to value a position and compute its return at any point in time.
-   Backed by `data-store`'s `market_returns`/`raw_market_data`.
+1. **Price series for a canonical ticker** over a date range — `GET /prices/{ticker}`, backed by
+   `market_returns`. Returns `split_adjusted_close`, `future_split_factor`, and the four return
+   columns (`price_return`, `dividend_return`, `simple_return`, `log_return`), nullable together
+   on a ticker's first stored date — `http_client.py` must preserve those nulls rather than
+   coercing them to 0.
 2. **FX rate series for a currency pair** over a date range, in the *same shape* as a price
-   series — modeled on `data-store`'s side as just another ticker-like series (e.g. a yfinance FX
-   ticker such as `EURUSD=X`), reusing the ingestion machinery `data-store` already has rather than
-   portfolio inventing a second one.
-3. *(Possibly)* **ticker existence/validity check** — so a mapping in
-   `configs/ticker_mappings.yaml` that names a `canonical_ticker` `data-store` doesn't actually
-   track can be caught early (e.g. by `list-unmapped-instruments`, or a future dedicated
-   validation command), rather than failing silently much later at returns-rebuild time. Not
-   strictly required for a first version (returns-rebuild failing loudly is a valid fallback) but
-   worth flagging as a nice-to-have for the same API.
+   series (a list of `{date, value}` points) — `GET /fx/{base}/{quote}`. **Correction to an
+   earlier assumption here**: this is *not* modeled as another yfinance-style ticker (e.g.
+   `EURUSD=X`) reusing `market_data/`'s ingestion machinery. `data-store` deliberately kept FX in
+   its own `fx_rates` table (no OHLC, dividends, or splits to carry), and the API instead derives
+   any requested pair — direct, inverse, or triangulated through `config/currencies.yaml`'s
+   configured base currency — from whatever `fx_rates` actually stores. The response shape still
+   satisfies the "same shape as a price series" intent (`{date, rate}` points); only the
+   ingestion-reuse assumption was wrong.
+3. **Ticker existence/validity check** — `GET /tickers/{ticker}`, reporting `exists` (ingested at
+   all) and `has_returns` (whether `calculate-returns` has run for it) separately, plus the
+   covered date range. Lets a `configs/ticker_mappings.yaml` entry naming a `canonical_ticker`
+   `data-store` doesn't track be caught by `list-unmapped-instruments` or a validation command,
+   rather than failing silently at returns-rebuild time.
+
+All three require `Authorization: Bearer <INTERNAL_API_SECRET>` — the same shared-secret model
+`auth/docs/architecture.md` describes — and `source` is a query parameter defaulting to
+`yfinance` on every endpoint, since `source` is part of the primary key on data-store's side.
 
 `datastore_client/base.py` defines the `DataStoreClient` Protocol portfolio's domain code depends
-on; `http_client.py` is the implementation that calls the not-yet-built API. Until that API
-exists, `http_client.py` cannot be finished — but because the rest of the domain (`positions/`,
-`transactions/`, `broker_import/`, `ticker_mapping/`) depends only on the Protocol, not the HTTP
-implementation, a local stub/fixture-backed implementation of `DataStoreClient` is enough to build
-and test everything except `returns/` in the meantime. Swapping the stub for the real HTTP client
-later touches `datastore_client/` only.
-
-**Explicitly not decided here**: the API's transport, auth, response shape, or endpoint layout.
-Flagging this as a joint prerequisite is the ask — `data-store` needs this read API designed before
-`returns/`'s `http_client.py` and the ticker-mapping validity check above can be fully wired up.
+on; `http_client.py` is the implementation that calls the now-built API. Because the rest of the
+domain (`positions/`, `transactions/`, `broker_import/`, `ticker_mapping/`) depends only on the
+Protocol, not the HTTP implementation, a local stub/fixture-backed implementation of
+`DataStoreClient` remains enough to build and test everything except `returns/` without a live
+data-store instance. Writing `http_client.py` against the real API is `returns/`'s own task
+(task 8), not a joint prerequisite any more.
 
 ## Configuration
 

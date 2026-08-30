@@ -35,6 +35,7 @@ from data_store.pipeline import (
     ingest_market_data,
     ingest_regimes,
 )
+from data_store.read_flows import fx_rate_series, price_series, ticker_info
 from data_store.run_result import build_run_result
 from data_store.settings import load_settings
 from shared.db.connection import apply_schema, get_connection
@@ -217,6 +218,51 @@ def run_ingest_regimes() -> dict[str, int | str]:
     conn = get_connection(settings.database_url)
     try:
         return ingest_regimes(conn, settings.regimes_csv_path)
+    finally:
+        conn.close()
+
+
+def get_price_series(*, ticker: str, source: str, start: date, end: date) -> dict:
+    """Price/return series for one ticker, for the read API.
+
+    Named `get_*` rather than `run_*`, and returns data rather than a run result: unlike every
+    flow above, there is nothing to save and no `{"status", "rows_saved"}` to report -- the
+    caller wants a payload, not a summary of a write. Raises `TickerNotFound` (see
+    `read_flows.py`) for an unknown ticker; the API layer turns that into a 404.
+    """
+    configure_logging()
+    settings = load_settings()
+    conn = get_connection(settings.database_url)
+    try:
+        return price_series(conn, ticker, source, start, end)
+    finally:
+        conn.close()
+
+
+def get_ticker_info(*, ticker: str, source: str) -> dict:
+    """Existence/validity info for one ticker, for the read API. Never raises for an unknown
+    ticker -- returning `exists: False` *is* the answer this endpoint exists to give."""
+    configure_logging()
+    settings = load_settings()
+    conn = get_connection(settings.database_url)
+    try:
+        return ticker_info(conn, ticker, source)
+    finally:
+        conn.close()
+
+
+def get_fx_series(*, base: str, quote: str, source: str, start: date, end: date) -> dict:
+    """FX rate series for a currency pair, for the read API. Loads currencies.yaml the same way
+    run_ingest_fx_rates does, since fx_rate_series needs the configured base currency to derive
+    an inverse or triangulated rate. Raises `CurrencyNotTracked` for a currency outside that
+    file's enabled list; the API layer turns that into a 404.
+    """
+    configure_logging()
+    settings = load_settings()
+    currencies_config = load_currencies(settings.currencies_path)
+    conn = get_connection(settings.database_url)
+    try:
+        return fx_rate_series(conn, currencies_config, base, quote, source, start, end)
     finally:
         conn.close()
 
