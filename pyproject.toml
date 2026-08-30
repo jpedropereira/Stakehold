@@ -28,6 +28,7 @@ dev = [
     "detect-secrets",
     "flake8",
     "hatchling",
+    "httpx",
     "isort",
     "pre-commit",
     "pycln",

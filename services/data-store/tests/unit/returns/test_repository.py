@@ -5,9 +5,12 @@ import pandas as pd
 import pytest
 from data_store.returns.repository import (
     _COLUMNS,
+    get_return_series,
+    get_returns_date_range,
     get_sources,
     iter_price_series,
     save_market_returns,
+    ticker_exists,
 )
 
 
@@ -332,3 +335,68 @@ def test_save_market_returns_rolls_back_on_failure_so_the_connection_stays_usabl
 
     assert conn.rolled_back is True
     assert conn.committed is False
+
+
+# --- ticker_exists -------------------------------------------------------------------------
+
+
+def test_ticker_exists_true_when_ticker_has_raw_market_data_rows():
+    conn = FakeConnection(fetch_results=[[(True,)]])
+
+    assert ticker_exists(conn, "AAPL", "yfinance") is True
+    sql, params = conn._cursor.executed[0]
+    assert "EXISTS" in sql
+    assert "raw_market_data" in sql
+    assert params == ("AAPL", "yfinance")
+
+
+def test_ticker_exists_false_when_ticker_has_no_rows():
+    conn = FakeConnection(fetch_results=[[(False,)]])
+
+    assert ticker_exists(conn, "NOPE", "yfinance") is False
+
+
+# --- get_returns_date_range -----------------------------------------------------------------
+
+
+def test_get_returns_date_range_returns_min_and_max_price_date():
+    conn = FakeConnection(fetch_results=[[(date(2010, 1, 4), date(2026, 8, 29))]])
+
+    result = get_returns_date_range(conn, "AAPL", "yfinance")
+
+    assert result == (date(2010, 1, 4), date(2026, 8, 29))
+    sql, params = conn._cursor.executed[0]
+    assert "MIN(price_date)" in sql
+    assert "MAX(price_date)" in sql
+    assert "market_returns" in sql
+    assert params == ("AAPL", "yfinance")
+
+
+def test_get_returns_date_range_is_none_none_when_no_rows_computed_yet():
+    conn = FakeConnection(fetch_results=[[(None, None)]])
+
+    assert get_returns_date_range(conn, "AAPL", "yfinance") == (None, None)
+
+
+# --- get_return_series -----------------------------------------------------------------------
+
+
+def test_get_return_series_query_shape():
+    conn = FakeConnection(fetch_results=[[]])
+
+    get_return_series(conn, "AAPL", "yfinance", date(2024, 1, 1), date(2024, 1, 31))
+
+    sql, params = conn._cursor.executed[0]
+    assert "market_returns" in sql
+    assert "BETWEEN" in sql
+    assert "ORDER BY price_date" in sql
+    assert params == ("AAPL", "yfinance", date(2024, 1, 1), date(2024, 1, 31))
+
+
+def test_get_return_series_returns_rows_verbatim_including_nulls():
+    row = (date(2024, 1, 2), 100.0, 1.0, None, None, None, None)
+    conn = FakeConnection(fetch_results=[[row]])
+
+    result = get_return_series(conn, "AAPL", "yfinance", date(2024, 1, 1), date(2024, 1, 31))
+
+    assert result == [row]
