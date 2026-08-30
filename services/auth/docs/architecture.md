@@ -12,7 +12,11 @@ references a user only by the UUID `auth` issues at signup, as a trusted plain c
 
 ## Stack
 
-- **FastAPI**, with its own Postgres — consistency with the rest of the monorepo.
+- **FastAPI**, with its own dedicated Postgres — deliberately isolated from `app-postgres` given
+  the sensitivity of what it stores (password hashes, session tokens). See
+  [`portfolio`'s deployment section](../../portfolio/docs/architecture.md#deployment) for the full
+  reasoning and how this reconciles with `app-postgres` being the shared database every other
+  future non-data-store service uses instead of standing up its own instance.
 - **Argon2id** via `argon2-cffi` for password hashing, not bcrypt.
 
 ## Key decisions
@@ -41,6 +45,12 @@ references a user only by the UUID `auth` issues at signup, as a trusted plain c
   user_id UUID, created_at, expires_at, last_seen_at)`, with a short-ish expiry (on the order of
   7–14 days) and sliding renewal on validation.
 - **Cookie flags**: `httpOnly`, `Secure`, `SameSite=Lax`.
+- **Service-to-service trust, resolved for now**: `auth` and `portfolio` are not reachable from
+  outside the deployment's private network — only `web` is publicly exposed — and every internal
+  call additionally carries a shared secret (an env-var-configured bearer token) that the receiving
+  service checks before processing the request. This proves "a legitimate internal caller," not
+  cryptographically that a specific `user_id` came from `auth` — an accepted gap at this stage, see
+  the signed-assertion upgrade path under "Open questions."
 
 ## Expected endpoint surface
 
@@ -49,7 +59,8 @@ full request/response schemas.
 
 ## Talks to
 
-- **`web`** calls `auth` server-to-server for login, logout, signup, and session validation.
+- **`web`** calls `auth` server-to-server for login, logout, signup, and session validation, over
+  the private internal network and carrying the shared internal secret (see "Key decisions").
 - **`portfolio`** references auth-issued UUIDs as a trusted plain column but does not call `auth`
   directly — it has no local `users` table to keep in sync.
 
@@ -61,11 +72,14 @@ full request/response schemas.
   `web` ever needs to serve non-browser clients.
 - Exact API contracts and request/response schemas — not designed yet, just the expected
   endpoint surface above.
-- **Service-to-service trust**: how a receiving service (`portfolio`, `data-store`) authenticates
-  that a forwarded user identity genuinely came from `web`, rather than from any caller able to
-  reach the network. A shared internal secret, mTLS, and network-level isolation are candidates —
-  none chosen yet. This is distinct from user-facing session validation; it's the trust boundary
-  between services themselves.
+- **Signed identity assertions (the service-to-service trust upgrade path)**: today `portfolio`
+  trusts a forwarded `user_id` as a plain value, backed only by network isolation and the shared
+  internal secret above — not distinguished from any other request an internal caller with the
+  secret could make. The stronger fix — `auth`'s session-validate response including a short-lived,
+  `auth`-signed assertion (e.g. a JWT with `user_id` + expiry) that `portfolio` verifies instead of
+  trusting the raw value — is deliberately not built yet: it adds key distribution/rotation with
+  nothing at stake to justify it currently. **Trigger to revisit**: before this deployment is ever
+  reachable beyond a single trusted host, or before real user funds/PII are involved.
 - Whether to add an absolute session lifetime cap alongside the inactivity-based sliding renewal,
   so a continuously-used session can't live forever.
 - **Bootstrapping before `auth` has a real signup endpoint**: `portfolio` needs a real UUID to put

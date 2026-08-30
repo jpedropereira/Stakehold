@@ -28,7 +28,8 @@ calls [`portfolio`](../../portfolio/docs/architecture.md), `data-store`, and
   assumption, not a guarantee — it's what justifies `auth`'s cookie-based (rather than
   bearer-token) session model. Revisit if a mobile app or third-party API consumer ever shows up.
 - **web calls the other services server-to-server, never from browser JS**, forwarding the user's
-  session identity as needed.
+  session identity as needed, over the private internal network and carrying the shared internal
+  secret described in [`auth`'s architecture doc](../../auth/docs/architecture.md#key-decisions).
 - **CSRF protection is web's responsibility, not `auth`'s**, since web is the one rendering the
   HTML forms on state-changing routes.
 
@@ -49,7 +50,7 @@ to browser JS.
   supporting bearer tokens alongside cookie sessions.
 - Exact API contracts with `portfolio`, `data-store`, and `auth` — none of those services' HTTP
   APIs exist yet.
-- **Service-to-service trust**: how `portfolio`/`data-store` authenticate that a forwarded user
-  identity genuinely came from `web` rather than any network-reachable caller — see
-  [`auth`'s architecture doc](../../auth/docs/architecture.md#open-questions) for the candidate
-  mechanisms, none chosen yet.
+- **Service-to-service trust**: resolved for now via network isolation plus a shared internal
+  secret — see [`auth`'s architecture doc](../../auth/docs/architecture.md#key-decisions). The
+  stronger fix (signed identity assertions from `auth`) is deliberately deferred; see that doc's
+  "Open questions" for the trigger to revisit it.
