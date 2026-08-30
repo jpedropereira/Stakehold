@@ -1,7 +1,6 @@
 # auth architecture
 
-**Status: schema and foundation implemented (task 1) — signup/login/logout/session-validation
-endpoints not yet built (task 2).**
+**Status: schema/foundation (task 1) and the identity HTTP API (task 2) both implemented.**
 
 ## Responsibility
 
@@ -19,6 +18,18 @@ references a user only by the UUID `auth` issues at signup, as a trusted plain c
   reasoning and how this reconciles with `app-postgres` being the shared database every other
   future non-data-store service uses instead of standing up its own instance.
 - **Argon2id** via `argon2-cffi` for password hashing, not bcrypt.
+- **Sync route handlers, not `async def`.** psycopg is used synchronously here (a
+  `psycopg_pool.ConnectionPool`, not the async pool variant), so routes are plain `def`s — FastAPI
+  runs those in its threadpool, which keeps a blocking DB call from stalling the event loop without
+  needing an async driver. `data-store` and `portfolio` (tasks 3, 9) are expected to copy this
+  shape rather than half-adopt async: mixing a sync DB layer with `async def` routes would silently
+  block the loop instead.
+- **`psycopg_pool.ConnectionPool`**, opened in the FastAPI lifespan and closed on shutdown (via
+  [`shared.db.pool.connection_pool`](../../shared/docs/architecture.md)), one connection checked
+  out per request. Chosen over opening a fresh connection per request (`shared.db.connection.
+  get_connection`, which one-shot CLI/job entry points still use) because `/sessions/validate` is
+  called on every page `web` renders — paying a full TCP-plus-auth handshake on each of those would
+  be the dominant cost of the whole request.
 
 ## Key decisions
 
@@ -57,10 +68,50 @@ references a user only by the UUID `auth` issues at signup, as a trusted plain c
   cryptographically that a specific `user_id` came from `auth` — an accepted gap at this stage, see
   the signed-assertion upgrade path under "Open questions."
 
-## Expected endpoint surface
+## Endpoint surface
 
-At minimum: login, logout, signup, session validation. Listed here as the expected surface, not
-full request/response schemas.
+`auth.api` (`src/auth/api/{app,deps,cookies,schemas,routes}.py`). Every route below except
+`/health` requires the shared internal secret (`X-Internal-Secret` header — see "Service-to-service
+trust" below); failure responses are deliberately uniform, so a bad password, an unknown email, and
+an expired session are indistinguishable to the caller.
+
+| Endpoint | Success | Notes |
+|---|---|---|
+| `POST /signup` | `201` + `Set-Cookie` | body `{user_id, email, display_name}`; `409` on a duplicate email |
+| `POST /login` | `200` + `Set-Cookie` | `401` on wrong password or unknown email (identical response either way — see "user enumeration" below); `429` once the login throttle trips |
+| `POST /sessions/validate` | `200` + refreshed `Set-Cookie` | reads the `Cookie` header; `401` on missing/expired/unknown session |
+| `POST /logout` | `204` + cookie cleared | idempotent — `204` even for a missing or unrecognized token |
+| `GET /health` | `200` | unauthenticated; backs the container healthcheck |
+
+`auth` sets the `Set-Cookie` header itself (name `stakehold_session`, flags below) — `web` proxies
+it straight through to the browser rather than building its own cookie from a token in the body.
+Cookie policy lives in exactly one place (`api/cookies.py`) as a result.
+
+## Login throttling and user enumeration
+
+- **Failed-login throttle**: an in-process, in-memory sliding-window limiter (`throttle.py`,
+  `LoginThrottle`), keyed by `(normalized_email, client_ip)` — 5 failures in 15 minutes locks that
+  pair out for the rest of the window. Chosen over a `login_attempts` table or Redis because it
+  needs no schema change and no new infrastructure for a hobby-project deployment with one uvicorn
+  worker. **Known limitation, accepted for now**: correct only with a single worker process, and
+  the map resets on every restart — a determined attacker who can force a restart, or a deployment
+  that scales to multiple workers, gets a fresh limiter for free. **Trigger to revisit**: moving to
+  more than one `auth` worker process, or before this is reachable by anyone outside a single
+  trusted host — at that point move the counters to a shared store (Redis, or a
+  `login_attempts` table, which would need schema sign-off per
+  [`data-schema.md`](../../../.claude/rules/data-schema.md)).
+- **User enumeration**: an unknown email on `/login` still runs a full Argon2 verification
+  (`passwords.dummy_verify()`) against a hash generated once at import time, so response timing
+  can't distinguish "no such user" from "wrong password" — both return the same `401`.
+
+## Entry points
+
+- `auth serve` (`cli.py` → `api/app.py`) — runs the HTTP API via `uvicorn`, host/port from
+  `settings.py` (`AUTH_API_HOST`/`AUTH_API_PORT`).
+- `auth sessions purge-expired` (`cli.py` → `jobs.py`) — deletes sessions past `expires_at` or
+  `absolute_expires_at`, using the `(expires_at)` index `docs/schema.md` describes existing for
+  exactly this. Same `{"status", "rows_saved"}` contract as `auth db init`.
+- `auth db init` — unchanged from task 1.
 
 ## Deployment
 
@@ -76,6 +127,10 @@ helpers and log setup underneath both are the *same* code, not just the same pat
 services depend on [`services/shared`](../../shared/docs/architecture.md) rather than each keeping
 its own copy.
 
+A second container, `auth-api` (`services/auth/Dockerfile`), runs `auth serve` — built from the
+repo root the same way `data-store`'s `Dockerfile.airflow` is, since `uv sync` needs every
+workspace member's source present even though this image only runs `auth`'s own entry point.
+
 ## Talks to
 
 - **`web`** calls `auth` server-to-server for login, logout, signup, and session validation, over
@@ -87,8 +142,6 @@ its own copy.
 
 - Whether bearer-token support will ever be needed alongside cookie sessions — tied to whether
   `web` ever needs to serve non-browser clients.
-- Exact API contracts and request/response schemas — not designed yet, just the expected
-  endpoint surface above.
 - **Signed identity assertions (the service-to-service trust upgrade path)**: today `portfolio`
   trusts a forwarded `user_id` as a plain value, backed only by network isolation and the shared
   internal secret above — not distinguished from any other request an internal caller with the
@@ -97,7 +150,9 @@ its own copy.
   trusting the raw value — is deliberately not built yet: it adds key distribution/rotation with
   nothing at stake to justify it currently. **Trigger to revisit**: before this deployment is ever
   reachable beyond a single trusted host, or before real user funds/PII are involved.
-- **Bootstrapping before `auth` has a real signup endpoint**: `portfolio` needs a real UUID to put
-  in `accounts.user_id` today, and `auth` doesn't have working signup yet. Until it does, that UUID
-  has to come from somewhere ad hoc (a manually-generated UUID, a test fixture) — a known, temporary
-  gap, not a design decision either service has made.
+- **Failed-login throttle storage** — see "Login throttling and user enumeration" above; the
+  in-memory limiter is correct only for a single worker process.
+
+Closed by task 2: exact API contracts (see "Endpoint surface" above), and the
+"bootstrapping before `auth` has a real signup endpoint" gap — `portfolio` (task 4+) can now get a
+real UUID from `POST /signup` instead of an ad hoc one.
