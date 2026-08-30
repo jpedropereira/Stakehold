@@ -22,7 +22,17 @@ def create_app() -> FastAPI:
     if not settings.internal_api_secret:
         raise SettingsError("INTERNAL_API_SECRET is not set")
 
-    fastapi_app = FastAPI(title="data-store read API")
+    # No /docs, /redoc or /openapi.json. FastAPI mounts those as plain Starlette routes, so
+    # neither the router's bearer dependency nor an app-level one covers them -- they answered
+    # 200 to anyone, handing an unauthenticated caller the whole route and parameter surface
+    # and contradicting "every route but /health requires Authorization". Serving them behind
+    # the bearer instead wouldn't work either: Swagger UI fetches the schema from the browser
+    # with no way to attach the secret. This is a service-to-service API whose contract is
+    # documented in README.md and docs/architecture.md, so the interactive explorer isn't worth
+    # an open endpoint.
+    fastapi_app = FastAPI(
+        title="data-store read API", docs_url=None, redoc_url=None, openapi_url=None
+    )
     fastapi_app.include_router(health_router)
     fastapi_app.include_router(router)
     return fastapi_app

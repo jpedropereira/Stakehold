@@ -24,7 +24,10 @@ def require_internal_secret(
         raise HTTPException(
             status.HTTP_500_INTERNAL_SERVER_ERROR, "INTERNAL_API_SECRET is not configured"
         )
+    # Compared as UTF-8 bytes, not as str: `compare_digest` refuses a str containing non-ASCII
+    # characters, and an Authorization header decodes as latin-1, so a caller sending a
+    # non-ASCII token could otherwise turn its own bad credential into a 500.
     if credentials is None or not secrets.compare_digest(
-        credentials.credentials, settings.internal_api_secret
+        credentials.credentials.encode("utf-8"), settings.internal_api_secret.encode("utf-8")
     ):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "unauthorized")

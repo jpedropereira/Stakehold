@@ -4,7 +4,10 @@ Kept separate from routes.py so the response contract -- what portfolio's `DataS
 actually consume -- is visible in one place. Numeric fields stay `Decimal`, not `float`: Pydantic
 v2 serializes `Decimal` to a JSON string in JSON mode, which preserves the `NUMERIC` column's
 exact precision (e.g. `market_returns.split_adjusted_close`'s four decimal places) that a float
-round-trip would not.
+round-trip would not. A derived FX rate is not read from a column at all, so `read_flows`
+quantizes it to `fx_rates.rate`'s own scale before it gets here -- otherwise a division's
+28-digit default context would make an inverse or triangulated pair look more precise than the
+stored one it came from.
 """
 
 from datetime import date

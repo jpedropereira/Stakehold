@@ -386,6 +386,18 @@ identity request (`base == quote`) has no `fx_rates` row of its own to answer fr
 calendar it reports rate `1` for comes from `get_dates_with_rate`, every date the requested
 currency appears on either side of a stored pair.
 
+Two details fall out of deriving rather than reading:
+
+- **A stored rate that isn't a usable quote (`<= 0`) drops its date from every derivation**, with
+  a warning, rather than being served verbatim on the direct path and dividing by zero on the
+  inverse and triangulated ones. `save_fx_rates` only rejects rates too *large* for the column,
+  so a `0` can reach the table; serving it would just move the division by zero into the caller.
+  This mirrors the write side's own convention — skip the row, warn, keep the rest of the range.
+- **Derived rates are quantized to `fx_rates.rate`'s `NUMERIC(18,8)` scale.** A `Decimal`
+  division carries the default context's 28 significant digits, which would have made a
+  triangulated pair look far more precise than a stored one when both only ever had 8dp of truth
+  behind them. Every response is on one scale as a result.
+
 **Errors follow the service's existing "a match on nothing is a failure" stance**
 (see "What a flow returns" above): a ticker with no ingested rows at all, or a currency outside
 `config/currencies.yaml`'s enabled list, is a 404 — a typo must be loud. A valid ticker or pair
@@ -399,6 +411,14 @@ describes for `auth`/`portfolio`: the secret proves "a legitimate internal calle
 cryptographically that a specific caller made the request — an accepted gap, not an oversight,
 revisited on the same trigger `auth`'s doc names (before this deployment is reachable beyond a
 single trusted host, or before real user data is involved).
+
+**`/docs`, `/redoc` and `/openapi.json` are switched off**, so that "every route but `/health`"
+is literally true. FastAPI mounts them as plain Starlette routes, which neither the router's
+dependency nor an app-level one covers — they served the full route and parameter surface to
+anyone. Putting them behind the bearer isn't an option either: Swagger UI fetches the schema
+from the browser with no way to attach the secret. For a service-to-service API whose contract
+is already written down in README.md and this file, an interactive explorer is not worth an open
+endpoint.
 
 **Known limitations, stated plainly rather than oversold:**
 
@@ -527,14 +547,9 @@ particularly unpleasant way to discover a build step you forgot.
 tree at build time (every workspace member, not just `data-store` — the root `pyproject.toml`
 lists all four as dependencies of the `package = false` root project, so `uv sync` needs each
 one's source present even though the API only imports `data_store` itself), so it too needs
-`docker compose build` after a code change; nothing under it is bind-mounted.
-
-**Known issue, not introduced here:** `Dockerfile.airflow` only `COPY`s `services/data-store` and
-`services/portfolio`, which predates `auth`/`web` being added as workspace members. Its
-`uv sync --frozen` would fail the same way `Dockerfile.api`'s did before this fix (`Distribution
-not found at: file:///opt/stakehold/services/auth`) the next time that image is actually rebuilt.
-Left alone here since fixing another image is outside this change's scope, but worth fixing the
-same way — `COPY services services` — before anyone next runs `docker compose build` for Airflow.
+`docker compose build` after a code change; nothing under it is bind-mounted. Because that
+`COPY` is service-agnostic, the root `.dockerignore` excludes `**/.env` rather than one named
+service's file — any workspace member's secrets would otherwise be baked into the image.
 
 ## Cross-cutting decisions
 

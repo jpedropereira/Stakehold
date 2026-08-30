@@ -259,9 +259,8 @@ def test_fx_rate_series_triangulates_through_the_configured_base(monkeypatch):
 
     assert result["derivation"] == "triangulated"
     assert result["via"] == "EUR"
-    assert result["points"] == [
-        {"date": date(2024, 1, 2), "rate": Decimal("0.95") / Decimal("0.85")}
-    ]
+    # Rounded to fx_rates.rate's own NUMERIC(18,8) scale, not the Decimal context's 28 digits.
+    assert result["points"] == [{"date": date(2024, 1, 2), "rate": Decimal("1.11764706")}]
 
 
 def test_fx_rate_series_triangulation_only_keeps_shared_dates(monkeypatch):
@@ -286,3 +285,140 @@ def test_fx_rate_series_triangulation_only_keeps_shared_dates(monkeypatch):
     )
 
     assert [p["date"] for p in result["points"]] == [date(2024, 1, 2)]
+
+
+# --- fx_rate_series: corrupt rates and derived-rate precision -------------------------------
+
+
+def test_fx_rate_series_inverse_skips_a_zero_rate_instead_of_failing_the_range(monkeypatch):
+    """Ingestion only rejects rates *above* the column's range, so a 0 can be stored. Dividing
+    by it used to 500 the whole request, while the direct pair for the same day returned 200."""
+    import data_store.read_flows as read_flows
+
+    monkeypatch.setattr(
+        read_flows,
+        "fx_repository",
+        FakeFxRepo(
+            series_by_pair={
+                ("EUR", "USD"): [
+                    (date(2024, 1, 2), Decimal("0")),
+                    (date(2024, 1, 3), Decimal("2")),
+                ]
+            }
+        ),
+    )
+
+    result = read_flows.fx_rate_series(
+        None, make_currencies(), "USD", "EUR", "yfinance", date(2024, 1, 1), date(2024, 1, 31)
+    )
+
+    assert result["points"] == [{"date": date(2024, 1, 3), "rate": Decimal("0.5")}]
+
+
+def test_fx_rate_series_triangulation_skips_a_zero_denominator(monkeypatch):
+    import data_store.read_flows as read_flows
+
+    monkeypatch.setattr(
+        read_flows,
+        "fx_repository",
+        FakeFxRepo(
+            series_by_pair={
+                ("EUR", "CHF"): [
+                    (date(2024, 1, 2), Decimal("0.95")),
+                    (date(2024, 1, 3), Decimal("0.96")),
+                ],
+                ("EUR", "GBP"): [
+                    (date(2024, 1, 2), Decimal("0")),
+                    (date(2024, 1, 3), Decimal("0.85")),
+                ],
+            }
+        ),
+    )
+
+    result = read_flows.fx_rate_series(
+        None, make_currencies(), "GBP", "CHF", "yfinance", date(2024, 1, 1), date(2024, 1, 31)
+    )
+
+    assert [p["date"] for p in result["points"]] == [date(2024, 1, 3)]
+
+
+def test_fx_rate_series_direct_skips_a_nonsense_rate_too(monkeypatch):
+    """Same rate, same day: a pair must not be usable in one derivation and corrupt in another."""
+    import data_store.read_flows as read_flows
+
+    monkeypatch.setattr(
+        read_flows,
+        "fx_repository",
+        FakeFxRepo(
+            series_by_pair={
+                ("EUR", "USD"): [
+                    (date(2024, 1, 2), Decimal("0")),
+                    (date(2024, 1, 3), Decimal("1.10")),
+                ]
+            }
+        ),
+    )
+
+    result = read_flows.fx_rate_series(
+        None, make_currencies(), "EUR", "USD", "yfinance", date(2024, 1, 1), date(2024, 1, 31)
+    )
+
+    assert result["points"] == [{"date": date(2024, 1, 3), "rate": Decimal("1.10")}]
+
+
+def test_fx_rate_series_warns_about_a_skipped_rate_rather_than_dropping_it_silently(
+    monkeypatch, caplog
+):
+    import data_store.read_flows as read_flows
+
+    monkeypatch.setattr(
+        read_flows,
+        "fx_repository",
+        FakeFxRepo(series_by_pair={("EUR", "USD"): [(date(2024, 1, 2), Decimal("0"))]}),
+    )
+
+    with caplog.at_level("WARNING"):
+        read_flows.fx_rate_series(
+            None, make_currencies(), "USD", "EUR", "yfinance", date(2024, 1, 1), date(2024, 1, 31)
+        )
+
+    assert "2024-01-02" in caplog.text
+
+
+def test_fx_rate_series_derived_rates_carry_the_stored_columns_scale(monkeypatch):
+    """A derived rate is a `Decimal` division, which uses the default 28-digit context -- so
+    /fx/GBP/CHF returned 28 significant digits while a stored pair returned the column's 8dp."""
+    import data_store.read_flows as read_flows
+
+    monkeypatch.setattr(
+        read_flows,
+        "fx_repository",
+        FakeFxRepo(
+            series_by_pair={
+                ("EUR", "CHF"): [(date(2024, 1, 2), Decimal("0.95000000"))],
+                ("EUR", "GBP"): [(date(2024, 1, 2), Decimal("0.85000000"))],
+            }
+        ),
+    )
+
+    result = read_flows.fx_rate_series(
+        None, make_currencies(), "GBP", "CHF", "yfinance", date(2024, 1, 1), date(2024, 1, 31)
+    )
+
+    assert str(result["points"][0]["rate"]) == "1.11764706"
+
+
+def test_fx_rate_series_inverse_rates_carry_the_stored_columns_scale(monkeypatch):
+    import data_store.read_flows as read_flows
+
+    monkeypatch.setattr(
+        read_flows,
+        "fx_repository",
+        FakeFxRepo(series_by_pair={("EUR", "USD"): [(date(2024, 1, 2), Decimal("3"))]}),
+    )
+
+    result = read_flows.fx_rate_series(
+        None, make_currencies(), "USD", "EUR", "yfinance", date(2024, 1, 1), date(2024, 1, 31)
+    )
+
+    assert str(result["points"][0]["rate"]) == "0.33333333"

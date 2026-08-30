@@ -80,11 +80,6 @@ match (FX is not modeled as a yfinance-style ticker) and updated to point at the
 writing `datastore_client/http_client.py` against it remains task 8's own work, not a blocker on
 this task.
 
-Left out of scope, noted for whoever picks up task 13: `Dockerfile.airflow` has the same
-`uv sync` workspace-member gap `Dockerfile.api` hit and fixed (it `COPY`s only `data-store` and
-`portfolio`, predating `auth`/`web`) — untouched here since fixing another image isn't this task's
-job, but it will fail the next time someone actually rebuilds it.
-
 ### 4. Portfolio foundation & schema sign-off
 
 `services/portfolio/docs/schema.md` is already drafted in detail but is explicitly marked

@@ -8,12 +8,21 @@ imported as modules (not `from ... import fn`) so a test can monkeypatch the who
 namespace the way `jobs.py`'s tests already do for `pipeline` functions.
 """
 
+import logging
 from datetime import date
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from data_store.config_loader import CurrenciesConfig
 from data_store.fx import repository as fx_repository
 from data_store.returns import repository as returns_repository
+
+logger = logging.getLogger(__name__)
+
+# fx_rates.rate is NUMERIC(18,8), so a stored rate arrives at exactly this scale. A derived one
+# is a Decimal division, which would otherwise carry the default context's 28 significant
+# digits -- making /fx/GBP/CHF far more precise-looking than /fx/EUR/USD for no reason, since
+# the inputs only ever had 8dp of truth in them. Quantizing puts every rate on one scale.
+_FX_RATE_SCALE = Decimal("1E-8")
 
 _PRICE_POINT_FIELDS = (
     "date",
@@ -85,19 +94,63 @@ def fx_rate_series(
         return _fx_result(base, quote, source, "identity", None, [(d, Decimal(1)) for d in dates])
 
     if base == config_base:
-        rows = fx_repository.get_rate_series(conn, base, quote, source, start, end)
+        rows = _usable_rates(
+            base, quote, fx_repository.get_rate_series(conn, base, quote, source, start, end)
+        )
         return _fx_result(base, quote, source, "direct", None, rows)
 
     if quote == config_base:
-        rows = fx_repository.get_rate_series(conn, quote, base, source, start, end)
-        inverted = [(d, Decimal(1) / rate) for d, rate in rows]
+        rows = _usable_rates(
+            quote, base, fx_repository.get_rate_series(conn, quote, base, source, start, end)
+        )
+        inverted = [(d, _quantize(Decimal(1) / rate)) for d, rate in rows]
         return _fx_result(base, quote, source, "inverse", None, inverted)
 
-    numerator = dict(fx_repository.get_rate_series(conn, config_base, quote, source, start, end))
-    denominator = dict(fx_repository.get_rate_series(conn, config_base, base, source, start, end))
+    numerator = dict(
+        _usable_rates(
+            config_base,
+            quote,
+            fx_repository.get_rate_series(conn, config_base, quote, source, start, end),
+        )
+    )
+    denominator = dict(
+        _usable_rates(
+            config_base,
+            base,
+            fx_repository.get_rate_series(conn, config_base, base, source, start, end),
+        )
+    )
     shared_dates = sorted(set(numerator) & set(denominator))
-    triangulated = [(d, numerator[d] / denominator[d]) for d in shared_dates]
+    triangulated = [(d, _quantize(numerator[d] / denominator[d])) for d in shared_dates]
     return _fx_result(base, quote, source, "triangulated", config_base, triangulated)
+
+
+def _usable_rates(stored_base: str, stored_quote: str, rows) -> list:
+    """Drop dates whose stored rate cannot be a real quote, warning about each.
+
+    `save_fx_rates` only rejects rates too *large* for the column, so a `0` (or a negative) can
+    reach the table. Every such rate is dropped here, not just the ones this request would
+    divide by: a rate of 0 is corrupt whichever derivation asks for it, and returning it
+    verbatim on the direct path while 500-ing the inverse one for the same day would just move
+    the division by zero into the caller. Dropping the date matches how the write side already
+    handles a rate its column can't hold -- skip the row, warn, keep the rest of the range."""
+    usable = []
+    for rate_date, rate in rows:
+        if rate is None or rate <= 0:
+            logger.warning(
+                "fx_rate_series: dropping %s/%s %s -- stored rate=%s is not a usable quote.",
+                stored_base,
+                stored_quote,
+                rate_date,
+                rate,
+            )
+            continue
+        usable.append((rate_date, rate))
+    return usable
+
+
+def _quantize(rate: Decimal) -> Decimal:
+    return rate.quantize(_FX_RATE_SCALE, rounding=ROUND_HALF_UP)
 
 
 def _fx_result(base, quote, source, derivation, via, rows) -> dict:
