@@ -942,6 +942,18 @@ wheels = [
 name = "portfolio"
 version = "0.1.0"
 source = { editable = "services/portfolio" }
+dependencies = [
+    { name = "psycopg", extra = ["binary"] },
+    { name = "python-dotenv" },
+    { name = "shared" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "psycopg", extras = ["binary"], specifier = ">=3.3" },
+    { name = "python-dotenv", specifier = ">=1.0" },
+    { name = "shared", editable = "services/shared" },
+]
 
 [[package]]
 name = "pre-commit"
