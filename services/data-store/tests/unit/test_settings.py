@@ -165,3 +165,26 @@ def test_currencies_path_overridable_via_env(monkeypatch, tmp_path):
     result = load_settings()
 
     assert result.currencies_path == tmp_path / "custom.yaml"
+
+
+def test_internal_api_secret_defaults_to_none(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost/db")
+    monkeypatch.delenv("INTERNAL_API_SECRET", raising=False)
+
+    assert load_settings().internal_api_secret is None
+
+
+def test_internal_api_secret_read_from_env(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost/db")
+    monkeypatch.setenv("INTERNAL_API_SECRET", "s3cret")
+
+    assert load_settings().internal_api_secret == "s3cret"
+
+
+def test_internal_api_secret_empty_string_is_treated_as_unset(monkeypatch):
+    # A blank env var (e.g. an unfilled .env template) must fail the same way as an absent one,
+    # not be accepted as a valid (empty) secret.
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost/db")
+    monkeypatch.setenv("INTERNAL_API_SECRET", "")
+
+    assert load_settings().internal_api_secret is None

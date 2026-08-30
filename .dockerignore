@@ -3,7 +3,10 @@
 dev/
 services/data-store/.data/
 services/data-store/logs/
-services/data-store/.env
+# Every service's, not just data-store's: Dockerfile.api COPYs the whole services/ tree, so
+# a secret file added under any workspace member would otherwise be baked into the image.
+# `.env.example` is deliberately not matched -- it holds no secrets and documents the contract.
+**/.env
 **/__pycache__/
 **/.pytest_cache/
 **/.testmondata

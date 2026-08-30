@@ -328,6 +328,35 @@ tagging is simply wrong, or a ticker needs a full rewrite (e.g. `"BRKB"` → `"B
 entry to the same file's optional `ticker_overrides:` section; verify it against real yfinance
 data before adding it.
 
+## Running the read API
+
+A FastAPI app exposing three read-only endpoints over `market_returns`/`raw_market_data` and
+`fx_rates`, for other services (`portfolio`, `web`) to consume — see `docs/architecture.md`'s
+"Read API" section for the design. Requires `INTERNAL_API_SECRET` (see `.env.example`); the app
+refuses to start without one.
+
+```bash
+uv run uvicorn data_store.api.app:create_app --factory --host 0.0.0.0 --port 8000
+```
+
+Or as part of the compose stack (`docker compose up -d api`), reachable at
+`http://localhost:${DATA_STORE_API_PORT:-8082}`. Every route but `/health` requires
+`Authorization: Bearer <INTERNAL_API_SECRET>`. There is no `/docs`, `/redoc` or `/openapi.json`
+— those can't be served behind the bearer, so the endpoint list below is the contract; see
+`docs/architecture.md`'s "Read API" section for why.
+
+| Endpoint | Returns |
+|---|---|
+| `GET /health` | Liveness, unauthenticated |
+| `GET /prices/{ticker}?start=&end=&source=yfinance` | `market_returns` series: split-adjusted close, future split factor, the four return columns |
+| `GET /fx/{base}/{quote}?start=&end=&source=yfinance` | FX rate series for any pair of enabled currencies — direct, inverse, or triangulated through `config/currencies.yaml`'s `base_currency` as needed |
+| `GET /tickers/{ticker}?source=yfinance` | Existence/validity: whether the ticker is ingested and whether returns have been computed for it |
+
+```bash
+curl -H "Authorization: Bearer $INTERNAL_API_SECRET" \
+     "localhost:8082/prices/IWDA.AS?start=2024-01-01&end=2024-01-31"
+```
+
 ## Running ingestion via Airflow
 
 With the full stack up (`docker compose up -d`) and `config/etfs.yaml` set up, the scheduled DAGs

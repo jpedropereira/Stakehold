@@ -88,3 +88,41 @@ def get_earliest_fx_dates(
             params,
         )
         return {(row[0], row[1]): row[2] for row in cur.fetchall()}
+
+
+def get_rate_series(
+    conn, base: str, quote: str, source: str, start: date, end: date
+) -> list[tuple]:
+    """Raw (rate_date, rate) rows for one stored (base, quote) pair over a date range, ordered
+    by date. Only ever finds rows for a pair that was actually fetched -- there is no cross-rate
+    computation at this layer, see read_flows.fx_rate_series for that."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT rate_date, rate
+            FROM fx_rates
+            WHERE base_currency = %s AND quote_currency = %s AND source = %s
+              AND rate_date BETWEEN %s AND %s
+            ORDER BY rate_date
+            """,
+            (base, quote, source, start, end),
+        )
+        return cur.fetchall()
+
+
+def get_dates_with_rate(conn, currency: str, source: str, start: date, end: date) -> list[date]:
+    """Every rate_date where `currency` appears on either side of a stored pair -- the trading-
+    calendar proxy for an identity (base == quote) request, which has no row of its own since a
+    currency is never paired against itself in fx_rates."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT DISTINCT rate_date
+            FROM fx_rates
+            WHERE (base_currency = %s OR quote_currency = %s) AND source = %s
+              AND rate_date BETWEEN %s AND %s
+            ORDER BY rate_date
+            """,
+            (currency, currency, source, start, end),
+        )
+        return [row[0] for row in cur.fetchall()]

@@ -989,3 +989,89 @@ def test_backfill_fx_rates_closes_the_connection(monkeypatch, fake_settings):
     jobs.run_backfill_fx_rates()
 
     assert closed == [True]
+
+
+# --- get_price_series / get_fx_series / get_ticker_info -- the read API's job layer ---------
+
+
+def test_get_price_series_calls_price_series_with_a_connection_and_closes_it(
+    monkeypatch, fake_settings
+):
+    closed = []
+    calls = []
+
+    monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn(closed))
+    monkeypatch.setattr(
+        jobs,
+        "price_series",
+        lambda conn, ticker, source, start, end: calls.append((ticker, source, start, end))
+        or {"ticker": ticker},
+    )
+
+    result = jobs.get_price_series(
+        ticker="AAPL", source="yfinance", start=date(2024, 1, 1), end=date(2024, 1, 31)
+    )
+
+    assert result == {"ticker": "AAPL"}
+    assert calls == [("AAPL", "yfinance", date(2024, 1, 1), date(2024, 1, 31))]
+    assert closed == [True]
+
+
+def test_get_price_series_propagates_ticker_not_found(monkeypatch, fake_settings):
+    from data_store.read_flows import TickerNotFound
+
+    monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn([]))
+
+    def raise_not_found(conn, ticker, source, start, end):
+        raise TickerNotFound(ticker)
+
+    monkeypatch.setattr(jobs, "price_series", raise_not_found)
+
+    with pytest.raises(TickerNotFound):
+        jobs.get_price_series(
+            ticker="NOPE", source="yfinance", start=date(2024, 1, 1), end=date(2024, 1, 31)
+        )
+
+
+def test_get_ticker_info_calls_ticker_info_and_closes_the_connection(monkeypatch, fake_settings):
+    closed = []
+
+    monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn(closed))
+    monkeypatch.setattr(
+        jobs, "ticker_info", lambda conn, ticker, source: {"ticker": ticker, "exists": True}
+    )
+
+    result = jobs.get_ticker_info(ticker="AAPL", source="yfinance")
+
+    assert result == {"ticker": "AAPL", "exists": True}
+    assert closed == [True]
+
+
+def test_get_fx_series_loads_currencies_config_and_closes_the_connection(
+    monkeypatch, fake_settings
+):
+    closed = []
+    calls = []
+
+    monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(jobs, "load_currencies", lambda path: make_currencies())
+    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn(closed))
+    monkeypatch.setattr(
+        jobs,
+        "fx_rate_series",
+        lambda conn, currencies_config, base, quote, source, start, end: calls.append(
+            (currencies_config, base, quote, source, start, end)
+        )
+        or {"base_currency": base, "quote_currency": quote},
+    )
+
+    result = jobs.get_fx_series(
+        base="EUR", quote="USD", source="yfinance", start=date(2024, 1, 1), end=date(2024, 1, 31)
+    )
+
+    assert result == {"base_currency": "EUR", "quote_currency": "USD"}
+    assert calls[0][1:] == ("EUR", "USD", "yfinance", date(2024, 1, 1), date(2024, 1, 31))
+    assert closed == [True]

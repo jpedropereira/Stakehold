@@ -61,6 +61,26 @@ services:
       timeout: 5s
       retries: 10
 
+  api:
+    build:
+      context: ../..
+      dockerfile: services/data-store/Dockerfile.api
+    image: stakehold-data-store-api:local
+    container_name: data-store-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Same override as x-airflow-common's: the host-oriented DATABASE_URL from .env points at
+      # localhost:POSTGRES_PORT, meant for a CLI run from the host, not for another container.
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
+    ports:
+      - "${DATA_STORE_API_PORT:-8082}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   pgadmin:
     image: dpage/pgadmin4:latest
     container_name: data-store-pgadmin
