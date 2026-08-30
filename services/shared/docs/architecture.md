@@ -14,6 +14,14 @@ this; it depends on nothing workspace-internal.
   lifecycle every service's `jobs.py` needs: opening a connection, committing or rolling back one
   unit of work, and applying a schema file. None of it is domain-specific — the same operations
   apply whether the schema being applied is `auth`'s or `data-store`'s.
+- `db/pool.py` — `connection_pool`. A thin `psycopg_pool.ConnectionPool` factory for services that
+  handle requests rather than run one-shot jobs: `auth`'s HTTP API (task 2) is the first consumer,
+  opening one pool in its FastAPI lifespan instead of paying a full TCP-plus-auth handshake on
+  every request — a cost that matters specifically for `/sessions/validate`, which `web`'s
+  architecture doc says gets called on every page render. `get_connection` stays the right tool for
+  one-shot CLI/job entry points (`auth db init`, `data-store` ingestion runs), where a pool's
+  standing connections would outlive the process for no benefit; `pool.py` is for the read-many,
+  short-lived-connection shape an HTTP service has instead.
 - `logging_config.py` — `configure_logging`. Installs the one stderr handler every entry point
   needs so `logger.info` isn't silently dropped (Python's default `lastResort` handler only emits
   WARNING and above), and keeps the "results on stdout, everything else on stderr" convention
@@ -49,6 +57,8 @@ its own database would have made it three.
 
 - `data_store.jobs` and its `market_data`/`returns`/`regimes`/`fx` repositories — `transaction`.
 - `data_store.jobs` and `auth.jobs` — `get_connection`, `apply_schema`, `configure_logging`.
+- `auth.api` — `connection_pool` (opened/closed in the FastAPI lifespan) and `transaction` (each
+  write-path repository call still wraps its statements in one, same as `data_store`'s).
 
 ## Deployment
 

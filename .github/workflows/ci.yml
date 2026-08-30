@@ -100,3 +100,4 @@ jobs:
           # job -- not a credential to anything that outlives it.
           DATABASE_URL: postgresql://data_store:ci-throwaway@localhost:5432/data_store  # pragma: allowlist secret
           AUTH_DATABASE_URL: postgresql://auth:ci-throwaway@localhost:5434/auth  # pragma: allowlist secret
+          AUTH_INTERNAL_SECRET: ci-throwaway-internal-secret  # pragma: allowlist secret

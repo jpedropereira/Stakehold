@@ -82,3 +82,43 @@ def test_run_db_init_logs_start_before_applying_schema(monkeypatch, tmp_path, ca
     start_index = next(i for i, m in enumerate(messages) if "applying" in m)
     done_index = next(i for i, m in enumerate(messages) if "schema applied" in m)
     assert start_index < done_index
+
+
+class _FakeCloseOnlyConnection:
+    def __init__(self):
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+
+def _patch_purge_common(monkeypatch, deleted):
+    fake_conn = _FakeCloseOnlyConnection()
+    monkeypatch.setattr(
+        jobs, "load_settings", lambda: type("S", (), {"database_url": "postgresql://x"})()
+    )
+    monkeypatch.setattr(jobs, "get_connection", lambda url: fake_conn)
+    monkeypatch.setattr(jobs.sessions_repository, "delete_expired", lambda conn, now: deleted)
+    return fake_conn
+
+
+def test_run_purge_expired_sessions_reports_ok_and_closes_connection_when_rows_deleted(
+    monkeypatch, caplog
+):
+    caplog.set_level(logging.INFO)
+    fake_conn = _patch_purge_common(monkeypatch, deleted=3)
+
+    result = jobs.run_purge_expired_sessions()
+
+    assert result == {"status": "ok", "rows_saved": 3}
+    assert fake_conn.closed is True
+    assert "deleting sessions" in caplog.text
+    assert "done" in caplog.text
+
+
+def test_run_purge_expired_sessions_reports_nothing_to_do_when_none_deleted(monkeypatch):
+    _patch_purge_common(monkeypatch, deleted=0)
+
+    result = jobs.run_purge_expired_sessions()
+
+    assert result == {"status": "nothing_to_do", "rows_saved": 0}

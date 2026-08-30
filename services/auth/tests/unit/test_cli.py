@@ -42,6 +42,68 @@ def test_db_init_exits_nonzero_on_unknown_status(monkeypatch):
     assert cli.main(["db", "init"]) == 1
 
 
+def test_sessions_purge_expired_dispatches_to_the_purge_job(monkeypatch):
+    called = {}
+
+    def fake_purge():
+        called["run_purge_expired_sessions"] = True
+        return {"status": "ok", "rows_saved": 3}
+
+    monkeypatch.setattr(cli.jobs, "run_purge_expired_sessions", fake_purge)
+
+    assert cli.main(["sessions", "purge-expired"]) == 0
+    assert called == {"run_purge_expired_sessions": True}
+
+
+def test_sessions_purge_expired_prints_the_deleted_count(monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli.jobs, "run_purge_expired_sessions", lambda: {"status": "ok", "rows_saved": 5}
+    )
+
+    cli.main(["sessions", "purge-expired"])
+
+    assert capsys.readouterr().out == "5 session(s) deleted\n"
+
+
+def test_sessions_purge_expired_exits_zero_when_nothing_to_do(monkeypatch):
+    monkeypatch.setattr(
+        cli.jobs,
+        "run_purge_expired_sessions",
+        lambda: {"status": "nothing_to_do", "rows_saved": 0},
+    )
+
+    assert cli.main(["sessions", "purge-expired"]) == 0
+
+
+def test_missing_sessions_subcommand_exits_nonzero():
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(["sessions"])
+
+    assert exc_info.value.code != 0
+
+
+def test_serve_dispatches_to_uvicorn_with_settings(monkeypatch):
+    captured = {}
+
+    fake_settings = type(
+        "S", (), {"api_host": "127.0.0.1", "api_port": 9001, "database_url": "postgresql://x"}
+    )()
+    fake_app = object()
+
+    monkeypatch.setattr("auth.settings.load_settings", lambda: fake_settings)
+    monkeypatch.setattr("auth.api.app.create_app", lambda settings: fake_app)
+
+    def fake_run(app, *, host, port):
+        captured["app"] = app
+        captured["host"] = host
+        captured["port"] = port
+
+    monkeypatch.setattr("uvicorn.run", fake_run)
+
+    assert cli.main(["serve"]) == 0
+    assert captured == {"app": fake_app, "host": "127.0.0.1", "port": 9001}
+
+
 def test_missing_command_exits_nonzero():
     with pytest.raises(SystemExit) as exc_info:
         cli.main([])

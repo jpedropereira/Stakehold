@@ -18,3 +18,33 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+
+  api:
+    build:
+      context: ../..
+      dockerfile: services/auth/Dockerfile
+    image: ${AUTH_API_IMAGE_NAME:-stakehold-auth-api:local}
+    container_name: auth-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Overrides the host-oriented AUTH_DATABASE_URL from .env (localhost:AUTH_POSTGRES_PORT,
+      # meant for a CLI run from the host) with the in-network address the postgres container is
+      # reachable at from other containers on this compose network -- the same override
+      # data-store's compose file makes for its own Airflow containers.
+      AUTH_DATABASE_URL: postgresql://${AUTH_POSTGRES_USER}:${AUTH_POSTGRES_PASSWORD}@postgres:5432/${AUTH_POSTGRES_DB}
+    ports:
+      - "${AUTH_API_PORT:-8001}:${AUTH_API_PORT:-8001}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:${AUTH_API_PORT:-8001}/health', timeout=3)\"",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
