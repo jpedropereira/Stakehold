@@ -397,26 +397,38 @@ flowchart TB
         PJOBS["jobs.py"]
     end
 
-    APPDB[("app-postgres<br/><i>the single shared application database --<br/>accounts, transactions, position_snapshots,<br/>return_snapshots, and any future non-data-store<br/>service's tables</i>")]
+    APPDB[("app-postgres<br/><i>the shared application database for non-data-store,<br/>non-credential services -- accounts, transactions,<br/>position_snapshots, return_snapshots, and any future<br/>such service's tables</i>")]
 
     subgraph ds["data-store"]
         DSAPI["data-store read API<br/><i>prerequisite, not yet built</i>"]
         DSDB[("data-store-postgres<br/><i>raw_market_data, market_returns</i>")]
     end
 
+    subgraph au["auth"]
+        AUAPI["auth HTTP API<br/><i>planned</i>"]
+    end
+
+    AUDB[("auth-postgres<br/><i>dedicated instance -- users, sessions.<br/>Isolated deliberately: credential data,<br/>kept out of app-postgres's blast radius</i>")]
+
     PCLI --> PJOBS
     PAPI -.future.-> PJOBS
     PJOBS --> APPDB
     PJOBS -->|"datastore_client<br/>(HTTP, future)"| DSAPI
     DSAPI --> DSDB
+    AUAPI --> AUDB
 ```
 
-**Two separate Postgres instances, no exceptions.** Portfolio never opens a connection to
-`data-store`'s database, and `data-store` never opens one to portfolio's — the boundary between the
-two services is the read API, full stop. This matches the application's stated split directly:
-`data-store` has its own, dedicated database; **portfolio's database is *the* shared application
-database** — the same one any future non-data-store service will use, not a third, separate
-instance.
+**Three separate Postgres instances, not two.** Portfolio never opens a connection to
+`data-store`'s or `auth`'s database, and neither of those opens one to portfolio's — the boundary
+between services is always an API, full stop. `data-store` has its own, dedicated database because
+its ingestion machinery and schema evolve independently. **`auth` also gets its own, dedicated
+database — a deliberate exception, not an oversight**: credentials and session tokens are the most
+sensitive data in the system, and isolating them at the database level keeps a bug or injection in
+portfolio's code path from ever reaching auth's tables, consistent with this repo's
+[`security.md`](../../../.claude/rules/security.md) rule to give credential-handling code extra
+scrutiny. **`app-postgres` remains the shared database for every other future non-data-store
+service** — the one such a service uses instead of standing up a fourth instance — but that sharing
+principle stops at the credential boundary; `auth` is the one deliberate carve-out from it.
 
 ## Cross-cutting decisions
 
