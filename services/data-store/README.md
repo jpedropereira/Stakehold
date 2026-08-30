@@ -341,7 +341,9 @@ uv run uvicorn data_store.api.app:create_app --factory --host 0.0.0.0 --port 800
 
 Or as part of the compose stack (`docker compose up -d api`), reachable at
 `http://localhost:${DATA_STORE_API_PORT:-8082}`. Every route but `/health` requires
-`Authorization: Bearer <INTERNAL_API_SECRET>`.
+`Authorization: Bearer <INTERNAL_API_SECRET>`. There is no `/docs`, `/redoc` or `/openapi.json`
+— those can't be served behind the bearer, so the endpoint list below is the contract; see
+`docs/architecture.md`'s "Read API" section for why.
 
 | Endpoint | Returns |
 |---|---|
