@@ -29,6 +29,16 @@ wheels = [
 name = "auth"
 version = "0.1.0"
 source = { editable = "services/auth" }
+dependencies = [
+    { name = "psycopg", extra = ["binary"] },
+    { name = "python-dotenv" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "psycopg", extras = ["binary"], specifier = ">=3.3" },
+    { name = "python-dotenv", specifier = ">=1.0" },
+]
 
 [[package]]
 name = "autoflake"
