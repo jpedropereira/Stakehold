@@ -1,9 +1,9 @@
 from datetime import date
 
 import pytest
-from data_store.db.connection import get_connection
 from data_store.regimes.loader import RegimeConfig
 from data_store.regimes.repository import save_regimes
+from shared.db.connection import get_connection
 
 pytestmark = pytest.mark.integration
 
