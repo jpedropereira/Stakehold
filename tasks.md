@@ -20,7 +20,7 @@ one-time snapshot.
 |----|------|-------------|--------|
 | 1 | [Auth schema & foundation](#1-auth-schema--foundation) | — | done |
 | 2 | [Auth identity API](#2-auth-identity-api) | 1 | ready |
-| 3 | [Data-store read API](#3-data-store-read-api) | — | ready |
+| 3 | [Data-store read API](#3-data-store-read-api) | — | done |
 | 4 | [Portfolio foundation & schema sign-off](#4-portfolio-foundation--schema-sign-off) | — | ready |
 | 5 | [Accounts & manual transactions](#5-accounts--manual-transactions) | 4 | blocked |
 | 6 | [Broker import](#6-broker-import) | 5 | blocked |
@@ -32,8 +32,8 @@ one-time snapshot.
 | 12 | [Portfolio view UI](#12-portfolio-view-ui) | 11 | blocked |
 | 13 | [End-to-end integration & smoke test](#13-end-to-end-integration--smoke-test) | 12 | blocked |
 
-Three tasks are `ready` in parallel today: **2** (auth), **3** (data-store), **4** (portfolio) —
-none of them depend on each other.
+Two tasks are `ready` in parallel today: **2** (auth) and **4** (portfolio) — neither depends on
+the other, and **1** and **3** are now `done`.
 
 ## Tasks
 
@@ -60,14 +60,25 @@ Argon2id password hashing (`argon2-cffi`). Opaque session cookies (`httpOnly`, `
 `SameSite=Lax`), sliding renewal on validation. Shared-secret check for internal server-to-server
 callers. Unit + integration tests (`tests/integration/` needs live Postgres).
 
-### 3. Data-store read API
+### 3. Data-store read API — done
 
-Not yet designed anywhere — this task both designs and implements it. Three read operations over
-existing tables, no new tables: price series for a canonical ticker (`market_returns`/
-`raw_market_data`), FX rate series for a currency pair (`fx_rates`), and a ticker existence/
-validity check. Shared-secret protected, matching the trust model `auth`/`portfolio` already use.
-Update `services/data-store/docs/architecture.md` — this is a new entry point per the
-[architecture rule](.claude/rules/architecture.md). Tests.
+A FastAPI app (`services/data-store/src/data_store/api/`) exposing `GET /prices/{ticker}`
+(`market_returns`), `GET /fx/{base}/{quote}` (`fx_rates`, deriving direct/inverse/triangulated
+pairs through `config/currencies.yaml`'s base currency), `GET /tickers/{ticker}` (existence +
+whether returns are computed), and an unauthenticated `GET /health`. Shared-secret protected —
+`Authorization: Bearer <INTERNAL_API_SECRET>` — matching the trust model
+`auth/docs/architecture.md` describes. New `read_flows.py` (a sibling of `pipeline.py`) and three
+`jobs.get_*` functions carry the read-side orchestration; `settings.py` gained an optional
+`internal_api_secret`. Wired into `docker-compose.yml` as its own `api` container
+(`Dockerfile.api`). `services/data-store/docs/architecture.md`'s "Read API" section covers the
+design, including the FX-derivation rules and known limitations (per-request connections,
+`calculated_at` not being a freshness signal). Unit tests (`tests/unit/api/`,
+`tests/unit/test_read_flows.py`, plus additions to the returns/fx repository and jobs tests) and
+an integration suite (`tests/integration/test_db_read_api.py`) against live Postgres.
+`services/portfolio/docs/architecture.md`'s cross-service-prerequisite section is corrected to
+match (FX is not modeled as a yfinance-style ticker) and updated to point at the now-built API;
+writing `datastore_client/http_client.py` against it remains task 8's own work, not a blocker on
+this task.
 
 ### 4. Portfolio foundation & schema sign-off
 

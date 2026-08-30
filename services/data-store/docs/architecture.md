@@ -39,11 +39,13 @@ flowchart TD
     subgraph entry["Entry points"]
         CLI["cli.py<br/><i>argparse, one handler per command</i>"]
         DAGS["dags/*.py<br/><i>Airflow, shells out to the CLI</i>"]
+        API["api/<br/><i>FastAPI, argument-parsing-plus-a-call, same as cli.py</i>"]
     end
 
     subgraph orch["Orchestration"]
         JOBS["jobs.py<br/><i>runnable units: config + connection + one flow</i>"]
-        PIPE["pipeline.py<br/><i>the run-level flows; ticker/currency resolution</i>"]
+        PIPE["pipeline.py<br/><i>the run-level write flows; ticker/currency resolution</i>"]
+        READ["read_flows.py<br/><i>read-side composition: FX derivation, existence checks</i>"]
     end
 
     subgraph domain["Domain modules"]
@@ -71,7 +73,9 @@ flowchart TD
 
     DAGS -->|subprocess| CLI
     CLI --> JOBS
+    API --> JOBS
     JOBS --> PIPE
+    JOBS --> READ
     JOBS --> CONF
     JOBS --> SET
     JOBS --> DB
@@ -81,6 +85,8 @@ flowchart TD
     PIPE --> FX
     PIPE --> RET
     PIPE --> REG
+    READ --> FX
+    READ --> RET
     HOLD --> EXT
     MKT --> EXT
     FX --> EXT
@@ -104,6 +110,14 @@ settings and configuration, open a connection, run the flow, close the connectio
 result. `cli.py` is argument parsing plus a call into it, and nothing else. An Airflow task will
 be a call into it and nothing else. Anything that lived in only one of those two would be, by
 construction, untested by the other — which is exactly how a CLI and a scheduled job drift apart.
+
+**The read API's jobs deviate from that contract on purpose.** `get_price_series`,
+`get_fx_series` and `get_ticker_info` are named `get_*` rather than `run_*`, and return a data
+payload rather than `run_result.py`'s `{"status", "rows_saved"}` — there is nothing to save and
+no run to summarize, only a query to answer. `read_flows.py` is a sibling of `pipeline.py`, not
+an addition to it: `pipeline.py` is already close to the file-size guidance in
+[`context-management.md`](../../../.claude/rules/context-management.md), and FX cross-rate
+derivation is a read-side decision with no write-flow analogue.
 
 Its arguments are plain builtins, including `earliest_date` as an ISO string rather than a `date`.
 That looks like a weaker type until you notice both callers hand it over as text — argparse from
@@ -330,6 +344,95 @@ findings, not guesses, and verify before adding more.
 
 Full details in [`schema.md`](schema.md).
 
+## Read API
+
+A fourth entry point, alongside `cli.py` and `dags/*.py`: a FastAPI app (`api/`) exposing three
+read-only operations over tables this service already owns, for `portfolio` and `web` to consume
+over HTTP rather than opening a database connection of their own — the cross-service boundary
+`portfolio/docs/architecture.md` insists is always an API, never a shared table.
+
+| Endpoint | Backed by | Notes |
+|---|---|---|
+| `GET /prices/{ticker}` | `market_returns` | Not `raw_market_data` — schema.md calls `market_returns` "the table a portfolio or chart should read"; serving raw OHLCV would push return computation onto every consumer. |
+| `GET /fx/{base}/{quote}` | `fx_rates` | See below — the endpoint derives pairs `fx_rates` never stores directly. |
+| `GET /tickers/{ticker}` | `raw_market_data` + `market_returns` | Existence and whether returns have been computed are reported separately — a ticker can be ingested before `calculate-returns` has run for it. |
+
+**`source` is an explicit, defaulted query parameter, not hardcoded.** `source` is part of the
+primary key on all three tables — the schema's own hook for a second provider to coexist with
+`yfinance` for the same ticker/pair/date. Hardcoding it would silently return duplicate dates the
+day a second source exists.
+
+**The FX endpoint owns cross-rate derivation**, rather than pushing schema.md's documented
+division formula onto every caller. `fx_rates` only ever stores `(configured_base, X)` pairs
+(see schema.md's "No cross-rates stored"), so a request for any other pair is satisfied one of
+four ways:
+
+```mermaid
+flowchart LR
+    Q{"base == quote?"} -->|yes| ID["identity: rate = 1"]
+    Q -->|no| B{"base is the<br/>configured base?"}
+    B -->|yes| DIR["direct: fx_rates row, verbatim"]
+    B -->|no| C{"quote is the<br/>configured base?"}
+    C -->|yes| INV["inverse: 1 / rate"]
+    C -->|no| TRI["triangulated:<br/>rate(cfg_base, quote) / rate(cfg_base, base)"]
+```
+
+This is exactly the identity schema.md documents for a cross-rate (e.g. `rate(GBP, CHF) =
+rate(EUR, CHF) / rate(EUR, GBP)` when `EUR` is the base) — the API just applies it once instead
+of leaving every future caller to re-derive it. The response's `derivation` field names which
+path produced the numbers, and `via` names the currency triangulated through when it applies, so
+a caller can tell a real stored rate from a computed one without knowing the formula itself. An
+identity request (`base == quote`) has no `fx_rates` row of its own to answer from — the trading
+calendar it reports rate `1` for comes from `get_dates_with_rate`, every date the requested
+currency appears on either side of a stored pair.
+
+Two details fall out of deriving rather than reading:
+
+- **A stored rate that isn't a usable quote (`<= 0`) drops its date from every derivation**, with
+  a warning, rather than being served verbatim on the direct path and dividing by zero on the
+  inverse and triangulated ones. `save_fx_rates` only rejects rates too *large* for the column,
+  so a `0` can reach the table; serving it would just move the division by zero into the caller.
+  This mirrors the write side's own convention — skip the row, warn, keep the rest of the range.
+- **Derived rates are quantized to `fx_rates.rate`'s `NUMERIC(18,8)` scale.** A `Decimal`
+  division carries the default context's 28 significant digits, which would have made a
+  triangulated pair look far more precise than a stored one when both only ever had 8dp of truth
+  behind them. Every response is on one scale as a result.
+
+**Errors follow the service's existing "a match on nothing is a failure" stance**
+(see "What a flow returns" above): a ticker with no ingested rows at all, or a currency outside
+`config/currencies.yaml`'s enabled list, is a 404 — a typo must be loud. A valid ticker or pair
+whose requested date range simply has no rows is a 200 with an empty `points` list — a quiet
+range is not a broken one, the same distinction the write flows draw between "nothing to do" and
+"failed".
+
+**Security**: every route but `/health` requires `Authorization: Bearer <INTERNAL_API_SECRET>`,
+compared with `secrets.compare_digest`. This is the same trust model `auth/docs/architecture.md`
+describes for `auth`/`portfolio`: the secret proves "a legitimate internal caller", not
+cryptographically that a specific caller made the request — an accepted gap, not an oversight,
+revisited on the same trigger `auth`'s doc names (before this deployment is reachable beyond a
+single trusted host, or before real user data is involved).
+
+**`/docs`, `/redoc` and `/openapi.json` are switched off**, so that "every route but `/health`"
+is literally true. FastAPI mounts them as plain Starlette routes, which neither the router's
+dependency nor an app-level one covers — they served the full route and parameter surface to
+anyone. Putting them behind the bearer isn't an option either: Swagger UI fetches the schema
+from the browser with no way to attach the secret. For a service-to-service API whose contract
+is already written down in README.md and this file, an interactive explorer is not worth an open
+endpoint.
+
+**Known limitations, stated plainly rather than oversold:**
+
+- **One connection per request**, opened and closed the same way every `run_*` job does. Fine at
+  today's load; `psycopg_pool` is the intended fix if request volume ever makes per-request
+  connection setup a bottleneck.
+- **`calculated_at` is not a usable freshness signal** for a price series. `market_returns`'s
+  upsert never deletes (see "Cross-cutting decisions" below), and the column only advances on a
+  row that was actually rewritten — a caller cannot tell "just computed" from "computed weeks ago
+  and untouched since" by looking at it.
+- **The shared secret is caller-agnostic.** Any holder of it can query any ticker or currency;
+  there is no per-caller scoping, matching `auth`'s own accepted gap rather than inventing a
+  stricter model data-store alone would need to maintain.
+
 ## Configuration
 
 Four files, split by whether they're personal or reference data:
@@ -357,25 +460,36 @@ loaders read the same file: `load_exchange_suffixes` and `load_ticker_overrides`
 top-level keys from `yfinance_exchange_suffixes.yaml`, since a one-off ticker rewrite and an
 exchange mapping are the same kind of reference data maintained together.
 
+**`INTERNAL_API_SECRET`** is the read API's shared secret, read via `settings.py` like every other
+value here — never from a config file. It is `Settings.internal_api_secret: str | None`, optional
+at the `Settings` level (every CLI/Airflow caller has no need of it, so making it required would
+break them) but required by `api/app.py` at its own startup: the API fails loudly with
+`SettingsError` if it's unset, rather than silently accepting every caller once the check would
+otherwise run.
+
 ## Deployment
 
 ```mermaid
 flowchart TB
     subgraph host["docker compose"]
         subgraph af["Airflow (custom image)"]
-            API["apiserver"]
+            AFAPI["apiserver"]
             SCHED["scheduler"]
             DAGP["dag-processor"]
             TRIG["triggerer"]
         end
+        READAPI["api<br/><i>Dockerfile.api, uvicorn</i>"]
         AFDB[("airflow-postgres<br/><i>Airflow's own metadata</i>")]
         APPDB[("postgres<br/><i>the data</i>")]
         PGA["pgadmin"]
     end
+    CALLER(["portfolio / web<br/>(future)"])
 
-    API & SCHED & DAGP & TRIG --> AFDB
+    AFAPI & SCHED & DAGP & TRIG --> AFDB
     SCHED -->|"@task.external_python:<br/>jobs.run_* in /opt/stakehold/.venv"| APPDB
     PGA --> APPDB
+    READAPI -->|"jobs.get_*"| APPDB
+    CALLER -->|"HTTPS + bearer token"| READAPI
 ```
 
 **Two separate Postgres instances.** Airflow's metadata database and the data warehouse share
@@ -384,6 +498,13 @@ nothing. Airflow's is disposable; the data one is not.
 **Airflow runs a custom image** (`Dockerfile.airflow`) that layers `uv` and this workspace onto the
 official Airflow image. The DAGs call the same `jobs.run_*` functions the CLI calls, through
 `@task.external_python`.
+
+**The read API is its own container** (`Dockerfile.api`), not folded into the Airflow image: it
+serves live traffic on its own lifecycle, independent of whatever the scheduler is doing, and
+needs none of Airflow's own image (no Playwright browser, no Airflow package at all — just this
+workspace's dependencies via `uv sync` and `uvicorn`). Like the Airflow containers, it reaches
+`postgres` by the compose network's service name, not `localhost:${POSTGRES_PORT}` — `DATABASE_URL`
+is overridden in `docker-compose.yml` the same way `x-airflow-common`'s is.
 
 **Two interpreters, on purpose.** Airflow's own is Python 3.13; this workspace requires 3.14 and
 pulls in pandas, yfinance and Playwright. `@task.external_python` runs the task body in
@@ -421,6 +542,14 @@ docker compose build   # required after changing src/data_store/ code
 `config/` is mounted rather than baked because it changes far more often than code — adding a fund
 or an exchange suffix is routine — and silently running yesterday's configuration is a
 particularly unpleasant way to discover a build step you forgot.
+
+**The `api` container follows the same rule.** `Dockerfile.api` `COPY`s the whole `services/`
+tree at build time (every workspace member, not just `data-store` — the root `pyproject.toml`
+lists all four as dependencies of the `package = false` root project, so `uv sync` needs each
+one's source present even though the API only imports `data_store` itself), so it too needs
+`docker compose build` after a code change; nothing under it is bind-mounted. Because that
+`COPY` is service-agnostic, the root `.dockerignore` excludes `**/.env` rather than one named
+service's file — any workspace member's secrets would otherwise be baked into the image.
 
 ## Cross-cutting decisions
 
@@ -504,6 +633,12 @@ The unit tests stub at the layer boundaries above, which is the practical payoff
 - **Pipeline tests** stub the `save_*` functions and swap the source registries for fakes. That
   leaves orchestration decisions — which tickers resolve, how they group, what gets skipped, what
   gets printed — testable with no database and no network.
+- **Route tests** (`tests/unit/api/`) build a bare `FastAPI()` app from `api/routes.py` with
+  `require_internal_secret` dependency-overridden to a no-op, and monkeypatch `jobs.get_*` —
+  the same "stub one layer down" approach the pipeline tests use, so a route test asserts on
+  status codes and response shape without a database or a real secret. Security itself
+  (`require_internal_secret`) is tested directly as a plain function, bypassing FastAPI's
+  dependency injection entirely, since it takes no state beyond its two arguments.
 
 Progress output is treated as behaviour and asserted with `capsys`/`caplog`, on the grounds that a
 run's summary is as much a part of its contract as its return value.
@@ -517,3 +652,5 @@ run's summary is as much a part of its contract as its return value.
 4. One domain module end to end (`market_data/` is the most representative of a
    provider-backed one; `returns/` is the most representative of a derived one).
 5. [`schema.md`](schema.md) — why the tables load the way they do.
+6. `api/routes.py` and `read_flows.py` — the read side's equivalent of 2 and 3, once the write
+   side above makes sense; the "Read API" section covers the design choices peculiar to it.
