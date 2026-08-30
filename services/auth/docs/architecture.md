@@ -71,7 +71,10 @@ three-instances-not-two reasoning. Connection config is `AUTH_DATABASE_URL` (`se
 deliberately not the bare `DATABASE_URL` `data-store` already owns — the two services' integration
 suites can run in the same pytest process, where a shared env var name would mean whichever
 service's `.env` loads first silently wins for both. `auth db init` (`cli.py` → `jobs.py`) applies
-`db/schema.sql`, mirroring `data-store`'s CLI/jobs/db-connection layering exactly.
+`db/schema.sql`, mirroring `data-store`'s CLI/jobs layering exactly. The connection/transaction
+helpers and log setup underneath both are the *same* code, not just the same pattern — both
+services depend on [`services/shared`](../../shared/docs/architecture.md) rather than each keeping
+its own copy.
 
 ## Talks to
 

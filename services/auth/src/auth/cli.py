@@ -3,10 +3,13 @@ import sys
 
 from auth import jobs
 
+_SUCCESS_STATUSES = {"ok", "nothing_to_do"}
+
 
 def _db_init(_args: argparse.Namespace) -> int:
     result = jobs.run_db_init()
-    return 0 if result["status"] == "ok" else 1
+    print(f"{result['rows_saved']} table(s) created")
+    return 0 if result["status"] in _SUCCESS_STATUSES else 1
 
 
 def _build_parser() -> argparse.ArgumentParser:

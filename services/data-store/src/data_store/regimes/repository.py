@@ -1,5 +1,5 @@
-from data_store.db.connection import transaction
 from data_store.regimes.loader import RegimeConfig
+from shared.db.connection import transaction
 
 
 def save_regimes(conn, rows: list[RegimeConfig]) -> int:

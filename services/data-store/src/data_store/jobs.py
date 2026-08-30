@@ -26,8 +26,6 @@ from data_store.config_loader import (
     load_ticker_resolution,
     load_tracked_tickers,
 )
-from data_store.db.connection import apply_schema, get_connection
-from data_store.logging_config import configure_logging
 from data_store.pipeline import (
     backfill_fx_rates,
     backfill_market_data,
@@ -39,6 +37,8 @@ from data_store.pipeline import (
 )
 from data_store.run_result import build_run_result
 from data_store.settings import load_settings
+from shared.db.connection import apply_schema, get_connection
+from shared.logging_config import configure_logging
 
 logger = logging.getLogger(__name__)
 

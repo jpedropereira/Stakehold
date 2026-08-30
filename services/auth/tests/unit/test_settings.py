@@ -1,13 +1,6 @@
-from pathlib import Path
-
 import pytest
 from auth import settings as settings_module
 from auth.settings import SettingsError, load_settings
-
-# Computed independently of settings.py's own _SERVICE_ROOT logic: this file lives at
-# services/auth/tests/unit/test_settings.py, two levels below services/auth. Deriving the
-# expectation the same way the implementation does would make these tests tautological.
-_SERVICE_ROOT = Path(__file__).resolve().parents[2]
 
 
 @pytest.fixture(autouse=True)
