@@ -121,7 +121,7 @@ def test_renewal_clamps_expiry_to_the_absolute_cap(client):
 
 
 def test_purge_expired_deletes_only_expired_sessions(client):
-    secret = _internal_secret()
+    _internal_secret()
     _signup(client, "expired@example.com")
     _signup(client, "still-live@example.com")
 

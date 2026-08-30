@@ -14,9 +14,7 @@ class User:
     created_at: datetime
 
 
-def insert_user(
-    conn, *, user_id: UUID, email: str, display_name: str, password_hash: str
-) -> None:
+def insert_user(conn, *, user_id: UUID, email: str, display_name: str, password_hash: str) -> None:
     """Raises psycopg.errors.UniqueViolation on a duplicate email -- service.py translates that
     into the domain-level EmailAlreadyRegistered."""
     with transaction(conn), conn.cursor() as cur:
@@ -40,8 +38,7 @@ def get_by_email(conn, email: str) -> User | None:
 def get_by_id(conn, user_id: UUID) -> User | None:
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT id, email, display_name, password_hash, created_at "
-            "FROM users WHERE id = %s",
+            "SELECT id, email, display_name, password_hash, created_at " "FROM users WHERE id = %s",
             (user_id,),
         )
         row = cur.fetchone()

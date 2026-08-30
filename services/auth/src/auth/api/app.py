@@ -1,15 +1,19 @@
 import logging
 from contextlib import asynccontextmanager
 
+from auth.api.routes import health_router, router
+from auth.service import (
+    EmailAlreadyRegistered,
+    InvalidCredentials,
+    RateLimited,
+    SessionInvalid,
+)
+from auth.settings import Settings, load_settings
+from auth.throttle import LoginThrottle
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from shared.db.pool import connection_pool
 from shared.logging_config import configure_logging
-
-from auth.api.routes import health_router, router
-from auth.service import EmailAlreadyRegistered, InvalidCredentials, RateLimited, SessionInvalid
-from auth.settings import Settings, load_settings
-from auth.throttle import LoginThrottle
 
 logger = logging.getLogger(__name__)
 

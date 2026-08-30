@@ -1,11 +1,10 @@
 import secrets
 from collections.abc import Iterator
 
-from fastapi import Depends, Header, HTTPException, Request, status
-from psycopg import Connection
-
 from auth.settings import Settings
 from auth.throttle import LoginThrottle
+from fastapi import Depends, Header, HTTPException, Request, status
+from psycopg import Connection
 
 
 def get_settings(request: Request) -> Settings:

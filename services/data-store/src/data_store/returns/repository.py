@@ -90,6 +90,53 @@ def iter_price_series(conn, source: str, tickers: list[str] | None, batch_size: 
         yield pd.DataFrame(rows, columns=_PRICE_COLUMNS)
 
 
+def ticker_exists(conn, ticker: str, source: str) -> bool:
+    """Whether `ticker` has any ingested row for `source` in raw_market_data -- the ingested
+    universe, not market_returns, since a ticker can be ingested before returns are computed
+    for it. This is the API's existence primitive; there is no ticker reference table."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT EXISTS (SELECT 1 FROM raw_market_data WHERE ticker = %s AND source = %s)",
+            (ticker, source),
+        )
+        return cur.fetchall()[0][0]
+
+
+def get_returns_date_range(conn, ticker: str, source: str) -> tuple:
+    """(earliest, latest) price_date in market_returns for (ticker, source), or (None, None) if
+    returns haven't been computed for it yet -- an aggregate over zero rows still returns one
+    row of NULLs, not an empty result."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT MIN(price_date), MAX(price_date)
+            FROM market_returns
+            WHERE ticker = %s AND source = %s
+            """,
+            (ticker, source),
+        )
+        return cur.fetchall()[0]
+
+
+def get_return_series(conn, ticker: str, source: str, start, end) -> list[tuple]:
+    """Raw rows (price_date, split_adjusted_close, future_split_factor, price_return,
+    dividend_return, simple_return, log_return) for one ticker over a date range, ordered by
+    date. The four return columns come back exactly as stored -- including NULL together on a
+    ticker's first date -- for the read API to serialize verbatim rather than coerce to 0."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT price_date, split_adjusted_close, future_split_factor,
+                   price_return, dividend_return, simple_return, log_return
+            FROM market_returns
+            WHERE ticker = %s AND source = %s AND price_date BETWEEN %s AND %s
+            ORDER BY price_date
+            """,
+            (ticker, source, start, end),
+        )
+        return cur.fetchall()
+
+
 def save_market_returns(conn, source: str, df: pd.DataFrame) -> int:
     """Upsert into market_returns via a temp staging table, mirroring
     market_data.repository.save_raw_market_data's shape -- COPY doesn't support ON CONFLICT

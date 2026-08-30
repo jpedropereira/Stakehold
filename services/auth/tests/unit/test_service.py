@@ -197,9 +197,9 @@ def test_validate_session_renewal_never_exceeds_absolute_expiry(repos):
     # sliding TTL (14 days) can't reach the 90-day cap from a fresh signup, so this stands in
     # for the many renewal cycles that would get it there.
     still_valid_expires_at = NOW + timedelta(days=ABSOLUTE_TTL_DAYS - 1)
-    sessions_repo.by_token_hash[tokens.hash_token(session.token)]["expires_at"] = (
-        still_valid_expires_at
-    )
+    sessions_repo.by_token_hash[tokens.hash_token(session.token)][
+        "expires_at"
+    ] = still_valid_expires_at
     now = NOW + timedelta(days=ABSOLUTE_TTL_DAYS - 2)
 
     result = service.validate_session(None, token=session.token, now=now, ttl_days=TTL_DAYS)

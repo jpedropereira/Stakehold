@@ -55,8 +55,9 @@ def client(repos, monkeypatch):
 
 
 def _signup(test_client, settings, **overrides):
-    body = dict(email="person@example.com", password="correct horse battery staple",
-                display_name="Person")
+    body = dict(
+        email="person@example.com", password="correct horse battery staple", display_name="Person"
+    )
     body.update(overrides)
     return test_client.post(
         "/signup", json=body, headers={"X-Internal-Secret": settings.internal_secret}
@@ -76,8 +77,11 @@ def test_signup_without_internal_secret_is_rejected(client):
 
     response = test_client.post(
         "/signup",
-        json={"email": "a@example.com", "password": "correct horse battery staple",
-              "display_name": "A"},
+        json={
+            "email": "a@example.com",
+            "password": "correct horse battery staple",
+            "display_name": "A",
+        },
     )
 
     assert response.status_code == 401
@@ -88,8 +92,11 @@ def test_signup_with_wrong_internal_secret_is_rejected(client):
 
     response = test_client.post(
         "/signup",
-        json={"email": "a@example.com", "password": "correct horse battery staple",
-              "display_name": "A"},
+        json={
+            "email": "a@example.com",
+            "password": "correct horse battery staple",
+            "display_name": "A",
+        },
         headers={"X-Internal-Secret": "not-the-secret"},
     )
 
@@ -227,9 +234,7 @@ def test_logout_clears_the_cookie_and_returns_204(client):
     test_client, settings = client
     _signup(test_client, settings)
 
-    response = test_client.post(
-        "/logout", headers={"X-Internal-Secret": settings.internal_secret}
-    )
+    response = test_client.post("/logout", headers={"X-Internal-Secret": settings.internal_secret})
 
     assert response.status_code == 204
 
@@ -242,8 +247,6 @@ def test_logout_clears_the_cookie_and_returns_204(client):
 def test_logout_without_a_cookie_is_idempotent(client):
     test_client, settings = client
 
-    response = test_client.post(
-        "/logout", headers={"X-Internal-Secret": settings.internal_secret}
-    )
+    response = test_client.post("/logout", headers={"X-Internal-Secret": settings.internal_secret})
 
     assert response.status_code == 204

@@ -83,9 +83,7 @@ def test_renew_and_fetch_returns_the_session_user():
     new_expires_at = NOW + timedelta(days=14)
     conn = FakeConnection(fetch_result=(user_id, "person@example.com", "Person", new_expires_at))
 
-    result = renew_and_fetch(
-        conn, token_hash=b"\x01" * 32, now=NOW, new_expires_at=new_expires_at
-    )
+    result = renew_and_fetch(conn, token_hash=b"\x01" * 32, now=NOW, new_expires_at=new_expires_at)
 
     assert result.user_id == user_id
     assert result.email == "person@example.com"
@@ -96,9 +94,7 @@ def test_renew_and_fetch_returns_the_session_user():
 def test_renew_and_fetch_query_clamps_to_absolute_expiry():
     conn = FakeConnection(fetch_result=None)
 
-    renew_and_fetch(
-        conn, token_hash=b"\x01" * 32, now=NOW, new_expires_at=NOW + timedelta(days=14)
-    )
+    renew_and_fetch(conn, token_hash=b"\x01" * 32, now=NOW, new_expires_at=NOW + timedelta(days=14))
 
     sql, params = conn._cursor.executed[0]
     assert "LEAST(" in sql

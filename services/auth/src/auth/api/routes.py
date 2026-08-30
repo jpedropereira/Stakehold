@@ -1,13 +1,12 @@
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, Request, Response, status
-
 from auth import service
 from auth.api.cookies import COOKIE_NAME, clear_session_cookie, set_session_cookie
 from auth.api.deps import get_db, get_settings, get_throttle, require_internal_secret
 from auth.api.schemas import LoginRequest, SignupRequest, UserResponse
 from auth.service import AuthenticatedUser
 from auth.settings import Settings
+from fastapi import APIRouter, Depends, Request, Response, status
 
 # /health carries no internal-secret requirement -- it backs the container healthcheck, which
 # doesn't have the shared secret to send. Every other route does, via this router-level dependency.
@@ -42,7 +41,10 @@ def signup(
         absolute_ttl_days=settings.session_absolute_ttl_days,
     )
     set_session_cookie(
-        response, token=session.token, expires_at=session.expires_at, now=now,
+        response,
+        token=session.token,
+        expires_at=session.expires_at,
+        now=now,
         secure=settings.cookie_secure,
     )
     return _user_response(session.user)
@@ -70,7 +72,10 @@ def login(
         throttle=throttle,
     )
     set_session_cookie(
-        response, token=session.token, expires_at=session.expires_at, now=now,
+        response,
+        token=session.token,
+        expires_at=session.expires_at,
+        now=now,
         secure=settings.cookie_secure,
     )
     return _user_response(session.user)
@@ -92,7 +97,10 @@ def validate(
         conn, token=token, now=now, ttl_days=settings.session_ttl_days
     )
     set_session_cookie(
-        response, token=session.token, expires_at=session.expires_at, now=now,
+        response,
+        token=session.token,
+        expires_at=session.expires_at,
+        now=now,
         secure=settings.cookie_secure,
     )
     return _user_response(session.user)
