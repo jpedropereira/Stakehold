@@ -11,9 +11,9 @@ Run with:
 """
 
 from data_store.api.routes import health_router, router
-from data_store.logging_config import configure_logging
 from data_store.settings import SettingsError, load_settings
 from fastapi import FastAPI
+from shared.logging_config import configure_logging
 
 
 def create_app() -> FastAPI:

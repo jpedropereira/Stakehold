@@ -5,8 +5,8 @@ from pathlib import Path
 import pandas as pd
 import psycopg
 import pytest
-from data_store.db.connection import apply_schema
 from data_store.holdings.repository import get_latest_tickers, save_holdings
+from shared.db.connection import apply_schema
 
 pytestmark = pytest.mark.integration
 

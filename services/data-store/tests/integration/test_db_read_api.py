@@ -7,7 +7,6 @@ import psycopg
 import pytest
 from data_store.api.app import create_app
 from data_store.config_loader import CurrenciesConfig, CurrencyConfig
-from data_store.db.connection import apply_schema
 from data_store.fx.repository import get_dates_with_rate, get_rate_series, save_fx_rates
 from data_store.market_data.repository import save_raw_market_data
 from data_store.read_flows import fx_rate_series
@@ -18,6 +17,7 @@ from data_store.returns.repository import (
     ticker_exists,
 )
 from fastapi.testclient import TestClient
+from shared.db.connection import apply_schema
 
 pytestmark = pytest.mark.integration
 

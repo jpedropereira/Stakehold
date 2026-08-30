@@ -7,7 +7,7 @@ import psycopg
 import pytest
 from data_store import pipeline
 from data_store.config_loader import FundConfig
-from data_store.db.connection import apply_schema
+from shared.db.connection import apply_schema
 
 pytestmark = pytest.mark.integration
 

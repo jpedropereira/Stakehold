@@ -6,6 +6,7 @@ dependencies = [
     "auth",
     "data-store",
     "portfolio",
+    "shared",
     "web",
 ]
 
@@ -16,6 +17,7 @@ package = false
 auth = { workspace = true }
 data-store = { workspace = true }
 portfolio = { workspace = true }
+shared = { workspace = true }
 web = { workspace = true }
 
 [tool.uv.workspace]
