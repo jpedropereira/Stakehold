@@ -57,9 +57,13 @@ flowchart TD
     subgraph found["Foundation"]
         CONF["config_loader.py"]
         SET["settings.py"]
-        DB["db/connection.py + schema.sql"]
-        LOG["logging_config.py · run_result.py"]
+        SCHEMA["db/schema.sql"]
+        RESULT["run_result.py"]
         RETRY["yfinance_retry.py<br/><i>shared transient-error classifier</i>"]
+    end
+
+    subgraph ext_pkg["services/shared (workspace package)"]
+        DB["db/connection.py · logging_config.py"]
     end
 
     PG[("Postgres")]
@@ -71,6 +75,7 @@ flowchart TD
     JOBS --> CONF
     JOBS --> SET
     JOBS --> DB
+    JOBS --> SCHEMA
     PIPE --> HOLD
     PIPE --> MKT
     PIPE --> FX
@@ -88,6 +93,11 @@ flowchart TD
     REG --> PG
     DB --> PG
 ```
+
+`db/connection.py` and `logging_config.py` are not this service's own code — they live in
+[`services/shared`](../../shared/docs/architecture.md), a workspace package this service depends
+on rather than duplicates. `auth` depends on the same package for the same reason. Everything else
+in the diagram above is `data-store`-specific.
 
 **`jobs.py` is the seam that matters.** Each `run_*` there is one complete operation: load
 settings and configuration, open a connection, run the flow, close the connection, return its
@@ -395,7 +405,14 @@ guarded.
 ### Build-time vs. runtime
 
 `dags/` and `config/` are bind-mounted, so DAG edits and configuration changes take effect on the
-next run. **Application code under `src/data_store/` is baked into the image**, so:
+next run. **Application code under `src/data_store/` is baked into the image**, along with every
+other workspace member — `services/auth`, `services/portfolio`,
+[`services/shared`](../../shared/docs/architecture.md), and `services/web` — even the ones this
+service's code never imports at runtime. That's not caution, it's a hard requirement: the root
+`pyproject.toml` depends on all of them (`package = false`), so `uv sync --frozen` inside the image
+resolves the *whole* workspace lock and needs every member's source present to build it. One
+missing from the `COPY` list isn't a smaller image, it's a build that fails at `uv sync` — the gap
+this bit before `services/shared` existed, when `auth` and `web` were never copied in. So:
 
 ```bash
 docker compose build   # required after changing src/data_store/ code
@@ -407,10 +424,10 @@ particularly unpleasant way to discover a build step you forgot.
 
 ## Cross-cutting decisions
 
-**Logs go to stderr, results go to stdout.** Every entry point calls
-`logging_config.configure_logging()`, so `logger.info` is visible — in a plain CLI run and in
-Airflow's captured task output alike. The one remaining `print` is a command's actual result (the
-row count `cli.py` writes), which stays on stdout so the CLI is pipeable.
+**Logs go to stderr, results go to stdout.** Every entry point calls `configure_logging()`
+(`shared.logging_config`), so `logger.info` is visible — in a plain CLI run and in Airflow's
+captured task output alike. The one remaining `print` is a command's actual result (the row count
+`cli.py` writes), which stays on stdout so the CLI is pipeable.
 
 This replaced an earlier `print(..., flush=True)` convention that existed only because nothing
 configured logging, which meant `logger.info` was silently dropped and `print` was the sole

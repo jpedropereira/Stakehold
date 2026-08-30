@@ -5,8 +5,8 @@ from pathlib import Path
 import pandas as pd
 import psycopg
 import pytest
-from data_store.db.connection import apply_schema
 from data_store.fx.repository import get_earliest_fx_dates, save_fx_rates
+from shared.db.connection import apply_schema
 
 pytestmark = pytest.mark.integration
 

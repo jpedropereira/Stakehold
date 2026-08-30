@@ -35,6 +35,9 @@ services/data-store/logs/
 # Postgres/pgAdmin data (services/data-store)
 services/data-store/.data/
 
+# Postgres data (services/auth)
+services/auth/.data/
+
 # Fund config (services/data-store) — see README.md for why and the etfs.yaml.example template
 services/data-store/config/etfs.yaml
 services/data-store/config/tracked_tickers.yaml

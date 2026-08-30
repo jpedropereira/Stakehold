@@ -18,8 +18,8 @@ one-time snapshot.
 
 | ID | Task | Depends on | Status |
 |----|------|-------------|--------|
-| 1 | [Auth schema & foundation](#1-auth-schema--foundation) | — | ready |
-| 2 | [Auth identity API](#2-auth-identity-api) | 1 | blocked |
+| 1 | [Auth schema & foundation](#1-auth-schema--foundation) | — | done |
+| 2 | [Auth identity API](#2-auth-identity-api) | 1 | ready |
 | 3 | [Data-store read API](#3-data-store-read-api) | — | ready |
 | 4 | [Portfolio foundation & schema sign-off](#4-portfolio-foundation--schema-sign-off) | — | ready |
 | 5 | [Accounts & manual transactions](#5-accounts--manual-transactions) | 4 | blocked |
@@ -32,18 +32,26 @@ one-time snapshot.
 | 12 | [Portfolio view UI](#12-portfolio-view-ui) | 11 | blocked |
 | 13 | [End-to-end integration & smoke test](#13-end-to-end-integration--smoke-test) | 12 | blocked |
 
-Three tasks are `ready` in parallel today: **1** (auth), **3** (data-store), **4** (portfolio) —
+Three tasks are `ready` in parallel today: **2** (auth), **3** (data-store), **4** (portfolio) —
 none of them depend on each other.
 
 ## Tasks
 
-### 1. Auth schema & foundation
+### 1. Auth schema & foundation — done
 
-Write `services/auth/docs/schema.md` — column-level DDL for `users` and `sessions` (currently only
-described conceptually in `architecture.md`) — and get explicit sign-off per
-[`data-schema.md`](.claude/rules/data-schema.md) before writing any model/migration code. Then:
-`settings.py`, `db/connection.py` + `schema.sql`, dedicated `auth-postgres` wired into the
-deployment (isolated from `app-postgres`, per `auth/docs/architecture.md`'s deployment reasoning).
+`services/auth/docs/schema.md` written and signed off per
+[`data-schema.md`](.claude/rules/data-schema.md): `users` (with `display_name`) and `sessions`
+(opaque token stored only as a `SHA-256` hash, plus a fixed `absolute_expires_at` cap alongside
+sliding renewal — both decisions recorded there and in `architecture.md`). Implemented:
+`settings.py` (`AUTH_DATABASE_URL`, not the bare `DATABASE_URL` data-store owns), `db/schema.sql`,
+`jobs.py`/`cli.py` (`auth db init`), dedicated `auth-postgres` in `docker-compose.yml` (isolated
+from `app-postgres`/`data-store-postgres`), CI service container + `AUTH_DATABASE_URL` wiring. The
+connection/transaction helper and log setup underneath moved to `services/shared`, a workspace
+package `data-store` also depends on, once `auth`'s copy of both turned out to be near-identical to
+`data-store`'s own — see `services/shared/docs/architecture.md`. Unit tests (`settings`, `cli`,
+`jobs`) and integration tests (`db init` idempotency, email uniqueness, cascade delete, token-hash
+uniqueness)
+under `services/auth/tests/`.
 
 ### 2. Auth identity API
 
