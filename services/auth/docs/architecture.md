@@ -1,6 +1,7 @@
 # auth architecture
 
-**Status: scaffolding — not yet implemented.**
+**Status: schema and foundation implemented (task 1) — signup/login/logout/session-validation
+endpoints not yet built (task 2).**
 
 ## Responsibility
 
@@ -24,9 +25,10 @@ references a user only by the UUID `auth` issues at signup, as a trusted plain c
 - **Stayed in Python/FastAPI rather than an off-the-shelf identity provider** (Keycloak,
   Authentik, Ory). Those are reasonable once there's a real need for MFA or social login, but
   excess complexity for a solo hobby project with no users yet.
-- **Owns the only `users` table in the application**: `users(id UUID, email, password_hash,
-  created_at)`, conceptually — column-level DDL still needs its own sign-off pass per
-  [`data-schema.md`](../../../.claude/rules/data-schema.md). `id` is a UUID v7 generated at signup,
+- **Owns the only `users` table in the application**: `users(id UUID, email, display_name,
+  password_hash, created_at)` — see [`docs/schema.md`](schema.md) for the column-level DDL,
+  signed off per [`data-schema.md`](../../../.claude/rules/data-schema.md). `id` is a UUID v7
+  generated at signup,
   chosen over v4 for index locality and sortable creation order — no meaningful downside for a
   non-secret identifier (unlike a session token, where randomness is what matters). Every other
   service that references a user — starting with `portfolio.accounts.user_id` — stores that UUID as
@@ -41,9 +43,12 @@ references a user only by the UUID `auth` issues at signup, as a trusted plain c
 - **Session validation is a per-request API call** (e.g. `/sessions/validate`) from `web`,
   deliberately not optimized with caching yet — acceptable at hobby-project request volumes,
   revisit only if it becomes a real bottleneck.
-- **Session storage**: a `sessions` table in `auth`'s own Postgres, roughly `sessions(id UUID,
-  user_id UUID, created_at, expires_at, last_seen_at)`, with a short-ish expiry (on the order of
-  7–14 days) and sliding renewal on validation.
+- **Session storage**: a `sessions` table in `auth`'s own Postgres — see
+  [`docs/schema.md`](schema.md) for the column-level DDL. The cookie carries a random opaque
+  token; the table stores only its `SHA-256` hash (`token_hash`), not the token itself, so reading
+  the table can't be replayed as a live session. Sliding expiry is on the order of 7–14 days,
+  renewed on validation, alongside a fixed `absolute_expires_at` cap set at login that renewal
+  never extends — see "Open questions" below for why.
 - **Cookie flags**: `httpOnly`, `Secure`, `SameSite=Lax`.
 - **Service-to-service trust, resolved for now**: `auth` and `portfolio` are not reachable from
   outside the deployment's private network — only `web` is publicly exposed — and every internal
@@ -57,6 +62,17 @@ references a user only by the UUID `auth` issues at signup, as a trusted plain c
 At minimum: login, logout, signup, session validation. Listed here as the expected surface, not
 full request/response schemas.
 
+## Deployment
+
+`auth-postgres` is a dedicated Postgres 17 container (`services/auth/docker-compose.yml`), separate
+from `data-store-postgres` and the future `app-postgres` — see
+[`portfolio`'s deployment section](../../portfolio/docs/architecture.md#deployment) for the
+three-instances-not-two reasoning. Connection config is `AUTH_DATABASE_URL` (`settings.py`),
+deliberately not the bare `DATABASE_URL` `data-store` already owns — the two services' integration
+suites can run in the same pytest process, where a shared env var name would mean whichever
+service's `.env` loads first silently wins for both. `auth db init` (`cli.py` → `jobs.py`) applies
+`db/schema.sql`, mirroring `data-store`'s CLI/jobs/db-connection layering exactly.
+
 ## Talks to
 
 - **`web`** calls `auth` server-to-server for login, logout, signup, and session validation, over
@@ -66,8 +82,6 @@ full request/response schemas.
 
 ## Open questions
 
-- Deployment shape for `auth` is undecided — `data-store` is the only service with a deployment
-  story so far.
 - Whether bearer-token support will ever be needed alongside cookie sessions — tied to whether
   `web` ever needs to serve non-browser clients.
 - Exact API contracts and request/response schemas — not designed yet, just the expected
@@ -80,8 +94,6 @@ full request/response schemas.
   trusting the raw value — is deliberately not built yet: it adds key distribution/rotation with
   nothing at stake to justify it currently. **Trigger to revisit**: before this deployment is ever
   reachable beyond a single trusted host, or before real user funds/PII are involved.
-- Whether to add an absolute session lifetime cap alongside the inactivity-based sliding renewal,
-  so a continuously-used session can't live forever.
 - **Bootstrapping before `auth` has a real signup endpoint**: `portfolio` needs a real UUID to put
   in `accounts.user_id` today, and `auth` doesn't have working signup yet. Until it does, that UUID
   has to come from somewhere ad hoc (a manually-generated UUID, a test fixture) — a known, temporary
