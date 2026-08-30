@@ -38,6 +38,23 @@ jobs:
           --health-timeout 5s
           --health-retries 10
 
+      # Separate container, not a second database on the same instance: auth's real deployment
+      # is a dedicated Postgres per docs/architecture.md, and a shared instance here would let a
+      # cross-service query slip past a boundary CI is supposed to enforce.
+      auth-postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: auth
+          POSTGRES_USER: auth
+          POSTGRES_PASSWORD: ci-throwaway  # pragma: allowlist secret
+        ports:
+          - 5434:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     steps:
       - uses: actions/checkout@v5
 
@@ -79,6 +96,7 @@ jobs:
       - name: Run integration test suite
         run: uv run pytest services -m integration
         env:
-          # Matches the service container above. Ephemeral, created and destroyed with the
+          # Matches the service containers above. Ephemeral, created and destroyed with the
           # job -- not a credential to anything that outlives it.
           DATABASE_URL: postgresql://data_store:ci-throwaway@localhost:5432/data_store  # pragma: allowlist secret
+          AUTH_DATABASE_URL: postgresql://auth:ci-throwaway@localhost:5434/auth  # pragma: allowlist secret

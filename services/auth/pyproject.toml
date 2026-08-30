@@ -3,7 +3,14 @@ name = "auth"
 version = "0.1.0"
 description = "Auth service"
 requires-python = ">=3.14"
-dependencies = []
+dependencies = [
+    "psycopg[binary]>=3.3",
+    "python-dotenv>=1.0",
+    "shared",
+]
+
+[project.scripts]
+auth = "auth.cli:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -11,3 +18,6 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/auth"]
+
+[tool.uv.sources]
+shared = { workspace = true }

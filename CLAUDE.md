@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Project overview
 
 Stakehold is an application to manage financial portfolios, calculate their returns, and identify
-possible improvements. It's a uv workspace containing four services:
+possible improvements. It's a uv workspace containing four services plus one shared library package:
 
 - `services/data-store/` — the `data_store` package. Implemented: scrapes iShares ETF holdings
   (Playwright + CSV), ingests daily OHLCV and dividend events from yfinance into Postgres, exposes
@@ -13,7 +13,12 @@ possible improvements. It's a uv workspace containing four services:
   scoped rules under `services/data-store/.claude/rules/`.
 - `services/portfolio/` — the `portfolio` package. Still empty scaffolding, no business logic yet.
 - `services/web/` — the `web` package. Empty scaffolding, no business logic yet.
-- `services/auth/` — the `auth` package. Empty scaffolding, no business logic yet.
+- `services/auth/` — the `auth` package. Implemented: Postgres schema (`users`, `sessions`) and an
+  `auth db init` CLI; identity endpoints (signup/login/logout/session-validation) not built yet.
+- `services/shared/` — the `shared` package. Not a service: no entry point, no schema, no business
+  logic. Cross-service infrastructure only — a Postgres connection/transaction/schema-apply helper
+  and log setup — that `data-store` and `auth` both depend on instead of each keeping its own copy.
+  See [`services/shared/docs/architecture.md`](services/shared/docs/architecture.md).
 
 They share one virtual environment and one lockfile (`uv.lock`) at the workspace root. Python 3.14 is
 required.

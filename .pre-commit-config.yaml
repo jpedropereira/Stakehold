@@ -16,8 +16,8 @@
 #   `pre-commit`/`pre-push` are the current stage names -- avoid the old
 #   `commit`/`push` aliases, which are deprecated.
 # - Test path is `services`, not a single `tests/` dir: this is a uv workspace with
-#   four services (data-store, portfolio, web, auth), each with its own tests/. Pytest
-#   recurses into all of them from that one root.
+#   four services (data-store, portfolio, web, auth) plus the shared library package,
+#   each with its own tests/. Pytest recurses into all of them from that one root.
 
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks

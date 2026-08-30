@@ -23,8 +23,15 @@ ENV UV_PYTHON_INSTALL_DIR=/opt/stakehold/.uv-python
 WORKDIR /opt/stakehold
 
 COPY pyproject.toml uv.lock ./
+# uv sync --frozen below resolves the *whole* workspace lock, not just this service's slice of
+# it -- the root pyproject.toml depends on every workspace member (package = false), so uv needs
+# each one's source present to build it, even members this service's code never imports at
+# runtime. Skipping one here isn't a smaller image, it's a build that fails at `uv sync`.
+COPY services/auth services/auth
 COPY services/data-store services/data-store
 COPY services/portfolio services/portfolio
+COPY services/shared services/shared
+COPY services/web services/web
 
 # docker-compose.yml runs every Airflow container as "${AIRFLOW_UID:-50000}:0" -- gid 0
 # (root) always, but the uid varies (it's meant to match the *host* user, for dags/'s bind

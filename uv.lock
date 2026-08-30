@@ -12,6 +12,7 @@ members = [
     "auth",
     "data-store",
     "portfolio",
+    "shared",
     "stakehold",
     "web",
 ]
@@ -50,6 +51,18 @@ wheels = [
 name = "auth"
 version = "0.1.0"
 source = { editable = "services/auth" }
+dependencies = [
+    { name = "psycopg", extra = ["binary"] },
+    { name = "python-dotenv" },
+    { name = "shared" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "psycopg", extras = ["binary"], specifier = ">=3.3" },
+    { name = "python-dotenv", specifier = ">=1.0" },
+    { name = "shared", editable = "services/shared" },
+]
 
 [[package]]
 name = "autoflake"
@@ -403,6 +416,7 @@ dependencies = [
     { name = "python-dotenv" },
     { name = "pyyaml" },
     { name = "requests" },
+    { name = "shared" },
     { name = "uvicorn", extra = ["standard"] },
     { name = "yfinance" },
 ]
@@ -416,6 +430,7 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "requests", specifier = ">=2.32" },
+    { name = "shared", editable = "services/shared" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34" },
     { name = "yfinance", specifier = ">=0.2" },
 ]
@@ -1259,6 +1274,17 @@ wheels = [
 ]
 
 [[package]]
+name = "shared"
+version = "0.1.0"
+source = { editable = "services/shared" }
+dependencies = [
+    { name = "psycopg", extra = ["binary"] },
+]
+
+[package.metadata]
+requires-dist = [{ name = "psycopg", extras = ["binary"], specifier = ">=3.3" }]
+
+[[package]]
 name = "shellingham"
 version = "1.5.4"
 source = { registry = "https://pypi.org/simple" }
@@ -1293,6 +1319,7 @@ dependencies = [
     { name = "auth" },
     { name = "data-store" },
     { name = "portfolio" },
+    { name = "shared" },
     { name = "web" },
 ]
 
@@ -1316,6 +1343,7 @@ requires-dist = [
     { name = "auth", editable = "services/auth" },
     { name = "data-store", editable = "services/data-store" },
     { name = "portfolio", editable = "services/portfolio" },
+    { name = "shared", editable = "services/shared" },
     { name = "web", editable = "services/web" },
 ]
 
