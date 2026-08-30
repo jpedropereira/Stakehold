@@ -122,9 +122,9 @@ upload a broker export file. htmx partial updates for form submission feedback.
 ### 12. Portfolio view UI
 
 Views of the portfolio by account and by value/returns: position listing per account, return-over-
-time chart (the lightweight JS charting library named in `web/docs/architecture.md`), calling
-task 9's positions/returns endpoints. Gains/losses rendered with `--forest`/`--oxblood` per the
-brand charter, numbers in `--font-mono`.
+time chart (a lightweight JS charting library, per `web/docs/architecture.md` — not yet named,
+needs picking as part of this task), calling task 9's positions/returns endpoints. Gains/losses
+rendered with `--forest`/`--oxblood` per the brand charter, numbers in `--font-mono`.
 
 ### 13. End-to-end integration & smoke test
 
