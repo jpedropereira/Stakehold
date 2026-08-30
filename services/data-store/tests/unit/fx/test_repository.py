@@ -3,7 +3,12 @@ from datetime import date
 import numpy as np
 import pandas as pd
 import pytest
-from data_store.fx.repository import get_earliest_fx_dates, save_fx_rates
+from data_store.fx.repository import (
+    get_dates_with_rate,
+    get_earliest_fx_dates,
+    get_rate_series,
+    save_fx_rates,
+)
 
 
 class FakeCopy:
@@ -206,3 +211,49 @@ def test_get_earliest_fx_dates_query_shape():
     assert "MIN(rate_date)" in sql
     assert "GROUP BY" in sql
     assert params[0] == "yfinance"
+
+
+# --- get_rate_series -------------------------------------------------------------------------
+
+
+def test_get_rate_series_query_shape():
+    conn = FakeConnection(fetch_result=[])
+
+    get_rate_series(conn, "EUR", "USD", "yfinance", date(2024, 1, 1), date(2024, 1, 31))
+
+    sql, params = conn._cursor.executed[0]
+    assert "fx_rates" in sql
+    assert "BETWEEN" in sql
+    assert "ORDER BY rate_date" in sql
+    assert params == ("EUR", "USD", "yfinance", date(2024, 1, 1), date(2024, 1, 31))
+
+
+def test_get_rate_series_returns_rows_verbatim():
+    row = (date(2024, 1, 2), 1.0842)
+    conn = FakeConnection(fetch_result=[row])
+
+    result = get_rate_series(conn, "EUR", "USD", "yfinance", date(2024, 1, 1), date(2024, 1, 31))
+
+    assert result == [row]
+
+
+# --- get_dates_with_rate ----------------------------------------------------------------------
+
+
+def test_get_dates_with_rate_query_shape():
+    conn = FakeConnection(fetch_result=[])
+
+    get_dates_with_rate(conn, "USD", "yfinance", date(2024, 1, 1), date(2024, 1, 31))
+
+    sql, params = conn._cursor.executed[0]
+    assert "fx_rates" in sql
+    assert "base_currency = %s OR quote_currency = %s" in sql
+    assert params == ("USD", "USD", "yfinance", date(2024, 1, 1), date(2024, 1, 31))
+
+
+def test_get_dates_with_rate_returns_distinct_dates_as_a_flat_list():
+    conn = FakeConnection(fetch_result=[(date(2024, 1, 2),), (date(2024, 1, 3),)])
+
+    result = get_dates_with_rate(conn, "USD", "yfinance", date(2024, 1, 1), date(2024, 1, 31))
+
+    assert result == [date(2024, 1, 2), date(2024, 1, 3)]
