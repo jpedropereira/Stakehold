@@ -3,12 +3,14 @@
 Stakehold is an application to manage different financial portfolios, calculate
 their returns, and identify possible improvements.
 
-It's a uv workspace containing two services:
+It's a uv workspace containing four services:
 
 - `services/data-store/` — the `data_store` package: scrapes ETF holdings, ingests daily prices
   and dividend events into Postgres, orchestrated by Airflow. See
   [its README](services/data-store/README.md) for setup and the ingestion commands.
 - `services/portfolio/` — the `portfolio` package (scaffolding; no business logic yet)
+- `services/web/` — the `web` package (scaffolding; no business logic yet)
+- `services/auth/` — the `auth` package (scaffolding; no business logic yet)
 
 ## Development setup
 

@@ -3,16 +3,20 @@ name = "stakehold"
 version = "0.1.0"
 requires-python = ">=3.14"
 dependencies = [
+    "auth",
     "data-store",
     "portfolio",
+    "web",
 ]
 
 [tool.uv]
 package = false
 
 [tool.uv.sources]
+auth = { workspace = true }
 data-store = { workspace = true }
 portfolio = { workspace = true }
+web = { workspace = true }
 
 [tool.uv.workspace]
 members = ["services/*"]

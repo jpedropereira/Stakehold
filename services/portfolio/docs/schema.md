@@ -10,34 +10,21 @@ it in lockstep with any future schema change, the same discipline
 out this way*, see [`architecture.md`](architecture.md), which this document turns from a
 conceptual entity model into concrete tables.
 
-Five tables: `users` and `accounts` (who owns what), `transactions` (the immutable ledger), and
-`position_snapshots` / `return_snapshots` (derived, materialized, rebuildable). The manual
-broker-instrument → `data-store`-ticker mapping is **not** a table here — it's defined in a YAML
-config file for now; see "Ticker mappings — not a table here" below.
+Four tables: `accounts` (who owns what — `user_id` is a plain UUID referencing `auth`, not a local
+`users` table), `transactions` (the immutable ledger), and `position_snapshots` /
+`return_snapshots` (derived, materialized, rebuildable). The manual broker-instrument →
+`data-store`-ticker mapping is **not** a table here — it's defined in a YAML config file for now;
+see "Ticker mappings — not a table here" below.
 
-## `users`
+## Users — not a table here
 
-Deliberately minimal. No identity/authentication service exists anywhere in this application yet,
-so this table is a bootstrap identity stand-in — enough for `accounts.user_id` to reference
-something real and human-readable — not a real profile/identity store. Portfolio still doesn't own
-*authentication* (credentials, sessions, login), per `architecture.md`'s non-goals.
-
-| Column | Type | Notes |
-|---|---|---|
-| `id` | `BIGSERIAL PRIMARY KEY` | Surrogate PK. |
-| `email` | `VARCHAR(255) NOT NULL UNIQUE` | The only identifying field, for now. |
-| `display_name` | `VARCHAR(100)` | Optional, for CLI/UI display. |
-| `created_at` | `TIMESTAMPTZ NOT NULL DEFAULT now()` | |
-
-No indexes beyond the implied ones (the PK, and the `UNIQUE` constraint on `email`).
-
-**Loading strategy**: single-row insert via a `user add` CLI command. That command isn't yet listed
-in `architecture.md`'s flow table — flagged here rather than silently added there in this pass.
-
-**Expect this table to move.** If a dedicated identity/auth service appears later, `users` is the
-one table in this document designed to be handed off wholesale — nothing else in portfolio owns
-any column on it beyond the `id` it references, so relocating it costs a foreign-key repoint, not
-a redesign.
+Originally proposed as a local `BIGSERIAL`-keyed bootstrap table (`id`, `email`, `display_name`)
+standing in for a dedicated identity service, and signed off on as such in an earlier pass of this
+document. **Removed here, not an oversight**: per
+[`auth/docs/architecture.md`](../../auth/docs/architecture.md), `auth` is the sole owner and issuer
+of user identity from the start, so there is nothing for portfolio to bootstrap or later hand off.
+`accounts.user_id` stores the UUID `auth` issues at signup directly, as a trusted plain column — see
+`accounts` below.
 
 ## `accounts`
 
@@ -46,7 +33,7 @@ One row per brokerage account a user has told portfolio about.
 | Column | Type | Notes |
 |---|---|---|
 | `id` | `BIGSERIAL PRIMARY KEY` | Surrogate PK — what `transactions` and the snapshot tables reference. |
-| `user_id` | `BIGINT NOT NULL REFERENCES users(id)` | |
+| `user_id` | `UUID NOT NULL` | The id `auth` issues at signup. Trusted plain column, not a foreign key — there's no local `users` table to reference, and portfolio never opens a connection to `auth`'s database. Not validated against `auth` at write time; see the open items below. |
 | `broker` | `VARCHAR(50) NOT NULL` | e.g. `'acme'`, `'globex'` — matches `broker_import`'s registry keys. Validated at the app layer, not a DB `CHECK`, the same convention data-store uses for `raw_market_data.asset_type`. |
 | `account_label` | `VARCHAR(100) NOT NULL` | User-chosen, e.g. `'acme-main'` — what `--account` on the CLI actually takes. |
 | `created_at` | `TIMESTAMPTZ NOT NULL DEFAULT now()` | |
@@ -65,7 +52,9 @@ later if richer per-fund metadata needs to live in the DB"). The same applies he
 `brokers` table is a cheap follow-up if broker-level metadata (display name, supported file
 formats, docs links) ever needs to live in the database rather than in code.
 
-**Loading strategy**: single-row insert via `account add --user <id> --broker <key>`.
+**Loading strategy**: single-row insert via `account add --user <id> --broker <key>`, where `<id>`
+is the UUID `auth` issued at signup — pasted in by the caller, not looked up or validated against
+`auth` (see open items).
 
 ## Ticker mappings — not a table here
 
@@ -211,7 +200,14 @@ extending past that point.
 - **`position_snapshots.native_currency`/`average_cost_native`'s single-currency-per-instrument
   assumption** is stated, not verified against a real multi-currency same-ticker case.
 - **The `data-store` read API** this schema's `return_snapshots` rebuild depends on doesn't exist
-  yet — see `architecture.md`'s cross-service prerequisite. `users`, `accounts`, `transactions`,
-  and `position_snapshots` need nothing from it and can be built and tested first.
+  yet — see `architecture.md`'s cross-service prerequisite. `accounts`, `transactions`, and
+  `position_snapshots` need nothing from it and can be built and tested first.
 - **The YAML → database migration path for ticker mappings**, once a UI exists, isn't designed
   yet — see `architecture.md`'s cross-cutting decision on ticker-mapping storage.
+- **`accounts.user_id` is unvalidated at write time.** There's no foreign key (no local `users`
+  table to reference) and no call to `auth` to confirm the UUID is real — `account add` accepts any
+  syntactically valid UUID. Acceptable for a solo hobby deployment; worth revisiting once `auth` has
+  a real API to check against.
+- **No real UUID exists to test with yet.** `auth` doesn't have a working signup endpoint (see
+  `auth/docs/architecture.md`'s open questions), so exercising `account add` today needs an ad hoc
+  UUID (hand-generated, or a test fixture) rather than one actually issued by `auth`.
