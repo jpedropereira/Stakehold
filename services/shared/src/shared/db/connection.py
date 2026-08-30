@@ -15,7 +15,8 @@ def transaction(conn):
 
     Rolling back on failure matters beyond correctness: a failed statement leaves Postgres's
     transaction aborted, so every later statement on this connection would fail too until
-    something rolls it back.
+    something rolls it back. Callers that isolate one unit's failure and keep going (e.g. a
+    per-ticker or per-batch loop) depend on this to leave the connection usable for the next one.
     """
     try:
         yield
@@ -27,6 +28,6 @@ def transaction(conn):
 
 def apply_schema(conn, schema_path: Path) -> None:
     sql = schema_path.read_text()
-    with conn.cursor() as cur:
-        cur.execute(sql)
-    conn.commit()
+    with transaction(conn):
+        with conn.cursor() as cur:
+            cur.execute(sql)

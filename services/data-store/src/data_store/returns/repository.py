@@ -1,7 +1,7 @@
 import logging
 
 import pandas as pd
-from data_store.db.connection import transaction
+from shared.db.connection import transaction
 
 logger = logging.getLogger(__name__)
 

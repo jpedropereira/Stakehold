@@ -43,11 +43,14 @@ none of them depend on each other.
 [`data-schema.md`](.claude/rules/data-schema.md): `users` (with `display_name`) and `sessions`
 (opaque token stored only as a `SHA-256` hash, plus a fixed `absolute_expires_at` cap alongside
 sliding renewal — both decisions recorded there and in `architecture.md`). Implemented:
-`settings.py` (`AUTH_DATABASE_URL`, not the bare `DATABASE_URL` data-store owns), `db/connection.py`
-+ `db/schema.sql`, `logging_config.py`, `jobs.py`/`cli.py` (`auth db init`), dedicated
-`auth-postgres` in `docker-compose.yml` (isolated from `app-postgres`/`data-store-postgres`), CI
-service container + `AUTH_DATABASE_URL` wiring. Unit tests (`settings`, `db/connection`, `cli`) and
-integration tests (`db init` idempotency, email uniqueness, cascade delete, token-hash uniqueness)
+`settings.py` (`AUTH_DATABASE_URL`, not the bare `DATABASE_URL` data-store owns), `db/schema.sql`,
+`jobs.py`/`cli.py` (`auth db init`), dedicated `auth-postgres` in `docker-compose.yml` (isolated
+from `app-postgres`/`data-store-postgres`), CI service container + `AUTH_DATABASE_URL` wiring. The
+connection/transaction helper and log setup underneath moved to `services/shared`, a workspace
+package `data-store` also depends on, once `auth`'s copy of both turned out to be near-identical to
+`data-store`'s own — see `services/shared/docs/architecture.md`. Unit tests (`settings`, `cli`,
+`jobs`) and integration tests (`db init` idempotency, email uniqueness, cascade delete, token-hash
+uniqueness)
 under `services/auth/tests/`.
 
 ### 2. Auth identity API
