@@ -9,7 +9,13 @@ from auth.service import (
     SessionInvalid,
 )
 from auth.settings import Settings, load_settings
-from auth.throttle import LoginThrottle
+from auth.throttle import (
+    LOGIN_MAX_ATTEMPTS,
+    LOGIN_WINDOW_SECONDS,
+    SIGNUP_MAX_ATTEMPTS,
+    SIGNUP_WINDOW_SECONDS,
+    AttemptThrottle,
+)
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from shared.db.pool import connection_pool
@@ -29,7 +35,14 @@ def _lifespan(settings: Settings):
         pool.open(wait=True)
         app.state.pool = pool
         app.state.settings = settings
-        app.state.throttle = LoginThrottle()
+        # Two limiters, not one: they count different things (login counts failures and
+        # resets on success; signup counts every attempt) and must not share a window.
+        app.state.login_throttle = AttemptThrottle(
+            max_attempts=LOGIN_MAX_ATTEMPTS, window_seconds=LOGIN_WINDOW_SECONDS
+        )
+        app.state.signup_throttle = AttemptThrottle(
+            max_attempts=SIGNUP_MAX_ATTEMPTS, window_seconds=SIGNUP_WINDOW_SECONDS
+        )
         logger.info(
             "auth api: started, pool opened (min=%d, max=%d).",
             settings.pool_min_size,

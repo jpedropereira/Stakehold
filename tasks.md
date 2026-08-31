@@ -62,10 +62,14 @@ session tokens (`tokens.py`, SHA-256-hashed at rest). `auth` sets the session co
 sliding renewal on validation, clamped to the fixed `absolute_expires_at` cap
 (`sessions/repository.py`). `psycopg_pool.ConnectionPool` opened in the FastAPI lifespan
 (`shared.db.pool`, new in this task) rather than a connection per request. Shared-secret check
-(`X-Internal-Secret`) on every route except `/health`. Also shipped: an in-process login-failure
-throttle (`throttle.py` — per-worker, resets on restart, see `docs/architecture.md`'s open
-questions), user-enumeration defence (`passwords.dummy_verify`), and `auth sessions purge-expired`
-(`cli.py`/`jobs.py`) for the expired-session sweep. Unit tests (`tests/unit/`, fake repositories
+(`X-Internal-Secret`) on every route except `/health`. Also shipped: in-process sliding-window
+throttles on both login failures and signup attempts (`throttle.py`, `AttemptThrottle` — per-worker,
+resets on restart, see `docs/architecture.md`'s open questions), user-enumeration defence
+(`passwords.dummy_verify`), and `auth sessions purge-expired` (`cli.py`/`jobs.py`) for the
+expired-session sweep. Signup's user and session rows are written in one transaction, owned by the
+service rather than the repositories (`docs/architecture.md`, "Transaction boundaries"). Compose
+runs `auth db init` as a one-shot `db-init` service the API waits on, and `/health` reports `503`
+unless the schema is actually there. Unit tests (`tests/unit/`, fake repositories
 for the service/API layers) and integration tests (`tests/integration/`, live Postgres: full
 signup→validate→logout round trip, duplicate-email handling, sliding-renewal and
 absolute-cap-clamping behaviour, the purge job).
@@ -141,7 +145,9 @@ FastAPI + Jinja2 + htmx scaffold, no build step. Base layout using the brand tok
 (`brand/tokens.css`) — Fraunces headlines, Inter body, IBM Plex Mono for numbers. Register, login,
 logout pages calling task 2's auth API server-to-server; session identity forwarded as a cookie,
 never exposed to browser JS. CSRF protection on state-changing routes (web's own responsibility,
-per its architecture doc).
+per its architecture doc). **Must forward the browser's address to `auth` as `X-Forwarded-For`** —
+`auth`'s login/signup throttles key on it, and without it every request looks like it came from
+`web` itself (see `services/auth/docs/architecture.md`, "Login throttling and user enumeration").
 
 ### 11. Portfolio entry UI
 

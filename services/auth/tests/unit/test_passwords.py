@@ -41,3 +41,13 @@ def test_hash_password_accepts_a_password_at_the_max_length():
     at_max = "a" * passwords.MAX_PASSWORD_LENGTH
 
     passwords.hash_password(at_max)
+
+
+def test_verify_returns_false_for_a_corrupt_stored_hash():
+    # A truncated/corrupt column value raises InvalidHashError, which is not a VerificationError
+    # -- if it escapes, login 500s and the caller's failed attempt never reaches the throttle.
+    assert passwords.verify_password("not-a-phc-string", "correct horse battery staple") is False
+
+
+def test_verify_returns_false_for_an_empty_stored_hash():
+    assert passwords.verify_password("", "correct horse battery staple") is False

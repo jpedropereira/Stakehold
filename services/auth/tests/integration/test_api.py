@@ -3,6 +3,7 @@ import os
 import psycopg
 import pytest
 from auth import cli
+from auth import service as service_module
 from auth.api.app import create_app
 from fastapi.testclient import TestClient
 
@@ -146,3 +147,27 @@ def test_purge_expired_deletes_only_expired_sessions(client):
         cur.execute("SELECT COUNT(*) FROM sessions")
         remaining = cur.fetchone()[0]
     assert remaining == 1
+
+
+def test_health_reports_ok_once_the_schema_is_applied(client):
+    response = client.get("/health")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"
+
+
+def test_signup_leaves_no_user_behind_when_creating_the_session_fails(client, monkeypatch):
+    """Real rollback, not the fake connection's commit counter: an orphaned user would be a
+    committed account nobody can sign up as again (409) and nobody was ever logged in to."""
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("session insert failed")
+
+    monkeypatch.setattr(service_module.sessions_repository, "insert_session", boom)
+
+    with pytest.raises(RuntimeError):
+        _signup(client, "atomic@example.com")
+
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM users WHERE email = %s", ("atomic@example.com",))
+        assert cur.fetchone()[0] == 0

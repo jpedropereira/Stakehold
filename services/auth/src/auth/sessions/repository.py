@@ -2,8 +2,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
-from shared.db.connection import transaction
-
 
 @dataclass(frozen=True)
 class SessionUser:
@@ -23,7 +21,8 @@ def insert_session(
     expires_at: datetime,
     absolute_expires_at: datetime,
 ) -> None:
-    with transaction(conn), conn.cursor() as cur:
+    """Does not commit -- the calling service owns the transaction. See architecture.md."""
+    with conn.cursor() as cur:
         cur.execute(
             "INSERT INTO sessions "
             "(id, token_hash, user_id, created_at, last_seen_at, expires_at, absolute_expires_at) "
@@ -41,7 +40,7 @@ def renew_and_fetch(
     Clamping to absolute_expires_at here (not just at login) is what keeps a continuously-renewed
     session from ever living past its absolute cap -- see schema.md.
     """
-    with transaction(conn), conn.cursor() as cur:
+    with conn.cursor() as cur:
         cur.execute(
             """
             WITH renewed AS (
@@ -65,12 +64,12 @@ def renew_and_fetch(
 
 def delete_by_token_hash(conn, token_hash: bytes) -> None:
     """Idempotent -- logging out an already-gone/unknown session is not an error."""
-    with transaction(conn), conn.cursor() as cur:
+    with conn.cursor() as cur:
         cur.execute("DELETE FROM sessions WHERE token_hash = %s", (token_hash,))
 
 
 def delete_expired(conn, now: datetime) -> int:
-    with transaction(conn), conn.cursor() as cur:
+    with conn.cursor() as cur:
         cur.execute(
             "DELETE FROM sessions WHERE expires_at <= %s OR absolute_expires_at <= %s",
             (now, now),

@@ -46,7 +46,7 @@ class FakeConnection:
         self.rolled_back = True
 
 
-def test_insert_session_executes_a_parameterized_insert_and_commits():
+def test_insert_session_executes_a_parameterized_insert_without_committing():
     conn = FakeConnection()
     session_id = uuid.uuid4()
     user_id = uuid.uuid4()
@@ -65,7 +65,9 @@ def test_insert_session_executes_a_parameterized_insert_and_commits():
     assert "INSERT INTO sessions" in sql
     assert params[0] == session_id
     assert params[2] == user_id
-    assert conn.committed is True
+    # See users/test_repository.py: transactions are the calling service's to own, not the
+    # repository's, so signup can put both inserts in one.
+    assert conn.committed is False
 
 
 def test_renew_and_fetch_returns_none_when_no_matching_row():
@@ -110,7 +112,7 @@ def test_delete_by_token_hash_is_a_plain_delete():
     sql, params = conn._cursor.executed[0]
     assert "DELETE FROM sessions" in sql
     assert params == (b"\x02" * 32,)
-    assert conn.committed is True
+    assert conn.committed is False
 
 
 def test_delete_expired_returns_the_deleted_count():

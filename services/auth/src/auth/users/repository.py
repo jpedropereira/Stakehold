@@ -2,8 +2,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
-from shared.db.connection import transaction
-
 
 @dataclass(frozen=True)
 class User:
@@ -16,8 +14,12 @@ class User:
 
 def insert_user(conn, *, user_id: UUID, email: str, display_name: str, password_hash: str) -> None:
     """Raises psycopg.errors.UniqueViolation on a duplicate email -- service.py translates that
-    into the domain-level EmailAlreadyRegistered."""
-    with transaction(conn), conn.cursor() as cur:
+    into the domain-level EmailAlreadyRegistered.
+
+    Does not commit: the calling service owns the transaction, so signup can put this insert and
+    the session insert in one unit of work. See architecture.md, "Transaction boundaries".
+    """
+    with conn.cursor() as cur:
         cur.execute(
             "INSERT INTO users (id, email, display_name, password_hash) VALUES (%s, %s, %s, %s)",
             (user_id, email, display_name, password_hash),

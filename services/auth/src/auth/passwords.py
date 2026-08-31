@@ -1,5 +1,5 @@
 from argon2 import PasswordHasher
-from argon2.exceptions import VerifyMismatchError
+from argon2.exceptions import InvalidHashError, VerificationError
 
 # Argon2id is argon2-cffi's default Type, matching architecture.md's choice over bcrypt.
 _hasher = PasswordHasher()
@@ -26,9 +26,16 @@ def hash_password(password: str) -> str:
 
 
 def verify_password(password_hash: str, password: str) -> bool:
+    """False for any hash that doesn't verify, including one that can't be parsed at all.
+
+    A truncated or otherwise corrupt `password_hash` column raises InvalidHashError, which is a
+    ValueError and *not* a VerificationError. Letting it escape would turn a bad row into a 500
+    and, worse, skip the caller's throttle bookkeeping -- so the unauthenticated caller sees a
+    different response for that account and gets unlimited attempts at it.
+    """
     try:
         _hasher.verify(password_hash, password)
-    except VerifyMismatchError:
+    except VerificationError, InvalidHashError:
         return False
     return True
 
@@ -47,5 +54,5 @@ def dummy_verify() -> None:
     """
     try:
         _hasher.verify(_DUMMY_HASH, "not-the-real-password")
-    except VerifyMismatchError:
+    except VerificationError, InvalidHashError:
         pass

@@ -28,9 +28,12 @@ def _int_env(name: str, default: int) -> int:
 
 def _bool_env(name: str, default: bool) -> bool:
     raw = os.environ.get(name)
-    if raw is None:
+    if raw is None or not raw.strip():
+        # Set-but-empty falls back to the default, matching _int_env. Reading it as False instead
+        # would let `AUTH_COOKIE_SECURE=` (or an unset compose variable interpolating to nothing)
+        # silently strip the session cookie's Secure flag in production.
         return default
-    return raw.strip().lower() not in ("0", "false", "no", "")
+    return raw.strip().lower() not in ("0", "false", "no")
 
 
 def load_settings() -> Settings:
