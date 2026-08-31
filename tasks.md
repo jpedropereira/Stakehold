@@ -21,8 +21,8 @@ one-time snapshot.
 | 1 | [Auth schema & foundation](#1-auth-schema--foundation) | — | done |
 | 2 | [Auth identity API](#2-auth-identity-api) | 1 | done |
 | 3 | [Data-store read API](#3-data-store-read-api) | — | done |
-| 4 | [Portfolio foundation & schema sign-off](#4-portfolio-foundation--schema-sign-off) | — | ready |
-| 5 | [Accounts & manual transactions](#5-accounts--manual-transactions) | 4 | blocked |
+| 4 | [Portfolio foundation & schema sign-off](#4-portfolio-foundation--schema-sign-off) | — | done |
+| 5 | [Accounts & manual transactions](#5-accounts--manual-transactions) | 4 | ready |
 | 6 | [Broker import](#6-broker-import) | 5 | blocked |
 | 7 | [Positions](#7-positions) | 6 | blocked |
 | 8 | [Returns](#8-returns) | 7, 3 | blocked |
@@ -32,8 +32,8 @@ one-time snapshot.
 | 12 | [Portfolio view UI](#12-portfolio-view-ui) | 11 | blocked |
 | 13 | [End-to-end integration & smoke test](#13-end-to-end-integration--smoke-test) | 12 | blocked |
 
-Two tasks are `ready` today: **4** (portfolio) and **10** (web) — independent of each other, both
-unblocked now that tasks 1–3 are all `done`.
+Two tasks are `ready` today: **5** (portfolio) and **10** (web) — independent of each other, both
+unblocked now that tasks 1–4 are all `done`.
 
 ## Tasks
 
@@ -94,13 +94,28 @@ match (FX is not modeled as a yfinance-style ticker) and updated to point at the
 writing `datastore_client/http_client.py` against it remains task 8's own work, not a blocker on
 this task.
 
-### 4. Portfolio foundation & schema sign-off
+### 4. Portfolio foundation & schema sign-off — done
 
-`services/portfolio/docs/schema.md` is already drafted in detail but is explicitly marked
-"proposal, not yet implemented" — confirm it (or amend) with the user before writing
-`schema.sql`, per [`data-schema.md`](.claude/rules/data-schema.md). Then: `settings.py`,
-`db/connection.py` + `schema.sql`, `jobs.py`/`pipeline.py` skeleton, `run_result.py` (same
-`{"status", "rows_saved"}` contract as data-store's), `cli.py` skeleton, `app-postgres` wiring.
+`services/portfolio/docs/schema.md` signed off per
+[`data-schema.md`](.claude/rules/data-schema.md) and implemented as `src/portfolio/db/schema.sql`
+(`accounts`, `transactions`, `position_snapshots`, `return_snapshots`, every statement guarded so
+`portfolio db init` is safe to rerun). One amendment at sign-off: `transactions.broker` was
+dropped and the idempotent-import key narrowed to `UNIQUE (account_id, broker_transaction_ref)` —
+an account has exactly one broker, so the column was functionally dependent on `account_id` and
+could only ever disagree with it. Implemented: `settings.py` (`PORTFOLIO_DATABASE_URL`, not the
+bare `DATABASE_URL` data-store owns), `run_result.py` (data-store's `{"status", "rows_saved"}`
+contract, replicated not imported), `jobs.py`/`cli.py` (`portfolio db init`), `app-postgres` in
+`services/portfolio/docker-compose.yml` (port 5435, isolated from `data-store-postgres` and
+`auth-postgres`), `.env.example`, CI service container + `PORTFOLIO_DATABASE_URL` wiring. Unit
+tests (`settings`, `run_result`, `cli`, `jobs`) and integration tests (`db init` idempotency,
+per-user label uniqueness, account-scoped import idempotency, FK enforcement, snapshot keys)
+under `services/portfolio/tests/`.
+
+**Two deliverables named in the original scope were dropped, deliberately.** `db/connection.py`:
+that code moved to the `shared` workspace package during task 1, so portfolio imports
+`shared.db.connection` rather than becoming a third copy. `pipeline.py`: `db init` doesn't route
+through it in either existing service, and a file holding only a logger is dead code — task 5's
+`account add` is the first flow that needs one, and creates it.
 
 ### 5. Accounts & manual transactions
 
