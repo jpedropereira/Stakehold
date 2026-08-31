@@ -1,5 +1,4 @@
 import httpx
-
 from web.auth_client.base import AuthResult, AuthUser
 from web.auth_client.errors import (
     AuthUnavailable,
@@ -42,9 +41,7 @@ class HttpAuthClient:
         except httpx.HTTPError as exc:
             raise AuthUnavailable(str(exc)) from exc
 
-    def signup(
-        self, *, email: str, password: str, display_name: str, client_ip: str
-    ) -> AuthResult:
+    def signup(self, *, email: str, password: str, display_name: str, client_ip: str) -> AuthResult:
         response = self._request(
             "POST",
             "/signup",

@@ -149,7 +149,11 @@ def test_login_with_wrong_password_is_rejected(web_client):
     login_csrf = _csrf_token(web_client.get("/login"))
     response = web_client.post(
         "/login",
-        data={"email": "bob@example.com", "password": "wrong-password", "csrf_token": login_csrf},
+        data={
+            "email": "bob@example.com",
+            "password": "wrong-password",  # pragma: allowlist secret
+            "csrf_token": login_csrf,
+        },
     )
 
     assert response.status_code == 401

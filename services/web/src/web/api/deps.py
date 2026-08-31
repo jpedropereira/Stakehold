@@ -1,6 +1,5 @@
 from fastapi import Depends, Request, Response
 from fastapi.templating import Jinja2Templates
-
 from web.auth_client.base import AuthClient, AuthUser
 from web.auth_client.errors import AuthClientError
 from web.settings import Settings
