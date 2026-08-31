@@ -203,7 +203,11 @@ def test_login_success_redirects_and_proxies_cookie(client):
 
     response = test_client.post(
         "/login",
-        data={"email": "ann@example.com", "password": "hunter2hunter2", "csrf_token": token},
+        data={
+            "email": "ann@example.com",
+            "password": "hunter2hunter2",  # pragma: allowlist secret
+            "csrf_token": token,
+        },
         follow_redirects=False,
     )
 
@@ -220,7 +224,11 @@ def test_login_invalid_credentials(client):
 
     response = test_client.post(
         "/login",
-        data={"email": "ann@example.com", "password": "wrong", "csrf_token": token},
+        data={
+            "email": "ann@example.com",
+            "password": "wrong",  # pragma: allowlist secret
+            "csrf_token": token,
+        },
     )
 
     assert response.status_code == 401
@@ -289,7 +297,11 @@ def test_login_htmx_success_returns_hx_redirect(client):
 
     response = test_client.post(
         "/login",
-        data={"email": "ann@example.com", "password": "hunter2hunter2", "csrf_token": token},
+        data={
+            "email": "ann@example.com",
+            "password": "hunter2hunter2",  # pragma: allowlist secret
+            "csrf_token": token,
+        },
         headers={"HX-Request": "true"},
     )
 
@@ -319,7 +331,7 @@ def test_signup_success_redirects_and_proxies_cookie(client):
         "/signup",
         data={
             "email": "ann@example.com",
-            "password": "hunter2hunter2",
+            "password": "hunter2hunter2",  # pragma: allowlist secret
             "display_name": "Ann",
             "csrf_token": token,
         },
@@ -340,7 +352,7 @@ def test_signup_email_already_registered(client):
         "/signup",
         data={
             "email": "ann@example.com",
-            "password": "hunter2hunter2",
+            "password": "hunter2hunter2",  # pragma: allowlist secret
             "display_name": "Ann",
             "csrf_token": token,
         },
@@ -357,7 +369,7 @@ def test_signup_without_csrf_cookie_is_rejected(client):
         "/signup",
         data={
             "email": "ann@example.com",
-            "password": "hunter2hunter2",
+            "password": "hunter2hunter2",  # pragma: allowlist secret
             "display_name": "Ann",
             "csrf_token": "anything",
         },
@@ -377,9 +389,7 @@ def test_logout_clears_cookie_and_redirects(client):
     home_response = test_client.get("/")
     csrf_token = home_response.cookies["stakehold_csrf"]
 
-    response = test_client.post(
-        "/logout", data={"csrf_token": csrf_token}, follow_redirects=False
-    )
+    response = test_client.post("/logout", data={"csrf_token": csrf_token}, follow_redirects=False)
 
     assert response.status_code == 303
     assert response.headers["location"] == "/login"
@@ -407,9 +417,7 @@ def test_logout_survives_auth_unavailable(client):
     csrf_token = home_response.cookies["stakehold_csrf"]
     fake_auth.logout_error = AuthUnavailable("boom")
 
-    response = test_client.post(
-        "/logout", data={"csrf_token": csrf_token}, follow_redirects=False
-    )
+    response = test_client.post("/logout", data={"csrf_token": csrf_token}, follow_redirects=False)
 
     assert response.status_code == 303
     assert response.headers["location"] == "/login"

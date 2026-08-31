@@ -6,7 +6,6 @@ def _serve(_args: argparse.Namespace) -> int:
     # Imported lazily so importing web.cli doesn't pay for FastAPI/uvicorn unless `web serve`
     # actually runs -- mirrors auth.cli's same reasoning.
     import uvicorn
-
     from web.api.app import create_app
     from web.settings import load_settings
 

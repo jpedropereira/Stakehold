@@ -2,7 +2,6 @@ import logging
 
 from fastapi import APIRouter, Depends, Form, Request, Response, status
 from fastapi.responses import RedirectResponse
-
 from web.api.csrf import CsrfInvalid, ensure_csrf_cookie, verify_csrf
 from web.api.deps import (
     client_ip,

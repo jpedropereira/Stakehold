@@ -9,7 +9,6 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from shared.logging_config import configure_logging
 from starlette import status
-
 from web.api.deps import AuthRequired
 from web.api.routes import health_router, router
 from web.api.security_headers import SecurityHeadersMiddleware

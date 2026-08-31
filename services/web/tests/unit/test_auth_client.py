@@ -33,7 +33,10 @@ def test_signup_sends_internal_secret_and_forwarded_for():
 
     client = _client(handler)
     result = client.signup(
-        email="a@example.com", password="hunter2hunter2", display_name="Ann", client_ip="1.2.3.4"
+        email="a@example.com",
+        password="hunter2hunter2",  # pragma: allowlist secret
+        display_name="Ann",
+        client_ip="1.2.3.4",
     )
 
     assert captured["headers"]["x-internal-secret"] == INTERNAL_SECRET
@@ -54,7 +57,11 @@ def test_login_sends_internal_secret_and_forwarded_for():
         )
 
     client = _client(handler)
-    result = client.login(email="a@example.com", password="hunter2hunter2", client_ip="9.9.9.9")
+    result = client.login(
+        email="a@example.com",
+        password="hunter2hunter2",  # pragma: allowlist secret
+        client_ip="9.9.9.9",
+    )
 
     assert captured["headers"]["x-internal-secret"] == INTERNAL_SECRET
     assert captured["headers"]["x-forwarded-for"] == "9.9.9.9"
@@ -65,21 +72,33 @@ def test_login_401_raises_invalid_credentials():
     client = _client(lambda request: httpx.Response(401, json={"detail": "invalid"}))
 
     with pytest.raises(InvalidCredentials):
-        client.login(email="a@example.com", password="wrong", client_ip="1.1.1.1")
+        client.login(
+            email="a@example.com",
+            password="wrong",  # pragma: allowlist secret
+            client_ip="1.1.1.1",
+        )
 
 
 def test_login_429_raises_rate_limited():
     client = _client(lambda request: httpx.Response(429, json={"detail": "slow down"}))
 
     with pytest.raises(RateLimited):
-        client.login(email="a@example.com", password="wrong", client_ip="1.1.1.1")
+        client.login(
+            email="a@example.com",
+            password="wrong",  # pragma: allowlist secret
+            client_ip="1.1.1.1",
+        )
 
 
 def test_login_422_raises_invalid_request():
     client = _client(lambda request: httpx.Response(422, json={"detail": []}))
 
     with pytest.raises(InvalidRequest):
-        client.login(email="a@example.com", password="wrong", client_ip="1.1.1.1")
+        client.login(
+            email="a@example.com",
+            password="wrong",  # pragma: allowlist secret
+            client_ip="1.1.1.1",
+        )
 
 
 def test_signup_409_raises_email_already_registered():
@@ -87,7 +106,10 @@ def test_signup_409_raises_email_already_registered():
 
     with pytest.raises(EmailAlreadyRegistered):
         client.signup(
-            email="a@example.com", password="hunter2hunter2", display_name="Ann", client_ip="1.1.1.1"
+            email="a@example.com",
+            password="hunter2hunter2",  # pragma: allowlist secret
+            display_name="Ann",
+            client_ip="1.1.1.1",
         )
 
 
