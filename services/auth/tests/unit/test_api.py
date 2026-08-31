@@ -32,7 +32,7 @@ class _FakePool:
 def _settings(**overrides):
     kwargs = dict(
         database_url="postgresql://unused",
-        internal_secret="test-secret",
+        internal_secret="test-secret",  # pragma: allowlist secret
         session_ttl_days=14,
         session_absolute_ttl_days=90,
         cookie_secure=False,
@@ -56,7 +56,9 @@ def client(repos, monkeypatch):
 
 def _signup(test_client, settings, **overrides):
     body = dict(
-        email="person@example.com", password="correct horse battery staple", display_name="Person"
+        email="person@example.com",
+        password="correct horse battery staple",  # pragma: allowlist secret
+        display_name="Person",
     )
     body.update(overrides)
     return test_client.post(
@@ -79,7 +81,7 @@ def test_signup_without_internal_secret_is_rejected(client):
         "/signup",
         json={
             "email": "a@example.com",
-            "password": "correct horse battery staple",
+            "password": "correct horse battery staple",  # pragma: allowlist secret
             "display_name": "A",
         },
     )
@@ -94,10 +96,10 @@ def test_signup_with_wrong_internal_secret_is_rejected(client):
         "/signup",
         json={
             "email": "a@example.com",
-            "password": "correct horse battery staple",
+            "password": "correct horse battery staple",  # pragma: allowlist secret
             "display_name": "A",
         },
-        headers={"X-Internal-Secret": "not-the-secret"},
+        headers={"X-Internal-Secret": "not-the-secret"},  # pragma: allowlist secret
     )
 
     assert response.status_code == 401
@@ -157,7 +159,10 @@ def test_login_with_correct_password_returns_200_and_sets_cookie(client):
 
     response = test_client.post(
         "/login",
-        json={"email": "person@example.com", "password": "correct horse battery staple"},
+        json={
+            "email": "person@example.com",
+            "password": "correct horse battery staple",  # pragma: allowlist secret
+        },
         headers={"X-Internal-Secret": settings.internal_secret},
     )
 
@@ -172,7 +177,10 @@ def test_login_with_wrong_password_returns_401(client):
 
     response = test_client.post(
         "/login",
-        json={"email": "person@example.com", "password": "wrong password"},
+        json={
+            "email": "person@example.com",
+            "password": "wrong password",  # pragma: allowlist secret
+        },
         headers={"X-Internal-Secret": settings.internal_secret},
     )
 
@@ -184,7 +192,10 @@ def test_login_with_unknown_email_returns_the_same_401_as_wrong_password(client)
 
     response = test_client.post(
         "/login",
-        json={"email": "nobody@example.com", "password": "whatever12345"},
+        json={
+            "email": "nobody@example.com",
+            "password": "whatever12345",  # pragma: allowlist secret
+        },
         headers={"X-Internal-Secret": settings.internal_secret},
     )
 
@@ -199,7 +210,10 @@ def test_repeated_failed_logins_eventually_return_429(client):
     responses = [
         test_client.post(
             "/login",
-            json={"email": "person@example.com", "password": "wrong password"},
+            json={
+                "email": "person@example.com",
+                "password": "wrong password",  # pragma: allowlist secret
+            },
             headers={"X-Internal-Secret": settings.internal_secret},
         )
         for _ in range(6)
