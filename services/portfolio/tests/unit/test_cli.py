@@ -420,3 +420,11 @@ def test_add_transaction_rejects_a_malformed_amount():
 def test_add_transaction_requires_all_mandatory_flags():
     with pytest.raises(SystemExit):
         cli.main(["add-transaction", "--user", str(uuid.uuid4())])
+
+
+def test_add_transaction_rejects_an_unrecognized_type():
+    args = ["--user", str(uuid.uuid4()), *_BASE_TXN_ARGS[1:]]
+    args[args.index("BUY")] = "TRANSFER"
+
+    with pytest.raises(SystemExit):
+        cli.main(["add-transaction", *args])

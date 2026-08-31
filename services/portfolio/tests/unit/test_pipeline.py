@@ -136,6 +136,26 @@ def test_add_account_allows_the_same_label_for_a_different_user(repos, conn):
     assert created == 1
 
 
+class _VanishingAccountsRepo(FakeAccountsRepo):
+    """Simulates insert_account reporting a conflict for a row that get_by_label then can't
+    find -- the TOCTOU race add_account must raise a clean domain error on, not crash on."""
+
+    def insert_account(self, conn, *, user_id, broker, account_label):
+        return None
+
+    def get_by_label(self, conn, *, user_id, account_label):
+        return None
+
+
+def test_add_account_raises_cleanly_when_the_conflicting_row_vanishes_before_reread(
+    conn, monkeypatch
+):
+    monkeypatch.setattr(pipeline, "accounts_repository", _VanishingAccountsRepo())
+
+    with pytest.raises(AccountNotFound):
+        pipeline.add_account(conn, user_id=uuid.uuid4(), broker="degiro", account_label="m")
+
+
 # --- list_accounts ---
 
 
@@ -244,6 +264,37 @@ def test_add_manual_transaction_rejects_a_non_eur_transaction_without_a_rate(rep
             native_currency="USD",
             native_amount=Decimal("-1000.00"),
         )
+
+    assert conn.commits == commits_before
+
+
+def test_add_manual_transaction_rejects_a_zero_fx_rate(repos, conn):
+    user_id = uuid.uuid4()
+    pipeline.add_account(conn, user_id=user_id, broker="ibkr", account_label="m")
+    commits_before = conn.commits
+
+    with pytest.raises(InvalidTransaction):
+        _add_txn(
+            conn,
+            user_id,
+            "m",
+            instrument_identifier="AAPL",
+            instrument_identifier_kind="SYMBOL",
+            native_currency="USD",
+            native_amount=Decimal("-1000.00"),
+            fx_rate=Decimal("0"),
+        )
+
+    assert conn.commits == commits_before
+
+
+def test_add_manual_transaction_rejects_a_non_finite_amount(repos, conn):
+    user_id = uuid.uuid4()
+    pipeline.add_account(conn, user_id=user_id, broker="degiro", account_label="m")
+    commits_before = conn.commits
+
+    with pytest.raises(InvalidTransaction):
+        _add_txn(conn, user_id, "m", native_amount=Decimal("NaN"))
 
     assert conn.commits == commits_before
 

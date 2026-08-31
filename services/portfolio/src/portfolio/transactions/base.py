@@ -29,7 +29,8 @@ IDENTIFIER_KINDS = ("ISIN", "SYMBOL")
 # "manual" is a user-typed rate -- none of the other three sources fit one, and leaving
 # fx_rate_source NULL for a manual rate would collide with NULL's other meaning ("EUR, no rate
 # needed"). See docs/schema.md.
-FX_RATE_SOURCES = ("broker_reported", "companion_row", "datastore_series", "manual")
+FX_RATE_SOURCE_MANUAL = "manual"
+FX_RATE_SOURCES = ("broker_reported", "companion_row", "datastore_series", FX_RATE_SOURCE_MANUAL)
 
 _EUR_QUANTUM = Decimal("0.0001")
 
@@ -59,8 +60,21 @@ def to_eur(native_amount: Decimal, fx_rate: Decimal | None) -> Decimal:
     converting *to* EUR divides. None means the amount is already EUR-denominated. Rounded here,
     explicitly and testably, rather than left to whatever the driver/server would do with a
     NUMERIC(20,4) column.
+
+    Guards its own inputs rather than trusting validate() to have run first: pipeline.py calls
+    this to build a CanonicalTransaction's eur_amount *before* validate() runs on it, so an
+    unguarded division would let a zero/negative/non-finite fx_rate reach the interpreter as a
+    raw decimal.DivisionByZero/InvalidOperation instead of the intended InvalidTransaction --
+    and a non-finite native_amount would quantize to NaN and get persisted silently.
     """
-    amount = native_amount if fx_rate is None else native_amount / fx_rate
+    if not native_amount.is_finite():
+        raise InvalidTransaction(f"native_amount must be a finite number: {native_amount!r}")
+    if fx_rate is None:
+        amount = native_amount
+    else:
+        if not fx_rate.is_finite() or fx_rate <= 0:
+            raise InvalidTransaction(f"fx_rate must be a positive, finite number: {fx_rate!r}")
+        amount = native_amount / fx_rate
     return amount.quantize(_EUR_QUANTUM, rounding=ROUND_HALF_UP)
 
 
@@ -72,6 +86,11 @@ def validate(txn: CanonicalTransaction) -> None:
         raise InvalidTransaction("broker_transaction_ref must not be empty")
     if txn.trade_datetime.tzinfo is None:
         raise InvalidTransaction("trade_datetime must be timezone-aware")
+
+    for field_name in ("native_amount", "quantity", "price", "fx_rate", "fees_native"):
+        value = getattr(txn, field_name)
+        if value is not None and not value.is_finite():
+            raise InvalidTransaction(f"{field_name} must be a finite number: {value!r}")
 
     has_identifier = txn.instrument_identifier is not None
     has_kind = txn.instrument_identifier_kind is not None
@@ -96,7 +115,13 @@ def validate(txn: CanonicalTransaction) -> None:
         if txn.transaction_type == "SELL" and txn.quantity >= 0:
             raise InvalidTransaction("SELL requires a negative quantity")
 
-    if len(txn.native_currency) != 3 or not txn.native_currency.isupper():
+    # isupper() alone isn't enough: it only requires the absence of lowercase letters, so a
+    # digit-containing string like "1AB" passes it too (isupper() ignores uncased characters).
+    if (
+        len(txn.native_currency) != 3
+        or not txn.native_currency.isalpha()
+        or not txn.native_currency.isupper()
+    ):
         raise InvalidTransaction(
             f"native_currency must be a 3-letter ISO 4217 code: {txn.native_currency!r}"
         )
