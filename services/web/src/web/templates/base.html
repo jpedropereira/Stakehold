@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Stakehold{% endblock %}</title>
+  <link rel="icon" href="/brand/logos/app-icon.svg">
+  <link rel="stylesheet" href="/brand/tokens.css">
+  <link rel="stylesheet" href="/static/web.css">
+  <script src="/static/vendor/htmx.min.js" defer></script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="/" class="brand-mark">
+      <img src="/brand/logos/logo-stone.svg" alt="Stakehold" height="28">
+    </a>
+    {% if user %}
+      <form action="/logout" method="post" class="logout-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <span class="user-name">{{ user.display_name }}</span>
+        <button type="submit" class="link-button">Log out</button>
+      </form>
+    {% endif %}
+  </header>
+  <main class="page">
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>
