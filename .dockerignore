@@ -1,7 +1,11 @@
 .git/
 .venv/
 dev/
-services/data-store/.data/
+# Every service's bind-mounted Postgres data dir, not just data-store's: the directory is
+# created root-owned by the postgres container, so once `docker compose up -d postgres` has
+# run, any later build that sends it as part of the context fails outright with
+# `error from sender: ... permission denied`.
+**/.data/
 services/data-store/logs/
 # Every service's, not just data-store's: Dockerfile.api COPYs the whole services/ tree, so
 # a secret file added under any workspace member would otherwise be baked into the image.

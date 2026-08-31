@@ -19,7 +19,7 @@ one-time snapshot.
 | ID | Task | Depends on | Status |
 |----|------|-------------|--------|
 | 1 | [Auth schema & foundation](#1-auth-schema--foundation) | — | done |
-| 2 | [Auth identity API](#2-auth-identity-api) | 1 | ready |
+| 2 | [Auth identity API](#2-auth-identity-api) | 1 | done |
 | 3 | [Data-store read API](#3-data-store-read-api) | — | done |
 | 4 | [Portfolio foundation & schema sign-off](#4-portfolio-foundation--schema-sign-off) | — | done |
 | 5 | [Accounts & manual transactions](#5-accounts--manual-transactions) | 4 | ready |
@@ -27,13 +27,13 @@ one-time snapshot.
 | 7 | [Positions](#7-positions) | 6 | blocked |
 | 8 | [Returns](#8-returns) | 7, 3 | blocked |
 | 9 | [Portfolio HTTP API](#9-portfolio-http-api) | 5, 6, 7, 8 | blocked |
-| 10 | [Web foundation & auth pages](#10-web-foundation--auth-pages) | 2 | blocked |
+| 10 | [Web foundation & auth pages](#10-web-foundation--auth-pages) | 2 | ready |
 | 11 | [Portfolio entry UI](#11-portfolio-entry-ui) | 10, 9 | blocked |
 | 12 | [Portfolio view UI](#12-portfolio-view-ui) | 11 | blocked |
 | 13 | [End-to-end integration & smoke test](#13-end-to-end-integration--smoke-test) | 12 | blocked |
 
-Two tasks are `ready` in parallel today: **2** (auth) and **5** (portfolio) — neither depends on
-the other, and **1**, **3** and **4** are now `done`.
+Two tasks are `ready` today: **5** (portfolio) and **10** (web) — independent of each other, both
+unblocked now that tasks 1–4 are all `done`.
 
 ## Tasks
 
@@ -53,12 +53,26 @@ package `data-store` also depends on, once `auth`'s copy of both turned out to b
 uniqueness)
 under `services/auth/tests/`.
 
-### 2. Auth identity API
+### 2. Auth identity API — done
 
-FastAPI app exposing the expected endpoint surface: signup, login, logout, session validation.
-Argon2id password hashing (`argon2-cffi`). Opaque session cookies (`httpOnly`, `Secure`,
-`SameSite=Lax`), sliding renewal on validation. Shared-secret check for internal server-to-server
-callers. Unit + integration tests (`tests/integration/` needs live Postgres).
+FastAPI app (`src/auth/api/`) exposing `POST /signup`, `POST /login`, `POST /sessions/validate`,
+`POST /logout`, `GET /health`. Argon2id password hashing (`passwords.py`, `argon2-cffi`), opaque
+session tokens (`tokens.py`, SHA-256-hashed at rest). `auth` sets the session cookie itself
+(`api/cookies.py`: `httpOnly`, `Secure`, `SameSite=Lax`) rather than handing `web` a raw token;
+sliding renewal on validation, clamped to the fixed `absolute_expires_at` cap
+(`sessions/repository.py`). `psycopg_pool.ConnectionPool` opened in the FastAPI lifespan
+(`shared.db.pool`, new in this task) rather than a connection per request. Shared-secret check
+(`X-Internal-Secret`) on every route except `/health`. Also shipped: in-process sliding-window
+throttles on both login failures and signup attempts (`throttle.py`, `AttemptThrottle` — per-worker,
+resets on restart, see `docs/architecture.md`'s open questions), user-enumeration defence
+(`passwords.dummy_verify`), and `auth sessions purge-expired` (`cli.py`/`jobs.py`) for the
+expired-session sweep. Signup's user and session rows are written in one transaction, owned by the
+service rather than the repositories (`docs/architecture.md`, "Transaction boundaries"). Compose
+runs `auth db init` as a one-shot `db-init` service the API waits on, and `/health` reports `503`
+unless the schema is actually there. Unit tests (`tests/unit/`, fake repositories
+for the service/API layers) and integration tests (`tests/integration/`, live Postgres: full
+signup→validate→logout round trip, duplicate-email handling, sliding-renewal and
+absolute-cap-clamping behaviour, the purge job).
 
 ### 3. Data-store read API — done
 
@@ -146,7 +160,9 @@ FastAPI + Jinja2 + htmx scaffold, no build step. Base layout using the brand tok
 (`brand/tokens.css`) — Fraunces headlines, Inter body, IBM Plex Mono for numbers. Register, login,
 logout pages calling task 2's auth API server-to-server; session identity forwarded as a cookie,
 never exposed to browser JS. CSRF protection on state-changing routes (web's own responsibility,
-per its architecture doc).
+per its architecture doc). **Must forward the browser's address to `auth` as `X-Forwarded-For`** —
+`auth`'s login/signup throttles key on it, and without it every request looks like it came from
+`web` itself (see `services/auth/docs/architecture.md`, "Login throttling and user enumeration").
 
 ### 11. Portfolio entry UI
 
