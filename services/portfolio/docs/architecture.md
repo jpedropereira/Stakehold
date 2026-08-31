@@ -76,6 +76,7 @@ flowchart TD
     subgraph found["Foundation"]
         SET["settings.py"]
         DB["db/schema.sql"]
+        ERR["errors.py<br/><i>PortfolioError and subclasses</i>"]
         DSC["datastore_client/<br/>base · http_client"]
     end
 
@@ -88,6 +89,7 @@ flowchart TD
     JOBS --> PIPE
     JOBS --> SET
     JOBS --> DB
+    JOBS --> ERR
     PIPE --> ACC
     PIPE --> IMP
     PIPE --> MAP
@@ -95,6 +97,8 @@ flowchart TD
     PIPE --> POS
     PIPE --> RET
     PIPE --> DSC
+    PIPE --> ERR
+    TXN --> ERR
     JOBS --> SH
     ACC --> SH
     TXN --> SH
@@ -130,17 +134,32 @@ directly, and the domain modules never decide *what* to import or rebuild.** Orc
 which account, which file, which date range; domain modules know how to parse one broker's file or
 read/write one table.
 
+**Built as of task 5** — `add_account`, `list_accounts`, `add_manual_transaction` — with two things
+worth flagging about the current state rather than the eventual one. First, `pipeline.py` (not a
+per-flow `service.py`) is where the `with transaction(conn):` boundary lives, the role
+`auth/src/auth/service.py` plays for that service; repository functions never commit, matching
+`accounts/repository.py` and `transactions/repository.py` below. Second, `pipeline.KNOWN_BROKERS`
+is a hardcoded placeholder tuple (`("degiro", "ibkr")`) standing in for the `BROKER_PARSERS`
+registry task 6 hasn't built yet — `account add` validates against it today, and the check moves to
+`tuple(BROKER_PARSERS)` once that registry exists, with no other change to `add_account`.
+
 ## The three-file shape of a domain module
 
 | Module | Shape | Deviation from the three-file default, and why |
 |---|---|---|
-| `accounts/` | `repository.py` only | No external source and no `base.py` — a broker and an account are user-declared reference data, created through a CLI command, not parsed or fetched. Every read here takes a `user_id`, and every other domain module's queries are reached only by first going through an account scoped to that user — this is the one place multi-user isolation is enforced, not repeated independently by each module. |
+| `accounts/` | `repository.py` only | No external source and no `base.py` — a broker and an account are user-declared reference data, created through a CLI command, not parsed or fetched. Every read here takes a `user_id`, and every other domain module's queries are reached only by first going through an account scoped to that user — this is the one place multi-user isolation is enforced, not repeated independently by each module. **Deliberately no unscoped `get_by_id(account_id)`** alongside `get_by_label` — that absence is the design, not an oversight: it removes the one shortcut that would let a caller reach an account without proving it owns it. |
 | `broker_import/` | `base.py` (the `BrokerParser` Protocol) + `degiro.py`, `ibkr.py` (the `*_source.py` equivalent — but they read a local export file, not a network call) | **No `repository.py`.** A parser hands back in-memory `CanonicalTransaction` records; persistence is owned entirely by `transactions/repository.py`, so a manually-entered transaction and an imported one are written through the exact same path. Splitting persistence into `broker_import/` would let the two paths drift. |
 | `ticker_mapping/` | `loader.py` only | **No `repository.py`.** The mapping lives in a YAML config file (`configs/ticker_mappings.yaml`), not a database table — mirroring `data-store`'s `yfinance_exchange_suffixes.yaml` reference-config pattern. `loader.py` reads and validates the file into an in-memory lookup; nothing here talks to Postgres. No `base.py` — nothing else is expected to implement a "mapping provider." |
 | `transactions/` | `base.py` (the `CanonicalTransaction` record shape) + `repository.py` | `base.py` here holds a **data shape**, not a `Protocol` — the contract is "what a normalized transaction looks like," which multiple producers (`broker_import` parsers, manual CLI entry) must fill in, not a swappable behavior one class implements. |
 | `positions/` | `calculator.py` (pure) + `repository.py` | Same shape as data-store's `returns/`: no `base.py`, no `*_source.py` — the input is this service's own `transactions` and `ticker_mapping` tables, not an external provider. |
 | `returns/` | `calculator.py` (pure) + `repository.py` | Same shape again, plus one more thing to disclose: it also needs prices and FX rates from `datastore_client`. Those are fetched by `pipeline.py` and handed into `calculator.py` as plain data — the calculator itself stays pure and knows nothing about HTTP, keeping it as unit-testable as data-store's `returns/calculator.py`. |
 | `datastore_client/` | `base.py` (a `DataStoreClient` Protocol) + `http_client.py` | This is the `*_source.py` role, but the "provider" is another in-house service's read API rather than a third party — see "Cross-service prerequisite" below for why `http_client.py` can't be fully implemented yet. |
+
+**`errors.py` is not a domain module** — it's a single Foundation-layer file (`PortfolioError` plus
+`UnknownBroker`, `AccountNotFound`, `AccountLabelConflict`, `InvalidTransaction`), not one per
+module, so `jobs.py` can catch every domain-level failure `pipeline.py` or a pure validator raises
+with one `except PortfolioError`. Repositories never raise these — they let the driver's own
+exceptions (e.g. `psycopg.errors.UniqueViolation`) propagate uncaught, same as `auth`.
 
 **One cross-domain dependency worth disclosing up front**, in the spirit of data-store's disclosed
 deviations: `broker_import/base.py`'s `BrokerParser.parse()` returns `list[CanonicalTransaction]`,
@@ -155,49 +174,64 @@ Same pattern as data-store's `SCRAPERS` / `MARKET_DATA_SOURCES` — a `Protocol`
 at the top of `pipeline.py`, no branching in flow functions.
 
 ```python
-# broker_import/base.py
+# broker_import/base.py  (task 6 -- not built yet)
 class BrokerParser(Protocol):
-    broker_key: str  # fills CanonicalTransaction.broker; accounts.broker is the persisted
-                      # source of truth, not a transactions column (see schema.md)
+    broker_key: str  # the registry key (e.g. "degiro"). accounts.broker is the persisted
+                      # source of truth for which broker an account belongs to; nothing on
+                      # CanonicalTransaction repeats it (see below).
 
-    def parse(self, file_path: Path, account_id: str) -> list["CanonicalTransaction"]:
+    def parse(self, file_path: Path, account_id: int) -> list["CanonicalTransaction"]:
         """Parse one broker export file into normalized transactions for one account.
 
-        account_id is supplied by the caller, not discovered from the file -- Degiro's own
-        export has no account-identifying column at all.
+        account_id is the resolved accounts.id (BIGINT), supplied by the caller after
+        resolving --account through accounts/repository.py's get_by_label -- not discovered
+        from the file itself. Degiro's own export has no account-identifying column at all.
         """
         ...
 ```
 
 The canonical intermediate representation both Degiro's flat blotter and IBKR's multi-section dump
-get parsed into (conceptually — a field list, not DDL):
+get parsed into -- **built as of task 5** (`transactions/base.py`), so this is the real shape, not
+a proposal:
 
 ```python
 # transactions/base.py
 @dataclass(frozen=True)
 class CanonicalTransaction:
-    broker: str                                   # "degiro" | "ibkr" | ...
-    account_id: str
-    broker_transaction_ref: str                    # natural id if the broker gives one,
-                                                     # else a stable content hash (see risk below)
-    transaction_type: TransactionType               # BUY | SELL | DEPOSIT | WITHDRAWAL |
-                                                     # DIVIDEND | FX | FEE | ADJUSTMENT
+    account_id: int                                 # the resolved accounts.id, not a label
+    broker_transaction_ref: str                      # natural id if the broker gives one,
+                                                       # else a stable content hash (see risk below)
+    transaction_type: str                             # BUY | SELL | DEPOSIT | WITHDRAWAL |
+                                                       # DIVIDEND | FX | FEE | ADJUSTMENT
     trade_datetime: datetime
-    instrument_identifier: str | None               # ISIN (Degiro) or Symbol (IBKR); None for
-                                                     # cash-only rows (deposits, adjustments)
-    instrument_identifier_kind: Literal["ISIN", "SYMBOL"] | None
-    quantity: Decimal | None                        # signed: +buy, -sell
-    price: Decimal | None                           # per unit, native currency
-    native_currency: str                             # ISO 4217, as the broker reports it
-    native_amount: Decimal                           # signed cash-flow, broker's own figure --
-                                                      # the source of truth
-    eur_amount: Decimal                              # signed, frozen at transaction time
-    fx_rate: Decimal | None
-    fx_rate_source: Literal["broker_reported", "companion_row", "datastore_series"] | None
+    instrument_identifier: str | None                 # ISIN (Degiro) or Symbol (IBKR); None for
+                                                       # cash-only rows (deposits, adjustments)
+    instrument_identifier_kind: str | None             # "ISIN" | "SYMBOL"
+    quantity: Decimal | None                          # signed: +buy, -sell
+    price: Decimal | None                             # per unit, native currency
+    native_currency: str                               # ISO 4217, as the broker reports it
+    native_amount: Decimal                             # signed cash-flow, broker's own figure --
+                                                        # the source of truth
+    eur_amount: Decimal                                # signed, frozen at transaction time
+    fx_rate: Decimal | None                            # required whenever native_currency != EUR
+    fx_rate_source: str | None                          # "broker_reported" | "companion_row" |
+                                                        # "datastore_series" | "manual"
     fees_native: Decimal | None
 ```
 
-Registry:
+**Two corrections against the version of this shape drafted before task 5 was built.** No
+`broker` field: `schema.md` dropped the functionally-dependent `transactions.broker` *column* at
+sign-off (task 4), and keeping it on the in-memory record would let a producer disagree with its
+own account about who the broker is for no benefit — a parser fills `CanonicalTransaction` without
+it, and `broker_key` above stays purely a registry key. `account_id` is `int`
+(`accounts.id`, a `BIGSERIAL`), not `str` — resolving a caller-supplied label to that id, scoped by
+`user_id`, is `accounts/repository.py`'s job, done before a `CanonicalTransaction` is ever built.
+`transactions/base.py`'s `validate()` enforces the field-level rules above, including that a
+non-EUR row must carry an `fx_rate` — a producer (manual entry, or a future broker parser) that
+skips resolving one is rejected, not persisted as a gap to patch up later.
+
+Registry (task 6 — not built yet; `pipeline.KNOWN_BROKERS`, a hardcoded `("degiro", "ibkr")` tuple,
+stands in for it today, used only to validate `account add --broker`):
 
 ```python
 # pipeline.py
@@ -319,13 +353,18 @@ identity — not column-level DDL, which needs its own sign-off pass.
 
 | Flow | Command | Cadence | Reads | Writes |
 |---|---|---|---|---|
-| Account setup | `account add --user <id> --broker <key>` | rare, manual | — | `accounts` (and `brokers` if new) |
+| Account setup | `account add --user <id> --broker <key> --label <label>` | rare, manual | — | `accounts` |
+| Account listing | `account list --user <id>` | manual, on demand | `accounts`, scoped by `user_id` | — (read-only report) |
 | Ticker linking | — (hand-edit the YAML file) | manual, as unmapped instruments surface | — | `configs/ticker_mappings.yaml` (edited directly, not through the service) |
 | List unmapped instruments | `list-unmapped-instruments` | manual, on demand | `transactions`, `configs/ticker_mappings.yaml` | — (read-only report) |
-| Manual transaction entry | `add-transaction` | ad hoc | — | `transactions` |
+| Manual transaction entry | `add-transaction --user <id> --account <label> --ref <key> --type <type> --datetime <iso8601> --amount <decimal> --currency <ISO4217> [--instrument <id> --instrument-kind ISIN\|SYMBOL] [--quantity <d>] [--price <d>] [--fx-rate <d>] [--fees <d>]` | ad hoc | `accounts`, scoped by `user_id` | `transactions` (idempotent on `(account_id, broker_transaction_ref)`, keyed by the mandatory `--ref`) |
 | Broker file import | `import-transactions --broker <key> --file <path> --account <id>` | manual, on demand | export file | `transactions` (idempotent on `(account_id, broker_transaction_ref)`) |
 | Positions rebuild | `rebuild-positions` | after transactions change | `transactions`, `configs/ticker_mappings.yaml` | `position_snapshots` |
 | Returns rebuild | `rebuild-returns` | after positions rebuild or new prices land | `position_snapshots`, `data-store` read API | `return_snapshots` |
+
+**No separate `brokers` table** ever materialized — `schema.md` settled on `broker` as a plain,
+app-validated string on `accounts`, so `account add` writes only to `accounts`, never a second
+table.
 
 **A load-bearing consequence of the entity model above, worth stating directly:** `rebuild-positions`
 needs no price data at all — quantity and average cost are pure functions of the transaction log.
@@ -343,6 +382,29 @@ process every other account/instrument normally, and report the blocked ones by 
 completion summary with a `partial` status, following the same `run_result` contract and
 `nothing_to_do` vs. `partial` vs. `ok` distinction data-store already established (and the
 repo-wide logging rule: "nothing to do" must never look like "something failed silently").
+
+### Manual transaction entry
+
+`add-transaction`'s `--ref` is **mandatory**, unlike a broker import where `broker_transaction_ref`
+comes from the file. That's what makes manual entry idempotent by construction: re-running the
+same command with the same `--ref` hits `(account_id, broker_transaction_ref)`'s `ON CONFLICT ...
+DO NOTHING` and reports `nothing_to_do`, exactly like re-importing an overlapping file. A caller
+who wants a one-off, throwaway entry still has to choose a ref (e.g. a UUID) — there's no
+auto-generated fallback, because a generated ref would make every invocation a *new* row instead of
+a safe re-run, silently defeating the idempotency the mandatory flag exists to give.
+
+The EUR side of a transaction is computed locally, not fetched. `--currency EUR` requires no rate:
+`eur_amount = native_amount`. Any other currency requires `--fx-rate`, read as **native currency
+units per 1 EUR** (e.g. `--currency USD --fx-rate 1.0850` means EUR 1 buys USD 1.085), so
+`eur_amount = native_amount / fx_rate`, rounded half-up to `eur_amount`'s own four decimal places
+(`transactions/base.py`'s `to_eur`). The stored `fx_rate_source` is `"manual"` — a fourth value
+added to the vocabulary `schema.md` originally documented as `broker_reported` / `companion_row` /
+`datastore_series`, none of which fit a rate the user typed in; see `schema.md`'s amendment.
+
+**Known limitation, not yet resolved**: a non-EUR manual entry has no fallback to `data-store`'s FX
+series the way task 8's `returns/` will — if the caller doesn't know the day's rate, `add-transaction`
+simply fails with `InvalidTransaction` rather than looking one up. Revisit once `datastore_client`
+exists and a manual entry can plausibly reuse it.
 
 ## Cross-service prerequisite: the data-store read API
 

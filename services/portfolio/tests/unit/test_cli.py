@@ -1,5 +1,9 @@
 """CLI tests: that argv maps to the right job call, and a result maps to the right exit code."""
 
+import uuid
+from datetime import UTC, datetime
+from decimal import Decimal
+
 import pytest
 from portfolio import cli
 
@@ -51,3 +55,376 @@ def test_missing_db_subcommand_exits_nonzero():
         cli.main(["db"])
 
     assert exc_info.value.code != 0
+
+
+# --- account add ---
+
+
+def test_account_add_dispatches_with_converted_types(monkeypatch):
+    captured = {}
+
+    def fake_run_add_account(*, user_id, broker, account_label):
+        captured.update(user_id=user_id, broker=broker, account_label=account_label)
+        return {"status": "ok", "rows_saved": 1, "accounts_created": 1}
+
+    monkeypatch.setattr(cli.jobs, "run_add_account", fake_run_add_account)
+    user_id = uuid.uuid4()
+
+    exit_code = cli.main(
+        ["account", "add", "--user", str(user_id), "--broker", "degiro", "--label", "m"]
+    )
+
+    assert exit_code == 0
+    assert captured == {"user_id": user_id, "broker": "degiro", "account_label": "m"}
+    assert isinstance(captured["user_id"], uuid.UUID)
+
+
+def test_account_add_prints_the_created_count(monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli.jobs,
+        "run_add_account",
+        lambda **kw: {"status": "ok", "rows_saved": 1, "accounts_created": 1},
+    )
+
+    cli.main(["account", "add", "--user", str(uuid.uuid4()), "--broker", "degiro", "--label", "m"])
+
+    assert capsys.readouterr().out == "1 account(s) created\n"
+
+
+def test_account_add_exits_zero_when_nothing_to_do(monkeypatch):
+    monkeypatch.setattr(
+        cli.jobs,
+        "run_add_account",
+        lambda **kw: {"status": "nothing_to_do", "rows_saved": 0, "accounts_created": 0},
+    )
+
+    exit_code = cli.main(
+        ["account", "add", "--user", str(uuid.uuid4()), "--broker", "degiro", "--label", "m"]
+    )
+
+    assert exit_code == 0
+
+
+def test_account_add_exits_nonzero_when_partial(monkeypatch):
+    monkeypatch.setattr(
+        cli.jobs,
+        "run_add_account",
+        lambda **kw: {"status": "partial", "rows_saved": 0, "accounts_created": 0},
+    )
+
+    exit_code = cli.main(
+        ["account", "add", "--user", str(uuid.uuid4()), "--broker", "x", "--label", "m"]
+    )
+
+    assert exit_code == 1
+
+
+def test_account_add_rejects_a_malformed_user_id():
+    with pytest.raises(SystemExit):
+        cli.main(["account", "add", "--user", "not-a-uuid", "--broker", "degiro", "--label", "m"])
+
+
+def test_account_add_requires_all_flags():
+    with pytest.raises(SystemExit):
+        cli.main(["account", "add", "--user", str(uuid.uuid4()), "--broker", "degiro"])
+
+
+# --- account list ---
+
+
+def test_account_list_dispatches_with_converted_user_id(monkeypatch):
+    captured = {}
+
+    def fake_run_list_accounts(*, user_id):
+        captured["user_id"] = user_id
+        return {"status": "nothing_to_do", "rows_saved": 0, "accounts_listed": 0, "accounts": []}
+
+    monkeypatch.setattr(cli.jobs, "run_list_accounts", fake_run_list_accounts)
+    user_id = uuid.uuid4()
+
+    cli.main(["account", "list", "--user", str(user_id)])
+
+    assert captured == {"user_id": user_id}
+
+
+def test_account_list_prints_one_line_per_account_then_the_count(monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli.jobs,
+        "run_list_accounts",
+        lambda **kw: {
+            "status": "ok",
+            "rows_saved": 0,
+            "accounts_listed": 2,
+            "accounts": [
+                {
+                    "id": 1,
+                    "account_label": "degiro-main",
+                    "broker": "degiro",
+                    "created_at": "2026-01-01T00:00:00+00:00",
+                },
+                {
+                    "id": 2,
+                    "account_label": "ibkr-main",
+                    "broker": "ibkr",
+                    "created_at": "2026-01-02T00:00:00+00:00",
+                },
+            ],
+        },
+    )
+
+    cli.main(["account", "list", "--user", str(uuid.uuid4())])
+
+    out = capsys.readouterr().out
+    assert out == (
+        "1\tdegiro-main\tdegiro\t2026-01-01\n" "2\tibkr-main\tibkr\t2026-01-02\n" "2 account(s)\n"
+    )
+
+
+def test_account_list_prints_only_the_count_when_empty(monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli.jobs,
+        "run_list_accounts",
+        lambda **kw: {
+            "status": "nothing_to_do",
+            "rows_saved": 0,
+            "accounts_listed": 0,
+            "accounts": [],
+        },
+    )
+
+    cli.main(["account", "list", "--user", str(uuid.uuid4())])
+
+    assert capsys.readouterr().out == "0 account(s)\n"
+
+
+def test_account_list_exits_zero_when_empty(monkeypatch):
+    monkeypatch.setattr(
+        cli.jobs,
+        "run_list_accounts",
+        lambda **kw: {
+            "status": "nothing_to_do",
+            "rows_saved": 0,
+            "accounts_listed": 0,
+            "accounts": [],
+        },
+    )
+
+    assert cli.main(["account", "list", "--user", str(uuid.uuid4())]) == 0
+
+
+def test_missing_account_subcommand_exits_nonzero():
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(["account"])
+
+    assert exc_info.value.code != 0
+
+
+# --- add-transaction ---
+
+_BASE_TXN_ARGS = [
+    "add-transaction",
+    "--account",
+    "degiro-main",
+    "--ref",
+    "manual-1",
+    "--type",
+    "BUY",
+    "--datetime",
+    "2026-03-01T10:00:00+00:00",
+    "--instrument",
+    "IE00B4L5Y983",
+    "--instrument-kind",
+    "ISIN",
+    "--quantity",
+    "10",
+    "--price",
+    "95.50",
+    "--currency",
+    "EUR",
+    "--amount",
+    "-955.00",
+]
+
+
+def test_add_transaction_dispatches_with_converted_types(monkeypatch):
+    captured = {}
+
+    def fake_run_add_transaction(**kw):
+        captured.update(kw)
+        return {"status": "ok", "rows_saved": 1, "transactions_saved": 1}
+
+    monkeypatch.setattr(cli.jobs, "run_add_transaction", fake_run_add_transaction)
+    user_id = uuid.uuid4()
+
+    exit_code = cli.main(["add-transaction", "--user", str(user_id), *_BASE_TXN_ARGS[1:]])
+
+    assert exit_code == 0
+    assert captured["user_id"] == user_id
+    assert isinstance(captured["user_id"], uuid.UUID)
+    assert captured["account_label"] == "degiro-main"
+    assert captured["broker_transaction_ref"] == "manual-1"
+    assert captured["transaction_type"] == "BUY"
+    assert captured["trade_datetime"] == datetime(2026, 3, 1, 10, 0, tzinfo=UTC)
+    assert captured["instrument_identifier"] == "IE00B4L5Y983"
+    assert captured["instrument_identifier_kind"] == "ISIN"
+    assert captured["quantity"] == Decimal("10")
+    assert isinstance(captured["quantity"], Decimal)
+    assert captured["price"] == Decimal("95.50")
+    assert captured["native_currency"] == "EUR"
+    assert captured["native_amount"] == Decimal("-955.00")
+    assert isinstance(captured["native_amount"], Decimal)
+
+
+def test_add_transaction_defaults_optional_fields_to_none(monkeypatch):
+    captured = {}
+
+    def fake_run_add_transaction(**kw):
+        captured.update(kw)
+        return {"status": "ok", "rows_saved": 1, "transactions_saved": 1}
+
+    monkeypatch.setattr(cli.jobs, "run_add_transaction", fake_run_add_transaction)
+
+    cli.main(
+        [
+            "add-transaction",
+            "--user",
+            str(uuid.uuid4()),
+            "--account",
+            "degiro-main",
+            "--ref",
+            "deposit-1",
+            "--type",
+            "DEPOSIT",
+            "--datetime",
+            "2026-03-01T10:00:00+00:00",
+            "--currency",
+            "EUR",
+            "--amount",
+            "1000.00",
+        ]
+    )
+
+    assert captured["instrument_identifier"] is None
+    assert captured["instrument_identifier_kind"] is None
+    assert captured["quantity"] is None
+    assert captured["price"] is None
+    assert captured["fx_rate"] is None
+    assert captured["fees_native"] is None
+
+
+def test_add_transaction_passes_through_fx_rate_and_fees(monkeypatch):
+    captured = {}
+
+    def fake_run_add_transaction(**kw):
+        captured.update(kw)
+        return {"status": "ok", "rows_saved": 1, "transactions_saved": 1}
+
+    monkeypatch.setattr(cli.jobs, "run_add_transaction", fake_run_add_transaction)
+
+    cli.main(
+        [
+            "add-transaction",
+            "--user",
+            str(uuid.uuid4()),
+            "--account",
+            "ibkr-main",
+            "--ref",
+            "manual-2",
+            "--type",
+            "BUY",
+            "--datetime",
+            "2026-03-03T14:00:00+00:00",
+            "--instrument",
+            "AAPL",
+            "--instrument-kind",
+            "SYMBOL",
+            "--quantity",
+            "5",
+            "--price",
+            "200",
+            "--currency",
+            "USD",
+            "--amount",
+            "-1000.00",
+            "--fx-rate",
+            "1.0850",
+            "--fees",
+            "1.50",
+        ]
+    )
+
+    assert captured["fx_rate"] == Decimal("1.0850")
+    assert captured["fees_native"] == Decimal("1.50")
+
+
+def test_add_transaction_prints_the_saved_count(monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli.jobs,
+        "run_add_transaction",
+        lambda **kw: {"status": "ok", "rows_saved": 1, "transactions_saved": 1},
+    )
+
+    cli.main(["add-transaction", "--user", str(uuid.uuid4()), *_BASE_TXN_ARGS[1:]])
+
+    assert capsys.readouterr().out == "1 transaction(s) saved\n"
+
+
+def test_add_transaction_exits_zero_when_nothing_to_do(monkeypatch):
+    monkeypatch.setattr(
+        cli.jobs,
+        "run_add_transaction",
+        lambda **kw: {"status": "nothing_to_do", "rows_saved": 0, "transactions_saved": 0},
+    )
+
+    exit_code = cli.main(["add-transaction", "--user", str(uuid.uuid4()), *_BASE_TXN_ARGS[1:]])
+
+    assert exit_code == 0
+
+
+def test_add_transaction_exits_nonzero_when_partial(monkeypatch):
+    monkeypatch.setattr(
+        cli.jobs,
+        "run_add_transaction",
+        lambda **kw: {"status": "partial", "rows_saved": 0, "transactions_saved": 0},
+    )
+
+    exit_code = cli.main(["add-transaction", "--user", str(uuid.uuid4()), *_BASE_TXN_ARGS[1:]])
+
+    assert exit_code == 1
+
+
+def test_add_transaction_rejects_a_malformed_datetime():
+    args = ["--user", str(uuid.uuid4()), *_BASE_TXN_ARGS[1:]]
+    args[args.index("2026-03-01T10:00:00+00:00")] = "not-a-date"
+
+    with pytest.raises(SystemExit):
+        cli.main(["add-transaction", *args])
+
+
+def test_add_transaction_rejects_a_naive_datetime():
+    args = ["--user", str(uuid.uuid4()), *_BASE_TXN_ARGS[1:]]
+    args[args.index("2026-03-01T10:00:00+00:00")] = "2026-03-01T10:00:00"
+
+    with pytest.raises(SystemExit):
+        cli.main(["add-transaction", *args])
+
+
+def test_add_transaction_rejects_a_malformed_amount():
+    args = ["--user", str(uuid.uuid4()), *_BASE_TXN_ARGS[1:]]
+    args[args.index("-955.00")] = "not-a-number"
+
+    with pytest.raises(SystemExit):
+        cli.main(["add-transaction", *args])
+
+
+def test_add_transaction_requires_all_mandatory_flags():
+    with pytest.raises(SystemExit):
+        cli.main(["add-transaction", "--user", str(uuid.uuid4())])
+
+
+def test_add_transaction_rejects_an_unrecognized_type():
+    args = ["--user", str(uuid.uuid4()), *_BASE_TXN_ARGS[1:]]
+    args[args.index("BUY")] = "TRANSFER"
+
+    with pytest.raises(SystemExit):
+        cli.main(["add-transaction", *args])
