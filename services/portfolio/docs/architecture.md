@@ -75,12 +75,13 @@ flowchart TD
 
     subgraph found["Foundation"]
         SET["settings.py"]
-        DB["db/connection.py + schema.sql"]
+        DB["db/schema.sql"]
         DSC["datastore_client/<br/>base · http_client"]
     end
 
+    SH[["shared<br/><i>workspace package: db.connection, logging_config</i>"]]
     PG[("app-postgres<br/><i>shared, separate from data-store's</i>")]
-    DSAPI(["data-store read API<br/><i>prerequisite, not yet built</i>"])
+    DSAPI(["data-store read API<br/><i>built (task 3)</i>"])
 
     CLI --> JOBS
     API -.future.-> JOBS
@@ -94,13 +95,23 @@ flowchart TD
     PIPE --> POS
     PIPE --> RET
     PIPE --> DSC
-    ACC --> PG
-    TXN --> PG
-    POS --> PG
-    RET --> PG
+    JOBS --> SH
+    ACC --> SH
+    TXN --> SH
+    POS --> SH
+    RET --> SH
+    SH --> PG
     DB --> PG
     DSC -->|HTTP, future| DSAPI
 ```
+
+**Portfolio owns no `db/connection.py`.** Opening a connection, wrapping a transaction, and
+applying a schema file are identical in every service here, so they live once in the
+[`shared`](../../shared/docs/architecture.md) workspace package — extracted during the auth build
+when its copy turned out near-identical to data-store's. Portfolio imports
+`shared.db.connection` and `shared.logging_config` rather than growing a third copy; `db/` here
+holds only `schema.sql`, which is genuinely portfolio's own. Repository modules import
+`transaction`; `jobs.py` imports `get_connection` and `apply_schema`.
 
 **`jobs.py` is the seam that matters**, for the same reason as data-store's: each `run_*` there is
 one complete operation — load settings, open a connection, run the flow, close the connection,
@@ -146,7 +157,8 @@ at the top of `pipeline.py`, no branching in flow functions.
 ```python
 # broker_import/base.py
 class BrokerParser(Protocol):
-    broker_key: str  # stamped into transactions.broker
+    broker_key: str  # fills CanonicalTransaction.broker; accounts.broker is the persisted
+                      # source of truth, not a transactions column (see schema.md)
 
     def parse(self, file_path: Path, account_id: str) -> list["CanonicalTransaction"]:
         """Parse one broker export file into normalized transactions for one account.
@@ -258,9 +270,10 @@ identity — not column-level DDL, which needs its own sign-off pass.
   `broker_import`'s registry keys; effectively reference data, not user-editable.
 - **Account** — identified by a user-chosen id/label; references one Broker and exactly one User (an
   `auth`-issued UUID, not a local row).
-  Any broker-side account identifier (e.g. IBKR's masked `U***57423`) is stored for
-  display/traceability only, never used to match — a file never self-identifies its account (see
-  Degiro above), so this is always supplied by the caller. Every downstream entity (Transaction,
+  Any broker-side account identifier (e.g. IBKR's masked `U***57423`) is **not stored at all** — a
+  file never self-identifies its account (see Degiro above), so matching is always by the
+  caller-supplied `--account`, which leaves a stored broker-side id as display-only data with no
+  reader. See [`schema.md`](schema.md)'s `accounts` section. Every downstream entity (Transaction,
   PositionSnapshot, ReturnSnapshot) is scoped by Account and therefore transitively by User — there
   is no cross-user query path. **Stated assumption, not confirmed**: one user per account, no
   shared/joint accounts.
@@ -279,8 +292,9 @@ identity — not column-level DDL, which needs its own sign-off pass.
     two partial unique indexes a database table would need for the same guarantee. Keying `SYMBOL`
     mappings without a broker qualifier risks silently reusing a mapping that isn't actually the
     same instrument on a future symbol-based broker.
-- **Transaction** — identified by a surrogate id; references an Account; carries `(broker,
-  broker_transaction_ref)` unique together for idempotent re-import; carries the raw
+- **Transaction** — identified by a surrogate id; references an Account; carries `(account_id,
+  broker_transaction_ref)` unique together for idempotent re-import (the broker is the account's,
+  not the row's — see [`schema.md`](schema.md)); carries the raw
   `instrument_identifier`/`kind` as reported (for traceability back to the source file/row) — **not**
   a hard foreign key to TickerLink at write time, since a transaction must be importable *before*
   its instrument is mapped. The mapping gap is a first-class, visible state (surfaced by the
@@ -309,7 +323,7 @@ identity — not column-level DDL, which needs its own sign-off pass.
 | Ticker linking | — (hand-edit the YAML file) | manual, as unmapped instruments surface | — | `configs/ticker_mappings.yaml` (edited directly, not through the service) |
 | List unmapped instruments | `list-unmapped-instruments` | manual, on demand | `transactions`, `configs/ticker_mappings.yaml` | — (read-only report) |
 | Manual transaction entry | `add-transaction` | ad hoc | — | `transactions` |
-| Broker file import | `import-transactions --broker <key> --file <path> --account <id>` | manual, on demand | export file | `transactions` (idempotent on `(broker, broker_transaction_ref)`) |
+| Broker file import | `import-transactions --broker <key> --file <path> --account <id>` | manual, on demand | export file | `transactions` (idempotent on `(account_id, broker_transaction_ref)`) |
 | Positions rebuild | `rebuild-positions` | after transactions change | `transactions`, `configs/ticker_mappings.yaml` | `position_snapshots` |
 | Returns rebuild | `rebuild-returns` | after positions rebuild or new prices land | `position_snapshots`, `data-store` read API | `return_snapshots` |
 
@@ -379,7 +393,7 @@ of its own:
 
 | File | Committed? | Why |
 |---|---|---|
-| `.env` (`DATABASE_URL`, later `DATASTORE_API_URL`/credential) | no — gitignored | Credentials, per-environment |
+| `.env` (`PORTFOLIO_DATABASE_URL`, `APP_POSTGRES_ADMIN_DATABASE_URL`, later `DATASTORE_API_URL`/credential) | no — gitignored | Credentials, per-environment. **Not** the bare `DATABASE_URL`: data-store already owns that name, and both suites can run in one pytest process where a shared name would collide — the same reasoning behind `AUTH_DATABASE_URL`. `PORTFOLIO_DATABASE_URL` names the *service*, not the instance, so a future service sharing `app-postgres` gets its own name and its own role. `APP_POSTGRES_ADMIN_DATABASE_URL` is the one exception — it names the *instance*, because the admin role it points at is the shared container's own bootstrap role, not any one service's; see the role/schema paragraph above. |
 | `.env.example` | yes | Template, matching data-store's convention |
 | `configs/ticker_mappings.yaml` | no — gitignored | This deployment's own ISIN/symbol → canonical-ticker choices — personal/deployment data, not generic reference data, the same reasoning `data-store` applies to `etfs.yaml`/`tracked_tickers.yaml`. |
 | `configs/ticker_mappings.yaml.example` | yes | Template, matching `data-store`'s `etfs.yaml.example` convention. |
@@ -391,9 +405,10 @@ reference table of *known-good* per-broker quirks to maintain outside code. Acco
 shared across environments, so they belong in the database the rest of the service already treats
 as the source of truth. **Ticker mappings are the one exception**: for now they're config-file
 rows, not database rows or CLI-entered data — see the cross-cutting decision below for why, and
-the migration path once a UI exists. The path resolves the same way `data-store/settings.py`
-resolves its own config paths — an env var override defaulting to a service-root-relative path —
-to be mirrored in `portfolio/settings.py` when it's written.
+the migration path once a UI exists. The path is meant to resolve the same way `data-store/settings.py`
+resolves its own config paths — an env var override defaulting to a service-root-relative path.
+`portfolio/settings.py` now exists, but only loads `PORTFOLIO_DATABASE_URL` so far; the
+ticker-mapping path resolution described here still needs to be added to it.
 
 ## Deployment
 
@@ -408,7 +423,7 @@ flowchart TB
     APPDB[("app-postgres<br/><i>the shared application database for non-data-store,<br/>non-credential services -- accounts, transactions,<br/>position_snapshots, return_snapshots, and any future<br/>such service's tables</i>")]
 
     subgraph ds["data-store"]
-        DSAPI["data-store read API<br/><i>prerequisite, not yet built</i>"]
+        DSAPI["data-store read API<br/><i>built (task 3)</i>"]
         DSDB[("data-store-postgres<br/><i>raw_market_data, market_returns</i>")]
     end
 
@@ -437,6 +452,34 @@ portfolio's code path from ever reaching auth's tables, consistent with this rep
 scrutiny. **`app-postgres` remains the shared database for every other future non-data-store
 service** — the one such a service uses instead of standing up a fourth instance — but that sharing
 principle stops at the credential boundary; `auth` is the one deliberate carve-out from it.
+
+**`app-postgres`'s compose file lives at `services/portfolio/docker-compose.yml`**, even though the
+instance is meant to be shared, because portfolio is its only tenant today and every other service
+here keeps its own containers next to its own code. Naming it `app-postgres` rather than
+`portfolio-postgres` is the part that matters: the container is not portfolio's to own, only
+portfolio's to start. Moving it somewhere neutral belongs to the end-to-end deployment task, once
+there is a second tenant to justify the move — noted here rather than left as a silent oddity.
+
+Inside that one instance the **database is named for the instance (`app`) and the role for the
+service (`portfolio`)**. A second service on `app-postgres` gets its own role in the same database
+rather than its own database, so the shared-application-database claim above stays true in the
+schema and not just in the container name.
+
+**That role is a real, enforced boundary, not an aspiration.** The official postgres image always
+grants superuser to whatever role it bootstraps via `POSTGRES_USER` — there is no env-var way
+around that — so `docker-compose.yml` and `ci.yml` bootstrap a separate admin role
+(`APP_POSTGRES_ADMIN_USER`) that the running app never connects as. `portfolio db init`
+(`jobs.py`'s `_ensure_role_and_schema`) uses that admin role exactly once, to create the
+non-superuser `portfolio` role and a like-named schema it owns (`CREATE SCHEMA portfolio
+AUTHORIZATION portfolio`) — Postgres denies cross-schema access by default, so owning the schema
+is the entire isolation mechanism, no further `GRANT`s needed. A role's default `search_path`
+resolves `"$user"` to the schema matching its own name first, which is why `schema.sql`'s table
+names stay unqualified. A second tenant follows the same recipe: its own `<service>_DATABASE_URL`
+with its own role name, and `db init` creates its role/schema the same way — never reusing
+`portfolio`'s. The one thing this doesn't solve is the admin role itself, which remains a
+superuser for as long as the stock postgres image bootstraps it that way; the guarantee is that
+nothing beyond one `db init` bootstrap step ever holds that privilege, not that no superuser
+exists on the instance.
 
 ## Cross-cutting decisions
 

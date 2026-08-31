@@ -55,6 +55,28 @@ jobs:
           --health-timeout 5s
           --health-retries 10
 
+      # app-postgres: the shared application database portfolio (and any future non-data-store,
+      # non-credential service) lives on. A third container for the same reason as auth's --
+      # portfolio's real deployment is a separate instance, and collapsing them here would let a
+      # cross-service query pass CI that production would refuse.
+      #
+      # POSTGRES_USER here is the admin bootstrap role, not portfolio's own -- see
+      # docs/architecture.md's deployment section. `db init` creates the scoped `portfolio`
+      # role itself, same as it does outside CI.
+      app-postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: app
+          POSTGRES_USER: app_postgres_admin
+          POSTGRES_PASSWORD: ci-throwaway-admin  # pragma: allowlist secret
+        ports:
+          - 5435:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     steps:
       - uses: actions/checkout@v5
 
@@ -100,3 +122,7 @@ jobs:
           # job -- not a credential to anything that outlives it.
           DATABASE_URL: postgresql://data_store:ci-throwaway@localhost:5432/data_store  # pragma: allowlist secret
           AUTH_DATABASE_URL: postgresql://auth:ci-throwaway@localhost:5434/auth  # pragma: allowlist secret
+          # Admin: the app-postgres service container's own bootstrap role (see above) --
+          # `db init` uses it once to create the `portfolio` role below, itself.
+          APP_POSTGRES_ADMIN_DATABASE_URL: postgresql://app_postgres_admin:ci-throwaway-admin@localhost:5435/app  # pragma: allowlist secret
+          PORTFOLIO_DATABASE_URL: postgresql://portfolio:ci-throwaway@localhost:5435/app  # pragma: allowlist secret
