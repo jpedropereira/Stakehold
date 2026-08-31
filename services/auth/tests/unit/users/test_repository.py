@@ -47,7 +47,7 @@ def test_insert_user_executes_a_parameterized_insert_and_commits():
         user_id=user_id,
         email="person@example.com",
         display_name="Person",
-        password_hash="hash",
+        password_hash="hash",  # pragma: allowlist secret
     )
 
     sql, params = conn._cursor.executed[0]
@@ -74,7 +74,7 @@ def test_get_by_email_returns_a_user():
     assert user.id == user_id
     assert user.email == "person@example.com"
     assert user.display_name == "Person"
-    assert user.password_hash == "hash"
+    assert user.password_hash == "hash"  # pragma: allowlist secret
     assert user.created_at == created_at
 
 

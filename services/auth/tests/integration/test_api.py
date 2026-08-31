@@ -38,7 +38,11 @@ def client():
 
 
 def _signup(client, email, **overrides):
-    body = dict(email=email, password="correct horse battery staple", display_name="Person")
+    body = dict(
+        email=email,
+        password="correct horse battery staple",  # pragma: allowlist secret
+        display_name="Person",
+    )
     body.update(overrides)
     return client.post("/signup", json=body, headers={"X-Internal-Secret": _internal_secret()})
 
@@ -75,7 +79,10 @@ def test_login_round_trip_after_signup(client):
 
     response = client.post(
         "/login",
-        json={"email": "login@example.com", "password": "correct horse battery staple"},
+        json={
+            "email": "login@example.com",
+            "password": "correct horse battery staple",  # pragma: allowlist secret
+        },
         headers={"X-Internal-Secret": secret},
     )
 

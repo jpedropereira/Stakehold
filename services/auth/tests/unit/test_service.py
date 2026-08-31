@@ -14,7 +14,7 @@ def _signup(**overrides):
         "conn": None,
         "email": "person@example.com",
         "display_name": "Person",
-        "password": "correct horse battery staple",
+        "password": "correct horse battery staple",  # pragma: allowlist secret
         "now": NOW,
         "ttl_days": TTL_DAYS,
         "absolute_ttl_days": ABSOLUTE_TTL_DAYS,
@@ -41,10 +41,10 @@ def test_signup_normalizes_email_case_and_whitespace(repos):
 def test_signup_stores_a_hashed_password_not_the_plaintext(repos):
     users_repo, _ = repos
 
-    _signup(password="hunter2hunter2")
+    _signup(password="hunter2hunter2")  # pragma: allowlist secret
 
     stored = users_repo.by_email["person@example.com"]
-    assert stored.password_hash != "hunter2hunter2"
+    assert stored.password_hash != "hunter2hunter2"  # pragma: allowlist secret
     assert passwords.verify_password(stored.password_hash, "hunter2hunter2") is True
 
 
@@ -56,13 +56,13 @@ def test_signup_duplicate_email_raises(repos):
 
 
 def test_login_succeeds_with_correct_password(repos):
-    _signup(password="correct horse battery staple")
+    _signup(password="correct horse battery staple")  # pragma: allowlist secret
     throttle = LoginThrottle()
 
     session = service.login(
         None,
         email="person@example.com",
-        password="correct horse battery staple",
+        password="correct horse battery staple",  # pragma: allowlist secret
         client_ip="1.2.3.4",
         now=NOW,
         ttl_days=TTL_DAYS,
@@ -75,14 +75,14 @@ def test_login_succeeds_with_correct_password(repos):
 
 
 def test_login_wrong_password_raises_invalid_credentials(repos):
-    _signup(password="correct horse battery staple")
+    _signup(password="correct horse battery staple")  # pragma: allowlist secret
     throttle = LoginThrottle()
 
     with pytest.raises(service.InvalidCredentials):
         service.login(
             None,
             email="person@example.com",
-            password="wrong password",
+            password="wrong password",  # pragma: allowlist secret
             client_ip="1.2.3.4",
             now=NOW,
             ttl_days=TTL_DAYS,
@@ -98,7 +98,7 @@ def test_login_unknown_email_raises_invalid_credentials_not_a_different_error(re
         service.login(
             None,
             email="nobody@example.com",
-            password="whatever12345",
+            password="whatever12345",  # pragma: allowlist secret
             client_ip="1.2.3.4",
             now=NOW,
             ttl_days=TTL_DAYS,
@@ -108,7 +108,7 @@ def test_login_unknown_email_raises_invalid_credentials_not_a_different_error(re
 
 
 def test_login_records_failures_and_then_rate_limits(repos):
-    _signup(password="correct horse battery staple")
+    _signup(password="correct horse battery staple")  # pragma: allowlist secret
     throttle = LoginThrottle(max_attempts=3)
 
     for _ in range(3):
@@ -116,7 +116,7 @@ def test_login_records_failures_and_then_rate_limits(repos):
             service.login(
                 None,
                 email="person@example.com",
-                password="wrong password",
+                password="wrong password",  # pragma: allowlist secret
                 client_ip="1.2.3.4",
                 now=NOW,
                 ttl_days=TTL_DAYS,
@@ -128,7 +128,7 @@ def test_login_records_failures_and_then_rate_limits(repos):
         service.login(
             None,
             email="person@example.com",
-            password="correct horse battery staple",
+            password="correct horse battery staple",  # pragma: allowlist secret
             client_ip="1.2.3.4",
             now=NOW,
             ttl_days=TTL_DAYS,
@@ -138,14 +138,14 @@ def test_login_records_failures_and_then_rate_limits(repos):
 
 
 def test_login_success_resets_the_throttle(repos):
-    _signup(password="correct horse battery staple")
+    _signup(password="correct horse battery staple")  # pragma: allowlist secret
     throttle = LoginThrottle(max_attempts=3)
 
     with pytest.raises(service.InvalidCredentials):
         service.login(
             None,
             email="person@example.com",
-            password="wrong password",
+            password="wrong password",  # pragma: allowlist secret
             client_ip="1.2.3.4",
             now=NOW,
             ttl_days=TTL_DAYS,
@@ -156,7 +156,7 @@ def test_login_success_resets_the_throttle(repos):
     service.login(
         None,
         email="person@example.com",
-        password="correct horse battery staple",
+        password="correct horse battery staple",  # pragma: allowlist secret
         client_ip="1.2.3.4",
         now=NOW,
         ttl_days=TTL_DAYS,
