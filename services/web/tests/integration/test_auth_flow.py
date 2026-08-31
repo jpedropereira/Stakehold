@@ -68,12 +68,17 @@ def web_client():
             yield web_test_client
 
 
-def _csrf_token(response) -> str:
-    return next(v for k, v in response.cookies.items() if "csrf" in k)
+def _csrf_token(client) -> str:
+    """Reads the CSRF token from the client's persistent cookie jar, not from a single
+    response's Set-Cookie header -- ensure_csrf_cookie only reissues Set-Cookie the *first*
+    time, so a second page load in the same session carries the cookie on the request but not
+    the response, the same way a real browser's own cookie store works."""
+    return next(v for k, v in client.cookies.items() if "csrf" in k)
 
 
 def test_signup_then_home_then_logout_round_trip(web_client):
-    csrf_token = _csrf_token(web_client.get("/signup"))
+    web_client.get("/signup")
+    csrf_token = _csrf_token(web_client)
 
     signup_response = web_client.post(
         "/signup",
@@ -93,7 +98,7 @@ def test_signup_then_home_then_logout_round_trip(web_client):
     assert home_response.status_code == 200
     assert "Welcome, Ann." in home_response.text
 
-    logout_csrf = _csrf_token(home_response)
+    logout_csrf = _csrf_token(web_client)
     logout_response = web_client.post(
         "/logout", data={"csrf_token": logout_csrf}, follow_redirects=False
     )
@@ -106,7 +111,8 @@ def test_signup_then_home_then_logout_round_trip(web_client):
 
 
 def test_signup_duplicate_email_is_rejected(web_client):
-    first_csrf = _csrf_token(web_client.get("/signup"))
+    web_client.get("/signup")
+    first_csrf = _csrf_token(web_client)
     web_client.post(
         "/signup",
         data={
@@ -117,7 +123,7 @@ def test_signup_duplicate_email_is_rejected(web_client):
         },
     )
 
-    second_csrf = _csrf_token(web_client.get("/signup"))
+    second_csrf = _csrf_token(web_client)
     second_response = web_client.post(
         "/signup",
         data={
@@ -133,7 +139,8 @@ def test_signup_duplicate_email_is_rejected(web_client):
 
 
 def test_login_with_wrong_password_is_rejected(web_client):
-    signup_csrf = _csrf_token(web_client.get("/signup"))
+    web_client.get("/signup")
+    signup_csrf = _csrf_token(web_client)
     web_client.post(
         "/signup",
         data={
@@ -144,9 +151,11 @@ def test_login_with_wrong_password_is_rejected(web_client):
         },
         follow_redirects=False,
     )
-    web_client.post("/logout", data={"csrf_token": _csrf_token(web_client.get("/"))})
+    web_client.get("/")
+    web_client.post("/logout", data={"csrf_token": _csrf_token(web_client)})
 
-    login_csrf = _csrf_token(web_client.get("/login"))
+    web_client.get("/login")
+    login_csrf = _csrf_token(web_client)
     response = web_client.post(
         "/login",
         data={
