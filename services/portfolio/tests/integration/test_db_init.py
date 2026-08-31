@@ -1,6 +1,5 @@
 """What only a real Postgres can answer: does the DDL apply, rerun cleanly, and constrain."""
 
-import os
 import uuid
 
 import psycopg
@@ -10,22 +9,6 @@ from portfolio import cli
 pytestmark = pytest.mark.integration
 
 _TABLES = ("accounts", "position_snapshots", "return_snapshots", "transactions")
-
-
-def _connect():
-    return psycopg.connect(os.environ["PORTFOLIO_DATABASE_URL"])
-
-
-@pytest.fixture(autouse=True)
-def _clean_tables():
-    cli.main(["db", "init"])
-    with _connect() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "TRUNCATE return_snapshots, position_snapshots, transactions, accounts CASCADE"
-            )
-        conn.commit()
-    yield
 
 
 def _insert_account(cur, *, user_id, label="acme-main", broker="acme"):
@@ -57,12 +40,12 @@ def _insert_transaction(cur, *, account_id, ref, **overrides):
     )
 
 
-def test_db_init_creates_expected_tables():
+def test_db_init_creates_expected_tables(pg_connect):
     exit_code = cli.main(["db", "init"])
 
     assert exit_code == 0
 
-    with _connect() as conn:
+    with pg_connect() as conn:
         with conn.cursor() as cur:
             # 'portfolio', not 'public': db init creates and connects as a role that owns a
             # like-named schema, so that's where the tables land. See jobs.py's
@@ -77,10 +60,10 @@ def test_db_init_creates_expected_tables():
     assert tables == list(_TABLES)
 
 
-def test_db_init_creates_a_non_superuser_role_owning_its_own_schema():
+def test_db_init_creates_a_non_superuser_role_owning_its_own_schema(pg_connect):
     cli.main(["db", "init"])
 
-    with _connect() as conn:
+    with pg_connect() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT rolsuper FROM pg_roles WHERE rolname = 'portfolio'")
             (is_superuser,) = cur.fetchone()
@@ -104,10 +87,10 @@ def test_db_init_is_idempotent_and_reports_nothing_to_do(capsys):
     assert capsys.readouterr().out == "0 table(s) created\n"
 
 
-def test_account_label_is_unique_per_user_not_globally():
+def test_account_label_is_unique_per_user_not_globally(pg_connect):
     user_a, user_b = uuid.uuid4(), uuid.uuid4()
 
-    with _connect() as conn:
+    with pg_connect() as conn:
         with conn.cursor() as cur:
             _insert_account(cur, user_id=user_a, label="main")
             # Same label, different owner: allowed -- the label is the owner's own handle.
@@ -120,9 +103,9 @@ def test_account_label_is_unique_per_user_not_globally():
             conn.commit()
 
 
-def test_reimporting_the_same_broker_ref_is_a_no_op():
+def test_reimporting_the_same_broker_ref_is_a_no_op(pg_connect):
     """The idempotent-import contract: ON CONFLICT DO NOTHING, keyed by account, not broker."""
-    with _connect() as conn:
+    with pg_connect() as conn:
         with conn.cursor() as cur:
             account_id = _insert_account(cur, user_id=uuid.uuid4())
             _insert_transaction(cur, account_id=account_id, ref="order-1")
@@ -141,9 +124,9 @@ def test_reimporting_the_same_broker_ref_is_a_no_op():
             assert cur.fetchone()[0] == 1
 
 
-def test_the_same_broker_ref_in_two_accounts_is_two_transactions():
+def test_the_same_broker_ref_in_two_accounts_is_two_transactions(pg_connect):
     """Why the key is account-scoped: Globex's content hash can collide across accounts."""
-    with _connect() as conn:
+    with pg_connect() as conn:
         with conn.cursor() as cur:
             user_id = uuid.uuid4()
             account_a = _insert_account(cur, user_id=user_id, label="globex-a", broker="globex")
@@ -157,16 +140,16 @@ def test_the_same_broker_ref_in_two_accounts_is_two_transactions():
             assert cur.fetchone()[0] == 2
 
 
-def test_a_transaction_cannot_reference_a_missing_account():
-    with _connect() as conn:
+def test_a_transaction_cannot_reference_a_missing_account(pg_connect):
+    with pg_connect() as conn:
         with pytest.raises(psycopg.errors.ForeignKeyViolation):
             with conn.cursor() as cur:
                 _insert_transaction(cur, account_id=999_999, ref="orphan")
             conn.commit()
 
 
-def test_cash_only_transactions_may_omit_instrument_and_quantity():
-    with _connect() as conn:
+def test_cash_only_transactions_may_omit_instrument_and_quantity(pg_connect):
+    with pg_connect() as conn:
         with conn.cursor() as cur:
             account_id = _insert_account(cur, user_id=uuid.uuid4())
             _insert_transaction(
@@ -188,8 +171,8 @@ def test_cash_only_transactions_may_omit_instrument_and_quantity():
             assert cur.fetchone()[0] == 1
 
 
-def test_position_snapshot_key_rejects_a_duplicate_date():
-    with _connect() as conn:
+def test_position_snapshot_key_rejects_a_duplicate_date(pg_connect):
+    with pg_connect() as conn:
         with conn.cursor() as cur:
             account_id = _insert_account(cur, user_id=uuid.uuid4())
             cur.execute(
@@ -211,9 +194,9 @@ def test_position_snapshot_key_rejects_a_duplicate_date():
             conn.commit()
 
 
-def test_return_snapshot_percentage_is_nullable_when_cost_basis_is_zero():
+def test_return_snapshot_percentage_is_nullable_when_cost_basis_is_zero(pg_connect):
     """A position sold down to zero gets a row with an undefined -- not zero -- return."""
-    with _connect() as conn:
+    with pg_connect() as conn:
         with conn.cursor() as cur:
             account_id = _insert_account(cur, user_id=uuid.uuid4())
             cur.execute(

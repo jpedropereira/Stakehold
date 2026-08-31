@@ -22,8 +22,8 @@ one-time snapshot.
 | 2 | [Auth identity API](#2-auth-identity-api) | 1 | done |
 | 3 | [Data-store read API](#3-data-store-read-api) | — | done |
 | 4 | [Portfolio foundation & schema sign-off](#4-portfolio-foundation--schema-sign-off) | — | done |
-| 5 | [Accounts & manual transactions](#5-accounts--manual-transactions) | 4 | ready |
-| 6 | [Broker import](#6-broker-import) | 5 | blocked |
+| 5 | [Accounts & manual transactions](#5-accounts--manual-transactions) | 4 | done |
+| 6 | [Broker import](#6-broker-import) | 5 | ready |
 | 7 | [Positions](#7-positions) | 6 | blocked |
 | 8 | [Returns](#8-returns) | 7, 3 | blocked |
 | 9 | [Portfolio HTTP API](#9-portfolio-http-api) | 5, 6, 7, 8 | blocked |
@@ -32,8 +32,8 @@ one-time snapshot.
 | 12 | [Portfolio view UI](#12-portfolio-view-ui) | 11 | blocked |
 | 13 | [End-to-end integration & smoke test](#13-end-to-end-integration--smoke-test) | 12 | blocked |
 
-Two tasks are `ready` today: **5** (portfolio) and **10** (web) — independent of each other, both
-unblocked now that tasks 1–4 are all `done`.
+Two tasks are `ready` today: **6** (broker import) and **10** (web) — independent of each other,
+both unblocked now that tasks 1–5 are all `done`.
 
 ## Tasks
 
@@ -117,12 +117,26 @@ that code moved to the `shared` workspace package during task 1, so portfolio im
 through it in either existing service, and a file holding only a logger is dead code — task 5's
 `account add` is the first flow that needs one, and creates it.
 
-### 5. Accounts & manual transactions
+### 5. Accounts & manual transactions — done
 
-`accounts/repository.py` (the multi-user isolation chokepoint — every other module's queries pass
-through it), `transactions/base.py` (the `CanonicalTransaction` shape) + `repository.py`
-(idempotent insert, `ON CONFLICT ... DO NOTHING`). CLI flows: `account add`, `add-transaction`.
-Tests (unit: pure logic; integration: idempotent-import semantics against live Postgres).
+`accounts/repository.py` (the multi-user isolation chokepoint — every read takes a `user_id`, and
+there's deliberately no unscoped `get_by_id`, only `get_by_label`/`list_by_user`),
+`transactions/base.py` (the `CanonicalTransaction` shape, plus a pure `validate()` and `to_eur()`)
++ `repository.py` (idempotent insert, `ON CONFLICT ... DO NOTHING`). New `pipeline.py` — the flow
+layer `architecture.md` described but task 4 deliberately hadn't built yet — owns the
+`with transaction(conn):` boundary and a placeholder `KNOWN_BROKERS` tuple standing in for task 6's
+`BROKER_PARSERS` registry. New `errors.py` (`PortfolioError` and subclasses) so `jobs.py` can catch
+every domain failure with one `except`. CLI flows: `account add --user --broker --label`,
+`account list --user` (not originally scoped, added because `--account` takes a user-chosen label
+a user needs a way to see), `add-transaction` (`--ref` mandatory, making manual entry idempotent by
+construction; `--amount` always required, `--fx-rate` required for non-EUR with `eur_amount`
+derived locally). Two corrections to `architecture.md`'s originally-documented
+`CanonicalTransaction` shape, made while implementing it: `account_id` is `int` (the resolved
+`accounts.id`), not `str`; the `broker` field is dropped (schema.md already dropped the
+functionally-dependent `transactions.broker` column at sign-off, task 4). One schema-*document*
+amendment, not a DDL change: `fx_rate_source` gains `'manual'` for a user-typed rate. Tests (unit:
+pure logic plus pipeline orchestration against fake repositories; integration: idempotent-import
+and multi-user-isolation semantics against live Postgres) under `services/portfolio/tests/`.
 
 ### 6. Broker import
 

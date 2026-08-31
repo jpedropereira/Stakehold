@@ -52,9 +52,12 @@ later if richer per-fund metadata needs to live in the DB"). The same applies he
 `brokers` table is a cheap follow-up if broker-level metadata (display name, supported file
 formats, docs links) ever needs to live in the database rather than in code.
 
-**Loading strategy**: single-row insert via `account add --user <id> --broker <key>`, where `<id>`
-is the UUID `auth` issued at signup — pasted in by the caller, not looked up or validated against
-`auth` (see open items).
+**Loading strategy**: single-row insert via `account add --user <id> --broker <key> --label
+<label>`, where `<id>` is the UUID `auth` issued at signup — pasted in by the caller, not looked up
+or validated against `auth` (see open items). `ON CONFLICT (user_id, account_label) DO NOTHING`:
+re-running with the same broker is a safe no-op; re-running with a *different* broker for a label
+already taken is rejected rather than silently ignored, since the two calls disagree about a fact
+that can't both be true.
 
 ## Ticker mappings — not a table here
 
@@ -89,8 +92,8 @@ The immutable ledger. One row per broker-reported line item or manually entered 
 | `native_currency` | `VARCHAR(10) NOT NULL` | ISO 4217, exactly as the broker reports it — same column width as `etf_holdings.currency`. |
 | `native_amount` | `NUMERIC(20,4) NOT NULL` | Signed cash-flow, the broker's own figure — the immutable source of truth (see `architecture.md`'s currency decision). |
 | `eur_amount` | `NUMERIC(20,4) NOT NULL` | Signed, frozen at transaction time — never recomputed later even if an FX source is subsequently revised. |
-| `fx_rate` | `NUMERIC(18,8)` | Nullable — absent when `native_currency = 'EUR'`. |
-| `fx_rate_source` | `VARCHAR(20)` | `'broker_reported'` \| `'companion_row'` \| `'datastore_series'`, nullable alongside `fx_rate`. |
+| `fx_rate` | `NUMERIC(18,8)` | Nullable — absent when `native_currency = 'EUR'`, required otherwise. |
+| `fx_rate_source` | `VARCHAR(20)` | `'broker_reported'` \| `'companion_row'` \| `'datastore_series'` \| `'manual'`, nullable alongside `fx_rate`. **`'manual'` added at task 5** for a rate the user typed in on `add-transaction` — none of the three broker-derived sources fit one, and leaving `fx_rate_source` `NULL` for a manual rate would collide with `NULL`'s other meaning ("EUR, no rate needed"). App-layer vocabulary only, no DDL change — the column was already `VARCHAR(20)` with no `CHECK` constraint. |
 | `fees_native` | `NUMERIC(18,4)` | Nullable. |
 | `imported_at` | `TIMESTAMPTZ NOT NULL DEFAULT now()` | When this row was written, not the trade date. |
 
@@ -216,6 +219,7 @@ extending past that point.
   table to reference) and no call to `auth` to confirm the UUID is real — `account add` accepts any
   syntactically valid UUID. Acceptable for a solo hobby deployment; worth revisiting once `auth` has
   a real API to check against.
-- **No real UUID exists to test with yet.** `auth` doesn't have a working signup endpoint (see
-  `auth/docs/architecture.md`'s open questions), so exercising `account add` today needs an ad hoc
-  UUID (hand-generated, or a test fixture) rather than one actually issued by `auth`.
+- **A real `auth`-issued UUID is now obtainable** — `auth`'s signup endpoint shipped in task 2 — but
+  `account add` still doesn't call it: the UUID is pasted in by the caller either way, whether it
+  came from a real signup or was hand-generated for testing. The unvalidated-at-write-time gap
+  above is unchanged; only the "nothing to test with" half of this item is resolved.
