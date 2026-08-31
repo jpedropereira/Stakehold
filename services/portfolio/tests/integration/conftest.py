@@ -18,6 +18,11 @@ def connect():
 
 @pytest.fixture(autouse=True)
 def clean_tables():
+    """Applies to every test under tests/integration/, not just this file -- deliberately
+    directory-wide, so any future integration test gets a freshly-initialized, empty schema by
+    default without having to opt in. A test that needs different setup (a different role, or
+    state that must survive across test functions) should override this fixture locally rather
+    than relying on it being scoped narrower than it is."""
     cli.main(["db", "init"])
     with connect() as conn:
         with conn.cursor() as cur:

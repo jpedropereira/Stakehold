@@ -49,6 +49,26 @@ def test_to_eur_preserves_sign():
     assert to_eur(Decimal("1000.00"), Decimal("1.0850")) == Decimal("921.6590")
 
 
+def test_to_eur_rejects_a_zero_fx_rate():
+    with pytest.raises(InvalidTransaction, match="fx_rate"):
+        to_eur(Decimal("100"), Decimal("0"))
+
+
+def test_to_eur_rejects_a_negative_fx_rate():
+    with pytest.raises(InvalidTransaction, match="fx_rate"):
+        to_eur(Decimal("100"), Decimal("-1"))
+
+
+def test_to_eur_rejects_a_non_finite_fx_rate():
+    with pytest.raises(InvalidTransaction, match="fx_rate"):
+        to_eur(Decimal("100"), Decimal("NaN"))
+
+
+def test_to_eur_rejects_a_non_finite_native_amount():
+    with pytest.raises(InvalidTransaction, match="native_amount"):
+        to_eur(Decimal("NaN"), Decimal("1.0850"))
+
+
 # --- validate: happy paths ---
 
 
@@ -149,6 +169,16 @@ def test_validate_rejects_a_currency_that_is_not_three_letters():
         validate(_txn(native_currency="EURO"))
 
 
+def test_validate_rejects_a_currency_with_digits():
+    # str.isupper() alone accepts this ("1AB".isupper() is True -- digits are uncased and
+    # ignored by isupper()), so the check must also require isalpha(). Matching on "ISO 4217"
+    # rather than "native_currency" specifically: a non-EUR code that isn't rejected as
+    # malformed would otherwise fall through to the (also native_currency-mentioning) "fx_rate
+    # is required" message and pass for the wrong reason.
+    with pytest.raises(InvalidTransaction, match="ISO 4217"):
+        validate(_txn(native_currency="1AB"))
+
+
 def test_validate_rejects_a_rate_without_a_source():
     with pytest.raises(InvalidTransaction, match="fx_rate"):
         validate(
@@ -207,3 +237,39 @@ def test_validate_rejects_a_non_positive_fx_rate():
 def test_validate_rejects_a_eur_transaction_that_carries_a_rate():
     with pytest.raises(InvalidTransaction, match="fx_rate"):
         validate(_txn(fx_rate=Decimal("1.0"), fx_rate_source="manual"))
+
+
+# --- validate: non-finite (NaN/Infinity) inputs ---
+
+
+def test_validate_rejects_a_non_finite_native_amount():
+    with pytest.raises(InvalidTransaction, match="native_amount"):
+        validate(_txn(native_amount=Decimal("NaN")))
+
+
+def test_validate_rejects_a_non_finite_quantity():
+    with pytest.raises(InvalidTransaction, match="quantity"):
+        validate(_txn(quantity=Decimal("NaN")))
+
+
+def test_validate_rejects_a_non_finite_price():
+    with pytest.raises(InvalidTransaction, match="price"):
+        validate(_txn(price=Decimal("NaN")))
+
+
+def test_validate_rejects_a_non_finite_fees():
+    with pytest.raises(InvalidTransaction, match="fees_native"):
+        validate(_txn(fees_native=Decimal("NaN")))
+
+
+def test_validate_rejects_a_non_finite_fx_rate():
+    with pytest.raises(InvalidTransaction, match="fx_rate"):
+        validate(
+            _txn(
+                native_currency="USD",
+                native_amount=Decimal("-1000.00"),
+                eur_amount=Decimal("-921.6590"),
+                fx_rate=Decimal("NaN"),
+                fx_rate_source="manual",
+            )
+        )

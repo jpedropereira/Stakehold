@@ -22,7 +22,12 @@ from portfolio.errors import (
     UnknownBroker,
 )
 from portfolio.transactions import repository as transactions_repository
-from portfolio.transactions.base import CanonicalTransaction, to_eur, validate
+from portfolio.transactions.base import (
+    FX_RATE_SOURCE_MANUAL,
+    CanonicalTransaction,
+    to_eur,
+    validate,
+)
 from shared.db.connection import transaction
 
 logger = logging.getLogger(__name__)
@@ -52,6 +57,14 @@ def add_account(conn, *, user_id: UUID, broker: str, account_label: str) -> int:
         existing = accounts_repository.get_by_label(
             conn, user_id=user_id, account_label=account_label
         )
+        if existing is None:
+            # insert_account just reported a conflict on this (user_id, account_label), but the
+            # row is gone by the time we re-read it -- a concurrent delete raced us. Not a state
+            # this caller can resolve; surface it as a clean domain error rather than crashing
+            # on `.broker` of None.
+            raise AccountNotFound(
+                f"account {account_label!r} was deleted concurrently with this request"
+            )
         if existing.broker != broker:
             raise AccountLabelConflict(
                 f"account {account_label!r} already exists for this user with broker "
@@ -98,9 +111,7 @@ def add_manual_transaction(
     else:
         if fx_rate is None:
             raise InvalidTransaction(f"{native_currency} transactions require --fx-rate")
-        # The only source a user-typed rate can be -- see transactions/base.py's FX_RATE_SOURCES
-        # and docs/schema.md's amendment adding this value.
-        fx_rate_source = "manual"
+        fx_rate_source = FX_RATE_SOURCE_MANUAL
 
     txn = CanonicalTransaction(
         account_id=account.id,

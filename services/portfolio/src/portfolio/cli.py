@@ -6,6 +6,7 @@ from uuid import UUID
 
 from portfolio import jobs
 from portfolio.run_result import STATUS_NOTHING_TO_DO, STATUS_OK
+from portfolio.transactions.base import TRANSACTION_TYPES
 
 _SUCCESS_STATUSES = {STATUS_OK, STATUS_NOTHING_TO_DO}
 
@@ -114,7 +115,9 @@ def _build_parser() -> argparse.ArgumentParser:
         required=True,
         help="A caller-chosen unique key -- re-running with the same --ref is a safe no-op",
     )
-    txn_parser.add_argument("--type", required=True, dest="type", help="e.g. BUY, DEPOSIT")
+    txn_parser.add_argument(
+        "--type", required=True, dest="type", choices=TRANSACTION_TYPES, help="Transaction type"
+    )
     txn_parser.add_argument(
         "--datetime",
         required=True,
