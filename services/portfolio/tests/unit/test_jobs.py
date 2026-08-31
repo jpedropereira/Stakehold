@@ -1,6 +1,11 @@
 import logging
+import uuid
+from datetime import UTC, datetime
+from decimal import Decimal
 
 from portfolio import jobs
+from portfolio.accounts.repository import Account
+from portfolio.errors import AccountNotFound, UnknownBroker
 
 _FAKE_DATABASE_URL = "postgresql://portfolio:pw@localhost/app"  # pragma: allowlist secret
 _FAKE_ADMIN_DATABASE_URL = "postgresql://admin:pw@localhost/app"  # pragma: allowlist secret
@@ -206,3 +211,153 @@ def test_ensure_role_and_schema_skips_create_role_when_role_already_exists():
     assert not any("CREATE ROLE" in s for s in statements)
     assert any("CREATE SCHEMA" in s for s in statements)
     assert admin_conn.committed is True
+
+
+class _SimpleFakeConnection:
+    def __init__(self):
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+
+def _patch_new_job_common(monkeypatch):
+    monkeypatch.setattr(jobs, "load_settings", _fake_settings)
+    fake_conn = _SimpleFakeConnection()
+    monkeypatch.setattr(jobs, "get_connection", lambda url: fake_conn)
+    return fake_conn
+
+
+# --- run_add_account ---
+
+
+def test_run_add_account_reports_ok_and_closes_connection_when_created(monkeypatch):
+    fake_conn = _patch_new_job_common(monkeypatch)
+    monkeypatch.setattr(jobs.pipeline, "add_account", lambda conn, **kw: 1)
+
+    result = jobs.run_add_account(user_id=uuid.uuid4(), broker="degiro", account_label="m")
+
+    assert result == {"status": "ok", "rows_saved": 1, "accounts_created": 1}
+    assert fake_conn.closed is True
+
+
+def test_run_add_account_reports_nothing_to_do_when_already_exists(monkeypatch):
+    _patch_new_job_common(monkeypatch)
+    monkeypatch.setattr(jobs.pipeline, "add_account", lambda conn, **kw: 0)
+
+    result = jobs.run_add_account(user_id=uuid.uuid4(), broker="degiro", account_label="m")
+
+    assert result == {"status": "nothing_to_do", "rows_saved": 0, "accounts_created": 0}
+
+
+def test_run_add_account_reports_partial_and_closes_connection_on_domain_error(monkeypatch):
+    fake_conn = _patch_new_job_common(monkeypatch)
+
+    def boom(conn, **kw):
+        raise UnknownBroker("nope")
+
+    monkeypatch.setattr(jobs.pipeline, "add_account", boom)
+
+    result = jobs.run_add_account(user_id=uuid.uuid4(), broker="nope", account_label="m")
+
+    assert result == {"status": "partial", "rows_saved": 0, "accounts_created": 0}
+    assert fake_conn.closed is True
+
+
+def test_run_add_account_logs_start_before_completion(monkeypatch, caplog):
+    caplog.set_level(logging.INFO)
+    _patch_new_job_common(monkeypatch)
+    monkeypatch.setattr(jobs.pipeline, "add_account", lambda conn, **kw: 1)
+
+    jobs.run_add_account(user_id=uuid.uuid4(), broker="degiro", account_label="m")
+
+    messages = [r.message for r in caplog.records]
+    start_index = next(i for i, m in enumerate(messages) if "creating account" in m)
+    done_index = next(i for i, m in enumerate(messages) if "done" in m)
+    assert start_index < done_index
+
+
+# --- run_list_accounts ---
+
+
+def test_run_list_accounts_reports_ok_with_the_account_payload(monkeypatch):
+    _patch_new_job_common(monkeypatch)
+    created_at = datetime(2026, 1, 1, tzinfo=UTC)
+    user_id = uuid.uuid4()
+    accounts = [
+        Account(id=1, user_id=user_id, broker="degiro", account_label="m", created_at=created_at)
+    ]
+    monkeypatch.setattr(jobs.pipeline, "list_accounts", lambda conn, **kw: accounts)
+
+    result = jobs.run_list_accounts(user_id=user_id)
+
+    assert result["status"] == "ok"
+    assert result["rows_saved"] == 0
+    assert result["accounts_listed"] == 1
+    assert result["accounts"] == [
+        {"id": 1, "account_label": "m", "broker": "degiro", "created_at": created_at.isoformat()}
+    ]
+
+
+def test_run_list_accounts_reports_nothing_to_do_when_empty(monkeypatch):
+    _patch_new_job_common(monkeypatch)
+    monkeypatch.setattr(jobs.pipeline, "list_accounts", lambda conn, **kw: [])
+
+    result = jobs.run_list_accounts(user_id=uuid.uuid4())
+
+    assert result["status"] == "nothing_to_do"
+    assert result["accounts"] == []
+
+
+def test_run_list_accounts_closes_the_connection(monkeypatch):
+    fake_conn = _patch_new_job_common(monkeypatch)
+    monkeypatch.setattr(jobs.pipeline, "list_accounts", lambda conn, **kw: [])
+
+    jobs.run_list_accounts(user_id=uuid.uuid4())
+
+    assert fake_conn.closed is True
+
+
+# --- run_add_transaction ---
+
+_TXN_KWARGS = dict(
+    account_label="m",
+    broker_transaction_ref="ref-1",
+    transaction_type="DEPOSIT",
+    trade_datetime=datetime(2026, 1, 1, tzinfo=UTC),
+    native_amount=Decimal("100"),
+    native_currency="EUR",
+)
+
+
+def test_run_add_transaction_reports_ok_when_saved(monkeypatch):
+    fake_conn = _patch_new_job_common(monkeypatch)
+    monkeypatch.setattr(jobs.pipeline, "add_manual_transaction", lambda conn, **kw: 1)
+
+    result = jobs.run_add_transaction(user_id=uuid.uuid4(), **_TXN_KWARGS)
+
+    assert result == {"status": "ok", "rows_saved": 1, "transactions_saved": 1}
+    assert fake_conn.closed is True
+
+
+def test_run_add_transaction_reports_nothing_to_do_when_ref_already_exists(monkeypatch):
+    _patch_new_job_common(monkeypatch)
+    monkeypatch.setattr(jobs.pipeline, "add_manual_transaction", lambda conn, **kw: 0)
+
+    result = jobs.run_add_transaction(user_id=uuid.uuid4(), **_TXN_KWARGS)
+
+    assert result == {"status": "nothing_to_do", "rows_saved": 0, "transactions_saved": 0}
+
+
+def test_run_add_transaction_reports_partial_and_closes_connection_on_domain_error(monkeypatch):
+    fake_conn = _patch_new_job_common(monkeypatch)
+
+    def boom(conn, **kw):
+        raise AccountNotFound("nope")
+
+    monkeypatch.setattr(jobs.pipeline, "add_manual_transaction", boom)
+
+    result = jobs.run_add_transaction(user_id=uuid.uuid4(), **_TXN_KWARGS)
+
+    assert result == {"status": "partial", "rows_saved": 0, "transactions_saved": 0}
+    assert fake_conn.closed is True
