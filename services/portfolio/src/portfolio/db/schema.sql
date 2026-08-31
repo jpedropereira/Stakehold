@@ -3,6 +3,11 @@
 --
 -- Every statement is guarded (IF NOT EXISTS, or a DO $$ block checking the current state)
 -- so `portfolio db init` is safe to rerun against any database, new or existing.
+--
+-- Unqualified table names on purpose: `jobs.py`'s `run_db_init` connects here as the
+-- `portfolio` role, whose default search_path resolves the unqualified name to the
+-- like-named `portfolio` schema it owns (Postgres's built-in "$user" search_path entry) --
+-- not `public`. `jobs.py` creates that role and schema before ever running this file.
 
 -- One row per brokerage account a user has told portfolio about. user_id is the UUID auth
 -- issues at signup -- a trusted plain column, not a foreign key: there is no local users

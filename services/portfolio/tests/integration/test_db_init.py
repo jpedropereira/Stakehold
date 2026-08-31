@@ -64,14 +64,34 @@ def test_db_init_creates_expected_tables():
 
     with _connect() as conn:
         with conn.cursor() as cur:
+            # 'portfolio', not 'public': db init creates and connects as a role that owns a
+            # like-named schema, so that's where the tables land. See jobs.py's
+            # _ensure_role_and_schema and schema.sql's header comment.
             cur.execute(
                 "SELECT table_name FROM information_schema.tables "
-                "WHERE table_schema = 'public' AND table_name = ANY(%s) ORDER BY table_name",
+                "WHERE table_schema = 'portfolio' AND table_name = ANY(%s) ORDER BY table_name",
                 (list(_TABLES),),
             )
             tables = [row[0] for row in cur.fetchall()]
 
     assert tables == list(_TABLES)
+
+
+def test_db_init_creates_a_non_superuser_role_owning_its_own_schema():
+    cli.main(["db", "init"])
+
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT rolsuper FROM pg_roles WHERE rolname = 'portfolio'")
+            (is_superuser,) = cur.fetchone()
+            cur.execute(
+                "SELECT nspname FROM pg_namespace n "
+                "JOIN pg_roles r ON r.oid = n.nspowner WHERE r.rolname = 'portfolio'"
+            )
+            owned_schemas = [row[0] for row in cur.fetchall()]
+
+    assert is_superuser is False
+    assert owned_schemas == ["portfolio"]
 
 
 def test_db_init_is_idempotent_and_reports_nothing_to_do(capsys):

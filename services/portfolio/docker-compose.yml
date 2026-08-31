@@ -1,6 +1,11 @@
 # app-postgres: the shared application database for non-data-store, non-credential services.
 # It lives here because portfolio is its only tenant today -- the container is not portfolio's
 # to own, only portfolio's to start. See docs/architecture.md's deployment section.
+#
+# POSTGRES_USER/PASSWORD here bootstrap an admin role, not the app's own role -- the official
+# postgres image always grants that role superuser, so nothing in this file's control. `db init`
+# uses it once, to create a separate non-superuser role per service, and the running app never
+# connects as this role. See docs/architecture.md's deployment section.
 services:
   postgres:
     image: postgres:17
@@ -10,14 +15,14 @@ services:
       - .env
     environment:
       POSTGRES_DB: ${APP_POSTGRES_DB}
-      POSTGRES_USER: ${APP_POSTGRES_USER}
-      POSTGRES_PASSWORD: ${APP_POSTGRES_PASSWORD}
+      POSTGRES_USER: ${APP_POSTGRES_ADMIN_USER}
+      POSTGRES_PASSWORD: ${APP_POSTGRES_ADMIN_PASSWORD}
     ports:
       - "${APP_POSTGRES_PORT:-5435}:5432"
     volumes:
       - ./.data/postgres:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${APP_POSTGRES_USER} -d ${APP_POSTGRES_DB}"]
+      test: ["CMD-SHELL", "pg_isready -U ${APP_POSTGRES_ADMIN_USER} -d ${APP_POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 10

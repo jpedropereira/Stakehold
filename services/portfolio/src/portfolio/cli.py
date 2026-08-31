@@ -2,16 +2,18 @@ import argparse
 import sys
 
 from portfolio import jobs
-from portfolio.run_result import STATUS_PARTIAL
+from portfolio.run_result import STATUS_NOTHING_TO_DO, STATUS_OK
+
+_SUCCESS_STATUSES = {STATUS_OK, STATUS_NOTHING_TO_DO}
 
 
 def _exit_code(result: dict[str, int | str]) -> int:
-    """Non-zero when a run only partly succeeded, so a scheduler can tell.
+    """Non-zero unless a run is a known success, so an unrecognized status fails closed.
 
     "nothing_to_do" is deliberately a success: a quiet day is not a broken one, and the run has
     already said so on stdout.
     """
-    return 1 if result["status"] == STATUS_PARTIAL else 0
+    return 0 if result["status"] in _SUCCESS_STATUSES else 1
 
 
 def _report(result: dict[str, int | str], noun: str) -> int:
