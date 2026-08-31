@@ -1,0 +1,117 @@
+/* Stakehold web -- layout and components only. All color/type/shape values come from
+   brand/tokens.css custom properties; nothing here hardcodes a hex value or a font name. */
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--parchment);
+  color: var(--stone);
+  font: var(--text-body);
+}
+
+a {
+  color: var(--stone);
+}
+
+.site-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 32px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.brand-mark img {
+  display: block;
+}
+
+.logout-form {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.user-name {
+  font: var(--text-caption);
+  color: var(--stone-600);
+}
+
+.link-button {
+  background: none;
+  border: none;
+  padding: 0;
+  font: var(--text-caption);
+  color: var(--stone);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.page {
+  display: flex;
+  justify-content: center;
+  padding: 64px 24px;
+}
+
+.auth-card,
+.welcome-card {
+  width: 100%;
+  max-width: 380px;
+  background: var(--parchment-deep);
+  border-radius: var(--radius-card);
+  padding: 32px;
+}
+
+.auth-card h1,
+.welcome-card h1 {
+  font: var(--text-h2);
+  margin: 0 0 24px;
+}
+
+.auth-card form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.auth-card label {
+  font: var(--text-caption);
+  color: var(--stone-600);
+  margin-top: 12px;
+}
+
+.auth-card input {
+  font: var(--text-body);
+  padding: 10px 12px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
+  background: var(--parchment);
+  color: var(--stone);
+}
+
+.primary-button {
+  margin-top: 24px;
+  padding: 12px;
+  border: none;
+  border-radius: var(--radius-card);
+  background: var(--gold);
+  color: var(--stone);
+  font: var(--text-body);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.form-error {
+  font: var(--text-caption);
+  color: var(--oxblood);
+  margin: 0 0 4px;
+}
+
+.auth-switch {
+  font: var(--text-caption);
+  color: var(--stone-600);
+  margin-top: 20px;
+  text-align: center;
+}
