@@ -23,15 +23,15 @@ copy of `email`/`display_name`.
 | Column          | Type            | Notes                                                        |
 |-----------------|-----------------|----------------------------------------------------------------|
 | `id`            | `UUID`          | PK. **No DB default** — generated in the app with `uuid.uuid7()` at signup, not `gen_random_uuid()` (Postgres 17 only offers v4 natively). v7 gives index locality and sortable creation order, which `architecture.md` chose specifically because `id` is a non-secret identifier where that trade-off has no downside — unlike a session token, where randomness is what matters. |
-| `email`         | `VARCHAR(320)`  | Stored already-lowercased; normalization happens at the app layer (task 2), not in the DB. `VARCHAR(320)` is the RFC 5321 maximum. Uniqueness is a plain unique index rather than a `citext` column — `citext` needs an extension present in every environment for something one `.lower()` at the write boundary already achieves. |
+| `email`         | `VARCHAR(320)`  | Stored already-lowercased; normalization (`service._normalize_email`, strip + lower) happens at the app layer, not in the DB. `VARCHAR(320)` is the RFC 5321 maximum. Uniqueness is a plain unique index rather than a `citext` column — `citext` needs an extension present in every environment for something one `.lower()` at the write boundary already achieves. |
 | `display_name`  | `VARCHAR(100)`  | Collected at signup. Exists so `web` has somewhere to read a greeting from without keeping its own copy of user data. |
-| `password_hash` | `TEXT`          | An Argon2id PHC string (task 2, `argon2-cffi`). `TEXT`, not a fixed width: the string's length moves with the cost parameters, and re-tuning those parameters later shouldn't force a migration. |
+| `password_hash` | `TEXT`          | An Argon2id PHC string (`passwords.hash_password`, `argon2-cffi`). `TEXT`, not a fixed width: the string's length moves with the cost parameters, and re-tuning those parameters later shouldn't force a migration. |
 | `created_at`    | `TIMESTAMPTZ`   | Defaults to `now()`.                                            |
 
 Indexes: `UNIQUE (email)` — the signup uniqueness check and the login lookup both key off it.
 
-**Loading strategy**: single-row insert at signup (task 2). Never bulk-loaded, never updated in
-bulk — a password change or display-name edit is a single-row `UPDATE` by `id`.
+**Loading strategy**: single-row insert at signup (`POST /signup`). Never bulk-loaded, never
+updated in bulk — a password change or display-name edit is a single-row `UPDATE` by `id`.
 
 ## `sessions`
 
@@ -49,8 +49,8 @@ One row per active (or not-yet-expired) login session. Backs the opaque session 
 | `absolute_expires_at`  | `TIMESTAMPTZ` | Fixed at login, **never extended by sliding renewal**. Closes the "whether to add an absolute session lifetime cap" open question in `architecture.md`: without this column a continuously-used session could live forever. A session is valid only while `now() < expires_at AND now() < absolute_expires_at`. |
 
 Indexes: `UNIQUE (token_hash)` for the validate/logout lookup by cookie value; `(user_id)` for
-"list/revoke all of a user's sessions"; `(expires_at)` for the expired-session sweep task 2 will
-need.
+"list/revoke all of a user's sessions"; `(expires_at)` for the expired-session sweep
+(`auth sessions purge-expired`).
 
 **Loading strategy**: insert at login; `UPDATE ... SET expires_at = ..., last_seen_at = now()` on
 each sliding renewal; `DELETE` on logout or expiry sweep. This is the whole reason

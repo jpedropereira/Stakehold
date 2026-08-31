@@ -122,6 +122,7 @@ jobs:
           # job -- not a credential to anything that outlives it.
           DATABASE_URL: postgresql://data_store:ci-throwaway@localhost:5432/data_store  # pragma: allowlist secret
           AUTH_DATABASE_URL: postgresql://auth:ci-throwaway@localhost:5434/auth  # pragma: allowlist secret
+          AUTH_INTERNAL_SECRET: ci-throwaway-internal-secret  # pragma: allowlist secret
           # Admin: the app-postgres service container's own bootstrap role (see above) --
           # `db init` uses it once to create the `portfolio` role below, itself.
           APP_POSTGRES_ADMIN_DATABASE_URL: postgresql://app_postgres_admin:ci-throwaway-admin@localhost:5435/app  # pragma: allowlist secret
