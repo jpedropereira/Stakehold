@@ -1,11 +1,11 @@
 # portfolio schema
 
-**Proposal, not yet implemented.** DDL will live at `src/portfolio/db/schema.sql`, applied via a
-`portfolio db init` command, guarded the same way as `data-store`'s (`IF NOT EXISTS` /
-`DO $$...$$` blocks so it stays safe to rerun on any database) — but that file doesn't exist yet.
-Per [`../../../.claude/rules/data-schema.md`](../../../.claude/rules/data-schema.md), this document
-is the proposal to sign off on before `schema.sql` or any model/migration code gets written. Keep
-it in lockstep with any future schema change, the same discipline
+**Signed off and implemented.** The DDL lives at `src/portfolio/db/schema.sql` and is applied by
+`portfolio db init`, guarded the same way as `data-store`'s (`IF NOT EXISTS` / `DO $$...$$` blocks
+so it stays safe to rerun on any database). Per
+[`../../../.claude/rules/data-schema.md`](../../../.claude/rules/data-schema.md), this document was
+the proposal signed off on before that file was written, and is now the description of what exists.
+Keep it in lockstep with any future schema change, the same discipline
 [`data-store`'s schema.md](../../data-store/docs/schema.md) follows. For *why the service is laid
 out this way*, see [`architecture.md`](architecture.md), which this document turns from a
 conceptual entity model into concrete tables.
@@ -79,7 +79,6 @@ The immutable ledger. One row per broker-reported line item or manually entered 
 |---|---|---|
 | `id` | `BIGSERIAL PRIMARY KEY` | |
 | `account_id` | `BIGINT NOT NULL REFERENCES accounts(id)` | |
-| `broker` | `VARCHAR(50) NOT NULL` | Denormalized from `accounts.broker` at write time — lets the idempotent-import key below, and broker-scoped queries, avoid a join. The same trade-off `market_returns.split_adjusted_close` makes by denormalizing from `raw_market_data`. |
 | `broker_transaction_ref` | `VARCHAR(128) NOT NULL` | Degiro's `Order ID` (a real, broker-issued natural key) or, for IBKR, a content hash of (date, symbol, type, amounts) — see `architecture.md`'s disclosed IBKR-row-identity risk. The exact hash input fields still need confirming before `broker_import/ibkr.py` is written; not decided here. |
 | `transaction_type` | `VARCHAR(20) NOT NULL` | `BUY` \| `SELL` \| `DEPOSIT` \| `WITHDRAWAL` \| `DIVIDEND` \| `FX` \| `FEE` \| `ADJUSTMENT`. App-layer validated, not a DB `CHECK` — an unrecognized broker transaction type is meant to be a parser-level error (per `architecture.md`), not something that reaches this table at all. |
 | `trade_datetime` | `TIMESTAMPTZ NOT NULL` | |
@@ -97,11 +96,18 @@ The immutable ledger. One row per broker-reported line item or manually entered 
 
 Indexes:
 
-- `UNIQUE (account_id, broker, broker_transaction_ref)` — scoped by **account**, not just broker.
-  IBKR's hash-based ref is derived from content (date, symbol, type, amounts) that two different
-  accounts could plausibly share by coincidence (same-day, same symbol, same size trade), unlike
-  Degiro's genuinely-global UUID `Order ID`. Scoping by account is the conservative choice that's
-  correct for both.
+- `UNIQUE (account_id, broker_transaction_ref)` — scoped by **account**. IBKR's hash-based ref is
+  derived from content (date, symbol, type, amounts) that two different accounts could plausibly
+  share by coincidence (same-day, same symbol, same size trade), unlike Degiro's genuinely-global
+  UUID `Order ID`. Scoping by account is the conservative choice that's correct for both.
+
+  **No `broker` column here, and none in this key.** An earlier draft denormalized
+  `accounts.broker` onto every transaction row and keyed on all three columns, to spare
+  broker-scoped queries a join. Dropped at sign-off: an account has exactly one broker, so `broker`
+  is functionally dependent on `account_id` — the three-column key constrains nothing the
+  two-column one doesn't, and the column's only remaining effect would be to let a row disagree
+  with its own account about who the broker is. Cross-account, per-broker queries join `accounts`,
+  which is the one place the answer actually lives.
 - `(account_id, trade_datetime)` — per-account, time-ordered reads.
 - A **partial** index, `(instrument_identifier_kind, instrument_identifier) WHERE
   instrument_identifier IS NOT NULL` — this is what powers `list-unmapped-instruments`'s read: find
@@ -115,8 +121,8 @@ Indexes:
 mapping at rebuild time, not resolved once and cached on the row. Caching the resolved
 `canonical_ticker` here would go stale silently the moment the YAML file is edited.
 
-**Loading strategy: insert with `ON CONFLICT (account_id, broker, broker_transaction_ref) DO
-NOTHING` — deliberately not a true upsert.** This is the opposite choice from `raw_market_data`'s
+**Loading strategy: insert with `ON CONFLICT (account_id, broker_transaction_ref) DO NOTHING` —
+deliberately not a true upsert.** This is the opposite choice from `raw_market_data`'s
 upsert-and-overwrite, for a reason specific to this table: `raw_market_data` is a *cache* of what a
 provider currently says, where restatement is normal and overwriting is correct; `transactions` is
 an **audit trail**, and a broker "correcting" a past transaction should arrive as a new, explicit
@@ -199,9 +205,11 @@ extending past that point.
   confirming when `broker_import/ibkr.py` is actually written.
 - **`position_snapshots.native_currency`/`average_cost_native`'s single-currency-per-instrument
   assumption** is stated, not verified against a real multi-currency same-ticker case.
-- **The `data-store` read API** this schema's `return_snapshots` rebuild depends on doesn't exist
-  yet — see `architecture.md`'s cross-service prerequisite. `accounts`, `transactions`, and
-  `position_snapshots` need nothing from it and can be built and tested first.
+- **The `data-store` read API** this schema's `return_snapshots` rebuild depends on now exists
+  (task 3 of [`tasks.md`](../../../tasks.md)) — see `architecture.md`'s cross-service prerequisite.
+  What's still outstanding is portfolio's `datastore_client/http_client.py` against it, which is
+  the returns task's own work. `accounts`, `transactions`, and `position_snapshots` need nothing
+  from it either way.
 - **The YAML → database migration path for ticker mappings**, once a UI exists, isn't designed
   yet — see `architecture.md`'s cross-cutting decision on ticker-mapping storage.
 - **`accounts.user_id` is unvalidated at write time.** There's no foreign key (no local `users`
