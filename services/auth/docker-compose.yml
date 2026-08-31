@@ -1,3 +1,20 @@
+# db-init and api run the same image with different entry points -- one applies the schema and
+# exits, the other serves. Anchored here so their build context, image tag and DB wiring can't
+# drift apart.
+x-auth-image: &auth-image
+  build:
+    context: ../..
+    dockerfile: services/auth/Dockerfile
+  image: ${AUTH_API_IMAGE_NAME:-stakehold-auth-api:local}
+  env_file:
+    - .env
+  environment:
+    # Overrides the host-oriented AUTH_DATABASE_URL from .env (localhost:AUTH_POSTGRES_PORT,
+    # meant for a CLI run from the host) with the in-network address the postgres container is
+    # reachable at from other containers on this compose network -- the same override
+    # data-store's compose file makes for its own Airflow containers.
+    AUTH_DATABASE_URL: postgresql://${AUTH_POSTGRES_USER}:${AUTH_POSTGRES_PASSWORD}@postgres:5432/${AUTH_POSTGRES_DB}
+
 services:
   postgres:
     image: postgres:17
@@ -19,27 +36,33 @@ services:
       timeout: 5s
       retries: 10
 
+  # Applies db/schema.sql and exits. A one-shot service rather than an api entrypoint step
+  # because the schema is idempotent but not concurrency-safe: running it once, before anything
+  # serves, keeps it that way even if `api` is ever scaled past one replica. Without it the api
+  # container comes up against an empty database and 500s on every request.
+  db-init:
+    <<: *auth-image
+    container_name: auth-db-init
+    restart: "no"
+    command: ["uv", "run", "--frozen", "auth", "db", "init"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   api:
-    build:
-      context: ../..
-      dockerfile: services/auth/Dockerfile
-    image: ${AUTH_API_IMAGE_NAME:-stakehold-auth-api:local}
+    <<: *auth-image
     container_name: auth-api
     restart: unless-stopped
-    env_file:
-      - .env
-    environment:
-      # Overrides the host-oriented AUTH_DATABASE_URL from .env (localhost:AUTH_POSTGRES_PORT,
-      # meant for a CLI run from the host) with the in-network address the postgres container is
-      # reachable at from other containers on this compose network -- the same override
-      # data-store's compose file makes for its own Airflow containers.
-      AUTH_DATABASE_URL: postgresql://${AUTH_POSTGRES_USER}:${AUTH_POSTGRES_PASSWORD}@postgres:5432/${AUTH_POSTGRES_DB}
     ports:
       - "${AUTH_API_PORT:-8001}:${AUTH_API_PORT:-8001}"
     depends_on:
       postgres:
         condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
     healthcheck:
+      # /health checks the schema, not just the process, so an api container talking to an
+      # uninitialised database reports unhealthy instead of silently accepting traffic.
       test:
         [
           "CMD-SHELL",

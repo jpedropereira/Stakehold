@@ -1,4 +1,4 @@
-"""Fake in-memory repositories shared by test_service.py and test_api.py.
+"""Fake in-memory repositories and connection shared by test_service.py and test_api.py.
 
 Standing in for `auth.users.repository` / `auth.sessions.repository` so both the domain layer
 and the HTTP layer can be exercised end-to-end without a real Postgres connection -- the
@@ -15,6 +15,53 @@ from auth.sessions.repository import SessionUser
 from auth.users.repository import User
 
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
+
+# What /health's schema probe returns from a database that has been initialised.
+HEALTHY_SCHEMA_ROW = ("users", "sessions")
+
+
+class FakeCursor:
+    def __init__(self, fetch_result):
+        self.fetch_result = fetch_result
+        self.executed: list[tuple] = []
+
+    def execute(self, sql, params=None):
+        self.executed.append((sql, params))
+
+    def fetchone(self):
+        return self.fetch_result
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class FakeConnection:
+    """Stands in for a pooled psycopg connection.
+
+    Counts commits and rollbacks rather than just flagging them: transaction *boundaries* are the
+    behaviour under test (signup's user and session inserts have to land in one transaction, not
+    two), and a boundary is only observable from the connection, never from the fake repositories.
+    """
+
+    def __init__(self, health_row=HEALTHY_SCHEMA_ROW):
+        self.commits = 0
+        self.rollbacks = 0
+        self.cursors: list[FakeCursor] = []
+        self._health_row = health_row
+
+    def cursor(self):
+        cursor = FakeCursor(self._health_row)
+        self.cursors.append(cursor)
+        return cursor
+
+    def commit(self):
+        self.commits += 1
+
+    def rollback(self):
+        self.rollbacks += 1
 
 
 class FakeUsersRepo:
@@ -92,3 +139,16 @@ def repos(monkeypatch):
     monkeypatch.setattr(service, "users_repository", users_repo)
     monkeypatch.setattr(service, "sessions_repository", sessions_repo)
     return users_repo, sessions_repo
+
+
+@pytest.fixture
+def conn():
+    return FakeConnection()
+
+
+@pytest.fixture
+def make_connection():
+    """Factory for a FakeConnection, for tests that need a non-default one (e.g. a database
+    whose schema has not been applied). Avoids importing across the tests package, which isn't
+    importable as one."""
+    return FakeConnection

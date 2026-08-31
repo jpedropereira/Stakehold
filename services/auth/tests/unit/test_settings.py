@@ -65,3 +65,30 @@ def test_overrides_are_read_from_env(monkeypatch):
     assert result.api_port == 9001
     assert result.pool_min_size == 2
     assert result.pool_max_size == 20
+
+
+def test_empty_cookie_secure_falls_back_to_the_default(monkeypatch):
+    # An env var present but empty (AUTH_COOKIE_SECURE= in a .env, or an unset compose variable
+    # interpolating to nothing) must not be read as "false" -- that would silently drop the
+    # session cookie's Secure flag in production. Matches how _int_env treats an empty value.
+    monkeypatch.setenv("AUTH_COOKIE_SECURE", "")
+
+    assert load_settings().cookie_secure is True
+
+
+def test_whitespace_only_cookie_secure_falls_back_to_the_default(monkeypatch):
+    monkeypatch.setenv("AUTH_COOKIE_SECURE", "   ")
+
+    assert load_settings().cookie_secure is True
+
+
+def test_empty_int_override_falls_back_to_the_default(monkeypatch):
+    monkeypatch.setenv("AUTH_SESSION_TTL_DAYS", "")
+
+    assert load_settings().session_ttl_days == 14
+
+
+def test_explicit_false_still_disables_cookie_secure(monkeypatch):
+    monkeypatch.setenv("AUTH_COOKIE_SECURE", "false")
+
+    assert load_settings().cookie_secure is False

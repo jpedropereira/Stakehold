@@ -4,7 +4,7 @@ from pathlib import Path
 
 from auth.sessions import repository as sessions_repository
 from auth.settings import load_settings
-from shared.db.connection import apply_schema, get_connection
+from shared.db.connection import apply_schema, get_connection, transaction
 from shared.logging_config import configure_logging
 
 logger = logging.getLogger(__name__)
@@ -59,7 +59,10 @@ def run_purge_expired_sessions() -> dict[str, int | str]:
     try:
         now = datetime.now(UTC)
         logger.info("sessions purge-expired: deleting sessions expired as of %s.", now.isoformat())
-        deleted = sessions_repository.delete_expired(conn, now)
+        # The repository no longer commits for itself (see architecture.md, "Transaction
+        # boundaries") -- without this the delete is rolled back when the connection closes.
+        with transaction(conn):
+            deleted = sessions_repository.delete_expired(conn, now)
     finally:
         conn.close()
 

@@ -87,6 +87,14 @@ def test_run_db_init_logs_start_before_applying_schema(monkeypatch, tmp_path, ca
 class _FakeCloseOnlyConnection:
     def __init__(self):
         self.closed = False
+        self.committed = False
+        self.rolled_back = False
+
+    def commit(self):
+        self.committed = True
+
+    def rollback(self):
+        self.rolled_back = True
 
     def close(self):
         self.closed = True
@@ -112,6 +120,9 @@ def test_run_purge_expired_sessions_reports_ok_and_closes_connection_when_rows_d
 
     assert result == {"status": "ok", "rows_saved": 3}
     assert fake_conn.closed is True
+    # The repositories no longer commit for themselves, so the job has to -- without this the
+    # delete is rolled back when the connection closes and the purge silently does nothing.
+    assert fake_conn.committed is True
     assert "deleting sessions" in caplog.text
     assert "done" in caplog.text
 

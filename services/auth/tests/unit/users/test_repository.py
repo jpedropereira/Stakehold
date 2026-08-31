@@ -38,7 +38,7 @@ class FakeConnection:
         self.rolled_back = True
 
 
-def test_insert_user_executes_a_parameterized_insert_and_commits():
+def test_insert_user_executes_a_parameterized_insert_without_committing():
     conn = FakeConnection()
     user_id = uuid.uuid4()
 
@@ -53,7 +53,9 @@ def test_insert_user_executes_a_parameterized_insert_and_commits():
     sql, params = conn._cursor.executed[0]
     assert "INSERT INTO users" in sql
     assert params == (user_id, "person@example.com", "Person", "hash")
-    assert conn.committed is True
+    # The caller owns the transaction: signup has to commit this insert and the session insert
+    # together, which it can't do if the repository commits on its own.
+    assert conn.committed is False
 
 
 def test_get_by_email_returns_none_when_no_row():
