@@ -26,6 +26,12 @@ this; it depends on nothing workspace-internal.
   needs so `logger.info` isn't silently dropped (Python's default `lastResort` handler only emits
   WARNING and above), and keeps the "results on stdout, everything else on stderr" convention
   consistent across services.
+- `env.py` — `int_env`/`float_env`/`bool_env`. Typed environment-variable readers every service's
+  `settings.py` needs (a required var still fails fast via that service's own `SettingsError`;
+  these only cover the optional, typed ones with a default). `bool_env`'s set-but-empty-falls-
+  back-to-default handling matters specifically because it's what keeps an interpolated-empty
+  compose variable (e.g. `WEB_COOKIE_SECURE=` with nothing after the `=`) from silently reading
+  as `False` and stripping a cookie's `Secure` flag in production.
 
 ## What it deliberately does not own
 
@@ -59,6 +65,8 @@ its own database would have made it three.
 - `data_store.jobs` and `auth.jobs` — `get_connection`, `apply_schema`, `configure_logging`.
 - `auth.api` — `connection_pool` (opened/closed in the FastAPI lifespan) and `transaction` (each
   write-path repository call still wraps its statements in one, same as `data_store`'s).
+- `auth.settings` and `web.settings` — `int_env`/`bool_env` (`web.settings` also uses
+  `float_env`).
 
 ## Deployment
 

@@ -27,14 +27,14 @@ one-time snapshot.
 | 7 | [Positions](#7-positions) | 6 | ready |
 | 8 | [Returns](#8-returns) | 7, 3 | blocked |
 | 9 | [Portfolio HTTP API](#9-portfolio-http-api) | 5, 6, 7, 8 | blocked |
-| 10 | [Web foundation & auth pages](#10-web-foundation--auth-pages) | 2 | ready |
+| 10 | [Web foundation & auth pages](#10-web-foundation--auth-pages) | 2 | done |
 | 11 | [Portfolio entry UI](#11-portfolio-entry-ui) | 10, 9 | blocked |
 | 12 | [Portfolio view UI](#12-portfolio-view-ui) | 11 | blocked |
 | 13 | [End-to-end integration & smoke test](#13-end-to-end-integration--smoke-test) | 12 | blocked |
 | 14 | [Acme cash-flow import](#14-acme-cash-flow-import) | 6 | done |
 
-Two tasks are `ready` today: **7** (positions) and **10** (web) — independent of each other, both
-unblocked now that task 6 is `done`.
+One task is `ready` today: **7** (positions), unblocked since task 6 is `done`. **11** stays
+`blocked` — it depends on both 10 (now `done`) and 9 (portfolio HTTP API, still `blocked`).
 
 ## Tasks
 
@@ -203,15 +203,31 @@ layering diagram. FastAPI routes that are argument-parsing-plus-a-call into `job
 for `web`'s server-to-server calls. Update `services/portfolio/docs/architecture.md` (new entry
 point per the [architecture rule](.claude/rules/architecture.md)).
 
-### 10. Web foundation & auth pages
+### 10. Web foundation & auth pages — done
 
-FastAPI + Jinja2 + htmx scaffold, no build step. Base layout using the brand tokens
-(`brand/tokens.css`) — Fraunces headlines, Inter body, IBM Plex Mono for numbers. Register, login,
-logout pages calling task 2's auth API server-to-server; session identity forwarded as a cookie,
-never exposed to browser JS. CSRF protection on state-changing routes (web's own responsibility,
-per its architecture doc). **Must forward the browser's address to `auth` as `X-Forwarded-For`** —
+FastAPI + Jinja2 scaffold, no build step (`src/web/{settings,cli}.py`, `api/{app,deps,routes,
+csrf,security_headers}.py`, `auth_client/{base,http_client,errors}.py`). Base layout
+(`templates/base.html`) mounts `brand/` as `StaticFiles` at `/brand` (a `WEB_BRAND_DIR` setting,
+defaulted to the repo-root directory and overridden to a baked-in path in the Docker image) —
+Fraunces headlines, Inter body, IBM Plex Mono for numbers, one `brand/tokens.css` on disk rather
+than a copy. `GET`/`POST /login`, `/signup`, `/logout` call task 2's auth API server-to-server
+through an `AuthClient` Protocol (mirroring `portfolio`'s `DataStoreClient` split) so routes are
+testable against a fake with no live `auth`; the session cookie `auth` sets is proxied through
+untouched, never rebuilt from a token in the response body and never exposed to browser JS. CSRF
+via a stateless double-submit cookie (`api/csrf.py`) — no secret key or server-side store needed.
+`web` forwards the browser's address to `auth` as `X-Forwarded-For` on every signup/login call —
 `auth`'s login/signup throttles key on it, and without it every request looks like it came from
-`web` itself (see `services/auth/docs/architecture.md`, "Login throttling and user enumeration").
+`web` itself (see `services/auth/docs/architecture.md`, "Login throttling and user enumeration") —
+while `client_ip()` itself trusts only the raw socket address, never an inbound forwarded header,
+since `web` is the public edge. htmx vendored into `static/vendor/htmx.min.js` (not a CDN) drives
+form-submission feedback via an `HX-Redirect` response header on success and a swapped error
+partial on failure; the same routes render a full page without it. `services/web/Dockerfile` and
+`docker-compose.yml` mirror `auth`'s, minus the multi-service network wiring, which is task 13's.
+Unit tests (`tests/unit/`: settings, CSRF, the `AuthClient` HTTP mapping via `httpx.MockTransport`,
+routes against a fake `AuthClient`, and a mechanical check that `static/web.css` hardcodes no hex
+colors) and an integration test (`tests/integration/test_auth_flow.py`: a real signup → home →
+logout round trip through both services' actual code, `auth`'s ASGI app reached via a
+`TestClient`-as-`httpx.Client` rather than a second container) under `services/web/tests/`.
 
 ### 11. Portfolio entry UI
 
