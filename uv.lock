@@ -468,7 +468,9 @@ name = "data-store"
 version = "0.1.0"
 source = { editable = "services/data-store" }
 dependencies = [
+    { name = "eurostat" },
     { name = "fastapi" },
+    { name = "fredapi" },
     { name = "pandas" },
     { name = "playwright" },
     { name = "psycopg", extra = ["binary"] },
@@ -482,7 +484,9 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "eurostat", specifier = ">=1.1.1" },
     { name = "fastapi", specifier = ">=0.115" },
+    { name = "fredapi", specifier = ">=0.5.2" },
     { name = "pandas", specifier = ">=3.0" },
     { name = "playwright", specifier = ">=1.55" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.3" },
@@ -539,6 +543,19 @@ wheels = [
 ]
 
 [[package]]
+name = "eurostat"
+version = "1.1.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pandas" },
+    { name = "requests" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c8/f0/5ef71bc8983335f509170f28a3e4c5ef5a6cbe4c42232e341383746f0ccf/eurostat-1.1.1.tar.gz", hash = "sha256:6b70c5278084f603d6e92f481c1893f8ccc96f80d09347a822873a7ee679d54d", size = 22591, upload-time = "2024-06-13T15:26:14.018Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/51/a0/51b4254341558a69002100e1bc9df436c000e03a1ae3488b7e431c61b890/eurostat-1.1.1-py3-none-any.whl", hash = "sha256:67297cbc5aeeded01cd48c18fe27ec6769658ebcafcf517758cf21f711faea11", size = 16095, upload-time = "2024-06-13T15:26:12.116Z" },
+]
+
+[[package]]
 name = "fastapi"
 version = "0.141.1"
 source = { registry = "https://pypi.org/simple" }
@@ -575,6 +592,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/9b/af/fbfe3c4b5a657d79e5c47a2827a362f9e1b763336a52f926126aa6dc7123/flake8-7.3.0.tar.gz", hash = "sha256:fe044858146b9fc69b551a4b490d69cf960fcb78ad1edcb84e7fbb1b4a8e3872", size = 48326, upload-time = "2025-06-20T19:31:35.838Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/9f/56/13ab06b4f93ca7cac71078fbe37fcea175d3216f31f85c3168a6bbd0bb9a/flake8-7.3.0-py2.py3-none-any.whl", hash = "sha256:b9696257b9ce8beb888cdbe31cf885c90d31928fe202be0889a7cdafad32f01e", size = 57922, upload-time = "2025-06-20T19:31:34.425Z" },
+]
+
+[[package]]
+name = "fredapi"
+version = "0.5.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pandas" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/6f/3c/e9281ecda4c6ee5c7d50a4bcf00dc5df1a7ff325e604c9b9510c5bdd8514/fredapi-0.5.2.tar.gz", hash = "sha256:405ca048abed4207d93dbc9b7ee8c46d6b473483650323e2f1c094af83d4b247", size = 14735, upload-time = "2024-05-05T11:42:11.444Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/73/64/1db43417cf7ed430f104a347126b5260a1724ee9a1b7d0b1622262c9c4df/fredapi-0.5.2-py3-none-any.whl", hash = "sha256:961817ec8d70e58886ff7302d3dda908614ad99f77831a59833c4fc3f6150155", size = 11854, upload-time = "2024-05-05T11:42:09.559Z" },
 ]
 
 [[package]]

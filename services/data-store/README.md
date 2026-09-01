@@ -301,6 +301,43 @@ Each `ingest-regimes` run replaces the entire `regimes` table from the CSV file 
 upsert. Because the source is hand-curated and changes infrequently, there is no scheduled Airflow
 DAG; run it manually after editing the CSV.
 
+### Loading macro indicators (inflation, GDP growth)
+
+`ingest-macro-indicators` fetches US inflation (FRED `CPIAUCSL`) and real GDP (FRED `GDPC1`) plus,
+if configured, EU/euro-area HICP inflation and GDP growth from Eurostat, and lands them verbatim
+into `raw_macro_indicators`. `calculate-macro-indicator-rates` then rebuilds
+`macro_indicator_rates` — comparable year-over-year percentages — from whatever is currently
+stored:
+
+```bash
+uv run data-store ingest-macro-indicators
+uv run data-store calculate-macro-indicator-rates
+```
+
+Requires `FRED_API_KEY` (see `.env.example`) — get a free key at
+<https://fred.stlouisfed.org/docs/api/api_key.html>. `ingest-macro-indicators` raises loudly at
+startup if it's unset, the same way the read API refuses to start without
+`INTERNAL_API_SECRET`.
+
+EU/euro-area data is **optional** — `config/macro_regions.yaml` (gitignored, copy from
+`macro_regions.yaml.example`) lists which regions to pull from Eurostat: `EA` for the euro-area
+aggregate, or Eurostat's own geo code for a country (not always the ISO2 code — Greece is `EL`,
+not `GR`). Without this file, `ingest-macro-indicators` still lands FRED's US data; it just skips
+Eurostat and says so in its log.
+
+```bash
+cp services/data-store/config/macro_regions.yaml.example services/data-store/config/macro_regions.yaml
+```
+
+`raw_macro_indicators` stores each source's value exactly as returned — an index level for FRED,
+an already-computed rate for Eurostat — with a `unit` column documenting what it is; it is not
+safe to compare two rows' `value` directly without checking `unit` first.
+`macro_indicator_rates` is the comparable table: every row there is a year-over-year percentage
+change, computed from FRED's levels or copied straight through from Eurostat depending on the
+source — see `docs/schema.md` for the full rationale. Both loading strategies are upsert
+(`raw_macro_indicators`) or full-rebuild (`macro_indicator_rates`); rerunning either command is
+always safe.
+
 ### Holdings ingest and market data ingest are independent
 
 `ingest-market-data` always reads the
@@ -368,6 +405,7 @@ docker exec <airflow-scheduler-container> airflow dags trigger ingest_holdings
 docker exec <airflow-scheduler-container> airflow dags trigger daily_pipeline
 docker exec <airflow-scheduler-container> airflow dags trigger backfill_market_data
 docker exec <airflow-scheduler-container> airflow dags trigger backfill_fx_rates
+docker exec <airflow-scheduler-container> airflow dags trigger macro_indicators
 ```
 
 Task logs land under `services/data-store/logs/dag_id=.../run_id=.../task_id=.../attempt=N.log`

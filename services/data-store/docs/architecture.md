@@ -17,13 +17,18 @@ Getting external financial data into Postgres, correctly and repeatably. Three t
   against its `base_currency`, landed in `fx_rates`. Kept separate from `raw_market_data`
   deliberately — an FX rate isn't a security's price and has no OHLC, dividends, or splits to
   carry.
+- **Macro indicators** — monthly/quarterly US inflation and GDP (FRED) and EU/euro-area
+  inflation and GDP growth (Eurostat), landed verbatim in `raw_macro_indicators`.
 
-One thing is derived, not fetched: **`market_returns`** — split-adjusted price and
-price/dividend/simple/log returns, rebuilt from `raw_market_data` by `calculate-returns`. This
-still fits the service's remit because it involves no judgment about portfolios or holdings — it's
-arithmetic on data already landed here, kept in this service so `raw_market_data`'s sharp edges
-(the split-restatement behaviour below) are handled once, next to the table that has them, rather
-than relearned by every consumer.
+Two things are derived, not fetched: **`market_returns`** — split-adjusted price and
+price/dividend/simple/log returns, rebuilt from `raw_market_data` by `calculate-returns` — and
+**`macro_indicator_rates`** — comparable year-over-year inflation/growth percentages, rebuilt from
+`raw_macro_indicators` by `calculate-macro-indicator-rates` (FRED's raw levels need the YoY
+computed; Eurostat's chosen dimension slices already are one, and pass through unchanged). Both
+still fit the service's remit because they involve no judgment about portfolios or holdings — it's
+arithmetic on data already landed here, kept in this service so each raw table's sharp edges (the
+split-restatement behaviour below for prices; the level-vs-rate distinction for macro data) are
+handled once, next to the table that has them, rather than relearned by every consumer.
 
 It does *not* value portfolios or decide what's worth owning — that belongs to `portfolio`, which
 reads `market_returns`. The dividing line is deliberate: this service's job is that the data in
@@ -54,6 +59,7 @@ flowchart TD
         FX["fx/<br/>yfinance_source · repository"]
         RET["returns/<br/>calculator · repository"]
         REG["regimes/<br/>loader · repository"]
+        MACRO["macro/<br/>fred_source · eurostat_source · repository · calculator"]
     end
 
     subgraph found["Foundation"]
@@ -70,6 +76,7 @@ flowchart TD
 
     PG[("Postgres")]
     EXT(["External: iShares, yfinance"])
+    EXT2(["External: FRED, Eurostat"])
 
     DAGS -->|subprocess| CLI
     CLI --> JOBS
@@ -85,11 +92,13 @@ flowchart TD
     PIPE --> FX
     PIPE --> RET
     PIPE --> REG
+    PIPE --> MACRO
     READ --> FX
     READ --> RET
     HOLD --> EXT
     MKT --> EXT
     FX --> EXT
+    MACRO --> EXT2
     MKT --> RETRY
     FX --> RETRY
     HOLD --> PG
@@ -97,6 +106,7 @@ flowchart TD
     FX --> PG
     RET --> PG
     REG --> PG
+    MACRO --> PG
     DB --> PG
 ```
 
@@ -159,6 +169,17 @@ instead of an external source is a shape the original three-file split didn't an
 and `repository.py` (writes to the `regimes` table). There is no external provider — the only
 source is a hand-curated CSV in `config/`, updated manually — and no base Protocol.
 
+`macro/` combines both patterns seen so far, because it has both a provider-backed raw table and
+a derived one: `base.py` (the `MacroIndicatorSource` Protocol, shared by both providers),
+`fred_source.py` and `eurostat_source.py` (one `*_source.py` per provider, not one — the two
+talk to genuinely different APIs, a fixed-series pull vs. a dimension-filtered dataset query —
+and `repository.py` (raw upsert plus the read-back `get_raw_indicators` the calculator needs),
+plus `calculator.py` (pure YoY-normalization arithmetic, no I/O, mirroring `returns/calculator.py`
+exactly). `retry.py` holds the transient-error classifier both `*_source.py` files share — scoped
+to this domain rather than promoted to a foundation module like `yfinance_retry.py`, since both
+callers live inside `macro/` itself rather than spanning two domains the way `market_data/` and
+`fx/` share `yfinance_retry.py`.
+
 `fx/` follows the standard three-file shape exactly, and is the second implementation of it (after
 `market_data/`) rather than the first — deliberately kept as a *separate* domain rather than folded
 into `market_data/`: an FX rate has no OHLC, dividends, or splits, so reusing `raw_market_data`'s
@@ -175,9 +196,10 @@ New providers are registry entries, not new branches. All three registries live 
 `pipeline.py`:
 
 ```python
-SCRAPERS            = {"ishares": get_holdings_csv_url}
-MARKET_DATA_SOURCES = {"yfinance": YFinanceMarketDataSource}
-FX_RATE_SOURCES      = {"yfinance": YFinanceFxRateSource}
+SCRAPERS              = {"ishares": get_holdings_csv_url}
+MARKET_DATA_SOURCES   = {"yfinance": YFinanceMarketDataSource}
+FX_RATE_SOURCES       = {"yfinance": YFinanceFxRateSource}
+MACRO_INDICATOR_SOURCES = {"fred": FredMacroIndicatorSource, "eurostat": EurostatMacroIndicatorSource}
 ```
 
 Adding a second market-data (or FX-rate) provider means writing a class satisfying
@@ -187,6 +209,12 @@ one line. No flow function changes. `FX_RATE_SOURCES` has one entry today and, u
 per-currency `price_source` field — there was nothing to choose between yet) — `ingest_fx_rates`
 and `backfill_fx_rates` both look it up under the literal `"yfinance"` key. Revisit that the day a
 second FX source actually exists.
+
+`MACRO_INDICATOR_SOURCES` is shaped differently from the other three registries: it isn't a
+*choice* between interchangeable providers for the same data — `fred` and `eurostat` cover
+disjoint regions (US vs. EU) and are always both used, not selected between. `ingest_macro_
+indicators` constructs and calls both unconditionally rather than looking one up by a config-
+selected key.
 
 **A disclosed trade-off of one combined registry**: before the OHLCV/dividend fetch merge, prices
 and dividends had separate registries and Protocols, because they were genuinely separate
@@ -202,9 +230,9 @@ two different strings. `.name` is what gets stamped into the `source` column and
 floors are read under; the key is what config files reference. Keep them equal unless you have a
 reason not to.
 
-## The seven flows
+## The nine flows
 
-All seven live in `pipeline.py` and are exposed as CLI subcommands.
+All nine live in `pipeline.py` and are exposed as CLI subcommands.
 
 | Flow | Command | Cadence | Reads | Writes |
 |---|---|---|---|---|
@@ -215,6 +243,8 @@ All seven live in `pipeline.py` and are exposed as CLI subcommands.
 | Regimes ingest | `ingest-regimes` | daily, in parallel with market data and FX ingest | `config/regimes.csv` | `regimes` |
 | FX rates ingest | `ingest-fx-rates` | daily, in parallel with market data and regimes ingest | `config/currencies.yaml` | `fx_rates` |
 | FX rates backfill | `backfill-fx-rates` | manual | `fx_rates` | `fx_rates` |
+| Macro indicators ingest | `ingest-macro-indicators` | monthly, own DAG | FRED + Eurostat + `config/macro_regions.yaml` | `raw_macro_indicators` |
+| Macro indicator rates | `calculate-macro-indicator-rates` | monthly, immediately after macro ingest succeeds (same run) | `raw_macro_indicators` | `macro_indicator_rates` |
 
 **Returns calculation is the odd one out**: it reads no config and does no ticker resolution — it
 discovers both sources and tickers directly from `raw_market_data` (`returns/repository.py`'s
@@ -260,6 +290,15 @@ manual-trigger counterpart, `backfill-fx-rates` (DAG `backfill_fx_rates`), mirro
 `backfill-market-data`'s shape — one currency pair at a time, rate-limited, using `fx_rates` itself
 as the checkpoint via `get_earliest_fx_dates` — but without market data's split-restatement
 concern, since an FX rate has no split to restate.
+
+**Macro indicators get their own DAG (`macro_indicators`), scheduled `@monthly` rather than
+joining `daily_pipeline`.** CPI/HICP publish monthly and GDP quarterly — nothing here changes
+day to day, so a daily run would mostly re-save identical figures. `ingest-macro-indicators`
+lands `raw_macro_indicators`; `calculate-macro-indicator-rates` runs after, gated on the ingest's
+check succeeding, the same pattern as `calculate-returns` after `ingest-market-data`. No backfill
+counterpart exists: FRED and Eurostat both return a series' full available history in one call
+(unlike yfinance, there's no per-ticker rate-limit concern driving a slow, one-at-a-time backfill
+mode), so `ingest-macro-indicators` already fetches everything available each run.
 
 ### What a flow returns
 
@@ -443,6 +482,7 @@ Four files, split by whether they're personal or reference data:
 | `config/tracked_tickers.yaml` | no — gitignored | Same, and optional |
 | `config/currencies.yaml` | no — gitignored | Someone's own base/tracked currencies |
 | `config/yfinance_exchange_suffixes.yaml` | **yes** | Generic reference data, useful to everyone |
+| `config/macro_regions.yaml` | no — gitignored | Someone's own choice of EU regions, and optional |
 
 `.example` templates are committed for the first three. Paths are environment-overridable via
 `settings.py`, which is also where `DATABASE_URL` comes from — no credential is ever read from a
@@ -466,6 +506,18 @@ at the `Settings` level (every CLI/Airflow caller has no need of it, so making i
 break them) but required by `api/app.py` at its own startup: the API fails loudly with
 `SettingsError` if it's unset, rather than silently accepting every caller once the check would
 otherwise run.
+
+**`FRED_API_KEY`** follows the identical pattern: `Settings.fred_api_key: str | None`, optional at
+the `Settings` level (only `ingest-macro-indicators` needs it), but `run_ingest_macro_indicators`
+raises `SettingsError` at its own point of use if it's unset — the same "fail loudly at the one
+call site that needs it, not at every caller" shape as `INTERNAL_API_SECRET`.
+
+**`config/macro_regions.yaml` is optional, unlike `config/currencies.yaml`.** `load_macro_regions`
+itself returns `[]` for a missing or empty file, rather than splitting that check into `jobs.py`
+the way `tracked_tickers.yaml` does — a deliberately simpler version of the same "not configured
+yet" tolerance, since there was no second caller here that needed the file-existence check
+separated out. FRED's US data ingests regardless; only the Eurostat half of a run is skipped
+(and says so in its log) when this file is absent.
 
 ## Deployment
 

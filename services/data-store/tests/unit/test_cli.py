@@ -30,6 +30,8 @@ def calls(monkeypatch):
         "run_calculate_returns",
         "run_ingest_fx_rates",
         "run_backfill_fx_rates",
+        "run_ingest_macro_indicators",
+        "run_calculate_macro_indicator_rates",
     ):
         monkeypatch.setattr(cli.jobs, name, record(name))
 
@@ -314,3 +316,50 @@ def test_backfill_fx_rates_reports_the_row_count_it_saved(monkeypatch, capsys):
     cli.main(["backfill-fx-rates"])
 
     assert "4 fx rate rows" in capsys.readouterr().out
+
+
+# --- ingest-macro-indicators / calculate-macro-indicator-rates ----------------------------------
+
+
+def test_ingest_macro_indicators_takes_no_flags(calls):
+    cli.main(["ingest-macro-indicators"])
+
+    assert calls["run_ingest_macro_indicators"] == {}
+
+
+def test_calculate_macro_indicator_rates_takes_no_flags(calls):
+    cli.main(["calculate-macro-indicator-rates"])
+
+    assert calls["run_calculate_macro_indicator_rates"] == {}
+
+
+def test_ingest_macro_indicators_exit_code_reflects_the_run_status(monkeypatch):
+    monkeypatch.setattr(
+        cli.jobs,
+        "run_ingest_macro_indicators",
+        lambda **kw: {"status": "partial", "rows_saved": 1},
+    )
+
+    assert cli.main(["ingest-macro-indicators"]) == 1
+
+
+def test_ingest_macro_indicators_reports_the_row_count_it_saved(monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli.jobs, "run_ingest_macro_indicators", lambda **kw: {"status": "ok", "rows_saved": 4}
+    )
+
+    cli.main(["ingest-macro-indicators"])
+
+    assert "4 macro indicator rows" in capsys.readouterr().out
+
+
+def test_calculate_macro_indicator_rates_reports_the_row_count_it_saved(monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli.jobs,
+        "run_calculate_macro_indicator_rates",
+        lambda **kw: {"status": "ok", "rows_saved": 4},
+    )
+
+    cli.main(["calculate-macro-indicator-rates"])
+
+    assert "4 macro indicator rate rows" in capsys.readouterr().out

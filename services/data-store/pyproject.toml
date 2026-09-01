@@ -14,6 +14,8 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.34",
     "shared",
+    "fredapi>=0.5.2",
+    "eurostat>=1.1.1",
 ]
 
 [project.scripts]

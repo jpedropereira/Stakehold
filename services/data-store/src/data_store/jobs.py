@@ -23,21 +23,24 @@ from data_store.config_loader import (
     TickerConfig,
     load_currencies,
     load_funds,
+    load_macro_regions,
     load_ticker_resolution,
     load_tracked_tickers,
 )
 from data_store.pipeline import (
     backfill_fx_rates,
     backfill_market_data,
+    calculate_macro_indicator_rates,
     calculate_returns,
     ingest_fx_rates,
     ingest_holdings,
+    ingest_macro_indicators,
     ingest_market_data,
     ingest_regimes,
 )
 from data_store.read_flows import fx_rate_series, price_series, ticker_info
 from data_store.run_result import build_run_result
-from data_store.settings import load_settings
+from data_store.settings import SettingsError, load_settings
 from shared.db.connection import apply_schema, get_connection
 from shared.logging_config import configure_logging
 
@@ -211,6 +214,43 @@ def run_backfill_fx_rates(
         conn.close()
 
 
+def run_ingest_macro_indicators(*, eu_regions: list[str] | None = None) -> dict[str, int | str]:
+    """Land raw inflation/GDP indicators from FRED (US) and Eurostat (EU) into
+    raw_macro_indicators. `eu_regions` defaults to the enabled entries in
+    config/macro_regions.yaml; pass it explicitly to override (e.g. from a caller that has
+    already resolved its own list)."""
+    configure_logging()
+    settings = load_settings()
+    if not settings.fred_api_key:
+        raise SettingsError("FRED_API_KEY is not set")
+    regions = (
+        eu_regions
+        if eu_regions is not None
+        else _load_enabled_macro_regions(settings.macro_regions_path)
+    )
+    conn = get_connection(settings.database_url)
+    try:
+        return ingest_macro_indicators(conn, fred_api_key=settings.fred_api_key, eu_regions=regions)
+    finally:
+        conn.close()
+
+
+def run_calculate_macro_indicator_rates() -> dict[str, int | str]:
+    """Rebuild macro_indicator_rates from whatever is currently in raw_macro_indicators.
+
+    Much simpler than the pricing flows, same reason as run_calculate_returns: no config, no
+    region resolution -- calculate_macro_indicator_rates reads only what raw_macro_indicators
+    already contains.
+    """
+    configure_logging()
+    settings = load_settings()
+    conn = get_connection(settings.database_url)
+    try:
+        return calculate_macro_indicator_rates(conn)
+    finally:
+        conn.close()
+
+
 def run_ingest_regimes() -> dict[str, int | str]:
     """Load regimes from the configured CSV file into the database."""
     configure_logging()
@@ -324,3 +364,7 @@ def _load_enabled_tracked_tickers(path: Path) -> list[TickerConfig]:
     if not path.is_file():
         return []
     return [tt for tt in load_tracked_tickers(path) if tt.enabled]
+
+
+def _load_enabled_macro_regions(path: Path) -> list[str]:
+    return [r.code for r in load_macro_regions(path) if r.enabled]

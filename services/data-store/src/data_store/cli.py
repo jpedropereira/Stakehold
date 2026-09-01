@@ -53,6 +53,16 @@ def _ingest_regimes(_args: argparse.Namespace) -> int:
     return _report(result, "regime rows")
 
 
+def _ingest_macro_indicators(_args: argparse.Namespace) -> int:
+    result = jobs.run_ingest_macro_indicators()
+    return _report(result, "macro indicator rows")
+
+
+def _calculate_macro_indicator_rates(_args: argparse.Namespace) -> int:
+    result = jobs.run_calculate_macro_indicator_rates()
+    return _report(result, "macro indicator rate rows")
+
+
 def _ingest_fx_rates(args: argparse.Namespace) -> int:
     result = jobs.run_ingest_fx_rates(days=args.days, currencies=args.currency)
     return _report(result, "fx rate rows")
@@ -178,6 +188,21 @@ def _build_parser() -> argparse.ArgumentParser:
         "ingest-regimes", help="Load economic/market regimes from CSV"
     )
     ingest_regimes_parser.set_defaults(handler=_ingest_regimes)
+
+    ingest_macro_indicators_parser = subparsers.add_parser(
+        "ingest-macro-indicators",
+        help="Fetch and load inflation/GDP indicators from FRED (US) and Eurostat (EU)",
+    )
+    ingest_macro_indicators_parser.set_defaults(handler=_ingest_macro_indicators)
+
+    calculate_macro_indicator_rates_parser = subparsers.add_parser(
+        "calculate-macro-indicator-rates",
+        help=(
+            "Rebuild macro_indicator_rates (comparable year-over-year rates) from "
+            "raw_macro_indicators. Always a full rebuild."
+        ),
+    )
+    calculate_macro_indicator_rates_parser.set_defaults(handler=_calculate_macro_indicator_rates)
 
     ingest_fx_rates_parser = subparsers.add_parser(
         "ingest-fx-rates",
