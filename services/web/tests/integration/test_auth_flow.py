@@ -1,14 +1,16 @@
 """End-to-end signup/login/logout through both services' real code.
 
-`HttpAuthClient` is pointed at auth's real ASGI app via a Starlette `TestClient` (itself an
-`httpx.Client` subclass) instead of a network call -- this exercises the actual HTTP contract
-(status codes, headers, Set-Cookie proxying) against auth's live Postgres, with no extra
-container beyond the one CI/local dev already brings up for auth's own integration suite.
+`HttpAuthClient` is pointed at auth's real ASGI app via `httpx.ASGITransport` instead of a network
+call -- this exercises the actual HTTP contract (status codes, headers, Set-Cookie proxying)
+against auth's live Postgres, with no extra container beyond the one CI/local dev already brings
+up for auth's own integration suite. auth's app is async-lifespan (it opens/closes its own DB
+pool), so the fixture drives that lifespan directly rather than going through a second TestClient.
 """
 
 import os
 from pathlib import Path
 
+import httpx
 import psycopg
 import pytest
 from auth import cli as auth_cli
@@ -19,7 +21,7 @@ from web.api.deps import get_auth_client
 from web.auth_client.http_client import HttpAuthClient
 from web.settings import Settings
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.anyio]
 
 _BRAND_DIR = Path(__file__).resolve().parents[4] / "brand"
 PASSWORD = "correct horse battery staple"  # pragma: allowlist secret
@@ -52,20 +54,24 @@ def _web_settings() -> Settings:
 
 
 @pytest.fixture
-def web_client():
+async def web_client():
     settings = _web_settings()
     web_app = create_web_app(settings)
+    auth_app = create_auth_app()
 
-    # https base_url on both TestClients: auth's default AUTH_COOKIE_SECURE=true marks its
-    # session cookie Secure, and web's own settings.cookie_secure=True does the same for its
-    # CSRF cookie -- httpx's cookie jar (correctly) won't re-send a Secure cookie over plain
-    # http, which would break every round trip for a reason unrelated to either service's logic.
-    with TestClient(create_auth_app(), base_url=settings.auth_api_url) as auth_test_client:
-        real_auth_client = HttpAuthClient(auth_test_client, settings.internal_secret)
-        web_app.dependency_overrides[get_auth_client] = lambda: real_auth_client
+    # https base_url on both clients: auth's default AUTH_COOKIE_SECURE=true marks its session
+    # cookie Secure, and web's own settings.cookie_secure=True does the same for its CSRF cookie
+    # -- httpx's cookie jar (correctly) won't re-send a Secure cookie over plain http, which
+    # would break every round trip for a reason unrelated to either service's logic.
+    async with auth_app.router.lifespan_context(auth_app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=auth_app), base_url=settings.auth_api_url
+        ) as auth_test_client:
+            real_auth_client = HttpAuthClient(auth_test_client, settings.internal_secret)
+            web_app.dependency_overrides[get_auth_client] = lambda: real_auth_client
 
-        with TestClient(web_app, base_url="https://testserver") as web_test_client:
-            yield web_test_client
+            with TestClient(web_app, base_url="https://testserver") as web_test_client:
+                yield web_test_client
 
 
 def _csrf_token(client) -> str:
@@ -76,7 +82,7 @@ def _csrf_token(client) -> str:
     return next(v for k, v in client.cookies.items() if "csrf" in k)
 
 
-def test_signup_then_home_then_logout_round_trip(web_client):
+async def test_signup_then_home_then_logout_round_trip(web_client):
     web_client.get("/signup")
     csrf_token = _csrf_token(web_client)
 
@@ -110,7 +116,7 @@ def test_signup_then_home_then_logout_round_trip(web_client):
     assert after_logout.headers["location"] == "/login"
 
 
-def test_signup_duplicate_email_is_rejected(web_client):
+async def test_signup_duplicate_email_is_rejected(web_client):
     web_client.get("/signup")
     first_csrf = _csrf_token(web_client)
     web_client.post(
@@ -138,7 +144,7 @@ def test_signup_duplicate_email_is_rejected(web_client):
     assert "already registered" in second_response.text
 
 
-def test_login_with_wrong_password_is_rejected(web_client):
+async def test_login_with_wrong_password_is_rejected(web_client):
     web_client.get("/signup")
     signup_csrf = _csrf_token(web_client)
     web_client.post(

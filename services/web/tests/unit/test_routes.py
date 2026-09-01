@@ -13,6 +13,7 @@ from web.auth_client.errors import (
     InvalidCredentials,
     InvalidRequest,
     RateLimited,
+    SessionInvalid,
 )
 from web.settings import Settings
 
@@ -30,25 +31,25 @@ class FakeAuthClient:
         self.logout_error: Exception | None = None
         self.calls: list[tuple] = []
 
-    def signup(self, *, email, password, display_name, client_ip):
+    async def signup(self, *, email, password, display_name, client_ip):
         self.calls.append(("signup", email, display_name, client_ip))
         if self.signup_error:
             raise self.signup_error
         return self.signup_result
 
-    def login(self, *, email, password, client_ip):
+    async def login(self, *, email, password, client_ip):
         self.calls.append(("login", email, client_ip))
         if self.login_error:
             raise self.login_error
         return self.login_result
 
-    def validate_session(self, *, cookie_header):
+    async def validate_session(self, *, cookie_header):
         self.calls.append(("validate_session", cookie_header))
         if self.validate_error:
             raise self.validate_error
         return self.validate_result
 
-    def logout(self, *, cookie_header):
+    async def logout(self, *, cookie_header):
         self.calls.append(("logout", cookie_header))
         if self.logout_error:
             raise self.logout_error
@@ -274,6 +275,22 @@ def test_login_auth_unavailable(client):
     assert "Can&#39;t reach the sign-in service" in response.text
 
 
+def test_login_unrecognized_auth_client_error_falls_back_to_default_message(client):
+    # SessionInvalid is a real AuthClientError subclass, just not one login_submit's error map
+    # names -- any AuthClientError the fake (or a future real one) raises that isn't explicitly
+    # mapped must still render a response, not crash the request.
+    test_client, _, fake_auth = client
+    token = _login_csrf_token(test_client)
+    fake_auth.login_error = SessionInvalid()
+
+    response = test_client.post(
+        "/login", data={"email": "a@example.com", "password": "x", "csrf_token": token}
+    )
+
+    assert response.status_code == 503
+    assert "Can&#39;t reach the sign-in service" in response.text
+
+
 def test_login_htmx_error_returns_partial_only(client):
     test_client, _, fake_auth = client
     token = _login_csrf_token(test_client)
@@ -395,8 +412,30 @@ def test_logout_clears_cookie_and_redirects(client):
     assert response.headers["location"] == "/login"
     set_cookie = response.headers.get("set-cookie", "")
     assert "stakehold_session=" in set_cookie
+    # Must match auth's own set_session_cookie flags, or a browser holding a cookie set with
+    # those flags won't accept the deleting Set-Cookie as clearing it.
+    assert "HttpOnly" in set_cookie
+    assert "samesite=lax" in set_cookie.lower()
     logout_call = next(call for call in fake_auth.calls if call[0] == "logout")
     assert "stakehold_session=tok" in logout_call[1]
+
+
+def test_logout_cookie_deletion_is_secure_when_cookie_secure_is_true(fake_auth):
+    settings = _settings(cookie_secure=True)
+    app = create_app(settings)
+    app.dependency_overrides[get_auth_client] = lambda: fake_auth
+    # https base_url: a Secure cookie (the CSRF cookie, here) is only stored/resent by httpx's
+    # cookie jar over https, same reasoning as the integration test's web_client fixture.
+    with TestClient(app, base_url="https://testserver") as entered:
+        fake_auth.validate_result = AuthResult(user=_logged_in_user(), set_cookie=SESSION_COOKIE)
+        entered.cookies.set("stakehold_session", "tok")
+        home_response = entered.get("/")
+        csrf_token = home_response.cookies["__Host-stakehold_csrf"]
+
+        response = entered.post("/logout", data={"csrf_token": csrf_token}, follow_redirects=False)
+
+    set_cookie = response.headers.get("set-cookie", "")
+    assert "Secure" in set_cookie
 
 
 def test_logout_without_csrf_is_rejected_without_calling_auth(client):

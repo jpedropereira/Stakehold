@@ -3,13 +3,12 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import httpx
-from fastapi import FastAPI, Request
-from fastapi.responses import RedirectResponse
+from fastapi import FastAPI, Request, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from shared.logging_config import configure_logging
-from starlette import status
 from web.api.deps import AuthRequired
+from web.api.htmx import htmx_or_redirect
 from web.api.routes import health_router, router
 from web.api.security_headers import SecurityHeadersMiddleware
 from web.auth_client.http_client import HttpAuthClient
@@ -24,18 +23,15 @@ _TEMPLATES_DIR = Path(__file__).resolve().parents[1] / "templates"
 def _lifespan(settings: Settings):
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        http_client = httpx.Client(
+        async with httpx.AsyncClient(
             base_url=settings.auth_api_url, timeout=settings.http_timeout_seconds
-        )
-        app.state.settings = settings
-        app.state.auth_client = HttpAuthClient(http_client, settings.internal_secret)
-        app.state.templates = Jinja2Templates(directory=_TEMPLATES_DIR)
-        logger.info("web api: started, auth_api_url=%s.", settings.auth_api_url)
-        try:
+        ) as http_client:
+            app.state.settings = settings
+            app.state.auth_client = HttpAuthClient(http_client, settings.internal_secret)
+            app.state.templates = Jinja2Templates(directory=_TEMPLATES_DIR)
+            logger.info("web api: started, auth_api_url=%s.", settings.auth_api_url)
             yield
-        finally:
-            http_client.close()
-            logger.info("web api: http client closed.")
+        logger.info("web api: http client closed.")
 
     return lifespan
 
@@ -54,7 +50,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(router)
 
     @app.exception_handler(AuthRequired)
-    async def _auth_required(_request: Request, _exc: AuthRequired) -> RedirectResponse:
-        return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+    async def _auth_required(request: Request, _exc: AuthRequired) -> Response:
+        return htmx_or_redirect(request, "/login")
 
     return app
