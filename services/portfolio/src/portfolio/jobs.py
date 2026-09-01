@@ -163,6 +163,27 @@ def run_list_accounts(*, user_id: UUID) -> dict[str, int | str]:
     return result
 
 
+def run_list_available_brokers() -> dict[str, int | str]:
+    """The broker keys a parser is currently registered for. Unlike every other job here, this
+    one loads no settings and opens no connection -- BROKER_PARSERS is an in-memory,
+    process-local fact, not something a database or config file can answer. Still routed
+    through jobs.py rather than read directly by cli.py, so the "cli.py is argument parsing plus
+    one call into jobs.py" rule holds even for the one job with nothing to configure or connect.
+    Saves nothing, so rows_saved is always 0 -- an empty registry is reported as
+    `nothing_to_do`, not `ok`, per the logging rule (the meaningful signal for "no broker
+    plugins installed" is the count, not a failure status)."""
+    configure_logging()
+    logger.info("broker list: checking the parser registry.")
+    brokers = pipeline.list_available_brokers()
+
+    logger.info("broker list: done, %d broker(s) available.", len(brokers))
+    result = build_run_result(
+        units_total=len(brokers), rows_saved=0, failed=0, brokers_available=len(brokers)
+    )
+    result["brokers"] = brokers
+    return result
+
+
 def run_add_transaction(
     *,
     user_id: UUID,

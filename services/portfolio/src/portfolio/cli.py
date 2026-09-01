@@ -67,6 +67,13 @@ def _account_list(args: argparse.Namespace) -> int:
     return _report(result, "account(s)", count_key="accounts_listed")
 
 
+def _broker_list(_args: argparse.Namespace) -> int:
+    result = jobs.run_list_available_brokers()
+    for broker in result["brokers"]:
+        print(broker)
+    return _report(result, "broker parser(s) available", count_key="brokers_available")
+
+
 def _import_transactions(args: argparse.Namespace) -> int:
     result = jobs.run_import_transactions(
         user_id=args.user, account_label=args.account, broker=args.broker, file_path=args.file
@@ -121,13 +128,24 @@ def _build_parser() -> argparse.ArgumentParser:
 
     add_parser = account_subparsers.add_parser("add", help="Create an account")
     add_parser.add_argument("--user", required=True, type=_uuid, help="The auth-issued user id")
-    add_parser.add_argument("--broker", required=True, help="e.g. acme, globex")
+    add_parser.add_argument(
+        "--broker",
+        required=True,
+        help="A free-text label for this account's broker -- not validated against a fixed list",
+    )
     add_parser.add_argument("--label", required=True, help="This user's own name for the account")
     add_parser.set_defaults(handler=_account_add)
 
     list_parser = account_subparsers.add_parser("list", help="List a user's accounts")
     list_parser.add_argument("--user", required=True, type=_uuid, help="The auth-issued user id")
     list_parser.set_defaults(handler=_account_list)
+
+    broker_parser = subparsers.add_parser("broker", help="Broker-parser plugin commands")
+    broker_subparsers = broker_parser.add_subparsers(dest="broker_command", required=True)
+    broker_list_parser = broker_subparsers.add_parser(
+        "list", help="List brokers with a parser currently installed"
+    )
+    broker_list_parser.set_defaults(handler=_broker_list)
 
     txn_parser = subparsers.add_parser("add-transaction", help="Record a manual transaction")
     txn_parser.add_argument("--user", required=True, type=_uuid, help="The auth-issued user id")
@@ -164,7 +182,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
     import_parser = subparsers.add_parser("import-transactions", help="Import a broker export file")
     import_parser.add_argument("--user", required=True, type=_uuid, help="The auth-issued user id")
-    import_parser.add_argument("--broker", required=True, help="e.g. acme, globex")
+    import_parser.add_argument(
+        "--broker", required=True, help="The key of an installed broker-parser plugin"
+    )
     import_parser.add_argument("--file", required=True, type=Path, help="Path to the export file")
     import_parser.add_argument(
         "--account", required=True, help="The --label of an existing account"

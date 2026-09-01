@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from portfolio import jobs
 from portfolio.accounts.repository import Account
-from portfolio.errors import AccountNotFound, BrokerMismatch, UnknownBroker
+from portfolio.errors import AccountNotFound, BrokerMismatch
 from portfolio.settings import SettingsError
 from portfolio.ticker_mapping.loader import TickerMappings
 
@@ -264,7 +264,7 @@ def test_run_add_account_reports_partial_and_closes_connection_on_domain_error(m
     fake_conn = _patch_new_job_common(monkeypatch)
 
     def boom(conn, **kw):
-        raise UnknownBroker("nope")
+        raise AccountNotFound("nope")
 
     monkeypatch.setattr(jobs.pipeline, "add_account", boom)
 
@@ -326,6 +326,45 @@ def test_run_list_accounts_closes_the_connection(monkeypatch):
     jobs.run_list_accounts(user_id=uuid.uuid4())
 
     assert fake_conn.closed is True
+
+
+# --- run_list_available_brokers ---
+
+
+def test_run_list_available_brokers_reports_ok_with_the_broker_payload(monkeypatch):
+    monkeypatch.setattr(jobs.pipeline, "list_available_brokers", lambda: ["acme", "globex"])
+
+    result = jobs.run_list_available_brokers()
+
+    assert result["status"] == "ok"
+    assert result["rows_saved"] == 0
+    assert result["brokers_available"] == 2
+    assert result["brokers"] == ["acme", "globex"]
+
+
+def test_run_list_available_brokers_reports_nothing_to_do_when_empty(monkeypatch):
+    monkeypatch.setattr(jobs.pipeline, "list_available_brokers", lambda: [])
+
+    result = jobs.run_list_available_brokers()
+
+    assert result["status"] == "nothing_to_do"
+    assert result["brokers"] == []
+
+
+def test_run_list_available_brokers_loads_no_settings_and_opens_no_connection(monkeypatch):
+    """The one job with nothing to configure or connect -- BROKER_PARSERS is in-memory."""
+
+    def boom_settings():
+        raise AssertionError("run_list_available_brokers must not call load_settings")
+
+    def boom_connection(url):
+        raise AssertionError("run_list_available_brokers must not open a connection")
+
+    monkeypatch.setattr(jobs, "load_settings", boom_settings)
+    monkeypatch.setattr(jobs, "get_connection", boom_connection)
+    monkeypatch.setattr(jobs.pipeline, "list_available_brokers", lambda: [])
+
+    jobs.run_list_available_brokers()
 
 
 # --- run_add_transaction ---

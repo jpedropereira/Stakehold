@@ -25,8 +25,9 @@ from portfolio.errors import (
     AccountLabelConflict,
     AccountNotFound,
     BrokerMismatch,
+    BrokerParserNotFound,
+    InvalidBroker,
     InvalidTransaction,
-    UnknownBroker,
 )
 from portfolio.ticker_mapping.loader import TickerMappings
 from portfolio.transactions import repository as transactions_repository
@@ -46,18 +47,25 @@ BROKER_PARSERS: dict[str, BrokerParser] = {
     "acme": AcmeParser(),
     "globex": GlobexParser(),
 }
-KNOWN_BROKERS = tuple(BROKER_PARSERS)
+
+
+def list_available_brokers() -> list[str]:
+    """The broker keys a parser is currently registered for. Pure, in-memory -- no connection."""
+    return sorted(BROKER_PARSERS)
 
 
 def add_account(conn, *, user_id: UUID, broker: str, account_label: str) -> int:
     """Create one account. Returns 1 if created, 0 if this (user, label) already exists under
-    the same broker -- a safe no-op, reported upstream as nothing_to_do. Raises UnknownBroker
-    for an unrecognized broker, or AccountLabelConflict if the label is already taken by this
-    user under a *different* broker -- silently swallowing that disagreement would be exactly
-    the silent-success the logging rule forbids.
+    the same broker -- a safe no-op, reported upstream as nothing_to_do. `broker` is a free-text
+    label, not checked against BROKER_PARSERS -- account creation (and therefore manual
+    transaction entry) must work with zero broker-parser plugins installed; only
+    import_transactions needs a registered parser, and checks for one itself. Raises
+    InvalidBroker for a blank/whitespace-only broker, or AccountLabelConflict if the label is
+    already taken by this user under a *different* broker -- silently swallowing that
+    disagreement would be exactly the silent-success the logging rule forbids.
     """
-    if broker not in KNOWN_BROKERS:
-        raise UnknownBroker(f"unrecognized broker: {broker!r}")
+    if not broker.strip():
+        raise InvalidBroker("broker must not be blank")
 
     with transaction(conn):
         account_id = accounts_repository.insert_account(
@@ -155,13 +163,18 @@ def import_transactions(
     Returns the count actually written -- re-importing a file whose date range overlaps a
     previous import is a safe no-op for the rows already seen, via the same
     (account_id, broker_transaction_ref) idempotency add_manual_transaction relies on. Raises
-    UnknownBroker for an unrecognized --broker, AccountNotFound if --account doesn't resolve for
-    this user (the isolation chokepoint), BrokerMismatch if --broker disagrees with the resolved
-    account's own broker, or whatever the parser/validate() raise for a malformed file.
+    BrokerParserNotFound if no parser is registered for --broker, AccountNotFound if --account
+    doesn't resolve for this user (the isolation chokepoint), BrokerMismatch if --broker
+    disagrees with the resolved account's own broker, or whatever the parser/validate() raise
+    for a malformed file.
     """
     parser = BROKER_PARSERS.get(broker)
     if parser is None:
-        raise UnknownBroker(f"unrecognized broker: {broker!r}")
+        raise BrokerParserNotFound(
+            f"no parser registered for broker {broker!r} -- check for a typo, or install the "
+            f"plugin package that provides a parser for it. Currently registered: "
+            f"{sorted(BROKER_PARSERS) or '(none)'}"
+        )
 
     account = accounts_repository.get_by_label(conn, user_id=user_id, account_label=account_label)
     if account is None:

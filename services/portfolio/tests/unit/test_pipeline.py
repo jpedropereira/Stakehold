@@ -18,8 +18,9 @@ from portfolio.errors import (
     AccountNotFound,
     BrokerFileError,
     BrokerMismatch,
+    BrokerParserNotFound,
+    InvalidBroker,
     InvalidTransaction,
-    UnknownBroker,
 )
 from portfolio.ticker_mapping.loader import TickerMappings
 from portfolio.transactions.base import CanonicalTransaction
@@ -129,9 +130,22 @@ def test_add_account_creates_a_new_account_and_commits_once(repos, conn):
     assert conn.rollbacks == 0
 
 
-def test_add_account_rejects_an_unknown_broker_without_touching_the_connection(repos, conn):
-    with pytest.raises(UnknownBroker):
-        pipeline.add_account(conn, user_id=uuid.uuid4(), broker="robinhood", account_label="m")
+def test_add_account_accepts_a_broker_with_no_registered_parser(repos, conn, monkeypatch):
+    """Account creation (and therefore manual transaction entry) must work with zero broker-
+    parser plugins installed -- broker is a free-text label, not checked against BROKER_PARSERS."""
+    monkeypatch.setattr(pipeline, "BROKER_PARSERS", {})
+
+    created = pipeline.add_account(
+        conn, user_id=uuid.uuid4(), broker="robinhood", account_label="m"
+    )
+
+    assert created == 1
+    assert conn.commits == 1
+
+
+def test_add_account_rejects_a_blank_broker_without_touching_the_connection(repos, conn):
+    with pytest.raises(InvalidBroker):
+        pipeline.add_account(conn, user_id=uuid.uuid4(), broker="   ", account_label="m")
 
     assert conn.commits == 0
 
@@ -198,6 +212,21 @@ def test_list_accounts_never_commits(repos, conn):
     pipeline.list_accounts(conn, user_id=uuid.uuid4())
 
     assert conn.commits == 0
+
+
+# --- list_available_brokers ---
+
+
+def test_list_available_brokers_returns_sorted_registered_keys(monkeypatch):
+    monkeypatch.setattr(pipeline, "BROKER_PARSERS", {"globex": object(), "acme": object()})
+
+    assert pipeline.list_available_brokers() == ["acme", "globex"]
+
+
+def test_list_available_brokers_returns_empty_list_with_no_plugins_installed(monkeypatch):
+    monkeypatch.setattr(pipeline, "BROKER_PARSERS", {})
+
+    assert pipeline.list_available_brokers() == []
 
 
 # --- add_manual_transaction ---
@@ -417,8 +446,10 @@ def test_import_transactions_requires_an_existing_account(repos, conn, monkeypat
         )
 
 
-def test_import_transactions_rejects_an_unknown_broker(repos, conn):
-    with pytest.raises(UnknownBroker):
+def test_import_transactions_rejects_a_broker_with_no_registered_parser(repos, conn, monkeypatch):
+    monkeypatch.setattr(pipeline, "BROKER_PARSERS", {})
+
+    with pytest.raises(BrokerParserNotFound):
         pipeline.import_transactions(
             conn,
             user_id=uuid.uuid4(),

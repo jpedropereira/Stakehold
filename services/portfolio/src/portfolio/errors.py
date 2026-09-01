@@ -11,8 +11,17 @@ class PortfolioError(Exception):
     """Base class for every domain-level failure in this service."""
 
 
-class UnknownBroker(PortfolioError):
-    """`account add` named a broker outside the known registry."""
+class BrokerParserNotFound(PortfolioError):
+    """`import-transactions --broker` (or the planned `import-cashflow --broker`) named a broker
+    with no parser currently registered under the BROKER_PARSERS registry -- either a typo, or
+    the plugin package providing that broker's parser isn't installed. Never raised by
+    `account add`: a broker is a free-text label there, and account creation must work with zero
+    broker plugins installed (see InvalidBroker below for the one check it does perform)."""
+
+
+class InvalidBroker(PortfolioError):
+    """`account add --broker` was blank or whitespace-only. The only validation account creation
+    performs on `broker` -- it's a free-text label, not checked against a fixed set of names."""
 
 
 class AccountNotFound(PortfolioError):

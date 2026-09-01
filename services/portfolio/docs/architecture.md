@@ -141,8 +141,17 @@ read/write one table.
 `accounts/repository.py` and `transactions/repository.py` below.
 
 **Built as of task 6** — `import_transactions`, `list_unmapped_instruments`, and the real
-`BROKER_PARSERS` registry replacing task 5's placeholder `KNOWN_BROKERS` tuple; `KNOWN_BROKERS` is
-now `tuple(BROKER_PARSERS)`, with no other change to `add_account`.
+`BROKER_PARSERS` registry replacing task 5's placeholder `KNOWN_BROKERS` tuple.
+
+**Revised after task 6** — `add_account` no longer reads `BROKER_PARSERS` at all. The original
+version gated account creation on `broker in tuple(BROKER_PARSERS)`, which meant an install with
+no broker-parser plugins available (`BROKER_PARSERS` empty) could create *no* account at all —
+and since `add_manual_transaction` requires an existing account, that also silently broke manual
+entry, a flow with no real dependency on any parser. `broker` is now a free-text label at account
+creation, validated only for non-blank (`InvalidBroker`); `BROKER_PARSERS` is read only by
+`import_transactions` (and the planned `import_cashflow`), the one place a parser is actually
+needed. `pipeline.list_available_brokers()` / `portfolio broker list` reports what's currently
+registered, for discoverability.
 
 **Built as of task 14** — `import_acme_cashflows`, and `datastore_client/http_client.py`'s
 `get_fx_rate`, pulled forward from task 8 because Acme's cash-ledger export needs it (see
@@ -256,6 +265,13 @@ BROKER_PARSERS: dict[str, BrokerParser] = {
     "globex": GlobexParser(),
 }
 ```
+
+**`BROKER_PARSERS` is read in exactly one place outside its own definition: `import_transactions`**
+(via `BROKER_PARSERS.get(broker)`, raising `BrokerParserNotFound` when nothing is registered for
+the given key). `add_account` deliberately does **not** read it — see the "Revised after task 6"
+note above for why account creation and manual entry must work with an empty registry.
+`pipeline.list_available_brokers()` (`portfolio broker list`) reads it too, read-only, for
+discoverability.
 
 **Worked example — adding a third broker** (e.g. Trading212): write `broker_import/trading212.py`
 implementing `BrokerParser`, add one line — `"trading212": Trading212Parser()`.
@@ -396,6 +412,7 @@ identity — not column-level DDL, which needs its own sign-off pass.
 |---|---|---|---|---|
 | Account setup | `account add --user <id> --broker <key> --label <label>` | rare, manual | — | `accounts` |
 | Account listing | `account list --user <id>` | manual, on demand | `accounts`, scoped by `user_id` | — (read-only report) |
+| Broker-plugin discovery | `broker list` | manual, on demand | `BROKER_PARSERS` (in-memory) | — (read-only report) |
 | Ticker linking | — (hand-edit the YAML file) | manual, as unmapped instruments surface | — | `configs/ticker_mappings.yaml` (edited directly, not through the service) |
 | List unmapped instruments | `list-unmapped-instruments --user <id>` | manual, on demand | `transactions` joined to `accounts` (scoped by `user_id`, and to pick up each instrument's owning broker), `configs/ticker_mappings.yaml` | — (read-only report) |
 | Manual transaction entry | `add-transaction --user <id> --account <label> --ref <key> --type <type> --datetime <iso8601> --amount <decimal> --currency <ISO4217> [--instrument <id> --instrument-kind ISIN\|SYMBOL] [--quantity <d>] [--price <d>] [--fx-rate <d>] [--fees <d>]` | ad hoc | `accounts`, scoped by `user_id` | `transactions` (idempotent on `(account_id, broker_transaction_ref)`, keyed by the mandatory `--ref`) |
@@ -404,9 +421,12 @@ identity — not column-level DDL, which needs its own sign-off pass.
 | Positions rebuild | `rebuild-positions` | after transactions change | `transactions`, `configs/ticker_mappings.yaml` | `position_snapshots` |
 | Returns rebuild | `rebuild-returns` | after positions rebuild or new prices land | `position_snapshots`, `data-store` read API | `return_snapshots` |
 
-**No separate `brokers` table** ever materialized — `schema.md` settled on `broker` as a plain,
-app-validated string on `accounts`, so `account add` writes only to `accounts`, never a second
-table.
+**No separate `brokers` table** ever materialized — `schema.md` settled on `broker` as a plain
+string on `accounts`, so `account add` writes only to `accounts`, never a second table.
+`account add --broker <key>` is free text, checked only for non-blank (`InvalidBroker`) — it is
+**not** validated against `BROKER_PARSERS` or any other fixed list of names, on purpose: account
+creation and manual transaction entry must both work with zero broker-parser plugins installed.
+`--broker <key>` only needs to match a registered parser at `import-transactions` time.
 
 **A load-bearing consequence of the entity model above, worth stating directly:** `rebuild-positions`
 needs no price data at all — quantity and average cost are pure functions of the transaction log.
