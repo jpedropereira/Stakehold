@@ -26,6 +26,8 @@ a {
 
 .brand-mark img {
   display: block;
+  height: 40px;
+  width: auto;
 }
 
 .logout-form {
