@@ -578,7 +578,21 @@ def test_list_unmapped_instruments_never_commits(repos, conn):
     assert conn.commits == 0
 
 
-# --- import_acme_cashflows ---
+# --- import_cashflow ---
+
+
+class FakeCashflowParser:
+    def __init__(self, broker_key, make_transactions=None, error=None):
+        self.broker_key = broker_key
+        self._make_transactions = make_transactions or (lambda account_id: [])
+        self._error = error
+        self.calls = []
+
+    def parse(self, file_path, account_id, resolve_fx_rate):
+        self.calls.append((file_path, account_id, resolve_fx_rate))
+        if self._error is not None:
+            raise self._error
+        return self._make_transactions(account_id)
 
 
 class FakeDataStoreClient:
@@ -615,49 +629,63 @@ def _cashflow_txn_factory(**overrides):
     return make
 
 
-def test_import_acme_cashflows_requires_an_existing_account(repos, conn, monkeypatch):
-    monkeypatch.setattr(pipeline, "parse_cashflows", lambda *a, **kw: [])
+def test_import_cashflow_rejects_a_broker_with_no_registered_parser(repos, conn, monkeypatch):
+    monkeypatch.setattr(pipeline, "CASHFLOW_PARSERS", {})
 
-    with pytest.raises(AccountNotFound):
-        pipeline.import_acme_cashflows(
+    with pytest.raises(BrokerParserNotFound):
+        pipeline.import_cashflow(
             conn,
             user_id=uuid.uuid4(),
-            account_label="nonexistent",
+            account_label="m",
+            broker="acme",
             file_path=Path("f.csv"),
             datastore_client=FakeDataStoreClient(),
         )
 
 
-def test_import_acme_cashflows_rejects_a_non_acme_account(repos, conn, monkeypatch):
-    monkeypatch.setattr(pipeline, "parse_cashflows", lambda *a, **kw: [])
+def test_import_cashflow_requires_an_existing_account(repos, conn, monkeypatch):
+    monkeypatch.setattr(pipeline, "CASHFLOW_PARSERS", {"acme": FakeCashflowParser("acme")})
+
+    with pytest.raises(AccountNotFound):
+        pipeline.import_cashflow(
+            conn,
+            user_id=uuid.uuid4(),
+            account_label="nonexistent",
+            broker="acme",
+            file_path=Path("f.csv"),
+            datastore_client=FakeDataStoreClient(),
+        )
+
+
+def test_import_cashflow_rejects_a_broker_mismatch(repos, conn, monkeypatch):
+    monkeypatch.setattr(pipeline, "CASHFLOW_PARSERS", {"acme": FakeCashflowParser("acme")})
     user_id = uuid.uuid4()
     pipeline.add_account(conn, user_id=user_id, broker="globex", account_label="m")
 
     with pytest.raises(BrokerMismatch):
-        pipeline.import_acme_cashflows(
+        pipeline.import_cashflow(
             conn,
             user_id=user_id,
             account_label="m",
+            broker="acme",
             file_path=Path("f.csv"),
             datastore_client=FakeDataStoreClient(),
         )
 
 
-def test_import_acme_cashflows_parses_and_saves_transactions(repos, conn, monkeypatch):
+def test_import_cashflow_parses_and_saves_transactions(repos, conn, monkeypatch):
     _, transactions_repo = repos
-    monkeypatch.setattr(
-        pipeline,
-        "parse_cashflows",
-        lambda path, account_id, resolve: _cashflow_txn_factory()(account_id),
-    )
+    parser = FakeCashflowParser("acme", make_transactions=_cashflow_txn_factory())
+    monkeypatch.setattr(pipeline, "CASHFLOW_PARSERS", {"acme": parser})
     user_id = uuid.uuid4()
     pipeline.add_account(conn, user_id=user_id, broker="acme", account_label="m")
     commits_before = conn.commits
 
-    saved = pipeline.import_acme_cashflows(
+    saved = pipeline.import_cashflow(
         conn,
         user_id=user_id,
         account_label="m",
+        broker="acme",
         file_path=Path("f.csv"),
         datastore_client=FakeDataStoreClient(),
     )
@@ -667,49 +695,49 @@ def test_import_acme_cashflows_parses_and_saves_transactions(repos, conn, monkey
     assert conn.commits - commits_before == 1
 
 
-def test_import_acme_cashflows_passes_a_working_fx_resolver_through_to_the_parser(
+def test_import_cashflow_passes_a_working_fx_resolver_through_to_the_parser(
     repos, conn, monkeypatch
 ):
-    captured = {}
-
-    def fake_parse(path, account_id, resolve_fx_rate):
-        captured["resolve_fx_rate"] = resolve_fx_rate
-        return []
-
-    monkeypatch.setattr(pipeline, "parse_cashflows", fake_parse)
+    parser = FakeCashflowParser("acme")
+    monkeypatch.setattr(pipeline, "CASHFLOW_PARSERS", {"acme": parser})
     user_id = uuid.uuid4()
     pipeline.add_account(conn, user_id=user_id, broker="acme", account_label="m")
     client = FakeDataStoreClient(rates={("EUR", "PLN", date(2026, 1, 1)): Decimal("4.30")})
 
-    pipeline.import_acme_cashflows(
-        conn, user_id=user_id, account_label="m", file_path=Path("f.csv"), datastore_client=client
+    pipeline.import_cashflow(
+        conn,
+        user_id=user_id,
+        account_label="m",
+        broker="acme",
+        file_path=Path("f.csv"),
+        datastore_client=client,
     )
 
-    rate = captured["resolve_fx_rate"]("PLN", date(2026, 1, 1))
+    _, _, resolve_fx_rate = parser.calls[0]
+    rate = resolve_fx_rate("PLN", date(2026, 1, 1))
     assert rate == Decimal("4.30")
     assert client.calls == [("EUR", "PLN", date(2026, 1, 1))]
 
 
-def test_import_acme_cashflows_is_idempotent_on_reimport(repos, conn, monkeypatch):
-    monkeypatch.setattr(
-        pipeline,
-        "parse_cashflows",
-        lambda path, account_id, resolve: _cashflow_txn_factory()(account_id),
-    )
+def test_import_cashflow_is_idempotent_on_reimport(repos, conn, monkeypatch):
+    parser = FakeCashflowParser("acme", make_transactions=_cashflow_txn_factory())
+    monkeypatch.setattr(pipeline, "CASHFLOW_PARSERS", {"acme": parser})
     user_id = uuid.uuid4()
     pipeline.add_account(conn, user_id=user_id, broker="acme", account_label="m")
-    pipeline.import_acme_cashflows(
+    pipeline.import_cashflow(
         conn,
         user_id=user_id,
         account_label="m",
+        broker="acme",
         file_path=Path("f.csv"),
         datastore_client=FakeDataStoreClient(),
     )
 
-    saved = pipeline.import_acme_cashflows(
+    saved = pipeline.import_cashflow(
         conn,
         user_id=user_id,
         account_label="m",
+        broker="acme",
         file_path=Path("f.csv"),
         datastore_client=FakeDataStoreClient(),
     )
@@ -717,22 +745,21 @@ def test_import_acme_cashflows_is_idempotent_on_reimport(repos, conn, monkeypatc
     assert saved == 0
 
 
-def test_import_acme_cashflows_propagates_a_broker_file_error_without_committing(
+def test_import_cashflow_propagates_a_broker_file_error_without_committing(
     repos, conn, monkeypatch
 ):
-    def boom(path, account_id, resolve):
-        raise BrokerFileError("bad file")
-
-    monkeypatch.setattr(pipeline, "parse_cashflows", boom)
+    parser = FakeCashflowParser("acme", error=BrokerFileError("bad file"))
+    monkeypatch.setattr(pipeline, "CASHFLOW_PARSERS", {"acme": parser})
     user_id = uuid.uuid4()
     pipeline.add_account(conn, user_id=user_id, broker="acme", account_label="m")
     commits_before = conn.commits
 
     with pytest.raises(BrokerFileError):
-        pipeline.import_acme_cashflows(
+        pipeline.import_cashflow(
             conn,
             user_id=user_id,
             account_label="m",
+            broker="acme",
             file_path=Path("f.csv"),
             datastore_client=FakeDataStoreClient(),
         )

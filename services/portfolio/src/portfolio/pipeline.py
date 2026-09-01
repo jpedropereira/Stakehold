@@ -16,10 +16,11 @@ from uuid import UUID
 
 from portfolio.accounts import repository as accounts_repository
 from portfolio.accounts.repository import Account
-from portfolio.broker_import.base import BrokerParser
-from portfolio.broker_import.acme import AcmeParser
-from portfolio.broker_import.acme_cashflow import parse_cashflows
-from portfolio.broker_import.globex import GlobexParser
+from portfolio.broker_import.base import BrokerParser, CashflowParser
+from portfolio.broker_import.discovery import (
+    discover_broker_parsers,
+    discover_cashflow_parsers,
+)
 from portfolio.datastore_client.base import DataStoreClient
 from portfolio.errors import (
     AccountLabelConflict,
@@ -42,11 +43,11 @@ from shared.db.connection import transaction
 logger = logging.getLogger(__name__)
 
 # Same pattern as data-store's SCRAPERS / MARKET_DATA_SOURCES -- a Protocol plus a registry dict,
-# no branching in flow functions. See docs/architecture.md's "Extension points" section.
-BROKER_PARSERS: dict[str, BrokerParser] = {
-    "acme": AcmeParser(),
-    "globex": GlobexParser(),
-}
+# no branching in flow functions. Populated once, at import time, by discovering whatever
+# implementations are installed under the two entry-point groups -- pipeline.py itself never
+# imports a concrete parser. See docs/architecture.md's "Extension points" section.
+BROKER_PARSERS: dict[str, BrokerParser] = discover_broker_parsers()
+CASHFLOW_PARSERS: dict[str, CashflowParser] = discover_cashflow_parsers()
 
 
 def list_available_brokers() -> list[str]:
@@ -207,36 +208,47 @@ def list_unmapped_instruments(
     ]
 
 
-def import_acme_cashflows(
+def import_cashflow(
     conn,
     *,
     user_id: UUID,
     account_label: str,
+    broker: str,
     file_path: Path,
     datastore_client: DataStoreClient,
 ) -> int:
-    """Parse and persist Acme's "Account" cash-ledger export (deposits, withdrawals,
-    dividends, ...) for one account. Not routed through BROKER_PARSERS/import_transactions --
-    see broker_import/acme_cashflow.py for why this file format needs its own flow.
+    """Parse and persist one broker's cash-ledger export (deposits, withdrawals, dividends, ...)
+    for one account, via the CASHFLOW_PARSERS registry -- the separate registry
+    import_transactions/BROKER_PARSERS doesn't share, since a cash-ledger format needs a live
+    FX-rate lookup mid-parse that a plain BrokerParser never carries. See broker_import/base.py's
+    CashflowParser Protocol.
 
     Returns the count actually written, idempotent the same way import_transactions is. Raises
-    AccountNotFound if --account doesn't resolve for this user (the isolation chokepoint),
-    BrokerMismatch if the resolved account isn't a Acme account, or whatever
-    acme_cashflow.parse_cashflows/validate() raise for a malformed file or an unresolvable
-    FX rate.
+    BrokerParserNotFound if no cashflow parser is registered for --broker, AccountNotFound if
+    --account doesn't resolve for this user (the isolation chokepoint), BrokerMismatch if
+    --broker disagrees with the resolved account's own broker, or whatever the parser's
+    parse()/validate() raise for a malformed file or an unresolvable FX rate.
     """
+    parser = CASHFLOW_PARSERS.get(broker)
+    if parser is None:
+        raise BrokerParserNotFound(
+            f"no cashflow parser registered for broker {broker!r} -- check for a typo, or "
+            f"install the plugin package that provides one. Currently registered: "
+            f"{sorted(CASHFLOW_PARSERS) or '(none)'}"
+        )
+
     account = accounts_repository.get_by_label(conn, user_id=user_id, account_label=account_label)
     if account is None:
         raise AccountNotFound(f"no account {account_label!r} for this user")
-    if account.broker != "acme":
+    if account.broker != broker:
         raise BrokerMismatch(
-            f"account {account_label!r} is a {account.broker!r} account, not 'acme'"
+            f"account {account_label!r} is a {account.broker!r} account, not {broker!r}"
         )
 
     def resolve_fx_rate(currency: str, on_date: date) -> Decimal | None:
         return datastore_client.get_fx_rate("EUR", currency, on_date)
 
-    transactions = parse_cashflows(file_path, account.id, resolve_fx_rate)
+    transactions = parser.parse(file_path, account.id, resolve_fx_rate)
     for txn in transactions:
         validate(txn)
 

@@ -12,11 +12,20 @@ class PortfolioError(Exception):
 
 
 class BrokerParserNotFound(PortfolioError):
-    """`import-transactions --broker` (or the planned `import-cashflow --broker`) named a broker
-    with no parser currently registered under the BROKER_PARSERS registry -- either a typo, or
-    the plugin package providing that broker's parser isn't installed. Never raised by
+    """`import-transactions --broker` (or `import-cashflow --broker`) named a broker with no
+    parser currently registered under BROKER_PARSERS/CASHFLOW_PARSERS -- either a typo, or the
+    plugin package providing that broker's parser isn't installed. Never raised by
     `account add`: a broker is a free-text label there, and account creation must work with zero
     broker plugins installed (see InvalidBroker below for the one check it does perform)."""
+
+
+class BrokerPluginError(PortfolioError):
+    """A broker-parser or cashflow-parser plugin's entry-point registration is malformed -- two
+    installed plugins claim the same key within one registry group, or a loaded parser's own
+    `broker_key` disagrees with the name it registered under. A startup/config-time failure
+    (raised by broker_import/discovery.py), not a per-request one -- an installed plugin set is
+    either internally consistent or the whole registry build fails loudly, never silently picks
+    one of two conflicting registrations."""
 
 
 class InvalidBroker(PortfolioError):

@@ -61,12 +61,12 @@ flowchart TD
 
     subgraph orch["Orchestration"]
         JOBS["jobs.py<br/><i>runnable units: config + connection + one flow</i>"]
-        PIPE["pipeline.py<br/><i>the flows; broker-parser and datastore-client registries</i>"]
+        PIPE["pipeline.py<br/><i>the flows; broker-parser/cashflow-parser (entry-point discovered)<br/>and datastore-client registries</i>"]
     end
 
     subgraph domain["Domain modules"]
         ACC["accounts/<br/>repository"]
-        IMP["broker_import/<br/>base · acme · globex · acme_cashflow"]
+        IMP["broker_import/<br/>base · discovery · acme · globex · acme_cashflow"]
         MAP["ticker_mapping/<br/>loader"]
         TXN["transactions/<br/>base · repository"]
         POS["positions/<br/>calculator · repository"]
@@ -149,21 +149,33 @@ no broker-parser plugins available (`BROKER_PARSERS` empty) could create *no* ac
 and since `add_manual_transaction` requires an existing account, that also silently broke manual
 entry, a flow with no real dependency on any parser. `broker` is now a free-text label at account
 creation, validated only for non-blank (`InvalidBroker`); `BROKER_PARSERS` is read only by
-`import_transactions` (and the planned `import_cashflow`), the one place a parser is actually
-needed. `pipeline.list_available_brokers()` / `portfolio broker list` reports what's currently
-registered, for discoverability.
+`import_transactions` (and the parallel `import_cashflow`, below), the one place a parser is
+actually needed. `pipeline.list_available_brokers()` / `portfolio broker list` reports what's
+currently registered, for discoverability.
 
-**Built as of task 14** — `import_acme_cashflows`, and `datastore_client/http_client.py`'s
+**Revised again, extraction prep** — `BROKER_PARSERS`/`CASHFLOW_PARSERS` are no longer hardcoded
+dicts; both are built once, at import time, by `broker_import/discovery.py` reading
+`importlib.metadata.entry_points()` under the `stakehold.broker_parsers` /
+`stakehold.cashflow_parsers` groups. `pipeline.py` itself now imports nothing broker-specific —
+see "Extension points" below. `acme.py`/`globex.py`/`acme_cashflow.py` still physically live in
+this package and self-register under those groups via `pyproject.toml`'s
+`[project.entry-points]` tables — an interim step, ahead of moving them to a separate installable
+package, that proves discovery end-to-end without changing the group names implementations will
+register under later.
+
+**Built as of task 14** — `import_cashflow`, and `datastore_client/http_client.py`'s
 `get_fx_rate`, pulled forward from task 8 because Acme's cash-ledger export needs it (see
-"Cross-service prerequisite" below). `import_acme_cashflows` is a separate flow function, not a
-branch inside `import_transactions` — see "The Acme cash-ledger import" below for why.
+"Cross-service prerequisite" below). `import_cashflow` is a separate flow function, not a
+branch inside `import_transactions` — see "The Acme cash-ledger import" below for why. Its
+`broker` parameter and the parallel `CASHFLOW_PARSERS` registry are a later generalization (same
+extraction prep as above) — task 14 itself built it Acme-only, hardcoded.
 
 ## The three-file shape of a domain module
 
 | Module | Shape | Deviation from the three-file default, and why |
 |---|---|---|
 | `accounts/` | `repository.py` only | No external source and no `base.py` — a broker and an account are user-declared reference data, created through a CLI command, not parsed or fetched. Every read here takes a `user_id`, and every other domain module's queries are reached only by first going through an account scoped to that user — this is the one place multi-user isolation is enforced, not repeated independently by each module. **Deliberately no unscoped `get_by_id(account_id)`** alongside `get_by_label` — that absence is the design, not an oversight: it removes the one shortcut that would let a caller reach an account without proving it owns it. |
-| `broker_import/` | `base.py` (the `BrokerParser` Protocol) + `acme.py`, `globex.py` (the `*_source.py` equivalent — but they read a local export file, not a network call) + `acme_cashflow.py` (task 14 — **not** a `BrokerParser`; see "The Acme cash-ledger import" below) | **No `repository.py`.** A parser hands back in-memory `CanonicalTransaction` records; persistence is owned entirely by `transactions/repository.py`, so a manually-entered transaction and an imported one are written through the exact same path. Splitting persistence into `broker_import/` would let the two paths drift. |
+| `broker_import/` | `base.py` (the `BrokerParser` and `CashflowParser` Protocols) + `discovery.py` (entry-point lookup, populating `pipeline.py`'s two registries) + `acme.py`, `globex.py` (the `*_source.py` equivalent — but they read a local export file, not a network call) + `acme_cashflow.py` (task 14 — implements `CashflowParser` via a `AcmeCashflowParser` adapter, not `BrokerParser`; see "The Acme cash-ledger import" below) | **No `repository.py`.** A parser hands back in-memory `CanonicalTransaction` records; persistence is owned entirely by `transactions/repository.py`, so a manually-entered transaction and an imported one are written through the exact same path. Splitting persistence into `broker_import/` would let the two paths drift. **The four implementation files are entry-point plugins, not statically imported** — `discovery.py` is the only file in this module `pipeline.py` imports directly. |
 | `ticker_mapping/` | `loader.py` only | **No `repository.py`.** The mapping lives in a YAML config file (`configs/ticker_mappings.yaml`), not a database table — mirroring `data-store`'s `yfinance_exchange_suffixes.yaml` reference-config pattern. `loader.py` reads and validates the file into an in-memory lookup; nothing here talks to Postgres. No `base.py` — nothing else is expected to implement a "mapping provider." |
 | `transactions/` | `base.py` (the `CanonicalTransaction` record shape) + `repository.py` | `base.py` here holds a **data shape**, not a `Protocol` — the contract is "what a normalized transaction looks like," which multiple producers (`broker_import` parsers, manual CLI entry) must fill in, not a swappable behavior one class implements. |
 | `positions/` | `calculator.py` (pure) + `repository.py` | Same shape as data-store's `returns/`: no `base.py`, no `*_source.py` — the input is this service's own `transactions` and `ticker_mapping` tables, not an external provider. |
@@ -189,13 +201,18 @@ domain module reaches into another domain's module rather than staying self-cont
 because the alternative (each parser inventing its own intermediate shape, reconciled later) is
 exactly the drift the extension point exists to prevent.
 
-## Extension points: the broker-import registry
+## Extension points: the broker-import registries
 
-Same pattern as data-store's `SCRAPERS` / `MARKET_DATA_SOURCES` — a `Protocol` plus a registry dict
-at the top of `pipeline.py`, no branching in flow functions.
+Same pattern as data-store's `SCRAPERS` / `MARKET_DATA_SOURCES` — a `Protocol` plus a registry
+dict, no branching in flow functions — but populated by `broker_import/discovery.py` reading
+entry points rather than hardcoded in `pipeline.py`. Two independent Protocol/registry pairs, not
+one: `BrokerParser`/`BROKER_PARSERS` (plain export files, read by `import_transactions`) and
+`CashflowParser`/`CASHFLOW_PARSERS` (cash-ledger formats needing a live FX lookup mid-parse, read
+by `import_cashflow`). A broker key can appear in one registry, the other, both, or neither,
+independently — `"acme"` is in both today, nothing enforces they agree.
 
 ```python
-# broker_import/base.py  (built as of task 6)
+# broker_import/base.py  (built as of task 6; CashflowParser added during extraction prep)
 class BrokerParser(Protocol):
     broker_key: str  # the registry key (e.g. "acme"). accounts.broker is the persisted
                       # source of truth for which broker an account belongs to; nothing on
@@ -209,7 +226,44 @@ class BrokerParser(Protocol):
         from the file itself. Acme's own export has no account-identifying column at all.
         """
         ...
+
+
+ResolveFxRate = Callable[[str, date], Decimal | None]
+
+
+class CashflowParser(Protocol):
+    broker_key: str  # same role as BrokerParser.broker_key, in the separate CASHFLOW_PARSERS
+                      # registry.
+
+    def parse(
+        self, file_path: Path, account_id: int, resolve_fx_rate: ResolveFxRate
+    ) -> list["CanonicalTransaction"]:
+        """Parse one cash-ledger export. Unlike BrokerParser.parse, carries resolve_fx_rate
+        explicitly -- only for formats whose rows have no EUR-equivalent at all."""
+        ...
 ```
+
+```python
+# broker_import/discovery.py
+BROKER_PARSER_GROUP = "stakehold.broker_parsers"
+CASHFLOW_PARSER_GROUP = "stakehold.cashflow_parsers"
+
+
+def discover_broker_parsers() -> dict[str, "BrokerParser"]:
+    return _discover(BROKER_PARSER_GROUP)
+
+
+def discover_cashflow_parsers() -> dict[str, "CashflowParser"]:
+    return _discover(CASHFLOW_PARSER_GROUP)
+```
+
+`_discover` instantiates every class registered under the group (`entry_points(group=...)`),
+raising `BrokerPluginError` — fail-fast, matching this file's "unrecognized type is a parse
+error" ethos — on either two installed plugins claiming the same key within one group, or a
+loaded parser's own `broker_key` disagreeing with the name it registered under. Editing a
+`[project.entry-points]` table does nothing until the owning package is reinstalled
+(`entry_points()` reads installed `.dist-info/entry_points.txt`, not `pyproject.toml` live) —
+worth remembering before assuming a registration change took effect.
 
 `broker_import/base.py`, `acme.py`, and `globex.py` are built as of task 6 -- see
 `broker_import/acme.py` and `broker_import/globex.py`'s own module docstrings for exact parsing
@@ -256,28 +310,34 @@ it, and `broker_key` above stays purely a registry key. `account_id` is `int`
 non-EUR row must carry an `fx_rate` — a producer (manual entry, or a future broker parser) that
 skips resolving one is rejected, not persisted as a gap to patch up later.
 
-Registry, built as of task 6:
+Registries, populated once at import time:
 
 ```python
 # pipeline.py
-BROKER_PARSERS: dict[str, BrokerParser] = {
-    "acme": AcmeParser(),
-    "globex": GlobexParser(),
-}
+BROKER_PARSERS: dict[str, BrokerParser] = discover_broker_parsers()
+CASHFLOW_PARSERS: dict[str, CashflowParser] = discover_cashflow_parsers()
 ```
+
+Today, both entries in `BROKER_PARSERS` and the one entry in `CASHFLOW_PARSERS` resolve to
+implementations still physically inside this package (`acme.py`, `globex.py`,
+`acme_cashflow.py`'s `AcmeCashflowParser` adapter), registered via this package's own
+`pyproject.toml` — see the "Revised again, extraction prep" note above.
 
 **`BROKER_PARSERS` is read in exactly one place outside its own definition: `import_transactions`**
 (via `BROKER_PARSERS.get(broker)`, raising `BrokerParserNotFound` when nothing is registered for
-the given key). `add_account` deliberately does **not** read it — see the "Revised after task 6"
-note above for why account creation and manual entry must work with an empty registry.
-`pipeline.list_available_brokers()` (`portfolio broker list`) reads it too, read-only, for
-discoverability.
+the given key). **`CASHFLOW_PARSERS` is read the same way, exactly once, by `import_cashflow`.**
+`add_account` deliberately reads neither — see the "Revised after task 6" note above for why
+account creation and manual entry must work with both registries empty.
+`pipeline.list_available_brokers()` (`portfolio broker list`) reads `BROKER_PARSERS`, read-only,
+for discoverability; it does not currently also report `CASHFLOW_PARSERS` availability.
 
-**Worked example — adding a third broker** (e.g. Trading212): write `broker_import/trading212.py`
-implementing `BrokerParser`, add one line — `"trading212": Trading212Parser()`.
-`import-transactions --broker trading212 --file ... --account ...` works with no change to
-`pipeline.py`'s flow function, `jobs.py`, or `cli.py`'s argument shape (only its `--broker` choices
-grow).
+**Worked example — adding a third broker** (e.g. Trading212): implement `BrokerParser` and
+register it under the `stakehold.broker_parsers` entry-point group as `trading212 = "...:
+Trading212Parser"` in whatever package provides it (this one, today; a separate installable
+package, once the extraction below completes) — no change to `pipeline.py`'s flow function,
+`jobs.py`, or `cli.py`'s argument shape. `import-transactions --broker trading212 --file ...
+--account ...` works as soon as that package is installed and its metadata is picked up
+(`entry_points()`, at next process start).
 
 **What each parser actually does, verified against a real export from each broker:**
 
@@ -417,7 +477,7 @@ identity — not column-level DDL, which needs its own sign-off pass.
 | List unmapped instruments | `list-unmapped-instruments --user <id>` | manual, on demand | `transactions` joined to `accounts` (scoped by `user_id`, and to pick up each instrument's owning broker), `configs/ticker_mappings.yaml` | — (read-only report) |
 | Manual transaction entry | `add-transaction --user <id> --account <label> --ref <key> --type <type> --datetime <iso8601> --amount <decimal> --currency <ISO4217> [--instrument <id> --instrument-kind ISIN\|SYMBOL] [--quantity <d>] [--price <d>] [--fx-rate <d>] [--fees <d>]` | ad hoc | `accounts`, scoped by `user_id` | `transactions` (idempotent on `(account_id, broker_transaction_ref)`, keyed by the mandatory `--ref`) |
 | Broker file import | `import-transactions --user <id> --broker <key> --file <path> --account <label>` | manual, on demand | export file, `accounts` scoped by `user_id` | `transactions` (idempotent on `(account_id, broker_transaction_ref)`) |
-| Acme cash-ledger import | `import-acme-cashflows --user <id> --file <path> --account <label>` | manual, on demand | export file, `accounts` scoped by `user_id`, data-store's FX read API (`datastore_client`) for non-EUR rows | `transactions` (idempotent on `(account_id, broker_transaction_ref)`) |
+| Acme cash-ledger import | `import-cashflow --user <id> --broker <key> --file <path> --account <label>` | manual, on demand | export file, `accounts` scoped by `user_id`, data-store's FX read API (`datastore_client`) for non-EUR rows | `transactions` (idempotent on `(account_id, broker_transaction_ref)`) |
 | Positions rebuild | `rebuild-positions` | after transactions change | `transactions`, `configs/ticker_mappings.yaml` | `position_snapshots` |
 | Returns rebuild | `rebuild-returns` | after positions rebuild or new prices land | `position_snapshots`, `data-store` read API | `return_snapshots` |
 
@@ -466,7 +526,7 @@ added to the vocabulary `schema.md` originally documented as `broker_reported` /
 **Known limitation, partly revisited at task 14**: a non-EUR manual entry still has no fallback to
 `data-store`'s FX series — if the caller doesn't know the day's rate, `add-transaction` simply fails
 with `InvalidTransaction` rather than looking one up. `datastore_client.get_fx_rate` now exists
-(built for `import-acme-cashflows` below), so this is technically reachable, but wiring
+(built for `import-cashflow` below), so this is technically reachable, but wiring
 `add-transaction` to it wasn't part of what task 14 was asked to do — left as an explicit, easy
 follow-up rather than done as a drive-by.
 
@@ -474,19 +534,23 @@ follow-up rather than done as a drive-by.
 
 Acme's `Transactions.csv` (`acme.py`, above) carries trades only — deposits, withdrawals,
 dividends, and dividend tax live in a second, separate export: the "Account" cash-ledger CSV.
-`broker_import/acme_cashflow.py` parses it, but **deliberately does not implement
-`BrokerParser`** and is not registered in `BROKER_PARSERS`. The reason is structural, not
-incidental: `BrokerParser.parse(file_path, account_id)` is pure — no I/O beyond the file itself,
-by design, matching the "domain modules never decide *what* to import" layering rule — but this
-file format's rows carry **no EUR-equivalent at all**, unlike `Transactions.csv`'s `Value EUR`
-column or Globex's EUR-base amounts, so a non-EUR row's `eur_amount` needs a live FX-rate lookup
-mid-parse. Widening `BrokerParser.parse()` to carry a `datastore_client` parameter for every
-implementation — including `acme.py` and `globex.py`, neither of which ever needs one — was
-rejected in favor of a dedicated flow: `pipeline.import_acme_cashflows` resolves rates through
-`datastore_client` and hands `acme_cashflow.parse_cashflows` a plain `resolve_fx_rate`
-callable, keeping the parser itself pure and testable against a fake callable, no HTTP client
-required. `import-acme-cashflows --user <id> --file <path> --account <label>` is therefore its
-own CLI command, not a file-type-sniffing branch inside `import-transactions --broker acme`.
+`broker_import/acme_cashflow.py` parses it via its module-level `parse_cashflows` function, but
+**deliberately does not implement `BrokerParser`** — it implements the separate `CashflowParser`
+Protocol instead (through the `AcmeCashflowParser` adapter class), registered in
+`CASHFLOW_PARSERS`, not `BROKER_PARSERS`. The reason is structural, not incidental:
+`BrokerParser.parse(file_path, account_id)` is pure — no I/O beyond the file itself, by design,
+matching the "domain modules never decide *what* to import" layering rule — but this file
+format's rows carry **no EUR-equivalent at all**, unlike `Transactions.csv`'s `Value EUR` column
+or Globex's EUR-base amounts, so a non-EUR row's `eur_amount` needs a live FX-rate lookup mid-parse.
+Widening `BrokerParser.parse()` to carry a `datastore_client` parameter for every implementation
+— including `acme.py` and `globex.py`, neither of which ever needs one — was rejected in favor of
+a second, parallel registry: `pipeline.import_cashflow` resolves rates through `datastore_client`
+and hands whatever `CashflowParser` is registered for `--broker` a plain `resolve_fx_rate`
+callable — `acme_cashflow.py`'s own `parse_cashflows` stays pure and testable against a fake
+callable, no HTTP client required, with the adapter class doing only the Protocol-shape
+translation. `import-cashflow --user <id> --broker <key> --file <path> --account <label>` is
+therefore its own CLI command, not a file-type-sniffing branch inside `import-transactions
+--broker acme`.
 
 **Row filtering, verified against a real, ~900-row export.** Every row carrying an Order Id
 duplicates a trade or trading fee already imported via `acme.py`/`Transactions.csv` (confirmed:
@@ -584,7 +648,7 @@ on; `http_client.py` is the implementation that calls the now-built API — `get
 of task 14. Because the rest of the domain (`positions/`, `transactions/`, `broker_import/`,
 `ticker_mapping/`) depends only on the Protocol, not the HTTP implementation, a local
 stub/fixture-backed implementation of `DataStoreClient` remains enough to build and test
-everything, `import-acme-cashflows` included (see its own tests, and
+everything, `import-cashflow` included (see its own tests, and
 `tests/integration/test_acme_cashflow_import.py`), without a live data-store instance. Adding
 the price-series and ticker-existence methods to `http_client.py` is `returns/`'s own remaining
 task (task 8), not a joint prerequisite any more.
@@ -596,7 +660,7 @@ of its own:
 
 | File | Committed? | Why |
 |---|---|---|
-| `.env` (`PORTFOLIO_DATABASE_URL`, `APP_POSTGRES_ADMIN_DATABASE_URL`, `DATASTORE_API_URL`, `INTERNAL_API_SECRET`) | no — gitignored | Credentials, per-environment. **Not** the bare `DATABASE_URL`: data-store already owns that name, and both suites can run in one pytest process where a shared name would collide — the same reasoning behind `AUTH_DATABASE_URL`. `PORTFOLIO_DATABASE_URL` names the *service*, not the instance, so a future service sharing `app-postgres` gets its own name and its own role. `APP_POSTGRES_ADMIN_DATABASE_URL` is the one exception — it names the *instance*, because the admin role it points at is the shared container's own bootstrap role, not any one service's; see the role/schema paragraph above. **`INTERNAL_API_SECRET` is likewise deliberately unprefixed** (built at task 14), matching data-store's own env var name exactly — it's the one shared credential both sides of an internal call must agree on, not a portfolio-owned setting. Both are optional at `load_settings()` — only `import-acme-cashflows` needs them, checked by `run_import_acme_cashflows` itself. |
+| `.env` (`PORTFOLIO_DATABASE_URL`, `APP_POSTGRES_ADMIN_DATABASE_URL`, `DATASTORE_API_URL`, `INTERNAL_API_SECRET`) | no — gitignored | Credentials, per-environment. **Not** the bare `DATABASE_URL`: data-store already owns that name, and both suites can run in one pytest process where a shared name would collide — the same reasoning behind `AUTH_DATABASE_URL`. `PORTFOLIO_DATABASE_URL` names the *service*, not the instance, so a future service sharing `app-postgres` gets its own name and its own role. `APP_POSTGRES_ADMIN_DATABASE_URL` is the one exception — it names the *instance*, because the admin role it points at is the shared container's own bootstrap role, not any one service's; see the role/schema paragraph above. **`INTERNAL_API_SECRET` is likewise deliberately unprefixed** (built at task 14), matching data-store's own env var name exactly — it's the one shared credential both sides of an internal call must agree on, not a portfolio-owned setting. Both are optional at `load_settings()` — only `import-cashflow` needs them, checked by `run_import_cashflow` itself. |
 | `.env.example` | yes | Template, matching data-store's convention |
 | `configs/ticker_mappings.yaml` | no — gitignored | This deployment's own ISIN/symbol → canonical-ticker choices — personal/deployment data, not generic reference data, the same reasoning `data-store` applies to `etfs.yaml`/`tracked_tickers.yaml`. |
 | `configs/ticker_mappings.yaml.example` | yes | Template, matching `data-store`'s `etfs.yaml.example` convention. |
@@ -775,13 +839,13 @@ table.
 
 | | Needs | Covers |
 |---|---|---|
-| `tests/unit/` | nothing | **Built as of task 6**: `broker_import/acme.py` and `globex.py` against fixture files trimmed from real exports (`tests/unit/broker_import/fixtures/`), including the content-hash dedup logic for both brokers and Acme's shared-Order-ID partial-fill case; `ticker_mapping/loader.py`; `pipeline.import_transactions`/`list_unmapped_instruments` against fake repositories and a fake parser. **Built as of task 14**: `broker_import/acme_cashflow.py` against a fixture trimmed from a real cash-ledger export, with a plain fake `resolve_fx_rate` callable (no `DataStoreClient` needed at that layer); `datastore_client/http_client.py` against a faked `requests.get`; `pipeline.import_acme_cashflows` against a fake `DataStoreClient`. **Not yet built**: `positions/calculator.py` and `returns/calculator.py` as pure functions over in-memory transaction/price frames (tasks 7–8) |
-| `tests/integration/` | live Postgres | **Built as of task 6**: re-importing the same file is a no-op (`tests/integration/test_broker_import.py`), `list_distinct_instruments`'s multi-user isolation and broker attribution; task 4/5's `accounts`, `transactions` idempotent-upsert, and schema-migration-idempotency coverage. **Built as of task 14**: `import_acme_cashflows`'s idempotent reimport and broker-mismatch rejection (`test_acme_cashflow_import.py`), routed through `pipeline.py` directly with a stub `DataStoreClient` rather than through `jobs.py`'s real `HttpDataStoreClient` — see below. **Not yet built**: `ticker_mapping/` (nothing there talks to Postgres — see the module table), `positions/repository.py`, `returns/repository.py`, full rebuild flows end-to-end (tasks 7–8) |
+| `tests/unit/` | nothing | **Built as of task 6**: `broker_import/acme.py` and `globex.py` against fixture files trimmed from real exports (`tests/unit/broker_import/fixtures/`), including the content-hash dedup logic for both brokers and Acme's shared-Order-ID partial-fill case; `ticker_mapping/loader.py`; `pipeline.import_transactions`/`list_unmapped_instruments` against fake repositories and a fake parser. **Built as of task 14**: `broker_import/acme_cashflow.py` against a fixture trimmed from a real cash-ledger export, with a plain fake `resolve_fx_rate` callable (no `DataStoreClient` needed at that layer); `datastore_client/http_client.py` against a faked `requests.get`; `pipeline.import_cashflow` against a fake `DataStoreClient`. **Not yet built**: `positions/calculator.py` and `returns/calculator.py` as pure functions over in-memory transaction/price frames (tasks 7–8) |
+| `tests/integration/` | live Postgres | **Built as of task 6**: re-importing the same file is a no-op (`tests/integration/test_broker_import.py`), `list_distinct_instruments`'s multi-user isolation and broker attribution; task 4/5's `accounts`, `transactions` idempotent-upsert, and schema-migration-idempotency coverage. **Built as of task 14**: `import_cashflow`'s idempotent reimport and broker-mismatch rejection (`test_acme_cashflow_import.py`), routed through `pipeline.py` directly with a stub `DataStoreClient` rather than through `jobs.py`'s real `HttpDataStoreClient` — see below. **Not yet built**: `ticker_mapping/` (nothing there talks to Postgres — see the module table), `positions/repository.py`, `returns/repository.py`, full rebuild flows end-to-end (tasks 7–8) |
 
 **`datastore_client/http_client.py` itself is tested against a faked `requests.get`, not a live
 data-store instance** — status codes, the lookback-window request shape, and error mapping to
 `DataStoreApiError` are covered entirely in `tests/unit/datastore_client/test_http_client.py`.
-Every *other* module that depends on `DataStoreClient` (`pipeline.import_acme_cashflows`,
+Every *other* module that depends on `DataStoreClient` (`pipeline.import_cashflow`,
 `broker_import/acme_cashflow.py` via its `resolve_fx_rate` callable) is tested against a
 fake/stub implementing the Protocol instead, the same way data-store's pipeline tests stub
 `save_*` and swap source registries for fakes. There is no live-`data-store` integration test

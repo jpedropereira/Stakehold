@@ -298,11 +298,11 @@ def run_list_unmapped_instruments(*, user_id: UUID) -> dict[str, int | str]:
     return result
 
 
-def run_import_acme_cashflows(
-    *, user_id: UUID, account_label: str, file_path: Path
+def run_import_cashflow(
+    *, user_id: UUID, account_label: str, broker: str, file_path: Path
 ) -> dict[str, int | str]:
-    """Parse and persist a Acme cash-ledger ("Account") export. See
-    pipeline.import_acme_cashflows for what `saved` means.
+    """Parse and persist one broker's cash-ledger ("Account") export. See
+    pipeline.import_cashflow for what `saved` means.
 
     Unlike every other command, this one needs a live data-store instance to resolve non-EUR
     rows' FX rates -- DATASTORE_API_URL and INTERNAL_API_SECRET must both be set, checked here
@@ -313,8 +313,7 @@ def run_import_acme_cashflows(
     settings = load_settings()
     if not settings.datastore_api_url or not settings.internal_api_secret:
         raise SettingsError(
-            "DATASTORE_API_URL and INTERNAL_API_SECRET must both be set for "
-            "import-acme-cashflows"
+            "DATASTORE_API_URL and INTERNAL_API_SECRET must both be set for import-cashflow"
         )
     datastore_client = HttpDataStoreClient(
         base_url=settings.datastore_api_url, internal_api_secret=settings.internal_api_secret
@@ -323,24 +322,26 @@ def run_import_acme_cashflows(
     conn = get_connection(settings.database_url)
     try:
         logger.info(
-            "import-acme-cashflows: importing %s into account %r (user %s).",
+            "import-cashflow: importing %s into account %r (user %s, broker=%r).",
             file_path,
             account_label,
             user_id,
+            broker,
         )
         try:
-            saved = pipeline.import_acme_cashflows(
+            saved = pipeline.import_cashflow(
                 conn,
                 user_id=user_id,
                 account_label=account_label,
+                broker=broker,
                 file_path=file_path,
                 datastore_client=datastore_client,
             )
         except PortfolioError as exc:
-            logger.error("import-acme-cashflows: failed -- %s", exc)
+            logger.error("import-cashflow: failed -- %s", exc)
             return build_run_result(units_total=1, rows_saved=0, failed=1, transactions_saved=0)
     finally:
         conn.close()
 
-    logger.info("import-acme-cashflows: done, %d transaction(s) saved.", saved)
+    logger.info("import-cashflow: done, %d transaction(s) saved.", saved)
     return build_run_result(units_total=saved, rows_saved=saved, failed=0, transactions_saved=saved)

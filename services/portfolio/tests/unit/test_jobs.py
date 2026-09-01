@@ -547,9 +547,9 @@ def test_run_list_unmapped_instruments_loads_mappings_from_the_settings_path(mon
     assert captured["path"] == Path("configs/ticker_mappings.yaml")
 
 
-# --- run_import_acme_cashflows ---
+# --- run_import_cashflow ---
 
-_CASHFLOW_KWARGS = dict(account_label="m", file_path=Path("acme_account.csv"))
+_CASHFLOW_KWARGS = dict(account_label="m", broker="acme", file_path=Path("acme_account.csv"))
 
 
 def _patch_cashflow_job_common(monkeypatch):
@@ -565,40 +565,40 @@ def _patch_cashflow_job_common(monkeypatch):
     return fake_conn
 
 
-def test_run_import_acme_cashflows_reports_ok_when_saved(monkeypatch):
+def test_run_import_cashflow_reports_ok_when_saved(monkeypatch):
     fake_conn = _patch_cashflow_job_common(monkeypatch)
-    monkeypatch.setattr(jobs.pipeline, "import_acme_cashflows", lambda conn, **kw: 339)
+    monkeypatch.setattr(jobs.pipeline, "import_cashflow", lambda conn, **kw: 339)
 
-    result = jobs.run_import_acme_cashflows(user_id=uuid.uuid4(), **_CASHFLOW_KWARGS)
+    result = jobs.run_import_cashflow(user_id=uuid.uuid4(), **_CASHFLOW_KWARGS)
 
     assert result == {"status": "ok", "rows_saved": 339, "transactions_saved": 339}
     assert fake_conn.closed is True
 
 
-def test_run_import_acme_cashflows_reports_nothing_to_do_on_a_reimport(monkeypatch):
+def test_run_import_cashflow_reports_nothing_to_do_on_a_reimport(monkeypatch):
     _patch_cashflow_job_common(monkeypatch)
-    monkeypatch.setattr(jobs.pipeline, "import_acme_cashflows", lambda conn, **kw: 0)
+    monkeypatch.setattr(jobs.pipeline, "import_cashflow", lambda conn, **kw: 0)
 
-    result = jobs.run_import_acme_cashflows(user_id=uuid.uuid4(), **_CASHFLOW_KWARGS)
+    result = jobs.run_import_cashflow(user_id=uuid.uuid4(), **_CASHFLOW_KWARGS)
 
     assert result == {"status": "nothing_to_do", "rows_saved": 0, "transactions_saved": 0}
 
 
-def test_run_import_acme_cashflows_reports_partial_on_domain_error(monkeypatch):
+def test_run_import_cashflow_reports_partial_on_domain_error(monkeypatch):
     fake_conn = _patch_cashflow_job_common(monkeypatch)
 
     def boom(conn, **kw):
         raise BrokerMismatch("nope")
 
-    monkeypatch.setattr(jobs.pipeline, "import_acme_cashflows", boom)
+    monkeypatch.setattr(jobs.pipeline, "import_cashflow", boom)
 
-    result = jobs.run_import_acme_cashflows(user_id=uuid.uuid4(), **_CASHFLOW_KWARGS)
+    result = jobs.run_import_cashflow(user_id=uuid.uuid4(), **_CASHFLOW_KWARGS)
 
     assert result == {"status": "partial", "rows_saved": 0, "transactions_saved": 0}
     assert fake_conn.closed is True
 
 
-def test_run_import_acme_cashflows_requires_datastore_api_url(monkeypatch):
+def test_run_import_cashflow_requires_datastore_api_url(monkeypatch):
     monkeypatch.setattr(
         jobs,
         "load_settings",
@@ -606,10 +606,10 @@ def test_run_import_acme_cashflows_requires_datastore_api_url(monkeypatch):
     )
 
     with pytest.raises(SettingsError):
-        jobs.run_import_acme_cashflows(user_id=uuid.uuid4(), **_CASHFLOW_KWARGS)
+        jobs.run_import_cashflow(user_id=uuid.uuid4(), **_CASHFLOW_KWARGS)
 
 
-def test_run_import_acme_cashflows_requires_internal_api_secret(monkeypatch):
+def test_run_import_cashflow_requires_internal_api_secret(monkeypatch):
     monkeypatch.setattr(
         jobs,
         "load_settings",
@@ -617,10 +617,10 @@ def test_run_import_acme_cashflows_requires_internal_api_secret(monkeypatch):
     )
 
     with pytest.raises(SettingsError):
-        jobs.run_import_acme_cashflows(user_id=uuid.uuid4(), **_CASHFLOW_KWARGS)
+        jobs.run_import_cashflow(user_id=uuid.uuid4(), **_CASHFLOW_KWARGS)
 
 
-def test_run_import_acme_cashflows_builds_the_http_client_from_settings(monkeypatch):
+def test_run_import_cashflow_builds_the_http_client_from_settings(monkeypatch):
     _patch_cashflow_job_common(monkeypatch)
     captured = {}
 
@@ -630,8 +630,8 @@ def test_run_import_acme_cashflows_builds_the_http_client_from_settings(monkeypa
             captured["internal_api_secret"] = internal_api_secret
 
     monkeypatch.setattr(jobs, "HttpDataStoreClient", FakeHttpDataStoreClient)
-    monkeypatch.setattr(jobs.pipeline, "import_acme_cashflows", lambda conn, **kw: 1)
+    monkeypatch.setattr(jobs.pipeline, "import_cashflow", lambda conn, **kw: 1)
 
-    jobs.run_import_acme_cashflows(user_id=uuid.uuid4(), **_CASHFLOW_KWARGS)
+    jobs.run_import_cashflow(user_id=uuid.uuid4(), **_CASHFLOW_KWARGS)
 
     assert captured == {"base_url": "http://datastore:8000", "internal_api_secret": "secret"}

@@ -81,9 +81,9 @@ def _import_transactions(args: argparse.Namespace) -> int:
     return _report(result, "transaction(s) saved")
 
 
-def _import_acme_cashflows(args: argparse.Namespace) -> int:
-    result = jobs.run_import_acme_cashflows(
-        user_id=args.user, account_label=args.account, file_path=args.file
+def _import_cashflow(args: argparse.Namespace) -> int:
+    result = jobs.run_import_cashflow(
+        user_id=args.user, account_label=args.account, broker=args.broker, file_path=args.file
     )
     return _report(result, "transaction(s) saved")
 
@@ -200,16 +200,19 @@ def _build_parser() -> argparse.ArgumentParser:
     unmapped_parser.set_defaults(handler=_list_unmapped_instruments)
 
     cashflow_parser = subparsers.add_parser(
-        "import-acme-cashflows", help="Import a Acme cash-ledger (Account) export"
+        "import-cashflow", help="Import a broker's cash-ledger (Account) export"
     )
     cashflow_parser.add_argument(
         "--user", required=True, type=_uuid, help="The auth-issued user id"
     )
+    cashflow_parser.add_argument(
+        "--broker", required=True, help="The key of an installed cashflow-parser plugin"
+    )
     cashflow_parser.add_argument("--file", required=True, type=Path, help="Path to the export file")
     cashflow_parser.add_argument(
-        "--account", required=True, help="The --label of an existing Acme account"
+        "--account", required=True, help="The --label of an existing account for this broker"
     )
-    cashflow_parser.set_defaults(handler=_import_acme_cashflows)
+    cashflow_parser.set_defaults(handler=_import_cashflow)
 
     return parser
 

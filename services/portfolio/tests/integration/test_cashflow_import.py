@@ -1,11 +1,12 @@
-"""import_acme_cashflows against live Postgres: the idempotent-reimport contract, using a stub
-DataStoreClient rather than a live data-store instance -- that boundary is the API contract
-itself (datastore_client/http_client.py's own unit tests), not something this service's suite
-should own verifying end-to-end. See docs/architecture.md's testing section.
+"""import_cashflow against live Postgres, for the Acme cashflow parser specifically: the
+idempotent-reimport contract, using a stub DataStoreClient rather than a live data-store
+instance -- that boundary is the API contract itself (datastore_client/http_client.py's own unit
+tests), not something this service's suite should own verifying end-to-end. See
+docs/architecture.md's testing section.
 
-Routed through pipeline.import_acme_cashflows directly rather than the CLI/jobs layer, so the
-stub client can be injected without a live data-store instance or real DATASTORE_API_URL/
-INTERNAL_API_SECRET -- jobs.run_import_acme_cashflows's own construction of the real
+Routed through pipeline.import_cashflow directly rather than the CLI/jobs layer, so the stub
+client can be injected without a live data-store instance or real DATASTORE_API_URL/
+INTERNAL_API_SECRET -- jobs.run_import_cashflow's own construction of the real
 HttpDataStoreClient from settings is covered by tests/unit/test_jobs.py instead.
 """
 
@@ -51,10 +52,11 @@ def _add_account(user_id, *, label="acme-main", broker="acme"):
 
 def _import(pg_connect, user_id, *, label="acme-main"):
     with pg_connect() as conn:
-        saved = pipeline.import_acme_cashflows(
+        saved = pipeline.import_cashflow(
             conn,
             user_id=user_id,
             account_label=label,
+            broker="acme",
             file_path=_FIXTURE,
             datastore_client=StubDataStoreClient(),
         )
@@ -79,10 +81,11 @@ def test_cashflow_import_requires_a_acme_account(pg_connect):
 
     with pg_connect() as conn:
         with pytest.raises(BrokerMismatch):
-            pipeline.import_acme_cashflows(
+            pipeline.import_cashflow(
                 conn,
                 user_id=user_id,
                 account_label="globex-main",
+                broker="acme",
                 file_path=_FIXTURE,
                 datastore_client=StubDataStoreClient(),
             )
