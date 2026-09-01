@@ -153,15 +153,17 @@ creation, validated only for non-blank (`InvalidBroker`); `BROKER_PARSERS` is re
 actually needed. `pipeline.list_available_brokers()` / `portfolio broker list` reports what's
 currently registered, for discoverability.
 
-**Revised again, extraction prep** — `BROKER_PARSERS`/`CASHFLOW_PARSERS` are no longer hardcoded
-dicts; both are built once, at import time, by `broker_import/discovery.py` reading
+**Revised again — broker code extracted.** `BROKER_PARSERS`/`CASHFLOW_PARSERS` are no longer
+hardcoded dicts; both are built once, at import time, by `broker_import/discovery.py` reading
 `importlib.metadata.entry_points()` under the `stakehold.broker_parsers` /
-`stakehold.cashflow_parsers` groups. `pipeline.py` itself now imports nothing broker-specific —
-see "Extension points" below. `acme.py`/`globex.py`/`acme_cashflow.py` still physically live in
-this package and self-register under those groups via `pyproject.toml`'s
-`[project.entry-points]` tables — an interim step, ahead of moving them to a separate installable
-package, that proves discovery end-to-end without changing the group names implementations will
-register under later.
+`stakehold.cashflow_parsers` groups. `pipeline.py` itself imports nothing broker-specific — see
+"Extension points" below. `acme.py`, `globex.py`, and `acme_cashflow.py` no longer live in this
+package at all — they moved to a separate, privately-installed plugin package (not a dependency
+of this one; this repo has no reference to it) that registers under the same two groups. A
+deployment with no such plugin installed still creates accounts and records transactions
+manually — see the "Revised after task 6" note above — and `import-transactions`/`import-cashflow`
+fail with a named, self-diagnosing error (`BrokerParserNotFound`) rather than a missing-file
+crash.
 
 **Built as of task 14** — `import_cashflow`, and `datastore_client/http_client.py`'s
 `get_fx_rate`, pulled forward from task 8 because Acme's cash-ledger export needs it (see
@@ -318,10 +320,11 @@ BROKER_PARSERS: dict[str, BrokerParser] = discover_broker_parsers()
 CASHFLOW_PARSERS: dict[str, CashflowParser] = discover_cashflow_parsers()
 ```
 
-Today, both entries in `BROKER_PARSERS` and the one entry in `CASHFLOW_PARSERS` resolve to
-implementations still physically inside this package (`acme.py`, `globex.py`,
-`acme_cashflow.py`'s `AcmeCashflowParser` adapter), registered via this package's own
-`pyproject.toml` — see the "Revised again, extraction prep" note above.
+Today's two `BROKER_PARSERS` entries and one `CASHFLOW_PARSERS` entry all resolve to
+implementations installed from a separate, privately-maintained plugin package — see the
+"Revised again — broker code extracted" note above. Nothing in this repo names that package or
+depends on it; it's discovered purely through the two entry-point groups above, at whatever
+process picks up its installed metadata.
 
 **`BROKER_PARSERS` is read in exactly one place outside its own definition: `import_transactions`**
 (via `BROKER_PARSERS.get(broker)`, raising `BrokerParserNotFound` when nothing is registered for

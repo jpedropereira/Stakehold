@@ -14,18 +14,6 @@ dependencies = [
 [project.scripts]
 portfolio = "portfolio.cli:main"
 
-# Interim, self-hosted registration -- these implementations still live in this package today.
-# Stage 3 of the broker-extraction plan moves acme.py/globex.py/acme_cashflow.py to a separate
-# plugin package and removes this table; the group names stay identical, so nothing in
-# pipeline.py's discovery code changes when that happens. See docs/architecture.md's "Extension
-# points" section.
-[project.entry-points."stakehold.broker_parsers"]
-acme = "portfolio.broker_import.acme:AcmeParser"
-globex = "portfolio.broker_import.globex:GlobexParser"
-
-[project.entry-points."stakehold.cashflow_parsers"]
-acme = "portfolio.broker_import.acme_cashflow:AcmeCashflowParser"
-
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
