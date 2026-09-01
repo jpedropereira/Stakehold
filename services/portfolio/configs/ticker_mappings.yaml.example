@@ -4,7 +4,7 @@
 # "Cross-cutting decisions" for why this is a hand-edited file rather than a database table.
 
 # ISIN mappings are global: an ISIN identifies one instrument worldwide, so one mapping covers
-# every ISIN-reporting broker (e.g. Acme).
+# every ISIN-reporting broker.
 isin:
   IE00B4L5Y983: IWDA.AS
   IE00B579F325: SGLD.L
@@ -13,6 +13,6 @@ isin:
 # same raw symbol from two different brokers (or exchanges) is not assumed to be the same
 # instrument.
 symbol:
-  globex:
+  example-broker:
     IWDA: IWDA.AS
     SGLD: SGLD.L

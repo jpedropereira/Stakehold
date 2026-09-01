@@ -45,8 +45,9 @@ CREATE TABLE IF NOT EXISTS transactions (
     imported_at                 TIMESTAMPTZ   NOT NULL DEFAULT now()
 );
 
--- The idempotent-import key. Account-scoped because Globex's ref is a content hash two
--- accounts could plausibly collide on, unlike Acme's globally unique Order ID.
+-- The idempotent-import key. Account-scoped because a content-hash-derived ref (a broker export
+-- with no natural id of its own) is one two accounts could plausibly collide on, unlike a
+-- genuinely broker-global natural key some export formats provide.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_account_ref
     ON transactions (account_id, broker_transaction_ref);
 CREATE INDEX IF NOT EXISTS idx_transactions_account_datetime
