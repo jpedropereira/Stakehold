@@ -44,48 +44,45 @@ def _forward_session_cookie(response: Response, set_cookie: str) -> None:
     response.headers.append("set-cookie", set_cookie)
 
 
-def require_user(
-    request: Request,
-    response: Response,
-    auth_client: AuthClient = Depends(get_auth_client),
-) -> AuthUser:
-    """Validates the browser's session cookie against auth, or raises AuthRequired.
-
-    Any failure -- no cookie, an expired/unknown session, or auth being unreachable -- sends the
-    caller to /login. This doesn't distinguish "logged out" from "auth is down" for the visitor;
-    that's an accepted gap at this stage (see docs/architecture.md, "Open questions").
-    """
-    cookie_header = request.headers.get("cookie")
-    if cookie_header is None:
-        raise AuthRequired()
-
-    try:
-        result = auth_client.validate_session(cookie_header=cookie_header)
-    except AuthClientError as exc:
-        raise AuthRequired() from exc
-
-    _forward_session_cookie(response, result.set_cookie)
-    return result.user
-
-
-def optional_user(
-    request: Request,
-    response: Response,
-    auth_client: AuthClient = Depends(get_auth_client),
+async def _resolve_user(
+    request: Request, response: Response, auth_client: AuthClient
 ) -> AuthUser | None:
-    """Same session check as require_user, but returns None instead of redirecting.
+    """Validates the browser's session cookie against auth, or returns None on any failure.
 
-    Used where a page renders either way (the home page, or bouncing an already-logged-in
-    visitor away from /login and /signup).
+    Any failure -- no cookie, an expired/unknown session, or auth being unreachable -- is
+    reported the same way. This doesn't distinguish "logged out" from "auth is down" for the
+    visitor; that's an accepted gap at this stage (see docs/architecture.md, "Open questions").
     """
     cookie_header = request.headers.get("cookie")
     if cookie_header is None:
         return None
 
     try:
-        result = auth_client.validate_session(cookie_header=cookie_header)
+        result = await auth_client.validate_session(cookie_header=cookie_header)
     except AuthClientError:
         return None
 
     _forward_session_cookie(response, result.set_cookie)
     return result.user
+
+
+async def require_user(
+    request: Request,
+    response: Response,
+    auth_client: AuthClient = Depends(get_auth_client),
+) -> AuthUser:
+    """Same session check as optional_user, but raises AuthRequired instead of returning None."""
+    user = await _resolve_user(request, response, auth_client)
+    if user is None:
+        raise AuthRequired()
+    return user
+
+
+async def optional_user(
+    request: Request,
+    response: Response,
+    auth_client: AuthClient = Depends(get_auth_client),
+) -> AuthUser | None:
+    """Used where a page renders either way (the home page, or bouncing an already-logged-in
+    visitor away from /login and /signup)."""
+    return await _resolve_user(request, response, auth_client)

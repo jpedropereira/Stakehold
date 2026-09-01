@@ -27,11 +27,11 @@ repos:
       - id: end-of-file-fixer
         # Vendored, minified third-party JS -- not ours to reformat. See
         # services/web/src/web/static/vendor/README.md for its provenance.
-        exclude: ^services/web/src/web/static/vendor/
+        exclude: ^services/web/src/web/static/vendor/htmx\.min\.js$
       - id: pretty-format-json
         args: ["--autofix", "--no-sort-keys"]
       - id: trailing-whitespace
-        exclude: ^services/web/src/web/static/vendor/
+        exclude: ^services/web/src/web/static/vendor/htmx\.min\.js$
       - id: check-added-large-files
       - id: check-merge-conflict
 
@@ -68,7 +68,7 @@ repos:
     hooks:
       - id: detect-secrets
         args: ["--baseline", ".secrets.baseline"]
-        exclude: (^|/)(package-lock\.json|uv\.lock|poetry\.lock)$|^services/web/src/web/static/vendor/
+        exclude: (^|/)(package-lock\.json|uv\.lock|poetry\.lock)$|^services/web/src/web/static/vendor/htmx\.min\.js$
 
   - repo: local
     hooks:

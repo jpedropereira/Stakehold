@@ -19,10 +19,16 @@ calls [`portfolio`](../../portfolio/docs/architecture.md), `data-store`, and
   Tailwind, no component kit, no CSS framework. `static/web.css` references only
   `var(--…)` tokens from `brand/tokens.css`, enforced mechanically by
   `tests/unit/test_templates.py` (no hardcoded hex value should ever land here).
-- **Sync route handlers, not `async def`.** Matches `auth`'s documented shape
-  (`auth/docs/architecture.md`, "Stack"): a sync `httpx.Client` opened once in the FastAPI
-  lifespan, plain `def` routes, FastAPI running them in its threadpool. `web`'s per-request work
-  is one or two short calls to `auth`, not a hot path that benefits from async.
+- **`async def` route handlers and dependencies**, backed by one `httpx.AsyncClient` opened in
+  the FastAPI lifespan. Every route ultimately does at least one `auth` call (`require_user`/
+  `optional_user` alone means that's true even for `GET /`), and FastAPI dispatches every sync
+  route/dependency through Starlette's shared threadpool -- capped at a fixed number of OS
+  threads for the whole process (AnyIO's default `CapacityLimiter`), regardless of how idle the
+  event loop is. Async keeps each request's wait on `auth` bound to one coroutine instead of one
+  of those threads, so concurrent visitors aren't capped by that pool. (`auth` itself stays sync
+  for now -- its own per-request work is a handful of local Postgres queries, not an outbound
+  call to another service, so the same argument doesn't carry over; see
+  `auth/docs/architecture.md`, "Stack".)
 - A lightweight JS charting library for returns/allocation views is still future work — task 12,
   not this one.
 
@@ -74,6 +80,22 @@ calls [`portfolio`](../../portfolio/docs/architecture.md), `data-store`, and
   disk — CLAUDE.md's "import it once" holds literally, not just by convention.
 - **`web` is the only client of `portfolio`/`data-store`/`auth`, for now.** Unchanged from before
   task 10 — still what justifies `auth`'s cookie-based (rather than bearer-token) session model.
+- **`HttpAuthClient` always sends an explicit (possibly empty) `Cookie` header (`auth_client/
+  http_client.py`, `_headers`).** The one `httpx.AsyncClient` in `app.state` is shared by every
+  concurrent visitor; httpx's client-level cookie jar auto-stores every `Set-Cookie` it sees and
+  auto-attaches it to the next outgoing request that doesn't set its own `Cookie` header. Without
+  this, a request racing right after another visitor's login/signup response could carry that
+  visitor's session token to `auth`. Setting the header (even to `""`) makes the underlying
+  `http.cookiejar` skip the jar for that request; `validate_session`/`logout` override it with the
+  browser's real cookie.
+- **`login`/`validate_session` disambiguate a 401 by `auth`'s response `detail` text
+  (`auth_client/http_client.py`).** `auth` answers both a wrong password/expired session *and* a
+  missing/wrong `X-Internal-Secret` with a bare 401 — collapsing them would report a drifted
+  internal secret to the visitor as "wrong password" instead of surfacing the real outage. This is
+  a soft coupling to `auth`'s exact hard-coded strings (`auth/api/app.py`'s exception handlers);
+  if those wordings change, this needs to change with them. The safe failure mode if they drift
+  apart is `AuthUnavailable`, not a wrong domain error, so a mismatch degrades to "can't reach the
+  sign-in service" rather than a misleading message.
 
 ## Endpoint surface
 
@@ -94,15 +116,19 @@ the enumeration oracle `auth`'s own `passwords.dummy_verify()` exists to close.
 ## Modules
 
 - `settings.py` — `WEB_AUTH_API_URL`, `WEB_INTERNAL_SECRET`, `WEB_BRAND_DIR`,
-  `WEB_COOKIE_SECURE`, `WEB_API_HOST`/`WEB_API_PORT`, `WEB_HTTP_TIMEOUT_SECONDS`. Same
-  `SettingsError`/`_int_env`/`_bool_env` shape as `auth/settings.py`, including the
+  `WEB_COOKIE_SECURE`, `WEB_API_HOST`/`WEB_API_PORT`, `WEB_HTTP_TIMEOUT_SECONDS`. Its own
+  `SettingsError`, but the typed env readers (`int_env`/`float_env`/`bool_env`, including the
   set-but-empty-falls-back-to-default handling that keeps an interpolated-empty compose variable
-  from silently stripping `Secure`.
+  from silently stripping `Secure`) come from `shared.env` — the same functions `auth/settings.py`
+  uses, extracted there after both carried a byte-for-byte copy.
 - `auth_client/{base,http_client,errors}.py` — the `AuthClient` Protocol, its real
   implementation, and one error hierarchy (`AuthClientError`) routes catch with a single `except`.
-- `api/{app,deps,routes,csrf,security_headers}.py` — app assembly and lifespan (opens/closes the
-  shared `httpx.Client`), FastAPI dependencies (`require_user`, `optional_user`, `client_ip`,
-  and friends), the route handlers, the CSRF helpers, and the security-headers middleware.
+- `api/{app,deps,routes,csrf,security_headers,htmx}.py` — app assembly and lifespan (opens/closes
+  the shared `httpx.AsyncClient`), FastAPI dependencies (`require_user`, `optional_user`,
+  `client_ip`, and friends), the route handlers, the CSRF helpers, the security-headers
+  middleware, and `htmx.py`'s `is_htmx`/`htmx_or_redirect` (shared by `routes.py`'s redirects and
+  `app.py`'s `AuthRequired` handler, so every redirect in the app picks htmx-partial vs.
+  full-navigation the same way).
 - `templates/`, `static/` — Jinja2 templates (`base.html` plus one per page,
   `partials/_form_errors.html` for the htmx swap target) and `web.css` plus vendored `htmx.min.js`.
 - `cli.py` — `web serve` only, mirroring `auth serve`'s lazy-import-uvicorn shape.

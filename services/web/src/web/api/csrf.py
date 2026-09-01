@@ -51,18 +51,19 @@ def verify_csrf(request: Request, *, form_token: str | None, cookie_secure: bool
     matching pair.
     """
     cookie_token = request.cookies.get(cookie_name(cookie_secure=cookie_secure))
+    if cookie_token is None:
+        # Falls back to the other name so a rolling deploy that briefly serves a request with a
+        # different WEB_COOKIE_SECURE than the one that issued the browser's cookie (mixed
+        # replica config, or a mid-rollout flip) doesn't hard-fail CSRF for every visitor until
+        # their browser reloads and is reissued a token under the new setting. Safe to accept
+        # either name: which cookie matches the submitted form token is what proves the request
+        # came from this browser, not which name it happened to be stored under.
+        cookie_token = request.cookies.get(cookie_name(cookie_secure=not cookie_secure))
     if not cookie_token or not form_token:
         raise CsrfInvalid("missing CSRF cookie or form token")
 
     # Compared as bytes, not str: secrets.compare_digest raises TypeError for any str character
     # above ASCII, so a forged high-byte token would turn a rejected request into a 500 instead
-    # of a clean CsrfInvalid -- same reasoning as auth's internal-secret check
-    # (auth/api/deps.py, require_internal_secret).
-    try:
-        cookie_bytes = cookie_token.encode("utf-8")
-        form_bytes = form_token.encode("utf-8")
-    except UnicodeEncodeError as exc:
-        raise CsrfInvalid("non-encodable CSRF token") from exc
-
-    if not secrets.compare_digest(cookie_bytes, form_bytes):
+    # of a clean CsrfInvalid.
+    if not secrets.compare_digest(cookie_token.encode("utf-8"), form_token.encode("utf-8")):
         raise CsrfInvalid("CSRF token mismatch")

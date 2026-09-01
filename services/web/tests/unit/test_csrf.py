@@ -91,3 +91,28 @@ def test_cookie_name_follows_cookie_secure_flag(client):
 
     assert "__Host-stakehold_csrf" in secure_response.cookies
     assert "stakehold_csrf" in insecure_response.cookies
+
+
+def test_verify_falls_back_to_the_other_cookie_name():
+    # Regression test: during a rolling deploy, a request can arrive at a process reading a
+    # different WEB_COOKIE_SECURE than the one that issued the browser's cookie. verify_csrf
+    # must still accept the cookie the browser actually has, under either name.
+    app = _build_app(cookie_secure=True)
+
+    @app.post("/verify-insecure")
+    def verify_insecure(request: Request, form_token: str | None = None):
+        try:
+            verify_csrf(request, form_token=form_token, cookie_secure=False)
+        except CsrfInvalid:
+            return {"ok": False}
+        return {"ok": True}
+
+    # https base_url: a Secure cookie is only stored/resent by httpx's cookie jar over https.
+    secure_client = TestClient(app, base_url="https://testserver")
+    issued = secure_client.get("/issue")
+    token = issued.json()["token"]
+
+    # The browser only has the secure-named cookie; the server now checks cookie_secure=False.
+    result = secure_client.post("/verify-insecure", params={"form_token": token})
+
+    assert result.json() == {"ok": True}
