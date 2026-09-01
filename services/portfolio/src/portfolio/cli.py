@@ -2,6 +2,7 @@ import argparse
 import sys
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 from uuid import UUID
 
 from portfolio import jobs
@@ -64,6 +65,27 @@ def _account_list(args: argparse.Namespace) -> int:
         created_date = account["created_at"][:10]
         print(f"{account['id']}\t{account['account_label']}\t{account['broker']}\t{created_date}")
     return _report(result, "account(s)", count_key="accounts_listed")
+
+
+def _import_transactions(args: argparse.Namespace) -> int:
+    result = jobs.run_import_transactions(
+        user_id=args.user, account_label=args.account, broker=args.broker, file_path=args.file
+    )
+    return _report(result, "transaction(s) saved")
+
+
+def _import_acme_cashflows(args: argparse.Namespace) -> int:
+    result = jobs.run_import_acme_cashflows(
+        user_id=args.user, account_label=args.account, file_path=args.file
+    )
+    return _report(result, "transaction(s) saved")
+
+
+def _list_unmapped_instruments(args: argparse.Namespace) -> int:
+    result = jobs.run_list_unmapped_instruments(user_id=args.user)
+    for instrument in result["unmapped_instruments"]:
+        print(f"{instrument['kind']}\t{instrument['identifier']}\t{instrument['broker']}")
+    return _report(result, "instrument(s) unmapped", count_key="instruments_unmapped")
 
 
 def _add_transaction(args: argparse.Namespace) -> int:
@@ -139,6 +161,35 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     txn_parser.add_argument("--fees", type=_decimal, help="Native currency")
     txn_parser.set_defaults(handler=_add_transaction)
+
+    import_parser = subparsers.add_parser("import-transactions", help="Import a broker export file")
+    import_parser.add_argument("--user", required=True, type=_uuid, help="The auth-issued user id")
+    import_parser.add_argument("--broker", required=True, help="e.g. acme, globex")
+    import_parser.add_argument("--file", required=True, type=Path, help="Path to the export file")
+    import_parser.add_argument(
+        "--account", required=True, help="The --label of an existing account"
+    )
+    import_parser.set_defaults(handler=_import_transactions)
+
+    unmapped_parser = subparsers.add_parser(
+        "list-unmapped-instruments", help="List instruments with no ticker mapping"
+    )
+    unmapped_parser.add_argument(
+        "--user", required=True, type=_uuid, help="The auth-issued user id"
+    )
+    unmapped_parser.set_defaults(handler=_list_unmapped_instruments)
+
+    cashflow_parser = subparsers.add_parser(
+        "import-acme-cashflows", help="Import a Acme cash-ledger (Account) export"
+    )
+    cashflow_parser.add_argument(
+        "--user", required=True, type=_uuid, help="The auth-issued user id"
+    )
+    cashflow_parser.add_argument("--file", required=True, type=Path, help="Path to the export file")
+    cashflow_parser.add_argument(
+        "--account", required=True, help="The --label of an existing Acme account"
+    )
+    cashflow_parser.set_defaults(handler=_import_acme_cashflows)
 
     return parser
 

@@ -34,3 +34,23 @@ class AccountLabelConflict(PortfolioError):
 
 class InvalidTransaction(PortfolioError):
     """A CanonicalTransaction failed transactions/base.py's validation rules."""
+
+
+class BrokerMismatch(PortfolioError):
+    """`import-transactions --broker` disagrees with the resolved account's own broker."""
+
+
+class BrokerFileError(PortfolioError):
+    """A broker export file could not be parsed -- malformed header, unrecognized transaction
+    type, or a row missing data its own type requires. Raised by broker_import/ parsers; never
+    silently skipped, per docs/architecture.md's "unrecognized type is a parse error" rule."""
+
+
+class TickerMappingError(PortfolioError):
+    """configs/ticker_mappings.yaml is missing, malformed, or fails validation."""
+
+
+class DataStoreApiError(PortfolioError):
+    """A call to data-store's read API (datastore_client) failed -- an error response, an
+    unreachable host, or a malformed one. Kept in the single PortfolioError hierarchy so
+    jobs.py's one `except PortfolioError` still catches it, same as every other domain error."""

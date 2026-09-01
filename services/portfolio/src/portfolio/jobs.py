@@ -13,9 +13,11 @@ from uuid import UUID
 
 from portfolio import pipeline
 from portfolio.accounts.repository import Account
+from portfolio.datastore_client.http_client import HttpDataStoreClient
 from portfolio.errors import PortfolioError
 from portfolio.run_result import build_run_result
-from portfolio.settings import load_settings
+from portfolio.settings import SettingsError, load_settings
+from portfolio.ticker_mapping.loader import load_ticker_mappings
 from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict
 from shared.db.connection import apply_schema, get_connection, transaction
@@ -213,4 +215,111 @@ def run_add_transaction(
         conn.close()
 
     logger.info("add-transaction: done, %d transaction(s) saved.", saved)
+    return build_run_result(units_total=saved, rows_saved=saved, failed=0, transactions_saved=saved)
+
+
+def run_import_transactions(
+    *, user_id: UUID, account_label: str, broker: str, file_path: Path
+) -> dict[str, int | str]:
+    """Parse and persist one broker export file. See pipeline.import_transactions for what
+    `saved` means."""
+    configure_logging()
+    settings = load_settings()
+    conn = get_connection(settings.database_url)
+    try:
+        logger.info(
+            "import-transactions: importing %s into account %r (user %s, broker=%r).",
+            file_path,
+            account_label,
+            user_id,
+            broker,
+        )
+        try:
+            saved = pipeline.import_transactions(
+                conn,
+                user_id=user_id,
+                account_label=account_label,
+                broker=broker,
+                file_path=file_path,
+            )
+        except PortfolioError as exc:
+            logger.error("import-transactions: failed -- %s", exc)
+            return build_run_result(units_total=1, rows_saved=0, failed=1, transactions_saved=0)
+    finally:
+        conn.close()
+
+    logger.info("import-transactions: done, %d transaction(s) saved.", saved)
+    return build_run_result(units_total=saved, rows_saved=saved, failed=0, transactions_saved=saved)
+
+
+def run_list_unmapped_instruments(*, user_id: UUID) -> dict[str, int | str]:
+    """Every (kind, identifier, broker) this user's transactions reference that
+    configs/ticker_mappings.yaml can't resolve. Saves nothing, so rows_saved is always 0 -- an
+    empty result is still reported as `nothing_to_do`, not `ok`, per the logging rule."""
+    configure_logging()
+    settings = load_settings()
+    mappings = load_ticker_mappings(settings.ticker_mappings_path)
+    conn = get_connection(settings.database_url)
+    try:
+        logger.info("list-unmapped-instruments: checking instruments for user %s.", user_id)
+        unmapped = pipeline.list_unmapped_instruments(conn, user_id=user_id, mappings=mappings)
+    finally:
+        conn.close()
+
+    logger.info("list-unmapped-instruments: done, %d unmapped instrument(s) found.", len(unmapped))
+    result = build_run_result(
+        units_total=len(unmapped), rows_saved=0, failed=0, instruments_unmapped=len(unmapped)
+    )
+    result["unmapped_instruments"] = [
+        {"kind": kind, "identifier": identifier, "broker": broker}
+        for kind, identifier, broker in unmapped
+    ]
+    return result
+
+
+def run_import_acme_cashflows(
+    *, user_id: UUID, account_label: str, file_path: Path
+) -> dict[str, int | str]:
+    """Parse and persist a Acme cash-ledger ("Account") export. See
+    pipeline.import_acme_cashflows for what `saved` means.
+
+    Unlike every other command, this one needs a live data-store instance to resolve non-EUR
+    rows' FX rates -- DATASTORE_API_URL and INTERNAL_API_SECRET must both be set, checked here
+    rather than in settings.py itself, the same way data-store's own API checks
+    internal_api_secret at its own startup rather than unconditionally in load_settings().
+    """
+    configure_logging()
+    settings = load_settings()
+    if not settings.datastore_api_url or not settings.internal_api_secret:
+        raise SettingsError(
+            "DATASTORE_API_URL and INTERNAL_API_SECRET must both be set for "
+            "import-acme-cashflows"
+        )
+    datastore_client = HttpDataStoreClient(
+        base_url=settings.datastore_api_url, internal_api_secret=settings.internal_api_secret
+    )
+
+    conn = get_connection(settings.database_url)
+    try:
+        logger.info(
+            "import-acme-cashflows: importing %s into account %r (user %s).",
+            file_path,
+            account_label,
+            user_id,
+        )
+        try:
+            saved = pipeline.import_acme_cashflows(
+                conn,
+                user_id=user_id,
+                account_label=account_label,
+                file_path=file_path,
+                datastore_client=datastore_client,
+            )
+        except PortfolioError as exc:
+            logger.error("import-acme-cashflows: failed -- %s", exc)
+            return build_run_result(units_total=1, rows_saved=0, failed=1, transactions_saved=0)
+    finally:
+        conn.close()
+
+    logger.info("import-acme-cashflows: done, %d transaction(s) saved.", saved)
     return build_run_result(units_total=saved, rows_saved=saved, failed=0, transactions_saved=saved)

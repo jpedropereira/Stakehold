@@ -6,8 +6,17 @@ docs/architecture.md's module table.
 """
 
 from collections.abc import Sequence
+from uuid import UUID
 
 from portfolio.transactions.base import CanonicalTransaction
+
+_DISTINCT_INSTRUMENTS_SQL = """
+    SELECT DISTINCT t.instrument_identifier_kind, t.instrument_identifier, a.broker
+    FROM transactions t
+    JOIN accounts a ON a.id = t.account_id
+    WHERE a.user_id = %s AND t.instrument_identifier IS NOT NULL
+    ORDER BY t.instrument_identifier_kind, t.instrument_identifier, a.broker
+"""
 
 _INSERT_SQL = """
     INSERT INTO transactions (
@@ -55,3 +64,17 @@ def insert_transactions(conn, transactions: Sequence[CanonicalTransaction]) -> i
             )
             saved += cur.rowcount
     return saved
+
+
+def list_distinct_instruments(conn, user_id: UUID) -> list[tuple[str, str, str]]:
+    """Every (kind, identifier, broker) triple this user's transactions reference.
+
+    Powers list-unmapped-instruments: the caller diffs these against configs/ticker_mappings.yaml
+    in application code (there's no DB anti-join, since the mapping isn't a database table -- see
+    docs/schema.md). Scoped through accounts.user_id, the isolation chokepoint, and includes the
+    owning account's broker because SYMBOL mappings are broker-scoped (schema.md); joining here
+    is also what removes the need for an unscoped account lookup.
+    """
+    with conn.cursor() as cur:
+        cur.execute(_DISTINCT_INSTRUMENTS_SQL, (user_id,))
+        return [(kind, identifier, broker) for kind, identifier, broker in cur.fetchall()]

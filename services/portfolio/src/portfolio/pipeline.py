@@ -9,18 +9,26 @@ service.py's repository modules.
 """
 
 import logging
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
+from pathlib import Path
 from uuid import UUID
 
 from portfolio.accounts import repository as accounts_repository
 from portfolio.accounts.repository import Account
+from portfolio.broker_import.base import BrokerParser
+from portfolio.broker_import.acme import AcmeParser
+from portfolio.broker_import.acme_cashflow import parse_cashflows
+from portfolio.broker_import.globex import GlobexParser
+from portfolio.datastore_client.base import DataStoreClient
 from portfolio.errors import (
     AccountLabelConflict,
     AccountNotFound,
+    BrokerMismatch,
     InvalidTransaction,
     UnknownBroker,
 )
+from portfolio.ticker_mapping.loader import TickerMappings
 from portfolio.transactions import repository as transactions_repository
 from portfolio.transactions.base import (
     FX_RATE_SOURCE_MANUAL,
@@ -32,9 +40,13 @@ from shared.db.connection import transaction
 
 logger = logging.getLogger(__name__)
 
-# Placeholder until task 6 builds broker_import/'s BROKER_PARSERS registry, at which point this
-# becomes tuple(BROKER_PARSERS) -- see docs/architecture.md.
-KNOWN_BROKERS = ("acme", "globex")
+# Same pattern as data-store's SCRAPERS / MARKET_DATA_SOURCES -- a Protocol plus a registry dict,
+# no branching in flow functions. See docs/architecture.md's "Extension points" section.
+BROKER_PARSERS: dict[str, BrokerParser] = {
+    "acme": AcmeParser(),
+    "globex": GlobexParser(),
+}
+KNOWN_BROKERS = tuple(BROKER_PARSERS)
 
 
 def add_account(conn, *, user_id: UUID, broker: str, account_label: str) -> int:
@@ -133,3 +145,87 @@ def add_manual_transaction(
 
     with transaction(conn):
         return transactions_repository.insert_transactions(conn, [txn])
+
+
+def import_transactions(
+    conn, *, user_id: UUID, account_label: str, broker: str, file_path: Path
+) -> int:
+    """Parse one broker export file and persist its transactions for one account.
+
+    Returns the count actually written -- re-importing a file whose date range overlaps a
+    previous import is a safe no-op for the rows already seen, via the same
+    (account_id, broker_transaction_ref) idempotency add_manual_transaction relies on. Raises
+    UnknownBroker for an unrecognized --broker, AccountNotFound if --account doesn't resolve for
+    this user (the isolation chokepoint), BrokerMismatch if --broker disagrees with the resolved
+    account's own broker, or whatever the parser/validate() raise for a malformed file.
+    """
+    parser = BROKER_PARSERS.get(broker)
+    if parser is None:
+        raise UnknownBroker(f"unrecognized broker: {broker!r}")
+
+    account = accounts_repository.get_by_label(conn, user_id=user_id, account_label=account_label)
+    if account is None:
+        raise AccountNotFound(f"no account {account_label!r} for this user")
+    if account.broker != broker:
+        raise BrokerMismatch(
+            f"account {account_label!r} is a {account.broker!r} account, not {broker!r}"
+        )
+
+    transactions = parser.parse(file_path, account.id)
+    for txn in transactions:
+        validate(txn)
+
+    with transaction(conn):
+        return transactions_repository.insert_transactions(conn, transactions)
+
+
+def list_unmapped_instruments(
+    conn, *, user_id: UUID, mappings: TickerMappings
+) -> list[tuple[str, str, str]]:
+    """Every (kind, identifier, broker) this user's transactions reference that `mappings` can't
+    resolve to a canonical_ticker -- see docs/architecture.md's "unmapped instrument blocks its
+    own rebuild, loudly" rule. Read-only; diffed in application code since the mapping is a YAML
+    file, not a database table (docs/schema.md)."""
+    instruments = transactions_repository.list_distinct_instruments(conn, user_id)
+    return [
+        (kind, identifier, broker)
+        for kind, identifier, broker in instruments
+        if mappings.resolve(kind, identifier, broker=broker) is None
+    ]
+
+
+def import_acme_cashflows(
+    conn,
+    *,
+    user_id: UUID,
+    account_label: str,
+    file_path: Path,
+    datastore_client: DataStoreClient,
+) -> int:
+    """Parse and persist Acme's "Account" cash-ledger export (deposits, withdrawals,
+    dividends, ...) for one account. Not routed through BROKER_PARSERS/import_transactions --
+    see broker_import/acme_cashflow.py for why this file format needs its own flow.
+
+    Returns the count actually written, idempotent the same way import_transactions is. Raises
+    AccountNotFound if --account doesn't resolve for this user (the isolation chokepoint),
+    BrokerMismatch if the resolved account isn't a Acme account, or whatever
+    acme_cashflow.parse_cashflows/validate() raise for a malformed file or an unresolvable
+    FX rate.
+    """
+    account = accounts_repository.get_by_label(conn, user_id=user_id, account_label=account_label)
+    if account is None:
+        raise AccountNotFound(f"no account {account_label!r} for this user")
+    if account.broker != "acme":
+        raise BrokerMismatch(
+            f"account {account_label!r} is a {account.broker!r} account, not 'acme'"
+        )
+
+    def resolve_fx_rate(currency: str, on_date: date) -> Decimal | None:
+        return datastore_client.get_fx_rate("EUR", currency, on_date)
+
+    transactions = parse_cashflows(file_path, account.id, resolve_fx_rate)
+    for txn in transactions:
+        validate(txn)
+
+    with transaction(conn):
+        return transactions_repository.insert_transactions(conn, transactions)

@@ -82,7 +82,7 @@ The immutable ledger. One row per broker-reported line item or manually entered 
 |---|---|---|
 | `id` | `BIGSERIAL PRIMARY KEY` | |
 | `account_id` | `BIGINT NOT NULL REFERENCES accounts(id)` | |
-| `broker_transaction_ref` | `VARCHAR(128) NOT NULL` | Acme's `Order ID` (a real, broker-issued natural key) or, for Globex, a content hash of (date, symbol, type, amounts) — see `architecture.md`'s disclosed Globex-row-identity risk. The exact hash input fields still need confirming before `broker_import/globex.py` is written; not decided here. |
+| `broker_transaction_ref` | `VARCHAR(128) NOT NULL` | **Corrected at task 6, against a real export**: Acme's `Order ID` is *not* row-unique on its own — a partial fill of one order produces multiple rows sharing it — so the stored value is `<order_id>:<12-char content hash>:<occurrence index>`. For Globex, which carries no broker-issued id at all, it's `<12-char content hash>:<occurrence index>`, hashed over (date, symbol, type, quantity, price, price currency, gross amount, commission, net amount). See `architecture.md`'s "Extension points" section for both parsers' exact ref construction. |
 | `transaction_type` | `VARCHAR(20) NOT NULL` | `BUY` \| `SELL` \| `DEPOSIT` \| `WITHDRAWAL` \| `DIVIDEND` \| `FX` \| `FEE` \| `ADJUSTMENT`. App-layer validated, not a DB `CHECK` — an unrecognized broker transaction type is meant to be a parser-level error (per `architecture.md`), not something that reaches this table at all. |
 | `trade_datetime` | `TIMESTAMPTZ NOT NULL` | |
 | `instrument_identifier` | `VARCHAR(50)` | `NULL` for cash-only rows (deposits, adjustments). |
@@ -93,7 +93,7 @@ The immutable ledger. One row per broker-reported line item or manually entered 
 | `native_amount` | `NUMERIC(20,4) NOT NULL` | Signed cash-flow, the broker's own figure — the immutable source of truth (see `architecture.md`'s currency decision). |
 | `eur_amount` | `NUMERIC(20,4) NOT NULL` | Signed, frozen at transaction time — never recomputed later even if an FX source is subsequently revised. |
 | `fx_rate` | `NUMERIC(18,8)` | Nullable — absent when `native_currency = 'EUR'`, required otherwise. |
-| `fx_rate_source` | `VARCHAR(20)` | `'broker_reported'` \| `'companion_row'` \| `'datastore_series'` \| `'manual'`, nullable alongside `fx_rate`. **`'manual'` added at task 5** for a rate the user typed in on `add-transaction` — none of the three broker-derived sources fit one, and leaving `fx_rate_source` `NULL` for a manual rate would collide with `NULL`'s other meaning ("EUR, no rate needed"). App-layer vocabulary only, no DDL change — the column was already `VARCHAR(20)` with no `CHECK` constraint. |
+| `fx_rate_source` | `VARCHAR(20)` | `'broker_reported'` \| `'companion_row'` \| `'datastore_series'` \| `'manual'`, nullable alongside `fx_rate`. **`'manual'` added at task 5** for a rate the user typed in on `add-transaction` — none of the three broker-derived sources fit one, and leaving `fx_rate_source` `NULL` for a manual rate would collide with `NULL`'s other meaning ("EUR, no rate needed"). App-layer vocabulary only, no DDL change — the column was already `VARCHAR(20)` with no `CHECK` constraint. **`'companion_row'` turned out unused at task 6**: it was reserved for matching Globex's `Forex Trade Component` rows to their parent trade, but a real Globex export shows `Gross Amount`/`Net Amount` are already EUR-denominated, so both parsers only ever write `'broker_reported'` — kept in the vocabulary rather than removed, in case a future broker genuinely needs it. **`'datastore_series'` got its first real writer at task 14**: `broker_import/acme_cashflow.py` (Acme's cash-ledger import) resolves a non-EUR row's rate via `datastore_client.get_fx_rate` — the daily FX series read from `data-store` this value was always meant to name, realized well before `returns/` (task 8), which is where it was originally expected to first appear. |
 | `fees_native` | `NUMERIC(18,4)` | Nullable. |
 | `imported_at` | `TIMESTAMPTZ NOT NULL DEFAULT now()` | When this row was written, not the trade date. |
 
@@ -113,9 +113,12 @@ Indexes:
   which is the one place the answer actually lives.
 - `(account_id, trade_datetime)` — per-account, time-ordered reads.
 - A **partial** index, `(instrument_identifier_kind, instrument_identifier) WHERE
-  instrument_identifier IS NOT NULL` — this is what powers `list-unmapped-instruments`'s read: find
-  distinct `(kind, identifier)` pairs here, then diff them in application code against the keys
-  loaded from `configs/ticker_mappings.yaml`. There's no DB anti-join for this anymore, since the
+  instrument_identifier IS NOT NULL` — this is what powers `list-unmapped-instruments`'s read
+  (`transactions/repository.py`'s `list_distinct_instruments`, task 6): find distinct `(kind,
+  identifier)` pairs here, joined to `accounts` for the owning `broker` (needed because SYMBOL
+  mappings are broker-scoped — see `architecture.md`'s TickerLink key-scoping note — and for the
+  `user_id` isolation scoping itself), then diff the resulting triples in application code against
+  the keys loaded from `configs/ticker_mappings.yaml`. There's no DB anti-join for this, since the
   mapping isn't a database table.
 
 **No foreign key to a ticker-mapping table** — there isn't one. A transaction must be importable
@@ -204,15 +207,14 @@ extending past that point.
 ## Open items, carried forward rather than resolved here
 
 - **Realized gains** have no table yet (see `position_snapshots` above).
-- **The Globex `broker_transaction_ref` hash's exact input fields** aren't pinned down — needs
-  confirming when `broker_import/globex.py` is actually written.
 - **`position_snapshots.native_currency`/`average_cost_native`'s single-currency-per-instrument
   assumption** is stated, not verified against a real multi-currency same-ticker case.
 - **The `data-store` read API** this schema's `return_snapshots` rebuild depends on now exists
   (task 3 of [`tasks.md`](../../../tasks.md)) — see `architecture.md`'s cross-service prerequisite.
-  What's still outstanding is portfolio's `datastore_client/http_client.py` against it, which is
-  the returns task's own work. `accounts`, `transactions`, and `position_snapshots` need nothing
-  from it either way.
+  Portfolio's own `datastore_client/http_client.py` now exists too, but only its `get_fx_rate`
+  method (task 14, pulled forward for Acme's cash-ledger import); the price-series and
+  ticker-existence methods `return_snapshots`'s rebuild needs are still the returns task's own
+  work. `accounts`, `transactions`, and `position_snapshots` need nothing from it either way.
 - **The YAML → database migration path for ticker mappings**, once a UI exists, isn't designed
   yet — see `architecture.md`'s cross-cutting decision on ticker-mapping storage.
 - **`accounts.user_id` is unvalidated at write time.** There's no foreign key (no local `users`

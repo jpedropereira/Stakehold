@@ -54,3 +54,54 @@ def test_data_stores_database_url_is_not_used(monkeypatch):
 
     with pytest.raises(SettingsError):
         load_settings()
+
+
+def test_ticker_mappings_path_defaults_to_a_service_root_relative_path(monkeypatch):
+    monkeypatch.setenv("PORTFOLIO_DATABASE_URL", "postgresql://user:pass@localhost/app")
+    monkeypatch.delenv("PORTFOLIO_TICKER_MAPPINGS_PATH", raising=False)
+
+    result = load_settings()
+
+    assert result.ticker_mappings_path == (
+        settings_module._SERVICE_ROOT / "configs" / "ticker_mappings.yaml"
+    )
+
+
+def test_ticker_mappings_path_honours_a_relative_env_override(monkeypatch):
+    monkeypatch.setenv("PORTFOLIO_DATABASE_URL", "postgresql://user:pass@localhost/app")
+    monkeypatch.setenv("PORTFOLIO_TICKER_MAPPINGS_PATH", "custom/mappings.yaml")
+
+    result = load_settings()
+
+    assert result.ticker_mappings_path == settings_module._SERVICE_ROOT / "custom" / "mappings.yaml"
+
+
+def test_ticker_mappings_path_honours_an_absolute_env_override(monkeypatch):
+    monkeypatch.setenv("PORTFOLIO_DATABASE_URL", "postgresql://user:pass@localhost/app")
+    monkeypatch.setenv("PORTFOLIO_TICKER_MAPPINGS_PATH", "/etc/stakehold/mappings.yaml")
+
+    result = load_settings()
+
+    assert str(result.ticker_mappings_path) == "/etc/stakehold/mappings.yaml"
+
+
+def test_datastore_api_url_and_internal_api_secret_default_to_none(monkeypatch):
+    monkeypatch.setenv("PORTFOLIO_DATABASE_URL", "postgresql://user:pass@localhost/app")
+    monkeypatch.delenv("DATASTORE_API_URL", raising=False)
+    monkeypatch.delenv("INTERNAL_API_SECRET", raising=False)
+
+    result = load_settings()
+
+    assert result.datastore_api_url is None
+    assert result.internal_api_secret is None
+
+
+def test_datastore_api_url_and_internal_api_secret_load_from_env(monkeypatch):
+    monkeypatch.setenv("PORTFOLIO_DATABASE_URL", "postgresql://user:pass@localhost/app")
+    monkeypatch.setenv("DATASTORE_API_URL", "http://localhost:8082")
+    monkeypatch.setenv("INTERNAL_API_SECRET", "shared-secret")
+
+    result = load_settings()
+
+    assert result.datastore_api_url == "http://localhost:8082"
+    assert result.internal_api_secret == "shared-secret"
