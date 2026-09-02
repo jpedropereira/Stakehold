@@ -27,7 +27,9 @@ class FakeResponse:
 
 @pytest.fixture
 def client():
-    return HttpDataStoreClient(base_url="http://datastore:8000", internal_api_secret="secret")
+    return HttpDataStoreClient(
+        base_url="http://datastore:8000", internal_api_secret="secret"  # pragma: allowlist secret
+    )
 
 
 def test_get_fx_rate_returns_the_latest_point_at_or_before_on_date(client, monkeypatch):

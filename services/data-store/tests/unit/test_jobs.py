@@ -7,6 +7,7 @@ through argparse. test_cli.py keeps only what is genuinely about the command lin
 """
 
 import logging
+from dataclasses import replace
 from datetime import date
 
 import pytest
@@ -18,7 +19,7 @@ from data_store.config_loader import (
     TickerConfig,
     TickerResolution,
 )
-from data_store.settings import Settings
+from data_store.settings import Settings, SettingsError
 
 
 @pytest.fixture
@@ -32,6 +33,7 @@ def fake_settings(tmp_path):
         exchange_suffixes_path=tmp_path / "yfinance_exchange_suffixes.yaml",
         regimes_csv_path=tmp_path / "regimes.csv",
         currencies_path=tmp_path / "currencies.yaml",
+        macro_regions_path=tmp_path / "macro_regions.yaml",
     )
 
 
@@ -304,6 +306,7 @@ def test_ingest_market_data_includes_enabled_tracked_tickers(monkeypatch, fake_s
         exchange_suffixes_path=fake_settings.exchange_suffixes_path,
         regimes_csv_path=fake_settings.regimes_csv_path,
         currencies_path=fake_settings.currencies_path,
+        macro_regions_path=fake_settings.macro_regions_path,
     )
     (tmp_path / "tracked_tickers.yaml").write_text("tickers: []\n")  # just needs to exist
     tracked = [make_tracked_ticker("IWDA.AS"), make_tracked_ticker("BTC-USD", enabled=False)]
@@ -1074,4 +1077,122 @@ def test_get_fx_series_loads_currencies_config_and_closes_the_connection(
 
     assert result == {"base_currency": "EUR", "quote_currency": "USD"}
     assert calls[0][1:] == ("EUR", "USD", "yfinance", date(2024, 1, 1), date(2024, 1, 31))
+    assert closed == [True]
+
+
+# --- run_ingest_macro_indicators ------------------------------------------------------------------
+
+
+def test_ingest_macro_indicators_raises_when_fred_api_key_is_unset(monkeypatch, fake_settings):
+    monkeypatch.setattr(jobs, "load_settings", lambda: replace(fake_settings, fred_api_key=None))
+
+    with pytest.raises(SettingsError, match="FRED_API_KEY"):
+        jobs.run_ingest_macro_indicators()
+
+
+def test_ingest_macro_indicators_loads_enabled_regions_from_config(
+    monkeypatch, fake_settings, tmp_path
+):
+    settings = replace(fake_settings, fred_api_key="test-key")
+    calls = []
+    regions_path = tmp_path / "macro_regions.yaml"
+    regions_path.write_text(
+        "regions:\n  - code: EA\n    enabled: true\n  - code: DE\n    enabled: false\n"
+    )
+    settings = replace(settings, macro_regions_path=regions_path)
+
+    monkeypatch.setattr(jobs, "load_settings", lambda: settings)
+    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(
+        jobs,
+        "ingest_macro_indicators",
+        lambda conn, fred_api_key, eu_regions: calls.append((fred_api_key, eu_regions))
+        or flow_result(2),
+    )
+
+    jobs.run_ingest_macro_indicators()
+
+    assert calls == [("test-key", ["EA"])]  # DE excluded -- not enabled
+
+
+def test_ingest_macro_indicators_eu_regions_override_bypasses_config_file(
+    monkeypatch, fake_settings
+):
+    settings = replace(fake_settings, fred_api_key="test-key")
+    calls = []
+
+    def fail(*args, **kwargs):
+        raise AssertionError("should not read config when eu_regions is passed explicitly")
+
+    monkeypatch.setattr(jobs, "load_settings", lambda: settings)
+    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(jobs, "load_macro_regions", fail)
+    monkeypatch.setattr(
+        jobs,
+        "ingest_macro_indicators",
+        lambda conn, fred_api_key, eu_regions: calls.append(eu_regions) or flow_result(1),
+    )
+
+    jobs.run_ingest_macro_indicators(eu_regions=["FR"])
+
+    assert calls == [["FR"]]
+
+
+def test_ingest_macro_indicators_missing_config_file_means_no_eu_regions(
+    monkeypatch, fake_settings
+):
+    settings = replace(fake_settings, fred_api_key="test-key")  # macro_regions_path doesn't exist
+    calls = []
+
+    monkeypatch.setattr(jobs, "load_settings", lambda: settings)
+    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(
+        jobs,
+        "ingest_macro_indicators",
+        lambda conn, fred_api_key, eu_regions: calls.append(eu_regions) or flow_result(),
+    )
+
+    jobs.run_ingest_macro_indicators()
+
+    assert calls == [[]]
+
+
+def test_ingest_macro_indicators_closes_the_connection(monkeypatch, fake_settings):
+    closed = []
+    settings = replace(fake_settings, fred_api_key="test-key")
+
+    monkeypatch.setattr(jobs, "load_settings", lambda: settings)
+    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn(closed))
+    monkeypatch.setattr(
+        jobs,
+        "ingest_macro_indicators",
+        lambda conn, fred_api_key, eu_regions: flow_result(1),
+    )
+
+    jobs.run_ingest_macro_indicators()
+
+    assert closed == [True]
+
+
+# --- run_calculate_macro_indicator_rates ----------------------------------------------------------
+
+
+def test_calculate_macro_indicator_rates_calls_the_flow_and_closes_the_connection(
+    monkeypatch, fake_settings
+):
+    closed = []
+    calls = []
+
+    monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn(closed))
+    monkeypatch.setattr(
+        jobs,
+        "calculate_macro_indicator_rates",
+        lambda conn: calls.append(conn) or flow_result(4),
+    )
+
+    result = jobs.run_calculate_macro_indicator_rates()
+
+    assert result["rows_saved"] == 4
+    assert len(calls) == 1
     assert closed == [True]

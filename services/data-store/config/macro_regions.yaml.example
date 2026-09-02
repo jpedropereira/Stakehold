@@ -1,0 +1,16 @@
+# Copy to macro_regions.yaml (in this same directory) and edit for the EU regions you want
+# Eurostat inflation/GDP-growth data for. macro_regions.yaml is gitignored. This file is
+# optional -- if it's missing or empty, ingest-macro-indicators still lands FRED's US data, it
+# just skips Eurostat.
+#
+# code: 'EA' for the euro-area aggregate, or Eurostat's own geo code for a country -- not always
+#       the ISO2 code (Greece is 'EL', not 'GR'). See https://ec.europa.eu/eurostat for the
+#       current list of country codes.
+# enabled: whether this region is included in the next ingest-macro-indicators run.
+regions:
+  - code: EA
+    enabled: true
+  - code: DE
+    enabled: true
+  - code: FR
+    enabled: true

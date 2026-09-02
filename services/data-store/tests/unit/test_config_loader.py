@@ -7,6 +7,7 @@ from data_store.config_loader import (
     TickerConfig,
     load_currencies,
     load_funds,
+    load_macro_regions,
     load_ticker_resolution,
     load_tracked_tickers,
 )
@@ -20,6 +21,12 @@ def write_yaml(tmp_path, content):
 
 def write_currencies_yaml(tmp_path, content):
     path = tmp_path / "currencies.yaml"
+    path.write_text(content)
+    return path
+
+
+def write_macro_regions_yaml(tmp_path, content):
+    path = tmp_path / "macro_regions.yaml"
     path.write_text(content)
     return path
 
@@ -696,3 +703,65 @@ def test_rejects_currency_code_not_three_uppercase_letters(tmp_path, bad_code):
 
     with pytest.raises(ConfigError, match="Invalid currency code"):
         load_currencies(path)
+
+
+# --- load_macro_regions --------------------------------------------------------------------------
+
+
+def test_missing_macro_regions_file_returns_empty_list(tmp_path):
+    # Optional, like load_tracked_tickers's *behaviour* (though that one splits the check into
+    # jobs.py) -- a setup that only wants FRED's US data never needs this file.
+    assert load_macro_regions(tmp_path / "does-not-exist.yaml") == []
+
+
+def test_empty_macro_regions_file_returns_empty_list(tmp_path):
+    path = write_macro_regions_yaml(tmp_path, "")
+
+    assert load_macro_regions(path) == []
+
+
+def test_loads_macro_regions_with_enabled_flags(tmp_path):
+    path = write_macro_regions_yaml(
+        tmp_path,
+        """
+        regions:
+          - code: EA
+            enabled: true
+          - code: DE
+            enabled: true
+          - code: FR
+            enabled: false
+        """,
+    )
+
+    regions = load_macro_regions(path)
+
+    assert [r.code for r in regions] == ["EA", "DE", "FR"]
+    assert regions[2].enabled is False
+
+
+def test_rejects_duplicate_macro_region_codes(tmp_path):
+    path = write_macro_regions_yaml(
+        tmp_path,
+        """
+        regions:
+          - code: EA
+            enabled: true
+          - code: EA
+            enabled: true
+        """,
+    )
+
+    with pytest.raises(ConfigError, match="(?i)duplicate"):
+        load_macro_regions(path)
+
+
+@pytest.mark.parametrize("missing_field", ["code", "enabled"])
+def test_rejects_macro_region_entry_missing_required_field(tmp_path, missing_field):
+    fields = {"code": "EA", "enabled": True}
+    del fields[missing_field]
+    entry_lines = "\n".join(f"            {k}: {_yaml_value(v)}" for k, v in fields.items())
+    path = write_macro_regions_yaml(tmp_path, f"regions:\n          - {entry_lines.strip()}\n")
+
+    with pytest.raises(ConfigError, match=missing_field):
+        load_macro_regions(path)

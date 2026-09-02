@@ -104,4 +104,4 @@ def test_datastore_api_url_and_internal_api_secret_load_from_env(monkeypatch):
     result = load_settings()
 
     assert result.datastore_api_url == "http://localhost:8082"
-    assert result.internal_api_secret == "shared-secret"
+    assert result.internal_api_secret == "shared-secret"  # pragma: allowlist secret

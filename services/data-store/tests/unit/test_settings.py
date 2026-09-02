@@ -188,3 +188,42 @@ def test_internal_api_secret_empty_string_is_treated_as_unset(monkeypatch):
     monkeypatch.setenv("INTERNAL_API_SECRET", "")
 
     assert load_settings().internal_api_secret is None
+
+
+def test_macro_regions_path_defaults_to_config_macro_regions_yaml(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost/db")
+    monkeypatch.delenv("DATA_STORE_MACRO_REGIONS_PATH", raising=False)
+
+    result = load_settings()
+
+    assert result.macro_regions_path == _SERVICE_ROOT / "config/macro_regions.yaml"
+
+
+def test_macro_regions_path_overridable_via_env(monkeypatch, tmp_path):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost/db")
+    monkeypatch.setenv("DATA_STORE_MACRO_REGIONS_PATH", str(tmp_path / "custom.yaml"))
+
+    result = load_settings()
+
+    assert result.macro_regions_path == tmp_path / "custom.yaml"
+
+
+def test_fred_api_key_defaults_to_none(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost/db")
+    monkeypatch.delenv("FRED_API_KEY", raising=False)
+
+    assert load_settings().fred_api_key is None
+
+
+def test_fred_api_key_read_from_env(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost/db")
+    monkeypatch.setenv("FRED_API_KEY", "test-key")
+
+    assert load_settings().fred_api_key == "test-key"  # pragma: allowlist secret
+
+
+def test_fred_api_key_empty_string_is_treated_as_unset(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost/db")
+    monkeypatch.setenv("FRED_API_KEY", "")
+
+    assert load_settings().fred_api_key is None

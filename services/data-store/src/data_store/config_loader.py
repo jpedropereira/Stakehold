@@ -9,6 +9,7 @@ _TICKER_REQUIRED_FIELDS = ("ticker", "display_name", "asset_type", "price_source
 _EXCHANGE_SUFFIX_REQUIRED_FIELDS = ("exchange", "suffix")
 _TICKER_OVERRIDE_REQUIRED_FIELDS = ("raw_ticker", "ticker")
 _CURRENCY_REQUIRED_FIELDS = ("code", "enabled")
+_MACRO_REGION_REQUIRED_FIELDS = ("code", "enabled")
 VALID_ASSET_TYPES = {"equity", "etf", "commodity", "crypto", "etc"}
 _CURRENCY_CODE_RE = re.compile(r"^[A-Z]{3}$")
 
@@ -61,6 +62,12 @@ class CurrencyConfig:
 class CurrenciesConfig:
     base_currency: str
     currencies: list[CurrencyConfig]
+
+
+@dataclass(frozen=True)
+class MacroRegionConfig:
+    code: str
+    enabled: bool
 
 
 def load_funds(path: Path) -> list[FundConfig]:
@@ -193,6 +200,39 @@ def load_currencies(path: Path) -> CurrenciesConfig:
         raise ConfigError(f"base_currency {base_currency!r} is not enabled")
 
     return CurrenciesConfig(base_currency=base_currency, currencies=currencies)
+
+
+def load_macro_regions(path: Path) -> list[MacroRegionConfig]:
+    """EU regions (the euro-area aggregate and/or individual countries) to pull Eurostat macro
+    indicators for, or [] when none are configured.
+
+    Optional, like load_tracked_tickers -- a setup that only wants FRED's US data never needs
+    this file, so "not created yet" and "created but empty" both mean no EU regions are tracked,
+    not a config error. FRED (US) data is unaffected either way.
+    """
+    if not path.is_file():
+        return []
+
+    with path.open() as f:
+        data = yaml.safe_load(f) or {}
+
+    entries = data.get("regions") or []
+
+    regions = []
+    seen_codes = set()
+    for entry in entries:
+        missing = [field for field in _MACRO_REGION_REQUIRED_FIELDS if field not in entry]
+        if missing:
+            raise ConfigError(f"Macro region entry missing required field(s): {', '.join(missing)}")
+
+        code = entry["code"]
+        if code in seen_codes:
+            raise ConfigError(f"Duplicate macro region code: {code}")
+        seen_codes.add(code)
+
+        regions.append(MacroRegionConfig(code=code, enabled=entry["enabled"]))
+
+    return regions
 
 
 def load_ticker_resolution(path: Path) -> TickerResolution:

@@ -557,7 +557,8 @@ def _patch_cashflow_job_common(monkeypatch):
         jobs,
         "load_settings",
         lambda: _fake_settings(
-            datastore_api_url="http://datastore:8000", internal_api_secret="secret"
+            datastore_api_url="http://datastore:8000",
+            internal_api_secret="secret",  # pragma: allowlist secret
         ),
     )
     fake_conn = _SimpleFakeConnection()
@@ -634,4 +635,7 @@ def test_run_import_cashflow_builds_the_http_client_from_settings(monkeypatch):
 
     jobs.run_import_cashflow(user_id=uuid.uuid4(), **_CASHFLOW_KWARGS)
 
-    assert captured == {"base_url": "http://datastore:8000", "internal_api_secret": "secret"}
+    assert captured == {
+        "base_url": "http://datastore:8000",
+        "internal_api_secret": "secret",  # pragma: allowlist secret
+    }

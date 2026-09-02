@@ -14,6 +14,14 @@ from data_store.holdings.repository import (
     save_holdings,
 )
 from data_store.holdings.scraper import get_holdings_csv_url
+from data_store.macro.calculator import compute_indicator_rates
+from data_store.macro.eurostat_source import EurostatMacroIndicatorSource
+from data_store.macro.fred_source import FredMacroIndicatorSource
+from data_store.macro.repository import (
+    get_raw_indicators,
+    save_macro_indicator_rates,
+    save_raw_macro_indicators,
+)
 from data_store.market_data.repository import get_earliest_dates, save_raw_market_data
 from data_store.market_data.yfinance_source import YFinanceMarketDataSource
 from data_store.regimes.loader import load_regimes
@@ -56,6 +64,11 @@ MARKET_DATA_SOURCES = {
 
 FX_RATE_SOURCES = {
     "yfinance": YFinanceFxRateSource,
+}
+
+MACRO_INDICATOR_SOURCES = {
+    "fred": FredMacroIndicatorSource,
+    "eurostat": EurostatMacroIndicatorSource,
 }
 
 
@@ -885,3 +898,85 @@ def _group_by_source_and_type(
     for ticker, (asset_type, price_source) in resolved.items():
         groups.setdefault((price_source, asset_type), []).append(ticker)
     return groups
+
+
+def ingest_macro_indicators(
+    conn, *, fred_api_key: str, eu_regions: list[str]
+) -> dict[str, int | str]:
+    """Lands raw inflation/GDP indicators from FRED (fixed to region 'US') and Eurostat
+    (`eu_regions`, from config/macro_regions.yaml) into raw_macro_indicators.
+
+    Each source's fetch and save both live inside one try/except -- a Eurostat outage (or a
+    Eurostat *save* failure) shouldn't cost the FRED data already landed, or vice versa, the
+    same per-unit failure isolation every other flow here uses (per fund when scraping, per
+    ticker when pricing).
+    """
+    sources = [
+        MACRO_INDICATOR_SOURCES["fred"](api_key=fred_api_key),
+        MACRO_INDICATOR_SOURCES["eurostat"](),
+    ]
+    regions_by_source = {"fred": ["US"], "eurostat": eu_regions}
+
+    total_saved = 0
+    failed = 0
+    for source in sources:
+        regions = regions_by_source[source.name]
+        if not regions:
+            logger.info(
+                f"ingest-macro-indicators: no regions configured for {source.name}, skipping."
+            )
+            continue
+        logger.info(f"ingest-macro-indicators: fetching {source.name} ({', '.join(regions)}).")
+        # fetch and save both live in this one try/except -- a source saved before an escaping
+        # exception is already committed, so letting a save failure propagate would turn a
+        # partial success into a wholly failed run and cost the other source's data too. Mirrors
+        # ingest_market_data's group-level catch.
+        try:
+            data = source.fetch(regions)
+            if data.empty:
+                logger.info(f"ingest-macro-indicators: {source.name} returned no data.")
+                continue
+            # fetch() doesn't stamp its own rows with the source -- MacroIndicatorSource.name is
+            # what the caller (this loop) already knows, mirroring MarketDataSource's fetch()
+            # not embedding a source column either.
+            saved = save_raw_macro_indicators(conn, data.assign(source=source.name))
+        except Exception as e:
+            failed += 1
+            logger.warning(
+                "ingest-macro-indicators: %s failed, skipping: %s", source.name, e, exc_info=True
+            )
+            continue
+        logger.info(f"ingest-macro-indicators: {source.name} saved {saved} row(s).")
+        total_saved += saved
+
+    logger.info(
+        f"ingest-macro-indicators complete: {total_saved} row(s) across {len(sources)} "
+        f"source(s), {failed} source(s) failed."
+    )
+    return build_run_result(
+        units_total=len(sources),
+        rows_saved=total_saved,
+        failed=failed,
+        sources=len(sources),
+        sources_failed=failed,
+    )
+
+
+def calculate_macro_indicator_rates(conn) -> dict[str, int | str]:
+    """Rebuild macro_indicator_rates from whatever is currently in raw_macro_indicators.
+
+    Always a full rebuild, mirroring calculate_returns: a revised raw value should always
+    propagate to the derived rate, and this table is a few hundred rows at most (nowhere near
+    market_returns' 8.95M), so there is no volume reason to do anything incremental.
+    """
+    raw = get_raw_indicators(conn)
+    if raw.empty:
+        logger.info(
+            "calculate-macro-indicator-rates: raw_macro_indicators is empty, nothing to do."
+        )
+        return build_run_result(units_total=0, rows_saved=0, failed=0)
+
+    rates = compute_indicator_rates(raw)
+    saved = save_macro_indicator_rates(conn, rates)
+    logger.info(f"calculate-macro-indicator-rates complete: {saved} row(s).")
+    return build_run_result(units_total=len(raw), rows_saved=saved, failed=0)
