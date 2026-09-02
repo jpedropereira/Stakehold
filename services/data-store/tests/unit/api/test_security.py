@@ -13,6 +13,7 @@ def make_settings(secret):
         exchange_suffixes_path=None,
         regimes_csv_path=None,
         currencies_path=None,
+        macro_regions_path=None,
         internal_api_secret=secret,
     )
 

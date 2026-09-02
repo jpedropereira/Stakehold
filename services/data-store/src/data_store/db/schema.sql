@@ -122,3 +122,34 @@ CREATE TABLE IF NOT EXISTS regimes (
 
 CREATE INDEX IF NOT EXISTS idx_regimes_dimension_scope ON regimes (dimension, scope);
 CREATE INDEX IF NOT EXISTS idx_regimes_start_date        ON regimes (start_date);
+
+CREATE TABLE IF NOT EXISTS raw_macro_indicators (
+    source            VARCHAR(20)    NOT NULL,
+    indicator_code    VARCHAR(50)    NOT NULL,
+    region            VARCHAR(10)    NOT NULL,
+    observation_date  DATE           NOT NULL,
+    indicator_type    VARCHAR(20)    NOT NULL,
+    frequency         VARCHAR(10)    NOT NULL,
+    value             NUMERIC(20,6)  NOT NULL,
+    unit              VARCHAR(100)   NOT NULL,
+    ingested_at       TIMESTAMPTZ    NOT NULL DEFAULT now(),
+    PRIMARY KEY (source, indicator_code, region, observation_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_raw_macro_indicators_region_type
+    ON raw_macro_indicators (region, indicator_type);
+
+CREATE TABLE IF NOT EXISTS macro_indicator_rates (
+    source              VARCHAR(20)    NOT NULL,
+    region              VARCHAR(10)    NOT NULL,
+    indicator_type      VARCHAR(20)    NOT NULL,
+    observation_date    DATE           NOT NULL,
+    frequency           VARCHAR(10)    NOT NULL,
+    rate_value          NUMERIC(18,8)  NOT NULL,
+    calculation_method  VARCHAR(30)    NOT NULL,
+    calculated_at       TIMESTAMPTZ    NOT NULL DEFAULT now(),
+    PRIMARY KEY (source, region, indicator_type, observation_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_macro_indicator_rates_region_type
+    ON macro_indicator_rates (region, indicator_type);

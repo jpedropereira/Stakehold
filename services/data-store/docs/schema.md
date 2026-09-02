@@ -396,3 +396,73 @@ not accumulate stale rows. Full-sync design is simple, idempotent, and enforces 
 data ingest. Since the CSV is hand-curated and rarely changes, most days this just replaces the
 table with the same rows; it can still be triggered manually via `data-store ingest-regimes` right
 after editing the CSV, without waiting for the next scheduled run.
+
+## `raw_macro_indicators`
+
+One row per `(source, indicator_code, region, observation_date)` — US inflation/GDP from FRED and
+EU/euro-area inflation/GDP-growth from Eurostat, landed exactly as each source returned it.
+Deliberately a raw landing zone, the same role `raw_market_data` plays for prices: FRED's
+`CPIAUCSL`/`GDPC1` are index/level series, not rates, while Eurostat's `prc_hicp_manr`/
+`namq_10_gdp` (queried at the specific dimension slice that is already a year-over-year rate) are
+rates already — this table stores both exactly as-is rather than deciding at ingest time which
+representation is "the" inflation or growth number. `macro_indicator_rates` below is the
+normalized, comparable counterpart.
+
+| Column             | Type            | Notes |
+|---------------------|-----------------|-------|
+| `source`            | `VARCHAR(20)`   | Part of PK. `'fred'` / `'eurostat'`. |
+| `indicator_code`    | `VARCHAR(50)`   | Part of PK. The source's own series/dataset id: `CPIAUCSL`, `GDPC1`, `prc_hicp_manr`, `namq_10_gdp`. |
+| `region`            | `VARCHAR(10)`   | Part of PK. `'US'` (FRED, always), `'EA'` (our own alias for Eurostat's euro-area aggregate geo code, currently `EA20`), or a country's Eurostat geo code (`'DE'`, `'FR'`, ... — not always the ISO2 code; Greece is `'EL'`). |
+| `observation_date`  | `DATE`          | Part of PK. Period-start convention (month start / quarter start) for both sources. |
+| `indicator_type`    | `VARCHAR(20)`   | Not part of PK — descriptive, like `raw_market_data.asset_type`. `'inflation'` / `'growth'`. Names the *concept* the series feeds, not the shape of this row's `value` — `GDPC1` is tagged `'growth'` even though the stored value is a level, not a rate; `unit` is what tells a reader that. |
+| `frequency`         | `VARCHAR(10)`   | `'monthly'` / `'quarterly'`. |
+| `value`             | `NUMERIC(20,6)` | The source's value, verbatim. Never compare two rows' `value` without checking `unit` first — they are not automatically on the same scale. |
+| `unit`              | `VARCHAR(100)`  | The source's own description of what `value` is, e.g. `'Index 1982-1984=100, not seasonally adjusted'` (FRED CPI), `'Annual rate of change (HICP, all-items)'` (Eurostat HICP). |
+| `ingested_at`       | `TIMESTAMPTZ`   | Defaults to `now()`. |
+
+Index: `(region, indicator_type)` for cross-cutting queries like "every inflation series for DE".
+
+**The exact Eurostat dimension codes are pinned in `macro/eurostat_source.py`
+(`EUROSTAT_DATASETS`), verified against Eurostat's live SDMX API rather than guessed**: HICP uses
+`unit=RCH_A` ("Annual rate of change") and `coicop=CP00` ("All-items HICP"); GDP uses
+`unit=CLV_PCH_SM` ("Chain linked volumes, percentage change compared to same period in previous
+year"), `na_item=B1GQ` ("GDP at market prices"), and `s_adj=SCA` ("Seasonally and calendar
+adjusted"). Each spec isolates one already-YoY-comparable series per dataset; `namq_10_gdp`
+without all three pinned would also match quarter-on-quarter, non-adjusted, or non-GDP rows.
+
+**Loading strategy: true upsert** (`INSERT ... ON CONFLICT (source, indicator_code, region,
+observation_date) DO UPDATE`), same rationale as `raw_market_data`: FRED and Eurostat both
+restate recent figures (a GDP "flash" estimate later revised, a late-corrected CPI print), so
+overwriting on rerun is the normal case. No point-in-time vintage tracking — the latest fetched
+value always wins, and an earlier revision is not retained.
+
+## `macro_indicator_rates`
+
+One row per `(source, region, indicator_type, observation_date)` — the derived, comparable
+counterpart of `raw_macro_indicators`, rebuilt from it by `calculate-macro-indicator-rates`,
+mirroring how `calculate-returns` rebuilds `market_returns` from `raw_market_data`.
+
+| Column               | Type             | Notes |
+|-----------------------|------------------|-------|
+| `source`              | `VARCHAR(20)`    | Part of PK. |
+| `region`              | `VARCHAR(10)`    | Part of PK. |
+| `indicator_type`      | `VARCHAR(20)`    | Part of PK. `'inflation'` / `'growth'`. |
+| `observation_date`    | `DATE`           | Part of PK. |
+| `frequency`           | `VARCHAR(10)`    | |
+| `rate_value`          | `NUMERIC(18,8)`  | Year-over-year percentage change (e.g. `3.2` means 3.2%). Chosen as the normalization target because Eurostat's chosen dimension slices are already a YoY rate by construction (see above), so YoY is the one metric both sources can express without this service inventing an annualization convention neither reports natively. |
+| `calculation_method`  | `VARCHAR(30)`    | `'source_reported'` (Eurostat rows — copied straight through) or `'yoy_pct_change'` (FRED rows — computed from the level series: `value_t / value_(t-12 or t-4) - 1`, lag 12 for monthly, 4 for quarterly). Traceability for how the number was derived, the same spirit as `market_returns` documenting its formulas. |
+| `calculated_at`       | `TIMESTAMPTZ`    | Defaults to `now()`, bumped on every rebuild. |
+
+Index: `(region, indicator_type)`, same rationale as `raw_macro_indicators`'s.
+
+**A level series' first 12 (monthly) or 4 (quarterly) observations are dropped, not nulled** —
+there is no prior-year value to compare them against. Unlike `market_returns`'s first-row-per-
+ticker `NULL`, this table simply omits those rows: there is no `simple_return ==
+price_return + dividend_return`-style cross-column invariant here that a `NULL` row needs to
+participate in, so dropping and nulling carry the same practical meaning.
+
+**Loading strategy: full rebuild**, not incremental — mirrors `market_returns`. Unlike that
+table's 8.95M rows, this is a few hundred rows total (a handful of series × a handful of regions
+× decades of monthly/quarterly history), so a full rebuild needs no batching; it runs in one pass
+every time `calculate-macro-indicator-rates` is invoked, and a revised raw value always
+propagates.

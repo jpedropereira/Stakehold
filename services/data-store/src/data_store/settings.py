@@ -30,10 +30,14 @@ class Settings:
     exchange_suffixes_path: Path
     regimes_csv_path: Path
     currencies_path: Path
+    macro_regions_path: Path
     # Optional: every CLI/Airflow caller has no need of it, so making it required here would
     # break them. The read API checks it is set at its own startup instead -- see
     # data_store.api.app.
     internal_api_secret: str | None = None
+    # Optional at this level for the same reason: only ingest-macro-indicators needs it.
+    # run_ingest_macro_indicators raises SettingsError itself if it's unset -- see jobs.py.
+    fred_api_key: str | None = None
 
 
 def load_settings() -> Settings:
@@ -56,6 +60,9 @@ def load_settings() -> Settings:
     currencies_path = _resolve(
         os.environ.get("DATA_STORE_CURRENCIES_PATH", "config/currencies.yaml")
     )
+    macro_regions_path = _resolve(
+        os.environ.get("DATA_STORE_MACRO_REGIONS_PATH", "config/macro_regions.yaml")
+    )
 
     return Settings(
         database_url=database_url,
@@ -64,5 +71,7 @@ def load_settings() -> Settings:
         exchange_suffixes_path=exchange_suffixes_path,
         regimes_csv_path=regimes_csv_path,
         currencies_path=currencies_path,
+        macro_regions_path=macro_regions_path,
         internal_api_secret=os.environ.get("INTERNAL_API_SECRET") or None,
+        fred_api_key=os.environ.get("FRED_API_KEY") or None,
     )
