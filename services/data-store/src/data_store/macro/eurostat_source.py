@@ -1,11 +1,9 @@
 import logging
-import random
-import time
 from datetime import date
 
 import eurostat
 import pandas as pd
-from data_store.macro.retry import is_transient
+from data_store.macro.retry import with_retries
 
 logger = logging.getLogger(__name__)
 
@@ -79,44 +77,37 @@ class EurostatMacroIndicatorSource:
             if not frame.empty:
                 frames.append(frame)
 
-        if not frames:
-            return pd.DataFrame(columns=_OUTPUT_COLUMNS)
-        return pd.concat(frames, ignore_index=True)
+        result = (
+            pd.concat(frames, ignore_index=True)
+            if frames
+            else pd.DataFrame(columns=_OUTPUT_COLUMNS)
+        )
+        # A region requested but never present in any dataset's response (a config typo, e.g.
+        # the ISO2 code 'GR' instead of Eurostat's own 'EL' for Greece) would otherwise vanish
+        # from every future ingest with no sign anything was wrong -- the run still reports
+        # status: ok on the regions that did match.
+        missing_regions = set(regions) - set(result["region"])
+        if missing_regions:
+            logger.warning(
+                "eurostat: requested region(s) %s never appeared in any dataset response -- "
+                "check the geo code in config/macro_regions.yaml.",
+                ", ".join(sorted(missing_regions)),
+            )
+        return result
 
     def _fetch_one(
         self, dataset_code: str, geo_codes: list[str], filter_pars: dict
     ) -> pd.DataFrame | None:
-        """One dataset's whole retry loop. Never raises -- a permanently-failing dataset is
-        logged and omitted from fetch()'s result, so one bad dataset can't cost the other."""
+        """One dataset's whole retry loop. A permanently-failing dataset is logged and omitted
+        from fetch()'s result, so one bad dataset can't cost the other."""
         pars = dict(filter_pars, geo=geo_codes)
-        attempt = 0
-        while True:
-            attempt += 1
-            try:
-                return eurostat.get_data_df(dataset_code, flags=False, filter_pars=pars)
-            except Exception as e:
-                if is_transient(e) and attempt < self.max_retries:
-                    sleep_seconds = self.backoff_base_seconds * (2 ** (attempt - 1))
-                    sleep_seconds += random.uniform(0, 0.25)
-                    logger.warning(
-                        "eurostat: transient error on attempt %d/%d for %s: %s. Retrying in "
-                        "%.2fs.",
-                        attempt,
-                        self.max_retries,
-                        dataset_code,
-                        e,
-                        sleep_seconds,
-                    )
-                    time.sleep(sleep_seconds)
-                    continue
-                logger.warning(
-                    "eurostat: %s failed after %d attempt(s), skipping: %s",
-                    dataset_code,
-                    attempt,
-                    e,
-                    exc_info=True,
-                )
-                return None
+        return with_retries(
+            lambda: eurostat.get_data_df(dataset_code, flags=False, filter_pars=pars),
+            description=dataset_code,
+            log_prefix="eurostat",
+            max_retries=self.max_retries,
+            backoff_base_seconds=self.backoff_base_seconds,
+        )
 
 
 def _reshape(
@@ -134,35 +125,32 @@ def _reshape(
         return pd.DataFrame(columns=_OUTPUT_COLUMNS)
 
     time_columns = [c for c in data.columns if c not in _DIMENSION_COLUMNS and c != geo_column]
-    rows = []
-    for _, row in data.iterrows():
-        region = region_by_geo.get(row[geo_column])
-        if region is None:
-            continue
-        for time_column in time_columns:
-            value = row[time_column]
-            if pd.isna(value):
-                continue
-            observation_date = _parse_period(str(time_column))
-            if observation_date is None:
-                logger.warning(
-                    "eurostat: %s has an unrecognized time period column %r, skipping it.",
-                    dataset_code,
-                    time_column,
-                )
-                continue
-            rows.append(
-                {
-                    "indicator_code": dataset_code,
-                    "region": region,
-                    "observation_date": observation_date,
-                    "indicator_type": meta["indicator_type"],
-                    "frequency": meta["frequency"],
-                    "value": float(value),
-                    "unit": meta["unit_label"],
-                }
+    long = data.melt(
+        id_vars=[geo_column], value_vars=time_columns, var_name="period", value_name="value"
+    )
+    long["region"] = long[geo_column].map(region_by_geo)
+    long = long.dropna(subset=["region", "value"])
+
+    # One _parse_period call per distinct period label (not per row) so the "unrecognized
+    # period" warning still fires once per bad column, matching the row-by-row loop this
+    # replaces rather than once per row that column produced.
+    parsed_by_period = {period: _parse_period(str(period)) for period in long["period"].unique()}
+    for period, parsed in parsed_by_period.items():
+        if parsed is None:
+            logger.warning(
+                "eurostat: %s has an unrecognized time period column %r, skipping it.",
+                dataset_code,
+                period,
             )
-    return pd.DataFrame(rows, columns=_OUTPUT_COLUMNS)
+    long["observation_date"] = long["period"].map(parsed_by_period)
+    long = long.dropna(subset=["observation_date"])
+
+    long["indicator_code"] = dataset_code
+    long["indicator_type"] = meta["indicator_type"]
+    long["frequency"] = meta["frequency"]
+    long["unit"] = meta["unit_label"]
+    long["value"] = long["value"].astype(float)
+    return long[_OUTPUT_COLUMNS].reset_index(drop=True)
 
 
 def _parse_period(label: str) -> date | None:

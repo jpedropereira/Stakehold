@@ -212,9 +212,10 @@ second FX source actually exists.
 
 `MACRO_INDICATOR_SOURCES` is shaped differently from the other three registries: it isn't a
 *choice* between interchangeable providers for the same data — `fred` and `eurostat` cover
-disjoint regions (US vs. EU) and are always both used, not selected between. `ingest_macro_
-indicators` constructs and calls both unconditionally rather than looking one up by a config-
-selected key.
+disjoint regions (US vs. EU), so both are constructed unconditionally rather than one being
+looked up by a config-selected key. Whether each is actually *called*, though, depends on
+`eu_regions`: `ingest_macro_indicators` skips Eurostat's `fetch()` (and says so in its log) when
+`config/macro_regions.yaml` is absent or empty — see the `macro_regions.yaml` note below.
 
 **A disclosed trade-off of one combined registry**: before the OHLCV/dividend fetch merge, prices
 and dividends had separate registries and Protocols, because they were genuinely separate

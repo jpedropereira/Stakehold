@@ -179,6 +179,25 @@ def test_transient_error_is_retried_then_succeeds(monkeypatch):
     assert "prc_hicp_manr" in set(result["indicator_code"])
 
 
+def test_requested_region_missing_from_every_response_is_logged(monkeypatch, caplog):
+    # A config typo (e.g. ISO2 'GR' instead of Eurostat's own 'EL' for Greece) must not vanish
+    # silently -- the run would otherwise report status: ok with no sign that region never
+    # matched anything.
+    caplog.set_level("WARNING")
+    fake = FakeEurostat(
+        responses={
+            "prc_hicp_manr": hicp_frame([("EA20", {"2024-01": 2.8})]),
+            "namq_10_gdp": gdp_frame([]),
+        }
+    )
+    source = make_source(fake, monkeypatch)
+
+    result = source.fetch(["EA", "GR"])
+
+    assert set(result["region"]) == {"EA"}
+    assert "GR" in caplog.text
+
+
 def test_missing_geo_column_is_skipped_with_a_warning(monkeypatch, caplog):
     caplog.set_level("WARNING")
     frame_without_geo = pd.DataFrame({"freq": ["M"], "unit": ["RCH_A"], "2024-01": [2.8]})

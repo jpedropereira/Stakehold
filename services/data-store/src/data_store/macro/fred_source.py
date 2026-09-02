@@ -1,12 +1,6 @@
-import logging
-import random
-import time
-
 import pandas as pd
-from data_store.macro.retry import is_transient
+from data_store.macro.retry import with_retries
 from fredapi import Fred
-
-logger = logging.getLogger(__name__)
 
 _OUTPUT_COLUMNS = [
     "indicator_code",
@@ -58,6 +52,13 @@ class FredMacroIndicatorSource:
             series = self._fetch_one(series_id)
             if series is None or series.empty:
                 continue
+            # fredapi converts FRED's own "." missing-observation marker to NaN and leaves it in
+            # the series (confirmed against the installed fredapi source) -- dropped here so a
+            # not-yet-published point never lands in raw_macro_indicators' NOT NULL value column,
+            # mirroring eurostat_source._reshape's `if pd.isna(value): continue`.
+            series = series.dropna()
+            if series.empty:
+                continue
             frame = series.reset_index()
             frame.columns = ["observation_date", "value"]
             frame["observation_date"] = pd.to_datetime(frame["observation_date"]).dt.date
@@ -73,33 +74,12 @@ class FredMacroIndicatorSource:
         return pd.concat(frames, ignore_index=True)
 
     def _fetch_one(self, series_id: str) -> pd.Series | None:
-        """One series' whole retry loop. Never raises -- a permanently-failing series is logged
-        and omitted from fetch()'s result, mirroring market_data/yfinance_source.py's per-ticker
+        """One series' whole retry loop, mirroring market_data/yfinance_source.py's per-ticker
         isolation, so one bad series can't cost the other."""
-        attempt = 0
-        while True:
-            attempt += 1
-            try:
-                return self._client.get_series(series_id)
-            except Exception as e:
-                if is_transient(e) and attempt < self.max_retries:
-                    sleep_seconds = self.backoff_base_seconds * (2 ** (attempt - 1))
-                    sleep_seconds += random.uniform(0, 0.25)
-                    logger.warning(
-                        "fred: transient error on attempt %d/%d for %s: %s. Retrying in %.2fs.",
-                        attempt,
-                        self.max_retries,
-                        series_id,
-                        e,
-                        sleep_seconds,
-                    )
-                    time.sleep(sleep_seconds)
-                    continue
-                logger.warning(
-                    "fred: %s failed after %d attempt(s), skipping: %s",
-                    series_id,
-                    attempt,
-                    e,
-                    exc_info=True,
-                )
-                return None
+        return with_retries(
+            lambda: self._client.get_series(series_id),
+            description=series_id,
+            log_prefix="fred",
+            max_retries=self.max_retries,
+            backoff_base_seconds=self.backoff_base_seconds,
+        )

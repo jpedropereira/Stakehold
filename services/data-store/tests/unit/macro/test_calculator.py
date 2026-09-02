@@ -93,6 +93,25 @@ def test_groups_are_computed_independently_by_source_region_and_indicator_type()
     assert de_inflation["rate_value"].iloc[0] == 3.1
 
 
+def test_two_indicator_codes_sharing_a_type_are_skipped_and_logged(caplog):
+    # macro_indicator_rates has no indicator_code column -- (source, region, indicator_type,
+    # observation_date) is the whole key -- so two distinct series here would silently blend
+    # into one YoY computation and collide on upsert. Must be refused, not computed wrong.
+    caplog.set_level(logging.WARNING)
+    raw = make_raw(
+        [
+            ["fred", "CPIAUCSL", "US", "2024-01-01", "inflation", "monthly", 300.1, "u"],
+            ["fred", "CPIALTT01", "US", "2024-01-01", "inflation", "monthly", 5.0, "u"],
+        ]
+    )
+
+    result = compute_indicator_rates(raw)
+
+    assert result.empty
+    assert "more than one indicator_code" in caplog.text
+    assert "CPIAUCSL" in caplog.text and "CPIALTT01" in caplog.text
+
+
 def test_unrecognized_frequency_is_skipped_and_logged(caplog):
     caplog.set_level(logging.WARNING)
     raw = make_raw([["fred", "XYZ", "US", "2024-01-01", "inflation", "weekly", 1.0, "u"]])

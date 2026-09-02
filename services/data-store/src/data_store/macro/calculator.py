@@ -53,6 +53,23 @@ def compute_indicator_rates(raw: pd.DataFrame) -> pd.DataFrame:
         ["source", "region", "indicator_type"], sort=False
     ):
         group = group.reset_index(drop=True)
+        # macro_indicator_rates' own key is (source, region, indicator_type, observation_date) --
+        # no indicator_code column -- so two distinct series sharing an indicator_type here would
+        # silently interleave into one YoY computation and collide on upsert. Every source today
+        # keeps that 1:1 (see FRED_SERIES / EUROSTAT_DATASETS), so this is a loud, skip-the-group
+        # failure rather than a schema change, which needs sign-off per data-schema.md.
+        indicator_codes = group["indicator_code"].unique()
+        if len(indicator_codes) > 1:
+            logger.warning(
+                "compute_indicator_rates: %s/%s/%s has more than one indicator_code (%s) -- "
+                "macro_indicator_rates has no column to keep them apart, skipping this group "
+                "rather than silently blending them.",
+                source,
+                region,
+                indicator_type,
+                ", ".join(sorted(indicator_codes)),
+            )
+            continue
         if source in _SOURCE_REPORTED_ALREADY:
             group["rate_value"] = group["value"]
             group["calculation_method"] = SOURCE_REPORTED

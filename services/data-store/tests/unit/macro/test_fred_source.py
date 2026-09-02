@@ -73,6 +73,23 @@ def test_fetch_stamps_the_configured_unit_for_each_series():
     assert gdp_unit == FRED_SERIES["GDPC1"]["unit"]
 
 
+def test_fetch_drops_nan_observations():
+    # fredapi turns FRED's "." missing-observation marker into NaN and leaves it in the series
+    # -- confirmed against the installed fredapi source. Must never land in raw_macro_indicators'
+    # NOT NULL value column.
+    cpi = pd.Series(
+        [300.1, float("nan"), 300.5],
+        index=pd.to_datetime(["2024-01-01", "2024-02-01", "2024-03-01"]),
+    )
+    fake = FakeFred(series={"CPIAUCSL": cpi, "GDPC1": pd.Series(dtype=float)})
+
+    result = make_source(fake).fetch(["US"])
+
+    cpi_rows = result[result["indicator_code"] == "CPIAUCSL"]
+    assert list(cpi_rows["observation_date"]) == [date(2024, 1, 1), date(2024, 3, 1)]
+    assert list(cpi_rows["value"]) == [300.1, 300.5]
+
+
 def test_fetch_returns_empty_frame_when_both_series_fail(caplog):
     caplog.set_level("WARNING")
     fake = FakeFred(errors={"CPIAUCSL": ValueError("No data exists"), "GDPC1": ValueError("boom")})

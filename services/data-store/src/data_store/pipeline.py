@@ -906,9 +906,10 @@ def ingest_macro_indicators(
     """Lands raw inflation/GDP indicators from FRED (fixed to region 'US') and Eurostat
     (`eu_regions`, from config/macro_regions.yaml) into raw_macro_indicators.
 
-    Each source is fetched and saved independently -- a Eurostat outage shouldn't cost the FRED
-    data already landed, or vice versa, the same per-unit failure isolation every other flow
-    here uses (per fund when scraping, per ticker when pricing).
+    Each source's fetch and save both live inside one try/except -- a Eurostat outage (or a
+    Eurostat *save* failure) shouldn't cost the FRED data already landed, or vice versa, the
+    same per-unit failure isolation every other flow here uses (per fund when scraping, per
+    ticker when pricing).
     """
     sources = [
         MACRO_INDICATOR_SOURCES["fred"](api_key=fred_api_key),
@@ -926,21 +927,25 @@ def ingest_macro_indicators(
             )
             continue
         logger.info(f"ingest-macro-indicators: fetching {source.name} ({', '.join(regions)}).")
+        # fetch and save both live in this one try/except -- a source saved before an escaping
+        # exception is already committed, so letting a save failure propagate would turn a
+        # partial success into a wholly failed run and cost the other source's data too. Mirrors
+        # ingest_market_data's group-level catch.
         try:
             data = source.fetch(regions)
+            if data.empty:
+                logger.info(f"ingest-macro-indicators: {source.name} returned no data.")
+                continue
+            # fetch() doesn't stamp its own rows with the source -- MacroIndicatorSource.name is
+            # what the caller (this loop) already knows, mirroring MarketDataSource's fetch()
+            # not embedding a source column either.
+            saved = save_raw_macro_indicators(conn, data.assign(source=source.name))
         except Exception as e:
             failed += 1
             logger.warning(
                 "ingest-macro-indicators: %s failed, skipping: %s", source.name, e, exc_info=True
             )
             continue
-        if data.empty:
-            logger.info(f"ingest-macro-indicators: {source.name} returned no data.")
-            continue
-        # fetch() doesn't stamp its own rows with the source -- MacroIndicatorSource.name is
-        # what the caller (this loop) already knows, mirroring MarketDataSource's fetch() not
-        # embedding a source column either.
-        saved = save_raw_macro_indicators(conn, data.assign(source=source.name))
         logger.info(f"ingest-macro-indicators: {source.name} saved {saved} row(s).")
         total_saved += saved
 

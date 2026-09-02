@@ -113,6 +113,31 @@ def test_ingest_macro_indicators_isolates_a_failing_source(caplog):
     assert "FRED is down" in caplog.text
 
 
+def test_ingest_macro_indicators_isolates_a_failing_save():
+    # A save failure for one source (a DB error, not a fetch error) must not cost the other
+    # source's data -- save_raw_macro_indicators lives inside the same try/except as fetch()
+    # specifically so this stays isolated too.
+    fred = FakeSource("fred", df=make_raw_df())
+    eurostat = FakeSource("eurostat", df=make_raw_df())
+    conn = MagicMock()
+
+    with (
+        patch(
+            "data_store.pipeline.MACRO_INDICATOR_SOURCES",
+            {"fred": lambda **_: fred, "eurostat": lambda **_: eurostat},
+        ),
+        patch(
+            "data_store.pipeline.save_raw_macro_indicators",
+            side_effect=[RuntimeError("db is down"), 1],
+        ),
+    ):
+        result = ingest_macro_indicators(conn, fred_api_key=FRED_API_KEY, eu_regions=["EA"])
+
+    assert result["status"] == "partial"
+    assert result["sources_failed"] == 1
+    assert result["rows_saved"] == 1  # eurostat's save still landed
+
+
 def test_ingest_macro_indicators_returns_ok_status_with_saved_row_counts():
     fred = FakeSource("fred", df=make_raw_df(rows=2))
     eurostat = FakeSource("eurostat", df=make_raw_df(rows=3))

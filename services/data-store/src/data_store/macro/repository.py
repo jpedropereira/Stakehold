@@ -143,6 +143,13 @@ def save_macro_indicator_rates(conn, df: pd.DataFrame) -> int:
     return written
 
 
+# Deliberately not market_data/repository.py's _cast_value + parallel-lists shape: that helper
+# exists to int-cast the `volume` column, a per-column-type need neither raw_macro_indicators nor
+# macro_indicator_rates has, so indexing the row dict directly (bounds: column -> limit) is the
+# simpler, complete version here rather than carrying an unused cast step. Still the same
+# guarded-COPY *pattern* as market_data/returns/fx -- a shared helper for that pattern belongs in
+# shared/db/connection.py, but consolidating all five call sites is its own change, out of scope
+# for this one.
 def _first_out_of_range(bounds: dict[str, int], row) -> tuple[str, object] | None:
     for column, bound in bounds.items():
         value = row[column]
