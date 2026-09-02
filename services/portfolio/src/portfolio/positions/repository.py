@@ -1,0 +1,70 @@
+"""Persistence for derived, materialized position snapshots.
+
+Loading strategy is delete-then-insert per (account_id, canonical_ticker), not upsert -- unlike a
+fixed daily grid, the event-driven dates themselves can change on rebuild (a corrected historical
+transaction can add, remove, or shift which dates count as position-changing events), so this is a
+full snapshot replacement, not an update-in-place. See docs/schema.md's "Loading strategy" note on
+position_snapshots.
+
+Does not commit anywhere in this module -- same as every other repository in this service.
+pipeline.py wraps each (account, ticker) pair's replace_snapshots call in its own
+`with transaction(conn):`, which is what makes that one pair's replacement atomic without
+inverting the "repositories never commit" rule for this module alone.
+"""
+
+from collections.abc import Sequence
+
+from portfolio.positions.calculator import PositionSnapshot
+
+_DELETE_SQL = "DELETE FROM position_snapshots WHERE account_id = %s AND canonical_ticker = %s"
+
+_INSERT_SQL = """
+    INSERT INTO position_snapshots (
+        account_id, canonical_ticker, as_of_date, quantity, average_cost_native,
+        native_currency, average_cost_eur, cost_basis_eur
+    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+"""
+
+_LIST_TICKERS_SQL = "SELECT DISTINCT canonical_ticker FROM position_snapshots WHERE account_id = %s"
+
+
+def replace_snapshots(
+    conn, *, account_id: int, canonical_ticker: str, snapshots: Sequence[PositionSnapshot]
+) -> int:
+    """Delete every existing snapshot for this (account, ticker), then insert the freshly
+    replayed set. Returns the count inserted. Does not commit -- the caller wraps this in one
+    transaction so a concurrent reader never observes the pair with zero rows (docs/schema.md)."""
+    with conn.cursor() as cur:
+        cur.execute(_DELETE_SQL, (account_id, canonical_ticker))
+        for snapshot in snapshots:
+            cur.execute(
+                _INSERT_SQL,
+                (
+                    snapshot.account_id,
+                    snapshot.canonical_ticker,
+                    snapshot.as_of_date,
+                    snapshot.quantity,
+                    snapshot.average_cost_native,
+                    snapshot.native_currency,
+                    snapshot.average_cost_eur,
+                    snapshot.cost_basis_eur,
+                ),
+            )
+    return len(snapshots)
+
+
+def list_tickers(conn, account_id: int) -> list[str]:
+    """Every canonical_ticker this account currently has a snapshot for -- lets a rebuild find
+    tickers no longer produced (e.g. a ticker mapping was re-pointed) so it can prune them."""
+    with conn.cursor() as cur:
+        cur.execute(_LIST_TICKERS_SQL, (account_id,))
+        return [row[0] for row in cur.fetchall()]
+
+
+def delete_snapshots(conn, *, account_id: int, canonical_ticker: str) -> int:
+    """Removes every snapshot for one (account, ticker) with nothing to replace it -- a rebuild
+    that no longer produces this ticker at all, as opposed to replace_snapshots' delete-then-
+    reinsert. Returns the row count removed. Does not commit -- same as replace_snapshots."""
+    with conn.cursor() as cur:
+        cur.execute(_DELETE_SQL, (account_id, canonical_ticker))
+        return cur.rowcount

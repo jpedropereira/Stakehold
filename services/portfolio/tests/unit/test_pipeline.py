@@ -25,6 +25,8 @@ from portfolio.errors import (
 from portfolio.ticker_mapping.loader import TickerMappings
 from portfolio.transactions.base import CanonicalTransaction
 
+_ISIN = "IE00B4L5Y983"
+
 NOW = datetime(2026, 3, 1, 10, 0, tzinfo=UTC)
 
 
@@ -104,14 +106,44 @@ class FakeTransactionsRepo:
             pairs.add((txn.instrument_identifier_kind, txn.instrument_identifier, account.broker))
         return sorted(pairs)
 
+    def list_by_account(self, conn, account_id):
+        rows = [t for t in self.saved if t.account_id == account_id]
+        return sorted(rows, key=lambda t: (t.trade_datetime, t.broker_transaction_ref))
+
+
+class FakePositionsRepo:
+    """Records every replace_snapshots/delete_snapshots call, keyed by (account_id,
+    canonical_ticker), so tests can assert both the persisted content and how many times each
+    pair's transaction boundary fired."""
+
+    def __init__(self):
+        self.snapshots: dict[tuple[int, str], list] = {}
+        self.replace_calls = []
+        self.delete_calls = []
+
+    def replace_snapshots(self, conn, *, account_id, canonical_ticker, snapshots):
+        self.replace_calls.append((account_id, canonical_ticker))
+        self.snapshots[(account_id, canonical_ticker)] = list(snapshots)
+        return len(snapshots)
+
+    def list_tickers(self, conn, account_id):
+        return [ticker for (aid, ticker) in self.snapshots if aid == account_id]
+
+    def delete_snapshots(self, conn, *, account_id, canonical_ticker):
+        self.delete_calls.append((account_id, canonical_ticker))
+        existing = self.snapshots.pop((account_id, canonical_ticker), None)
+        return len(existing) if existing else 0
+
 
 @pytest.fixture
 def repos(monkeypatch):
     accounts_repo = FakeAccountsRepo()
     transactions_repo = FakeTransactionsRepo(accounts_repo)
+    positions_repo = FakePositionsRepo()
     monkeypatch.setattr(pipeline, "accounts_repository", accounts_repo)
     monkeypatch.setattr(pipeline, "transactions_repository", transactions_repo)
-    return accounts_repo, transactions_repo
+    monkeypatch.setattr(pipeline, "positions_repository", positions_repo)
+    return accounts_repo, transactions_repo, positions_repo
 
 
 @pytest.fixture
@@ -300,7 +332,7 @@ def test_add_manual_transaction_scopes_account_lookup_by_user(repos, conn):
 
 
 def test_add_manual_transaction_derives_eur_amount_for_a_eur_transaction(repos, conn):
-    accounts_repo, transactions_repo = repos
+    accounts_repo, transactions_repo, _ = repos
     user_id = uuid.uuid4()
     pipeline.add_account(conn, user_id=user_id, broker="acme", account_label="m")
     commits_before = conn.commits
@@ -316,7 +348,7 @@ def test_add_manual_transaction_derives_eur_amount_for_a_eur_transaction(repos, 
 
 
 def test_add_manual_transaction_derives_eur_amount_from_a_manual_fx_rate(repos, conn):
-    _, transactions_repo = repos
+    _, transactions_repo, _ = repos
     user_id = uuid.uuid4()
     pipeline.add_account(conn, user_id=user_id, broker="globex", account_label="m")
 
@@ -416,7 +448,7 @@ def test_add_manual_transaction_is_a_no_op_when_the_ref_already_exists(repos, co
 
 
 def test_add_manual_transaction_passes_through_optional_fields(repos, conn):
-    _, transactions_repo = repos
+    _, transactions_repo, _ = repos
     user_id = uuid.uuid4()
     pipeline.add_account(conn, user_id=user_id, broker="acme", account_label="m")
 
@@ -501,7 +533,7 @@ def test_import_transactions_rejects_a_broker_with_no_registered_parser(repos, c
 
 
 def test_import_transactions_parses_and_saves_transactions(repos, conn, monkeypatch):
-    _, transactions_repo = repos
+    _, transactions_repo, _ = repos
     parser = FakeParser("acme", make_transactions=_txn_factory())
     monkeypatch.setattr(pipeline, "BROKER_PARSERS", {"acme": parser})
     user_id = uuid.uuid4()
@@ -695,7 +727,7 @@ def test_import_cashflow_requires_an_existing_account(repos, conn, monkeypatch):
 
 
 def test_import_cashflow_parses_and_saves_transactions(repos, conn, monkeypatch):
-    _, transactions_repo = repos
+    _, transactions_repo, _ = repos
     parser = FakeCashflowParser("acme", make_transactions=_cashflow_txn_factory())
     monkeypatch.setattr(pipeline, "CASHFLOW_PARSERS", {"acme": parser})
     user_id = uuid.uuid4()
@@ -808,3 +840,247 @@ def test_import_cashflow_propagates_a_broker_file_error_without_committing(
         )
 
     assert conn.commits == commits_before
+
+
+# --- rebuild_positions ---
+
+
+def _position_txn(**overrides):
+    kwargs = dict(
+        account_id=1,
+        broker_transaction_ref="ref-1",
+        transaction_type="BUY",
+        trade_datetime=NOW,
+        instrument_identifier=_ISIN,
+        instrument_identifier_kind="ISIN",
+        quantity=Decimal("10"),
+        price=Decimal("95.00"),
+        native_currency="EUR",
+        native_amount=Decimal("-950.00"),
+        eur_amount=Decimal("-950.0000"),
+        fx_rate=None,
+        fx_rate_source=None,
+        fees_native=None,
+    )
+    kwargs.update(overrides)
+    return CanonicalTransaction(**kwargs)
+
+
+def _seed_account(accounts_repo, *, user_id, label="m", broker="acme"):
+    accounts_repo.insert_account(None, user_id=user_id, broker=broker, account_label=label)
+    return accounts_repo.get_by_label(None, user_id=user_id, account_label=label)
+
+
+def test_rebuild_positions_saves_snapshots_for_a_mapped_instrument(repos, conn):
+    accounts_repo, transactions_repo, positions_repo = repos
+    user_id = uuid.uuid4()
+    account = _seed_account(accounts_repo, user_id=user_id)
+    transactions_repo.saved.append(_position_txn(account_id=account.id))
+    mappings = TickerMappings(isin={_ISIN: "IWDA.AS"}, symbol={})
+
+    outcome = pipeline.rebuild_positions(conn, user_id=user_id, mappings=mappings)
+
+    assert outcome.blocked == []
+    assert outcome.positions_rebuilt == 1
+    assert outcome.snapshots_saved == 1
+    assert positions_repo.snapshots[(account.id, "IWDA.AS")][0].quantity == Decimal("10.000000")
+
+
+def test_rebuild_positions_reports_unmapped_instruments_as_blocked(repos, conn):
+    accounts_repo, transactions_repo, positions_repo = repos
+    user_id = uuid.uuid4()
+    account = _seed_account(accounts_repo, user_id=user_id)
+    transactions_repo.saved.append(_position_txn(account_id=account.id))
+    mappings = TickerMappings(isin={}, symbol={})
+
+    outcome = pipeline.rebuild_positions(conn, user_id=user_id, mappings=mappings)
+
+    assert outcome.blocked == [("ISIN", _ISIN, "acme")]
+    assert outcome.positions_rebuilt == 0
+    assert outcome.snapshots_saved == 0
+    assert positions_repo.snapshots == {}
+
+
+def test_rebuild_positions_rebuilds_every_other_instrument_when_one_is_blocked(repos, conn):
+    accounts_repo, transactions_repo, positions_repo = repos
+    user_id = uuid.uuid4()
+    account = _seed_account(accounts_repo, user_id=user_id)
+    transactions_repo.saved.append(
+        _position_txn(account_id=account.id, broker_transaction_ref="ref-1")
+    )
+    transactions_repo.saved.append(
+        _position_txn(
+            account_id=account.id,
+            broker_transaction_ref="ref-2",
+            instrument_identifier="IE00XXXXXXX9",
+        )
+    )
+    mappings = TickerMappings(isin={"IE00XXXXXXX9": "VUSA.AS"}, symbol={})
+
+    outcome = pipeline.rebuild_positions(conn, user_id=user_id, mappings=mappings)
+
+    assert outcome.blocked == [("ISIN", _ISIN, "acme")]
+    assert outcome.positions_rebuilt == 1
+    assert (account.id, "VUSA.AS") in positions_repo.snapshots
+
+
+def test_rebuild_positions_commits_once_per_account_ticker_pair(repos, conn):
+    accounts_repo, transactions_repo, _ = repos
+    user_id = uuid.uuid4()
+    account = _seed_account(accounts_repo, user_id=user_id)
+    transactions_repo.saved.append(
+        _position_txn(account_id=account.id, broker_transaction_ref="ref-1")
+    )
+    transactions_repo.saved.append(
+        _position_txn(
+            account_id=account.id,
+            broker_transaction_ref="ref-2",
+            instrument_identifier="IE00XXXXXXX9",
+        )
+    )
+    mappings = TickerMappings(isin={_ISIN: "IWDA.AS", "IE00XXXXXXX9": "VUSA.AS"}, symbol={})
+    commits_before = conn.commits
+
+    pipeline.rebuild_positions(conn, user_id=user_id, mappings=mappings)
+
+    assert conn.commits - commits_before == 2
+
+
+def test_rebuild_positions_scopes_to_one_account_via_account_label(repos, conn):
+    accounts_repo, transactions_repo, positions_repo = repos
+    user_id = uuid.uuid4()
+    account_a = _seed_account(accounts_repo, user_id=user_id, label="a")
+    account_b = _seed_account(accounts_repo, user_id=user_id, label="b")
+    transactions_repo.saved.append(_position_txn(account_id=account_a.id))
+    transactions_repo.saved.append(_position_txn(account_id=account_b.id))
+    mappings = TickerMappings(isin={_ISIN: "IWDA.AS"}, symbol={})
+
+    outcome = pipeline.rebuild_positions(
+        conn, user_id=user_id, mappings=mappings, account_label="a"
+    )
+
+    assert outcome.positions_rebuilt == 1
+    assert (account_a.id, "IWDA.AS") in positions_repo.snapshots
+    assert (account_b.id, "IWDA.AS") not in positions_repo.snapshots
+
+
+def test_rebuild_positions_raises_account_not_found_for_a_bad_label(repos, conn):
+    with pytest.raises(AccountNotFound):
+        pipeline.rebuild_positions(
+            conn,
+            user_id=uuid.uuid4(),
+            mappings=TickerMappings(isin={}, symbol={}),
+            account_label="nope",
+        )
+
+
+def test_rebuild_positions_is_isolated_per_user(repos, conn):
+    accounts_repo, transactions_repo, positions_repo = repos
+    user_a, user_b = uuid.uuid4(), uuid.uuid4()
+    account_a = _seed_account(accounts_repo, user_id=user_a, label="a")
+    _seed_account(accounts_repo, user_id=user_b, label="b")
+    transactions_repo.saved.append(_position_txn(account_id=account_a.id))
+    mappings = TickerMappings(isin={_ISIN: "IWDA.AS"}, symbol={})
+
+    outcome = pipeline.rebuild_positions(conn, user_id=user_b, mappings=mappings)
+
+    assert outcome.positions_rebuilt == 0
+    assert outcome.blocked == []
+    assert positions_repo.snapshots == {}
+
+
+def test_rebuild_positions_handles_one_instrument_in_two_accounts_two_currencies(repos, conn):
+    """Each account replays independently -- no anomaly, two distinct snapshot sets. See
+    docs/schema.md's note on the same instrument held in two currencies across two accounts."""
+    accounts_repo, transactions_repo, positions_repo = repos
+    user_id = uuid.uuid4()
+    account_eur = _seed_account(accounts_repo, user_id=user_id, label="eur")
+    account_pln = _seed_account(accounts_repo, user_id=user_id, label="pln")
+    transactions_repo.saved.append(_position_txn(account_id=account_eur.id))
+    transactions_repo.saved.append(
+        _position_txn(
+            account_id=account_pln.id,
+            broker_transaction_ref="ref-pln",
+            native_currency="PLN",
+            native_amount=Decimal("-4100.00"),
+            eur_amount=Decimal("-953.4884"),
+            fx_rate=Decimal("4.3000"),
+            fx_rate_source="broker_reported",
+        )
+    )
+    mappings = TickerMappings(isin={_ISIN: "IWDA.AS"}, symbol={})
+
+    outcome = pipeline.rebuild_positions(conn, user_id=user_id, mappings=mappings)
+
+    assert outcome.anomalies == []
+    eur_snapshot = positions_repo.snapshots[(account_eur.id, "IWDA.AS")][0]
+    pln_snapshot = positions_repo.snapshots[(account_pln.id, "IWDA.AS")][0]
+    assert eur_snapshot.native_currency == "EUR"
+    assert pln_snapshot.native_currency == "PLN"
+    assert eur_snapshot.average_cost_eur != pln_snapshot.average_cost_eur
+
+
+def test_rebuild_positions_surfaces_calculator_anomalies(repos, conn):
+    accounts_repo, transactions_repo, _ = repos
+    user_id = uuid.uuid4()
+    account = _seed_account(accounts_repo, user_id=user_id)
+    transactions_repo.saved.append(
+        _position_txn(
+            account_id=account.id,
+            transaction_type="SELL",
+            quantity=Decimal("-10"),
+            native_amount=Decimal("950.00"),
+            eur_amount=Decimal("950.0000"),
+        )
+    )
+    mappings = TickerMappings(isin={_ISIN: "IWDA.AS"}, symbol={})
+
+    outcome = pipeline.rebuild_positions(conn, user_id=user_id, mappings=mappings)
+
+    assert len(outcome.anomalies) == 1
+    assert "IWDA.AS" in outcome.anomalies[0]
+
+
+def test_rebuild_positions_prunes_a_ticker_no_longer_produced(repos, conn):
+    """A ticker mapping re-pointed to a different canonical_ticker leaves the old ticker's
+    snapshots stale; a full rebuild removes them rather than letting them survive forever."""
+    accounts_repo, transactions_repo, positions_repo = repos
+    user_id = uuid.uuid4()
+    account = _seed_account(accounts_repo, user_id=user_id)
+    transactions_repo.saved.append(_position_txn(account_id=account.id))
+    positions_repo.snapshots[(account.id, "OLD.AS")] = ["stale"]
+    mappings = TickerMappings(isin={_ISIN: "IWDA.AS"}, symbol={})
+
+    outcome = pipeline.rebuild_positions(conn, user_id=user_id, mappings=mappings)
+
+    assert outcome.positions_removed == 1
+    assert (account.id, "OLD.AS") not in positions_repo.snapshots
+
+
+def test_rebuild_positions_does_not_prune_when_the_account_has_a_blocked_instrument(repos, conn):
+    """A blocked instrument's old canonical_ticker is indistinguishable from a genuinely stale
+    one, so pruning is skipped for that account rather than risking a wrong delete."""
+    accounts_repo, transactions_repo, positions_repo = repos
+    user_id = uuid.uuid4()
+    account = _seed_account(accounts_repo, user_id=user_id)
+    transactions_repo.saved.append(_position_txn(account_id=account.id))
+    positions_repo.snapshots[(account.id, "OLD.AS")] = ["stale"]
+    mappings = TickerMappings(isin={}, symbol={})  # now unmapped -> blocked
+
+    outcome = pipeline.rebuild_positions(conn, user_id=user_id, mappings=mappings)
+
+    assert outcome.positions_removed == 0
+    assert (account.id, "OLD.AS") in positions_repo.snapshots
+
+
+def test_rebuild_positions_with_no_transactions_reports_nothing(repos, conn):
+    accounts_repo, _, _ = repos
+    user_id = uuid.uuid4()
+    _seed_account(accounts_repo, user_id=user_id)
+    mappings = TickerMappings(isin={}, symbol={})
+
+    outcome = pipeline.rebuild_positions(conn, user_id=user_id, mappings=mappings)
+
+    assert outcome.positions_rebuilt == 0
+    assert outcome.snapshots_saved == 0
+    assert outcome.blocked == []

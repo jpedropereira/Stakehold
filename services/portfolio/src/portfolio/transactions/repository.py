@@ -18,6 +18,15 @@ _DISTINCT_INSTRUMENTS_SQL = """
     ORDER BY t.instrument_identifier_kind, t.instrument_identifier, a.broker
 """
 
+_LIST_BY_ACCOUNT_SQL = """
+    SELECT account_id, broker_transaction_ref, transaction_type, trade_datetime,
+           instrument_identifier, instrument_identifier_kind, quantity, price,
+           native_currency, native_amount, eur_amount, fx_rate, fx_rate_source, fees_native
+    FROM transactions
+    WHERE account_id = %s
+    ORDER BY trade_datetime, broker_transaction_ref
+"""
+
 _INSERT_SQL = """
     INSERT INTO transactions (
         account_id, broker_transaction_ref, transaction_type, trade_datetime,
@@ -78,3 +87,15 @@ def list_distinct_instruments(conn, user_id: UUID) -> list[tuple[str, str, str]]
     with conn.cursor() as cur:
         cur.execute(_DISTINCT_INSTRUMENTS_SQL, (user_id,))
         return [(kind, identifier, broker) for kind, identifier, broker in cur.fetchall()]
+
+
+def list_by_account(conn, account_id: int) -> list[CanonicalTransaction]:
+    """This account's full transaction log, oldest first -- the read the positions rebuild
+    (task 7) replays. Unscoped by user_id, like insert_transactions: the caller only ever
+    reaches this with an account_id already resolved through accounts/repository.py, the
+    isolation chokepoint. Ordered by (trade_datetime, broker_transaction_ref) -- the ref is only
+    a tiebreaker for same-timestamp rows, served by the existing (account_id, trade_datetime)
+    index."""
+    with conn.cursor() as cur:
+        cur.execute(_LIST_BY_ACCOUNT_SQL, (account_id,))
+        return [CanonicalTransaction(*row) for row in cur.fetchall()]

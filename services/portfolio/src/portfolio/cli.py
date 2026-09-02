@@ -89,6 +89,13 @@ def _import_cashflow(args: argparse.Namespace) -> int:
     return _report(result, "transaction(s) saved")
 
 
+def _rebuild_positions(args: argparse.Namespace) -> int:
+    result = jobs.run_rebuild_positions(user_id=args.user, account_label=args.account)
+    for instrument in result["blocked_instruments"]:
+        print(f"{instrument['kind']}\t{instrument['identifier']}\t{instrument['broker']}")
+    return _report(result, "position snapshot(s) saved")
+
+
 def _list_unmapped_instruments(args: argparse.Namespace) -> int:
     result = jobs.run_list_unmapped_instruments(user_id=args.user)
     for instrument in result["unmapped_instruments"]:
@@ -212,6 +219,17 @@ def _build_parser() -> argparse.ArgumentParser:
         help="The --label of an existing account -- its own broker picks the parser used",
     )
     cashflow_parser.set_defaults(handler=_import_cashflow)
+
+    positions_parser = subparsers.add_parser(
+        "rebuild-positions", help="Replay transactions into position snapshots"
+    )
+    positions_parser.add_argument(
+        "--user", required=True, type=_uuid, help="The auth-issued user id"
+    )
+    positions_parser.add_argument(
+        "--account", help="The --label of one account to rebuild; omit to rebuild every account"
+    )
+    positions_parser.set_defaults(handler=_rebuild_positions)
 
     return parser
 

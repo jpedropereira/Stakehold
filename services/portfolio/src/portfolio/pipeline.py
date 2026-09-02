@@ -9,6 +9,7 @@ service.py's repository modules.
 """
 
 import logging
+from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -30,6 +31,8 @@ from portfolio.errors import (
     InvalidBroker,
     InvalidTransaction,
 )
+from portfolio.positions import repository as positions_repository
+from portfolio.positions.calculator import replay
 from portfolio.ticker_mapping.loader import TickerMappings
 from portfolio.transactions import repository as transactions_repository
 from portfolio.transactions.base import (
@@ -309,3 +312,107 @@ def import_cashflow(
 
     with transaction(conn):
         return transactions_repository.insert_transactions(conn, transactions)
+
+
+_POSITION_MOVING_TYPES = ("BUY", "SELL")
+
+
+@dataclass(frozen=True)
+class RebuildOutcome:
+    snapshots_saved: int
+    positions_rebuilt: int
+    positions_removed: int
+    blocked: list[tuple[str, str, str]]  # (kind, identifier, broker)
+    anomalies: list[str]
+
+
+def rebuild_positions(
+    conn, *, user_id: UUID, mappings: TickerMappings, account_label: str | None = None
+) -> RebuildOutcome:
+    """Replay every relevant account's transaction log into position_snapshots.
+
+    Needs no price or FX data -- quantity and average cost are pure functions of the transaction
+    log (docs/architecture.md). Scoped per account: an --account rebuilds only that account
+    (raising AccountNotFound if it doesn't resolve for this user, the isolation chokepoint);
+    omitting it rebuilds every account this user owns.
+
+    An unmapped instrument blocks only its own ticker -- reported in `blocked`, never a silent
+    skip -- while every other (account, ticker) in the run still gets rebuilt. A ledger anomaly
+    (the same ticker traded in two currencies within one account, or a running quantity going
+    negative) is reported in `anomalies` but never blocks anything -- see
+    positions/calculator.py's "warn but compute" policy.
+
+    Each (account, ticker) pair's delete-then-insert is wrapped in its own transaction here,
+    rather than inside positions/repository.py, so that pair's replacement is atomic without
+    inverting the "repositories never commit" rule for that one module.
+    """
+    if account_label is not None:
+        account = accounts_repository.get_by_label(
+            conn, user_id=user_id, account_label=account_label
+        )
+        if account is None:
+            raise AccountNotFound(f"no account {account_label!r} for this user")
+        accounts = [account]
+    else:
+        accounts = accounts_repository.list_by_user(conn, user_id)
+
+    blocked: list[tuple[str, str, str]] = []
+    anomalies: list[str] = []
+    snapshots_saved = 0
+    positions_rebuilt = 0
+    positions_removed = 0
+
+    for account in accounts:
+        transactions = transactions_repository.list_by_account(conn, account.id)
+
+        by_ticker: dict[str, list[CanonicalTransaction]] = {}
+        account_blocked: list[tuple[str, str, str]] = []
+        for txn in transactions:
+            if txn.transaction_type not in _POSITION_MOVING_TYPES:
+                continue
+            ticker = mappings.resolve(
+                txn.instrument_identifier_kind, txn.instrument_identifier, broker=account.broker
+            )
+            if ticker is None:
+                account_blocked.append(
+                    (txn.instrument_identifier_kind, txn.instrument_identifier, account.broker)
+                )
+                continue
+            by_ticker.setdefault(ticker, []).append(txn)
+
+        for ticker, ticker_transactions in by_ticker.items():
+            snapshots, ticker_anomalies = replay(account.id, ticker, ticker_transactions)
+            anomalies.extend(ticker_anomalies)
+            with transaction(conn):
+                saved = positions_repository.replace_snapshots(
+                    conn, account_id=account.id, canonical_ticker=ticker, snapshots=snapshots
+                )
+            snapshots_saved += saved
+            positions_rebuilt += 1
+
+        # Pruning a ticker this rebuild no longer produced (e.g. a mapping was re-pointed) is
+        # only safe when nothing in this account is currently blocked -- a blocked instrument's
+        # old canonical_ticker (from before its mapping was removed) is indistinguishable from a
+        # genuinely stale one here, and "blocked means don't touch, not delete"
+        # (docs/architecture.md) means the ambiguous case must not delete.
+        if not account_blocked:
+            stale_tickers = set(positions_repository.list_tickers(conn, account.id)) - set(
+                by_ticker
+            )
+            for ticker in stale_tickers:
+                with transaction(conn):
+                    removed = positions_repository.delete_snapshots(
+                        conn, account_id=account.id, canonical_ticker=ticker
+                    )
+                if removed:
+                    positions_removed += 1
+
+        blocked.extend(account_blocked)
+
+    return RebuildOutcome(
+        snapshots_saved=snapshots_saved,
+        positions_rebuilt=positions_rebuilt,
+        positions_removed=positions_removed,
+        blocked=sorted(set(blocked)),
+        anomalies=anomalies,
+    )

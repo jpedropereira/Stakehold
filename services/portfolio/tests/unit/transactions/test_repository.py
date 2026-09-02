@@ -4,6 +4,7 @@ from decimal import Decimal
 from portfolio.transactions.base import CanonicalTransaction
 from portfolio.transactions.repository import (
     insert_transactions,
+    list_by_account,
     list_distinct_instruments,
 )
 
@@ -146,3 +147,53 @@ def test_list_distinct_instruments_filters_out_cash_only_rows():
 
     sql, _ = conn._cursor.executed[0]
     assert "IS NOT NULL" in sql
+
+
+# --- list_by_account ---
+
+
+def test_list_by_account_returns_canonical_transactions_in_row_order():
+    txn = _txn()
+    conn = FakeReadConnection(
+        rows=[
+            (
+                txn.account_id,
+                txn.broker_transaction_ref,
+                txn.transaction_type,
+                txn.trade_datetime,
+                txn.instrument_identifier,
+                txn.instrument_identifier_kind,
+                txn.quantity,
+                txn.price,
+                txn.native_currency,
+                txn.native_amount,
+                txn.eur_amount,
+                txn.fx_rate,
+                txn.fx_rate_source,
+                txn.fees_native,
+            )
+        ]
+    )
+
+    result = list_by_account(conn, account_id=1)
+
+    assert result == [txn]
+
+
+def test_list_by_account_scopes_by_account_id():
+    conn = FakeReadConnection(rows=[])
+
+    list_by_account(conn, account_id=42)
+
+    sql, params = conn._cursor.executed[0]
+    assert "WHERE account_id = %s" in sql
+    assert params == (42,)
+
+
+def test_list_by_account_orders_by_trade_datetime_then_ref():
+    conn = FakeReadConnection(rows=[])
+
+    list_by_account(conn, account_id=1)
+
+    sql, _ = conn._cursor.executed[0]
+    assert "ORDER BY trade_datetime, broker_transaction_ref" in sql
