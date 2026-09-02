@@ -2,10 +2,12 @@ import argparse
 import sys
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 from uuid import UUID
 
 from portfolio import jobs
 from portfolio.run_result import STATUS_NOTHING_TO_DO, STATUS_OK
+from portfolio.settings import SettingsError
 from portfolio.transactions.base import TRANSACTION_TYPES
 
 _SUCCESS_STATUSES = {STATUS_OK, STATUS_NOTHING_TO_DO}
@@ -66,6 +68,34 @@ def _account_list(args: argparse.Namespace) -> int:
     return _report(result, "account(s)", count_key="accounts_listed")
 
 
+def _broker_list(_args: argparse.Namespace) -> int:
+    result = jobs.run_list_available_brokers()
+    for broker in result["brokers"]:
+        print(broker)
+    return _report(result, "broker parser(s) available", count_key="brokers_available")
+
+
+def _import_transactions(args: argparse.Namespace) -> int:
+    result = jobs.run_import_transactions(
+        user_id=args.user, account_label=args.account, file_path=args.file
+    )
+    return _report(result, "transaction(s) saved")
+
+
+def _import_cashflow(args: argparse.Namespace) -> int:
+    result = jobs.run_import_cashflow(
+        user_id=args.user, account_label=args.account, file_path=args.file
+    )
+    return _report(result, "transaction(s) saved")
+
+
+def _list_unmapped_instruments(args: argparse.Namespace) -> int:
+    result = jobs.run_list_unmapped_instruments(user_id=args.user)
+    for instrument in result["unmapped_instruments"]:
+        print(f"{instrument['kind']}\t{instrument['identifier']}\t{instrument['broker']}")
+    return _report(result, "instrument(s) unmapped", count_key="instruments_unmapped")
+
+
 def _add_transaction(args: argparse.Namespace) -> int:
     result = jobs.run_add_transaction(
         user_id=args.user,
@@ -99,13 +129,24 @@ def _build_parser() -> argparse.ArgumentParser:
 
     add_parser = account_subparsers.add_parser("add", help="Create an account")
     add_parser.add_argument("--user", required=True, type=_uuid, help="The auth-issued user id")
-    add_parser.add_argument("--broker", required=True, help="e.g. acme, globex")
+    add_parser.add_argument(
+        "--broker",
+        required=True,
+        help="A free-text label for this account's broker -- not validated against a fixed list",
+    )
     add_parser.add_argument("--label", required=True, help="This user's own name for the account")
     add_parser.set_defaults(handler=_account_add)
 
     list_parser = account_subparsers.add_parser("list", help="List a user's accounts")
     list_parser.add_argument("--user", required=True, type=_uuid, help="The auth-issued user id")
     list_parser.set_defaults(handler=_account_list)
+
+    broker_parser = subparsers.add_parser("broker", help="Broker-parser plugin commands")
+    broker_subparsers = broker_parser.add_subparsers(dest="broker_command", required=True)
+    broker_list_parser = broker_subparsers.add_parser(
+        "list", help="List brokers with a parser currently installed"
+    )
+    broker_list_parser.set_defaults(handler=_broker_list)
 
     txn_parser = subparsers.add_parser("add-transaction", help="Record a manual transaction")
     txn_parser.add_argument("--user", required=True, type=_uuid, help="The auth-issued user id")
@@ -140,13 +181,54 @@ def _build_parser() -> argparse.ArgumentParser:
     txn_parser.add_argument("--fees", type=_decimal, help="Native currency")
     txn_parser.set_defaults(handler=_add_transaction)
 
+    import_parser = subparsers.add_parser("import-transactions", help="Import a broker export file")
+    import_parser.add_argument("--user", required=True, type=_uuid, help="The auth-issued user id")
+    import_parser.add_argument("--file", required=True, type=Path, help="Path to the export file")
+    import_parser.add_argument(
+        "--account",
+        required=True,
+        help="The --label of an existing account -- its own broker picks the parser used",
+    )
+    import_parser.set_defaults(handler=_import_transactions)
+
+    unmapped_parser = subparsers.add_parser(
+        "list-unmapped-instruments", help="List instruments with no ticker mapping"
+    )
+    unmapped_parser.add_argument(
+        "--user", required=True, type=_uuid, help="The auth-issued user id"
+    )
+    unmapped_parser.set_defaults(handler=_list_unmapped_instruments)
+
+    cashflow_parser = subparsers.add_parser(
+        "import-cashflow", help="Import a broker's cash-ledger (Account) export"
+    )
+    cashflow_parser.add_argument(
+        "--user", required=True, type=_uuid, help="The auth-issued user id"
+    )
+    cashflow_parser.add_argument("--file", required=True, type=Path, help="Path to the export file")
+    cashflow_parser.add_argument(
+        "--account",
+        required=True,
+        help="The --label of an existing account -- its own broker picks the parser used",
+    )
+    cashflow_parser.set_defaults(handler=_import_cashflow)
+
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
-    return args.handler(args)
+    try:
+        return args.handler(args)
+    except SettingsError as exc:
+        # A misconfigured deployment (a missing env var), not a domain failure -- every
+        # PortfolioError is already caught inside jobs.py and reported as a clean partial
+        # result, but SettingsError deliberately isn't one of those (see settings.py), so
+        # without this it would otherwise surface as a raw traceback instead of a one-line,
+        # actionable message.
+        print(f"configuration error: {exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

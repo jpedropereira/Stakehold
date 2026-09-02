@@ -1148,6 +1148,8 @@ source = { editable = "services/portfolio" }
 dependencies = [
     { name = "psycopg", extra = ["binary"] },
     { name = "python-dotenv" },
+    { name = "pyyaml" },
+    { name = "requests" },
     { name = "shared" },
 ]
 
@@ -1155,6 +1157,8 @@ dependencies = [
 requires-dist = [
     { name = "psycopg", extras = ["binary"], specifier = ">=3.3" },
     { name = "python-dotenv", specifier = ">=1.0" },
+    { name = "pyyaml", specifier = ">=6.0" },
+    { name = "requests", specifier = ">=2.32" },
     { name = "shared", editable = "services/shared" },
 ]
 

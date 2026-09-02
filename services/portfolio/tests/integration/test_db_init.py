@@ -125,7 +125,7 @@ def test_reimporting_the_same_broker_ref_is_a_no_op(pg_connect):
 
 
 def test_the_same_broker_ref_in_two_accounts_is_two_transactions(pg_connect):
-    """Why the key is account-scoped: a content-hash-derived ref can collide across accounts."""
+    """Why the key is account-scoped: Globex's content hash can collide across accounts."""
     with pg_connect() as conn:
         with conn.cursor() as cur:
             user_id = uuid.uuid4()

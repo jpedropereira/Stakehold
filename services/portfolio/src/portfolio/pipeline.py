@@ -9,18 +9,28 @@ service.py's repository modules.
 """
 
 import logging
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
+from pathlib import Path
 from uuid import UUID
 
 from portfolio.accounts import repository as accounts_repository
 from portfolio.accounts.repository import Account
+from portfolio.broker_import.base import BrokerParser, CashflowParser
+from portfolio.broker_import.discovery import (
+    discover_broker_parsers,
+    discover_cashflow_parsers,
+)
+from portfolio.datastore_client.base import DataStoreClient
 from portfolio.errors import (
     AccountLabelConflict,
     AccountNotFound,
+    BrokerParserNotFound,
+    BrokerPluginError,
+    InvalidBroker,
     InvalidTransaction,
-    UnknownBroker,
 )
+from portfolio.ticker_mapping.loader import TickerMappings
 from portfolio.transactions import repository as transactions_repository
 from portfolio.transactions.base import (
     FX_RATE_SOURCE_MANUAL,
@@ -32,20 +42,93 @@ from shared.db.connection import transaction
 
 logger = logging.getLogger(__name__)
 
-# Placeholder until task 6 builds broker_import/'s BROKER_PARSERS registry, at which point this
-# becomes tuple(BROKER_PARSERS) -- see docs/architecture.md.
-KNOWN_BROKERS = ("acme", "globex")
+# Same pattern as data-store's SCRAPERS / MARKET_DATA_SOURCES -- a Protocol plus a registry dict,
+# no branching in flow functions. Populated once, at import time, by discovering whatever
+# implementations are installed under the two entry-point groups -- pipeline.py itself never
+# imports a concrete parser. See docs/architecture.md's "Extension points" section.
+#
+# A broken plugin installation must not take down every CLI command -- account creation and
+# manual entry need neither registry (see add_account's docstring), so a discovery failure is
+# caught here and re-raised lazily, only from the functions that actually read the affected
+# registry (list_available_brokers/import_transactions for BROKER_PARSERS,
+# import_cashflow for CASHFLOW_PARSERS).
+BROKER_PARSERS: dict[str, BrokerParser] = {}
+CASHFLOW_PARSERS: dict[str, CashflowParser] = {}
+_BROKER_DISCOVERY_ERROR: BrokerPluginError | None = None
+_CASHFLOW_DISCOVERY_ERROR: BrokerPluginError | None = None
+
+try:
+    BROKER_PARSERS = discover_broker_parsers()
+except BrokerPluginError as exc:
+    _BROKER_DISCOVERY_ERROR = exc
+    logger.error("broker-parser plugin discovery failed at import time -- %s", exc)
+
+try:
+    CASHFLOW_PARSERS = discover_cashflow_parsers()
+except BrokerPluginError as exc:
+    _CASHFLOW_DISCOVERY_ERROR = exc
+    logger.error("cashflow-parser plugin discovery failed at import time -- %s", exc)
+
+
+def list_available_brokers() -> list[str]:
+    """The broker keys a parser is currently registered for. Pure, in-memory -- no connection."""
+    if _BROKER_DISCOVERY_ERROR is not None:
+        raise _BROKER_DISCOVERY_ERROR
+    return sorted(BROKER_PARSERS)
+
+
+def _resolve_import_context(
+    conn,
+    *,
+    registry: dict[str, object],
+    discovery_error: BrokerPluginError | None,
+    parser_noun: str,
+    user_id: UUID,
+    account_label: str,
+) -> tuple[object, Account]:
+    """Shared by import_transactions/import_cashflow: resolve the target account and its
+    registered parser, or raise the same domain errors either flow raises on a bad --account.
+    The account's own `broker` column is the source of truth for which parser to use -- there is
+    no separate --broker argument to agree or disagree with it. `parser_noun` only changes
+    BrokerParserNotFound's message ("parser" vs "cashflow parser")."""
+    if discovery_error is not None:
+        raise discovery_error
+
+    account = accounts_repository.get_by_label(conn, user_id=user_id, account_label=account_label)
+    if account is None:
+        raise AccountNotFound(f"no account {account_label!r} for this user")
+
+    parser = registry.get(account.broker)
+    if parser is None:
+        raise BrokerParserNotFound(
+            f"no {parser_noun} registered for broker {account.broker!r} (account "
+            f"{account_label!r}) -- check for a typo, or install the plugin package that "
+            f"provides one. Currently registered: {sorted(registry) or '(none)'}"
+        )
+    return parser, account
+
+
+_MAX_BROKER_LENGTH = 50  # must match accounts.broker's VARCHAR(50) in db/schema.sql
 
 
 def add_account(conn, *, user_id: UUID, broker: str, account_label: str) -> int:
     """Create one account. Returns 1 if created, 0 if this (user, label) already exists under
-    the same broker -- a safe no-op, reported upstream as nothing_to_do. Raises UnknownBroker
-    for an unrecognized broker, or AccountLabelConflict if the label is already taken by this
-    user under a *different* broker -- silently swallowing that disagreement would be exactly
-    the silent-success the logging rule forbids.
+    the same broker -- a safe no-op, reported upstream as nothing_to_do. `broker` is a free-text
+    label, not checked against BROKER_PARSERS -- account creation (and therefore manual
+    transaction entry) must work with zero broker-parser plugins installed; only
+    import_transactions needs a registered parser, and checks for one itself. Raises
+    InvalidBroker for a blank/whitespace-only broker or one longer than the column can hold, or
+    AccountLabelConflict if the label is already taken by this user under a *different* broker --
+    silently swallowing that disagreement would be exactly the silent-success the logging rule
+    forbids. Stored with surrounding whitespace stripped, so incidental whitespace (a stray
+    space from copy-pasting --broker) can't make an otherwise-identical broker compare unequal
+    later, e.g. against import_transactions/import_cashflow's own --broker.
     """
-    if broker not in KNOWN_BROKERS:
-        raise UnknownBroker(f"unrecognized broker: {broker!r}")
+    broker = broker.strip()
+    if not broker:
+        raise InvalidBroker("broker must not be blank")
+    if len(broker) > _MAX_BROKER_LENGTH:
+        raise InvalidBroker(f"broker must be at most {_MAX_BROKER_LENGTH} characters: {broker!r}")
 
     with transaction(conn):
         account_id = accounts_repository.insert_account(
@@ -133,3 +216,96 @@ def add_manual_transaction(
 
     with transaction(conn):
         return transactions_repository.insert_transactions(conn, [txn])
+
+
+def import_transactions(conn, *, user_id: UUID, account_label: str, file_path: Path) -> int:
+    """Parse one broker export file and persist its transactions for one account.
+
+    Returns the count actually written -- re-importing a file whose date range overlaps a
+    previous import is a safe no-op for the rows already seen, via the same
+    (account_id, broker_transaction_ref) idempotency add_manual_transaction relies on. The
+    parser used is looked up from the resolved account's own `broker` column -- there is no
+    separate --broker argument to keep in agreement with it. Raises AccountNotFound if
+    --account doesn't resolve for this user (the isolation chokepoint), BrokerParserNotFound if
+    no parser is registered for that account's broker, or whatever the parser/validate() raise
+    for a malformed file.
+    """
+    parser, account = _resolve_import_context(
+        conn,
+        registry=BROKER_PARSERS,
+        discovery_error=_BROKER_DISCOVERY_ERROR,
+        parser_noun="parser",
+        user_id=user_id,
+        account_label=account_label,
+    )
+
+    transactions = parser.parse(file_path, account.id)
+    for txn in transactions:
+        validate(txn)
+
+    with transaction(conn):
+        return transactions_repository.insert_transactions(conn, transactions)
+
+
+def list_unmapped_instruments(
+    conn, *, user_id: UUID, mappings: TickerMappings
+) -> list[tuple[str, str, str]]:
+    """Every (kind, identifier, broker) this user's transactions reference that `mappings` can't
+    resolve to a canonical_ticker -- see docs/architecture.md's "unmapped instrument blocks its
+    own rebuild, loudly" rule. Read-only; diffed in application code since the mapping is a YAML
+    file, not a database table (docs/schema.md)."""
+    instruments = transactions_repository.list_distinct_instruments(conn, user_id)
+    return [
+        (kind, identifier, broker)
+        for kind, identifier, broker in instruments
+        if mappings.resolve(kind, identifier, broker=broker) is None
+    ]
+
+
+def import_cashflow(
+    conn,
+    *,
+    user_id: UUID,
+    account_label: str,
+    file_path: Path,
+    datastore_client: DataStoreClient,
+) -> int:
+    """Parse and persist one broker's cash-ledger export (deposits, withdrawals, dividends, ...)
+    for one account, via the CASHFLOW_PARSERS registry -- the separate registry
+    import_transactions/BROKER_PARSERS doesn't share, since a cash-ledger format needs a live
+    FX-rate lookup mid-parse that a plain BrokerParser never carries. See broker_import/base.py's
+    CashflowParser Protocol.
+
+    Returns the count actually written, idempotent the same way import_transactions is. The
+    parser used is looked up from the resolved account's own `broker` column, same as
+    import_transactions. Raises AccountNotFound if --account doesn't resolve for this user (the
+    isolation chokepoint), BrokerParserNotFound if no cashflow parser is registered for that
+    account's broker, or whatever the parser's parse()/validate() raise for a malformed file or
+    an unresolvable FX rate.
+    """
+    parser, account = _resolve_import_context(
+        conn,
+        registry=CASHFLOW_PARSERS,
+        discovery_error=_CASHFLOW_DISCOVERY_ERROR,
+        parser_noun="cashflow parser",
+        user_id=user_id,
+        account_label=account_label,
+    )
+
+    # A cash-ledger export commonly has many rows sharing one (currency, date) -- a dividend
+    # batch, several same-day fees -- so this cache turns N row-level HTTP calls into one per
+    # distinct pair actually seen in this file.
+    fx_rate_cache: dict[tuple[str, date], Decimal | None] = {}
+
+    def resolve_fx_rate(currency: str, on_date: date) -> Decimal | None:
+        key = (currency, on_date)
+        if key not in fx_rate_cache:
+            fx_rate_cache[key] = datastore_client.get_fx_rate("EUR", currency, on_date)
+        return fx_rate_cache[key]
+
+    transactions = parser.parse(file_path, account.id, resolve_fx_rate)
+    for txn in transactions:
+        validate(txn)
+
+    with transaction(conn):
+        return transactions_repository.insert_transactions(conn, transactions)

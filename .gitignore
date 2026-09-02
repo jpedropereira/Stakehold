@@ -52,6 +52,10 @@ services/data-store/config/currencies.yaml
 # Regimes config (services/data-store) — hand-curated, unversioned
 services/data-store/config/regimes.csv
 
+# Ticker mapping config (services/portfolio) — this deployment's own ISIN/symbol -> canonical
+# ticker choices, not generic reference data. See configs/ticker_mappings.yaml.example.
+services/portfolio/configs/ticker_mappings.yaml
+
 # Macro region config (services/data-store) — see README.md for why and the
 # macro_regions.yaml.example template
 services/data-store/config/macro_regions.yaml

@@ -1,0 +1,18 @@
+# This deployment's own broker-instrument -> data-store-canonical-ticker mapping. Copy this file
+# to ticker_mappings.yaml (gitignored) and fill it in as `list-unmapped-instruments` surfaces
+# instruments to map. See docs/architecture.md's "Conceptual entity model" (TickerLink) and
+# "Cross-cutting decisions" for why this is a hand-edited file rather than a database table.
+
+# ISIN mappings are global: an ISIN identifies one instrument worldwide, so one mapping covers
+# every ISIN-reporting broker.
+isin:
+  IE00B4L5Y983: IWDA.AS
+  IE00B579F325: SGLD.L
+
+# SYMBOL mappings are scoped per broker: a bare ticker symbol is not globally unambiguous, so the
+# same raw symbol from two different brokers (or exchanges) is not assumed to be the same
+# instrument.
+symbol:
+  example-broker:
+    IWDA: IWDA.AS
+    SGLD: SGLD.L

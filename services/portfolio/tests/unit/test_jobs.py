@@ -2,20 +2,30 @@ import logging
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
+from pathlib import Path
 
+import pytest
 from portfolio import jobs
 from portfolio.accounts.repository import Account
-from portfolio.errors import AccountNotFound, UnknownBroker
+from portfolio.errors import AccountNotFound, TickerMappingError
+from portfolio.settings import SettingsError
+from portfolio.ticker_mapping.loader import TickerMappings
 
 _FAKE_DATABASE_URL = "postgresql://portfolio:pw@localhost/app"  # pragma: allowlist secret
 _FAKE_ADMIN_DATABASE_URL = "postgresql://admin:pw@localhost/app"  # pragma: allowlist secret
 
 
-def _fake_settings():
+def _fake_settings(*, datastore_api_url=None, internal_api_secret=None):
     return type(
         "S",
         (),
-        {"database_url": _FAKE_DATABASE_URL, "admin_database_url": _FAKE_ADMIN_DATABASE_URL},
+        {
+            "database_url": _FAKE_DATABASE_URL,
+            "admin_database_url": _FAKE_ADMIN_DATABASE_URL,
+            "ticker_mappings_path": Path("configs/ticker_mappings.yaml"),
+            "datastore_api_url": datastore_api_url,
+            "internal_api_secret": internal_api_secret,
+        },
     )()
 
 
@@ -254,7 +264,7 @@ def test_run_add_account_reports_partial_and_closes_connection_on_domain_error(m
     fake_conn = _patch_new_job_common(monkeypatch)
 
     def boom(conn, **kw):
-        raise UnknownBroker("nope")
+        raise AccountNotFound("nope")
 
     monkeypatch.setattr(jobs.pipeline, "add_account", boom)
 
@@ -318,6 +328,45 @@ def test_run_list_accounts_closes_the_connection(monkeypatch):
     assert fake_conn.closed is True
 
 
+# --- run_list_available_brokers ---
+
+
+def test_run_list_available_brokers_reports_ok_with_the_broker_payload(monkeypatch):
+    monkeypatch.setattr(jobs.pipeline, "list_available_brokers", lambda: ["acme", "globex"])
+
+    result = jobs.run_list_available_brokers()
+
+    assert result["status"] == "ok"
+    assert result["rows_saved"] == 0
+    assert result["brokers_available"] == 2
+    assert result["brokers"] == ["acme", "globex"]
+
+
+def test_run_list_available_brokers_reports_nothing_to_do_when_empty(monkeypatch):
+    monkeypatch.setattr(jobs.pipeline, "list_available_brokers", lambda: [])
+
+    result = jobs.run_list_available_brokers()
+
+    assert result["status"] == "nothing_to_do"
+    assert result["brokers"] == []
+
+
+def test_run_list_available_brokers_loads_no_settings_and_opens_no_connection(monkeypatch):
+    """The one job with nothing to configure or connect -- BROKER_PARSERS is in-memory."""
+
+    def boom_settings():
+        raise AssertionError("run_list_available_brokers must not call load_settings")
+
+    def boom_connection(url):
+        raise AssertionError("run_list_available_brokers must not open a connection")
+
+    monkeypatch.setattr(jobs, "load_settings", boom_settings)
+    monkeypatch.setattr(jobs, "get_connection", boom_connection)
+    monkeypatch.setattr(jobs.pipeline, "list_available_brokers", lambda: [])
+
+    jobs.run_list_available_brokers()
+
+
 # --- run_add_transaction ---
 
 _TXN_KWARGS = dict(
@@ -361,3 +410,247 @@ def test_run_add_transaction_reports_partial_and_closes_connection_on_domain_err
 
     assert result == {"status": "partial", "rows_saved": 0, "transactions_saved": 0}
     assert fake_conn.closed is True
+
+
+# --- run_import_transactions ---
+
+_IMPORT_KWARGS = dict(account_label="m", file_path=Path("acme.csv"))
+
+
+def test_run_import_transactions_reports_ok_when_saved(monkeypatch):
+    fake_conn = _patch_new_job_common(monkeypatch)
+    monkeypatch.setattr(jobs.pipeline, "import_transactions", lambda conn, **kw: 82)
+
+    result = jobs.run_import_transactions(user_id=uuid.uuid4(), **_IMPORT_KWARGS)
+
+    assert result == {"status": "ok", "rows_saved": 82, "transactions_saved": 82}
+    assert fake_conn.closed is True
+
+
+def test_run_import_transactions_reports_nothing_to_do_on_a_reimport(monkeypatch):
+    _patch_new_job_common(monkeypatch)
+    monkeypatch.setattr(jobs.pipeline, "import_transactions", lambda conn, **kw: 0)
+
+    result = jobs.run_import_transactions(user_id=uuid.uuid4(), **_IMPORT_KWARGS)
+
+    assert result == {"status": "nothing_to_do", "rows_saved": 0, "transactions_saved": 0}
+
+
+def test_run_import_transactions_reports_partial_and_closes_connection_on_domain_error(
+    monkeypatch,
+):
+    fake_conn = _patch_new_job_common(monkeypatch)
+
+    def boom(conn, **kw):
+        raise AccountNotFound("nope")
+
+    monkeypatch.setattr(jobs.pipeline, "import_transactions", boom)
+
+    result = jobs.run_import_transactions(user_id=uuid.uuid4(), **_IMPORT_KWARGS)
+
+    assert result == {"status": "partial", "rows_saved": 0, "transactions_saved": 0}
+    assert fake_conn.closed is True
+
+
+def test_run_import_transactions_passes_the_file_path_through(monkeypatch):
+    _patch_new_job_common(monkeypatch)
+    captured = {}
+
+    def fake_import(conn, **kw):
+        captured.update(kw)
+        return 1
+
+    monkeypatch.setattr(jobs.pipeline, "import_transactions", fake_import)
+
+    jobs.run_import_transactions(user_id=uuid.uuid4(), **_IMPORT_KWARGS)
+
+    assert captured["file_path"] == Path("acme.csv")
+    assert captured["account_label"] == "m"
+
+
+def test_run_import_transactions_logs_start_before_completion(monkeypatch, caplog):
+    caplog.set_level(logging.INFO)
+    _patch_new_job_common(monkeypatch)
+    monkeypatch.setattr(jobs.pipeline, "import_transactions", lambda conn, **kw: 1)
+
+    jobs.run_import_transactions(user_id=uuid.uuid4(), **_IMPORT_KWARGS)
+
+    messages = [r.message for r in caplog.records]
+    start_index = next(i for i, m in enumerate(messages) if "importing" in m)
+    done_index = next(i for i, m in enumerate(messages) if "done" in m)
+    assert start_index < done_index
+
+
+# --- run_list_unmapped_instruments ---
+
+
+def test_run_list_unmapped_instruments_reports_ok_with_the_payload(monkeypatch):
+    _patch_new_job_common(monkeypatch)
+    monkeypatch.setattr(
+        jobs, "load_ticker_mappings", lambda path: TickerMappings(isin={}, symbol={})
+    )
+    monkeypatch.setattr(
+        jobs.pipeline,
+        "list_unmapped_instruments",
+        lambda conn, **kw: [("ISIN", "IE00B4L5Y983", "acme")],
+    )
+
+    result = jobs.run_list_unmapped_instruments(user_id=uuid.uuid4())
+
+    assert result["status"] == "ok"
+    assert result["rows_saved"] == 0
+    assert result["instruments_unmapped"] == 1
+    assert result["unmapped_instruments"] == [
+        {"kind": "ISIN", "identifier": "IE00B4L5Y983", "broker": "acme"}
+    ]
+
+
+def test_run_list_unmapped_instruments_reports_nothing_to_do_when_empty(monkeypatch):
+    _patch_new_job_common(monkeypatch)
+    monkeypatch.setattr(
+        jobs, "load_ticker_mappings", lambda path: TickerMappings(isin={}, symbol={})
+    )
+    monkeypatch.setattr(jobs.pipeline, "list_unmapped_instruments", lambda conn, **kw: [])
+
+    result = jobs.run_list_unmapped_instruments(user_id=uuid.uuid4())
+
+    assert result["status"] == "nothing_to_do"
+    assert result["unmapped_instruments"] == []
+
+
+def test_run_list_unmapped_instruments_closes_the_connection(monkeypatch):
+    fake_conn = _patch_new_job_common(monkeypatch)
+    monkeypatch.setattr(
+        jobs, "load_ticker_mappings", lambda path: TickerMappings(isin={}, symbol={})
+    )
+    monkeypatch.setattr(jobs.pipeline, "list_unmapped_instruments", lambda conn, **kw: [])
+
+    jobs.run_list_unmapped_instruments(user_id=uuid.uuid4())
+
+    assert fake_conn.closed is True
+
+
+def test_run_list_unmapped_instruments_loads_mappings_from_the_settings_path(monkeypatch):
+    _patch_new_job_common(monkeypatch)
+    captured = {}
+
+    def fake_load(path):
+        captured["path"] = path
+        return TickerMappings(isin={}, symbol={})
+
+    monkeypatch.setattr(jobs, "load_ticker_mappings", fake_load)
+    monkeypatch.setattr(jobs.pipeline, "list_unmapped_instruments", lambda conn, **kw: [])
+
+    jobs.run_list_unmapped_instruments(user_id=uuid.uuid4())
+
+    assert captured["path"] == Path("configs/ticker_mappings.yaml")
+
+
+def test_run_list_unmapped_instruments_reports_partial_on_a_missing_mappings_file(monkeypatch):
+    """A missing/malformed configs/ticker_mappings.yaml is a domain error, not a crash -- every
+    sibling job function degrades to a clean `partial` result the same way."""
+    fake_conn = _patch_new_job_common(monkeypatch)
+
+    def boom(path):
+        raise TickerMappingError("Ticker mappings file not found")
+
+    monkeypatch.setattr(jobs, "load_ticker_mappings", boom)
+
+    result = jobs.run_list_unmapped_instruments(user_id=uuid.uuid4())
+
+    assert result == {"status": "partial", "rows_saved": 0, "instruments_unmapped": 0}
+    assert fake_conn.closed is True
+
+
+# --- run_import_cashflow ---
+
+_CASHFLOW_KWARGS = dict(account_label="m", file_path=Path("acme_account.csv"))
+
+
+def _patch_cashflow_job_common(monkeypatch):
+    monkeypatch.setattr(
+        jobs,
+        "load_settings",
+        lambda: _fake_settings(
+            datastore_api_url="http://datastore:8000",
+            internal_api_secret="secret",  # pragma: allowlist secret
+        ),
+    )
+    fake_conn = _SimpleFakeConnection()
+    monkeypatch.setattr(jobs, "get_connection", lambda url: fake_conn)
+    return fake_conn
+
+
+def test_run_import_cashflow_reports_ok_when_saved(monkeypatch):
+    fake_conn = _patch_cashflow_job_common(monkeypatch)
+    monkeypatch.setattr(jobs.pipeline, "import_cashflow", lambda conn, **kw: 339)
+
+    result = jobs.run_import_cashflow(user_id=uuid.uuid4(), **_CASHFLOW_KWARGS)
+
+    assert result == {"status": "ok", "rows_saved": 339, "transactions_saved": 339}
+    assert fake_conn.closed is True
+
+
+def test_run_import_cashflow_reports_nothing_to_do_on_a_reimport(monkeypatch):
+    _patch_cashflow_job_common(monkeypatch)
+    monkeypatch.setattr(jobs.pipeline, "import_cashflow", lambda conn, **kw: 0)
+
+    result = jobs.run_import_cashflow(user_id=uuid.uuid4(), **_CASHFLOW_KWARGS)
+
+    assert result == {"status": "nothing_to_do", "rows_saved": 0, "transactions_saved": 0}
+
+
+def test_run_import_cashflow_reports_partial_on_domain_error(monkeypatch):
+    fake_conn = _patch_cashflow_job_common(monkeypatch)
+
+    def boom(conn, **kw):
+        raise AccountNotFound("nope")
+
+    monkeypatch.setattr(jobs.pipeline, "import_cashflow", boom)
+
+    result = jobs.run_import_cashflow(user_id=uuid.uuid4(), **_CASHFLOW_KWARGS)
+
+    assert result == {"status": "partial", "rows_saved": 0, "transactions_saved": 0}
+    assert fake_conn.closed is True
+
+
+def test_run_import_cashflow_requires_datastore_api_url(monkeypatch):
+    monkeypatch.setattr(
+        jobs,
+        "load_settings",
+        lambda: _fake_settings(datastore_api_url=None, internal_api_secret="secret"),
+    )
+
+    with pytest.raises(SettingsError):
+        jobs.run_import_cashflow(user_id=uuid.uuid4(), **_CASHFLOW_KWARGS)
+
+
+def test_run_import_cashflow_requires_internal_api_secret(monkeypatch):
+    monkeypatch.setattr(
+        jobs,
+        "load_settings",
+        lambda: _fake_settings(datastore_api_url="http://datastore:8000", internal_api_secret=None),
+    )
+
+    with pytest.raises(SettingsError):
+        jobs.run_import_cashflow(user_id=uuid.uuid4(), **_CASHFLOW_KWARGS)
+
+
+def test_run_import_cashflow_builds_the_http_client_from_settings(monkeypatch):
+    _patch_cashflow_job_common(monkeypatch)
+    captured = {}
+
+    class FakeHttpDataStoreClient:
+        def __init__(self, base_url, internal_api_secret):
+            captured["base_url"] = base_url
+            captured["internal_api_secret"] = internal_api_secret
+
+    monkeypatch.setattr(jobs, "HttpDataStoreClient", FakeHttpDataStoreClient)
+    monkeypatch.setattr(jobs.pipeline, "import_cashflow", lambda conn, **kw: 1)
+
+    jobs.run_import_cashflow(user_id=uuid.uuid4(), **_CASHFLOW_KWARGS)
+
+    assert captured == {
+        "base_url": "http://datastore:8000",
+        "internal_api_secret": "secret",  # pragma: allowlist secret
+    }

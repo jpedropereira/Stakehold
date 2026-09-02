@@ -2,7 +2,10 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from portfolio.transactions.base import CanonicalTransaction
-from portfolio.transactions.repository import insert_transactions
+from portfolio.transactions.repository import (
+    insert_transactions,
+    list_distinct_instruments,
+)
 
 NOW = datetime(2026, 3, 1, 10, 0, tzinfo=UTC)
 
@@ -90,3 +93,56 @@ def test_insert_transactions_with_an_empty_sequence_executes_nothing():
 
     assert saved == 0
     assert conn._cursor.executed == []
+
+
+class FakeReadCursor:
+    def __init__(self, rows):
+        self._rows = rows
+        self.executed = []
+
+    def execute(self, sql, params=None):
+        self.executed.append((sql, params))
+
+    def fetchall(self):
+        return self._rows
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class FakeReadConnection:
+    def __init__(self, rows):
+        self._cursor = FakeReadCursor(rows)
+
+    def cursor(self):
+        return self._cursor
+
+
+def test_list_distinct_instruments_returns_kind_identifier_broker_triples():
+    conn = FakeReadConnection(rows=[("ISIN", "IE00B4L5Y983", "acme"), ("SYMBOL", "IWDA", "globex")])
+
+    result = list_distinct_instruments(conn, user_id="u1")
+
+    assert result == [("ISIN", "IE00B4L5Y983", "acme"), ("SYMBOL", "IWDA", "globex")]
+
+
+def test_list_distinct_instruments_scopes_by_user_id():
+    conn = FakeReadConnection(rows=[])
+
+    list_distinct_instruments(conn, user_id="u1")
+
+    sql, params = conn._cursor.executed[0]
+    assert "accounts" in sql
+    assert params == ("u1",)
+
+
+def test_list_distinct_instruments_filters_out_cash_only_rows():
+    conn = FakeReadConnection(rows=[])
+
+    list_distinct_instruments(conn, user_id="u1")
+
+    sql, _ = conn._cursor.executed[0]
+    assert "IS NOT NULL" in sql

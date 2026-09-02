@@ -3,6 +3,7 @@
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 from portfolio import cli
@@ -55,6 +56,19 @@ def test_missing_db_subcommand_exits_nonzero():
         cli.main(["db"])
 
     assert exc_info.value.code != 0
+
+
+def test_a_settings_error_prints_a_clean_message_and_exits_nonzero(monkeypatch, capsys):
+    """Missing/invalid configuration (e.g. no PORTFOLIO_DATABASE_URL set) is an operator mistake,
+    not a domain failure -- it must not surface as a raw traceback."""
+
+    def boom():
+        raise cli.SettingsError("PORTFOLIO_DATABASE_URL is not set")
+
+    monkeypatch.setattr(cli.jobs, "run_db_init", boom)
+
+    assert cli.main(["db", "init"]) == 1
+    assert "PORTFOLIO_DATABASE_URL is not set" in capsys.readouterr().err
 
 
 # --- account add ---
@@ -215,6 +229,55 @@ def test_account_list_exits_zero_when_empty(monkeypatch):
 def test_missing_account_subcommand_exits_nonzero():
     with pytest.raises(SystemExit) as exc_info:
         cli.main(["account"])
+
+    assert exc_info.value.code != 0
+
+
+# --- broker list ---
+
+
+def test_broker_list_prints_one_line_per_broker_then_the_count(monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli.jobs,
+        "run_list_available_brokers",
+        lambda: {
+            "status": "ok",
+            "rows_saved": 0,
+            "brokers_available": 2,
+            "brokers": ["acme", "globex"],
+        },
+    )
+
+    cli.main(["broker", "list"])
+
+    assert capsys.readouterr().out == "acme\nglobex\n2 broker parser(s) available\n"
+
+
+def test_broker_list_prints_only_the_count_when_empty(monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli.jobs,
+        "run_list_available_brokers",
+        lambda: {"status": "nothing_to_do", "rows_saved": 0, "brokers_available": 0, "brokers": []},
+    )
+
+    cli.main(["broker", "list"])
+
+    assert capsys.readouterr().out == "0 broker parser(s) available\n"
+
+
+def test_broker_list_exits_zero_when_empty(monkeypatch):
+    monkeypatch.setattr(
+        cli.jobs,
+        "run_list_available_brokers",
+        lambda: {"status": "nothing_to_do", "rows_saved": 0, "brokers_available": 0, "brokers": []},
+    )
+
+    assert cli.main(["broker", "list"]) == 0
+
+
+def test_missing_broker_subcommand_exits_nonzero():
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(["broker"])
 
     assert exc_info.value.code != 0
 
@@ -428,3 +491,326 @@ def test_add_transaction_rejects_an_unrecognized_type():
 
     with pytest.raises(SystemExit):
         cli.main(["add-transaction", *args])
+
+
+# --- import-transactions ---
+
+
+def test_import_transactions_dispatches_with_converted_types(monkeypatch):
+    captured = {}
+
+    def fake_run_import_transactions(**kw):
+        captured.update(kw)
+        return {"status": "ok", "rows_saved": 82, "transactions_saved": 82}
+
+    monkeypatch.setattr(cli.jobs, "run_import_transactions", fake_run_import_transactions)
+    user_id = uuid.uuid4()
+
+    exit_code = cli.main(
+        [
+            "import-transactions",
+            "--user",
+            str(user_id),
+            "--file",
+            "dev/porfolio/acme.csv",
+            "--account",
+            "acme-main",
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured["user_id"] == user_id
+    assert isinstance(captured["user_id"], uuid.UUID)
+    assert captured["account_label"] == "acme-main"
+    assert captured["file_path"] == Path("dev/porfolio/acme.csv")
+    assert isinstance(captured["file_path"], Path)
+
+
+def test_import_transactions_prints_the_saved_count(monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli.jobs,
+        "run_import_transactions",
+        lambda **kw: {"status": "ok", "rows_saved": 82, "transactions_saved": 82},
+    )
+
+    cli.main(
+        [
+            "import-transactions",
+            "--user",
+            str(uuid.uuid4()),
+            "--file",
+            "acme.csv",
+            "--account",
+            "acme-main",
+        ]
+    )
+
+    assert capsys.readouterr().out == "82 transaction(s) saved\n"
+
+
+def test_import_transactions_exits_zero_when_nothing_to_do(monkeypatch):
+    monkeypatch.setattr(
+        cli.jobs,
+        "run_import_transactions",
+        lambda **kw: {"status": "nothing_to_do", "rows_saved": 0, "transactions_saved": 0},
+    )
+
+    exit_code = cli.main(
+        [
+            "import-transactions",
+            "--user",
+            str(uuid.uuid4()),
+            "--file",
+            "acme.csv",
+            "--account",
+            "acme-main",
+        ]
+    )
+
+    assert exit_code == 0
+
+
+def test_import_transactions_exits_nonzero_when_partial(monkeypatch):
+    monkeypatch.setattr(
+        cli.jobs,
+        "run_import_transactions",
+        lambda **kw: {"status": "partial", "rows_saved": 0, "transactions_saved": 0},
+    )
+
+    exit_code = cli.main(
+        [
+            "import-transactions",
+            "--user",
+            str(uuid.uuid4()),
+            "--file",
+            "acme.csv",
+            "--account",
+            "acme-main",
+        ]
+    )
+
+    assert exit_code == 1
+
+
+def test_import_transactions_requires_all_flags():
+    with pytest.raises(SystemExit):
+        cli.main(["import-transactions", "--user", str(uuid.uuid4())])
+
+
+def test_import_transactions_rejects_a_malformed_user_id():
+    with pytest.raises(SystemExit):
+        cli.main(
+            [
+                "import-transactions",
+                "--user",
+                "not-a-uuid",
+                "--file",
+                "acme.csv",
+                "--account",
+                "acme-main",
+            ]
+        )
+
+
+# --- list-unmapped-instruments ---
+
+
+def test_list_unmapped_instruments_dispatches_with_converted_user_id(monkeypatch):
+    captured = {}
+
+    def fake_run(*, user_id):
+        captured["user_id"] = user_id
+        return {
+            "status": "nothing_to_do",
+            "rows_saved": 0,
+            "instruments_unmapped": 0,
+            "unmapped_instruments": [],
+        }
+
+    monkeypatch.setattr(cli.jobs, "run_list_unmapped_instruments", fake_run)
+    user_id = uuid.uuid4()
+
+    cli.main(["list-unmapped-instruments", "--user", str(user_id)])
+
+    assert captured == {"user_id": user_id}
+
+
+def test_list_unmapped_instruments_prints_one_line_per_instrument_then_the_count(
+    monkeypatch, capsys
+):
+    monkeypatch.setattr(
+        cli.jobs,
+        "run_list_unmapped_instruments",
+        lambda **kw: {
+            "status": "ok",
+            "rows_saved": 0,
+            "instruments_unmapped": 2,
+            "unmapped_instruments": [
+                {"kind": "ISIN", "identifier": "IE00B4L5Y983", "broker": "acme"},
+                {"kind": "SYMBOL", "identifier": "IWDA", "broker": "globex"},
+            ],
+        },
+    )
+
+    cli.main(["list-unmapped-instruments", "--user", str(uuid.uuid4())])
+
+    out = capsys.readouterr().out
+    assert out == (
+        "ISIN\tIE00B4L5Y983\tacme\n" "SYMBOL\tIWDA\tglobex\n" "2 instrument(s) unmapped\n"
+    )
+
+
+def test_list_unmapped_instruments_prints_only_the_count_when_empty(monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli.jobs,
+        "run_list_unmapped_instruments",
+        lambda **kw: {
+            "status": "nothing_to_do",
+            "rows_saved": 0,
+            "instruments_unmapped": 0,
+            "unmapped_instruments": [],
+        },
+    )
+
+    cli.main(["list-unmapped-instruments", "--user", str(uuid.uuid4())])
+
+    assert capsys.readouterr().out == "0 instrument(s) unmapped\n"
+
+
+def test_list_unmapped_instruments_exits_zero_when_empty(monkeypatch):
+    monkeypatch.setattr(
+        cli.jobs,
+        "run_list_unmapped_instruments",
+        lambda **kw: {
+            "status": "nothing_to_do",
+            "rows_saved": 0,
+            "instruments_unmapped": 0,
+            "unmapped_instruments": [],
+        },
+    )
+
+    assert cli.main(["list-unmapped-instruments", "--user", str(uuid.uuid4())]) == 0
+
+
+def test_missing_user_for_list_unmapped_instruments_exits_nonzero():
+    with pytest.raises(SystemExit):
+        cli.main(["list-unmapped-instruments"])
+
+
+# --- import-cashflow ---
+
+
+def test_import_cashflow_dispatches_with_converted_types(monkeypatch):
+    captured = {}
+
+    def fake_run(**kw):
+        captured.update(kw)
+        return {"status": "ok", "rows_saved": 339, "transactions_saved": 339}
+
+    monkeypatch.setattr(cli.jobs, "run_import_cashflow", fake_run)
+    user_id = uuid.uuid4()
+
+    exit_code = cli.main(
+        [
+            "import-cashflow",
+            "--user",
+            str(user_id),
+            "--file",
+            "dev/porfolio/acme_account.csv",
+            "--account",
+            "acme-main",
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured["user_id"] == user_id
+    assert isinstance(captured["user_id"], uuid.UUID)
+    assert captured["account_label"] == "acme-main"
+    assert captured["file_path"] == Path("dev/porfolio/acme_account.csv")
+    assert isinstance(captured["file_path"], Path)
+
+
+def test_import_cashflow_prints_the_saved_count(monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli.jobs,
+        "run_import_cashflow",
+        lambda **kw: {"status": "ok", "rows_saved": 339, "transactions_saved": 339},
+    )
+
+    cli.main(
+        [
+            "import-cashflow",
+            "--user",
+            str(uuid.uuid4()),
+            "--file",
+            "acme_account.csv",
+            "--account",
+            "acme-main",
+        ]
+    )
+
+    assert capsys.readouterr().out == "339 transaction(s) saved\n"
+
+
+def test_import_cashflow_exits_zero_when_nothing_to_do(monkeypatch):
+    monkeypatch.setattr(
+        cli.jobs,
+        "run_import_cashflow",
+        lambda **kw: {"status": "nothing_to_do", "rows_saved": 0, "transactions_saved": 0},
+    )
+
+    exit_code = cli.main(
+        [
+            "import-cashflow",
+            "--user",
+            str(uuid.uuid4()),
+            "--file",
+            "acme_account.csv",
+            "--account",
+            "acme-main",
+        ]
+    )
+
+    assert exit_code == 0
+
+
+def test_import_cashflow_exits_nonzero_when_partial(monkeypatch):
+    monkeypatch.setattr(
+        cli.jobs,
+        "run_import_cashflow",
+        lambda **kw: {"status": "partial", "rows_saved": 0, "transactions_saved": 0},
+    )
+
+    exit_code = cli.main(
+        [
+            "import-cashflow",
+            "--user",
+            str(uuid.uuid4()),
+            "--file",
+            "acme_account.csv",
+            "--account",
+            "acme-main",
+        ]
+    )
+
+    assert exit_code == 1
+
+
+def test_import_cashflow_requires_all_flags():
+    with pytest.raises(SystemExit):
+        cli.main(["import-cashflow", "--user", str(uuid.uuid4())])
+
+
+def test_import_cashflow_rejects_a_malformed_user_id():
+    with pytest.raises(SystemExit):
+        cli.main(
+            [
+                "import-cashflow",
+                "--user",
+                "not-a-uuid",
+                "--file",
+                "acme_account.csv",
+                "--account",
+                "acme-main",
+            ]
+        )

@@ -6,8 +6,9 @@ tests/unit/{accounts,transactions}/test_repository.py and the integration suite.
 """
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 from portfolio import pipeline
@@ -15,9 +16,14 @@ from portfolio.accounts.repository import Account
 from portfolio.errors import (
     AccountLabelConflict,
     AccountNotFound,
+    BrokerFileError,
+    BrokerParserNotFound,
+    BrokerPluginError,
+    InvalidBroker,
     InvalidTransaction,
-    UnknownBroker,
 )
+from portfolio.ticker_mapping.loader import TickerMappings
+from portfolio.transactions.base import CanonicalTransaction
 
 NOW = datetime(2026, 3, 1, 10, 0, tzinfo=UTC)
 
@@ -63,10 +69,19 @@ class FakeAccountsRepo:
     def list_by_user(self, conn, user_id):
         return [a for (u, _), a in self.by_key.items() if u == user_id]
 
+    def get_by_id(self, account_id):
+        return next((a for a in self.by_key.values() if a.id == account_id), None)
+
 
 class FakeTransactionsRepo:
-    def __init__(self):
+    """Standing in for the real repository's SQL join to `accounts` -- given a reference to the
+    fake accounts repo purely so this fake can resolve (user_id, broker) per row the same way the
+    real query does. accounts/repository.py itself still has no unscoped get_by_id; this is a
+    test-only convenience, not a production shortcut."""
+
+    def __init__(self, accounts_repo):
         self.saved = []
+        self._accounts_repo = accounts_repo
 
     def insert_transactions(self, conn, transactions):
         existing = {(t.account_id, t.broker_transaction_ref) for t in self.saved}
@@ -78,11 +93,22 @@ class FakeTransactionsRepo:
             new += 1
         return new
 
+    def list_distinct_instruments(self, conn, user_id):
+        pairs = set()
+        for txn in self.saved:
+            if txn.instrument_identifier is None:
+                continue
+            account = self._accounts_repo.get_by_id(txn.account_id)
+            if account is None or account.user_id != user_id:
+                continue
+            pairs.add((txn.instrument_identifier_kind, txn.instrument_identifier, account.broker))
+        return sorted(pairs)
+
 
 @pytest.fixture
 def repos(monkeypatch):
     accounts_repo = FakeAccountsRepo()
-    transactions_repo = FakeTransactionsRepo()
+    transactions_repo = FakeTransactionsRepo(accounts_repo)
     monkeypatch.setattr(pipeline, "accounts_repository", accounts_repo)
     monkeypatch.setattr(pipeline, "transactions_repository", transactions_repo)
     return accounts_repo, transactions_repo
@@ -104,11 +130,50 @@ def test_add_account_creates_a_new_account_and_commits_once(repos, conn):
     assert conn.rollbacks == 0
 
 
-def test_add_account_rejects_an_unknown_broker_without_touching_the_connection(repos, conn):
-    with pytest.raises(UnknownBroker):
-        pipeline.add_account(conn, user_id=uuid.uuid4(), broker="robinhood", account_label="m")
+def test_add_account_accepts_a_broker_with_no_registered_parser(repos, conn, monkeypatch):
+    """Account creation (and therefore manual transaction entry) must work with zero broker-
+    parser plugins installed -- broker is a free-text label, not checked against BROKER_PARSERS."""
+    monkeypatch.setattr(pipeline, "BROKER_PARSERS", {})
+
+    created = pipeline.add_account(
+        conn, user_id=uuid.uuid4(), broker="robinhood", account_label="m"
+    )
+
+    assert created == 1
+    assert conn.commits == 1
+
+
+def test_add_account_rejects_a_blank_broker_without_touching_the_connection(repos, conn):
+    with pytest.raises(InvalidBroker):
+        pipeline.add_account(conn, user_id=uuid.uuid4(), broker="   ", account_label="m")
 
     assert conn.commits == 0
+
+
+def test_add_account_rejects_a_broker_longer_than_the_column_can_hold(repos, conn):
+    with pytest.raises(InvalidBroker):
+        pipeline.add_account(conn, user_id=uuid.uuid4(), broker="x" * 51, account_label="m")
+
+    assert conn.commits == 0
+
+
+def test_add_account_strips_surrounding_whitespace_before_storing_the_broker(repos, conn):
+    user_id = uuid.uuid4()
+    pipeline.add_account(conn, user_id=user_id, broker="  acme  ", account_label="m")
+
+    account = pipeline.list_accounts(conn, user_id=user_id)[0]
+
+    assert account.broker == "acme"
+
+
+def test_add_account_is_unaffected_by_a_broker_plugin_discovery_error(repos, conn, monkeypatch):
+    """account creation (and manual entry) must work even if the installed broker-parser plugin
+    set is broken -- see docs/architecture.md's discovery-confinement note."""
+    monkeypatch.setattr(pipeline, "_BROKER_DISCOVERY_ERROR", BrokerPluginError("boom"))
+
+    created = pipeline.add_account(conn, user_id=uuid.uuid4(), broker="acme", account_label="m")
+
+    assert created == 1
 
 
 def test_add_account_is_a_no_op_when_the_same_label_and_broker_already_exist(repos, conn):
@@ -173,6 +238,28 @@ def test_list_accounts_never_commits(repos, conn):
     pipeline.list_accounts(conn, user_id=uuid.uuid4())
 
     assert conn.commits == 0
+
+
+# --- list_available_brokers ---
+
+
+def test_list_available_brokers_returns_sorted_registered_keys(monkeypatch):
+    monkeypatch.setattr(pipeline, "BROKER_PARSERS", {"globex": object(), "acme": object()})
+
+    assert pipeline.list_available_brokers() == ["acme", "globex"]
+
+
+def test_list_available_brokers_returns_empty_list_with_no_plugins_installed(monkeypatch):
+    monkeypatch.setattr(pipeline, "BROKER_PARSERS", {})
+
+    assert pipeline.list_available_brokers() == []
+
+
+def test_list_available_brokers_raises_a_stashed_discovery_error(monkeypatch):
+    monkeypatch.setattr(pipeline, "_BROKER_DISCOVERY_ERROR", BrokerPluginError("boom"))
+
+    with pytest.raises(BrokerPluginError, match="boom"):
+        pipeline.list_available_brokers()
 
 
 # --- add_manual_transaction ---
@@ -336,3 +423,388 @@ def test_add_manual_transaction_passes_through_optional_fields(repos, conn):
     _add_txn(conn, user_id, "m", fees_native=Decimal("1.50"))
 
     assert transactions_repo.saved[0].fees_native == Decimal("1.50")
+
+
+# --- import_transactions ---
+
+
+class FakeParser:
+    def __init__(self, broker_key, make_transactions=None, error=None):
+        self.broker_key = broker_key
+        self._make_transactions = make_transactions or (lambda account_id: [])
+        self._error = error
+        self.calls = []
+
+    def parse(self, file_path, account_id):
+        self.calls.append((file_path, account_id))
+        if self._error is not None:
+            raise self._error
+        return self._make_transactions(account_id)
+
+
+def _txn_factory(**overrides):
+    def make(account_id):
+        kwargs = dict(
+            account_id=account_id,
+            broker_transaction_ref="import-1",
+            transaction_type="BUY",
+            trade_datetime=NOW,
+            instrument_identifier="IE00B4L5Y983",
+            instrument_identifier_kind="ISIN",
+            quantity=Decimal("10"),
+            price=Decimal("95.50"),
+            native_currency="EUR",
+            native_amount=Decimal("-955.00"),
+            eur_amount=Decimal("-955.0000"),
+            fx_rate=None,
+            fx_rate_source=None,
+            fees_native=None,
+        )
+        kwargs.update(overrides)
+        return [CanonicalTransaction(**kwargs)]
+
+    return make
+
+
+def test_import_transactions_requires_an_existing_account(repos, conn, monkeypatch):
+    monkeypatch.setattr(pipeline, "BROKER_PARSERS", {"acme": FakeParser("acme")})
+
+    with pytest.raises(AccountNotFound):
+        pipeline.import_transactions(
+            conn,
+            user_id=uuid.uuid4(),
+            account_label="nonexistent",
+            file_path=Path("f.csv"),
+        )
+
+
+def test_import_transactions_raises_a_stashed_broker_discovery_error(repos, conn, monkeypatch):
+    monkeypatch.setattr(pipeline, "_BROKER_DISCOVERY_ERROR", BrokerPluginError("boom"))
+
+    with pytest.raises(BrokerPluginError, match="boom"):
+        pipeline.import_transactions(
+            conn, user_id=uuid.uuid4(), account_label="m", file_path=Path("f.csv")
+        )
+
+
+def test_import_transactions_rejects_a_broker_with_no_registered_parser(repos, conn, monkeypatch):
+    """The account's own broker (here "robinhood") has no parser registered for it -- the
+    account itself resolves fine, since account creation never checks BROKER_PARSERS."""
+    monkeypatch.setattr(pipeline, "BROKER_PARSERS", {})
+    user_id = uuid.uuid4()
+    pipeline.add_account(conn, user_id=user_id, broker="robinhood", account_label="m")
+
+    with pytest.raises(BrokerParserNotFound):
+        pipeline.import_transactions(
+            conn, user_id=user_id, account_label="m", file_path=Path("f.csv")
+        )
+
+
+def test_import_transactions_parses_and_saves_transactions(repos, conn, monkeypatch):
+    _, transactions_repo = repos
+    parser = FakeParser("acme", make_transactions=_txn_factory())
+    monkeypatch.setattr(pipeline, "BROKER_PARSERS", {"acme": parser})
+    user_id = uuid.uuid4()
+    pipeline.add_account(conn, user_id=user_id, broker="acme", account_label="m")
+    commits_before = conn.commits
+
+    saved = pipeline.import_transactions(
+        conn, user_id=user_id, account_label="m", file_path=Path("f.csv")
+    )
+
+    assert saved == 1
+    assert transactions_repo.saved[0].broker_transaction_ref == "import-1"
+    assert parser.calls == [(Path("f.csv"), transactions_repo.saved[0].account_id)]
+    assert conn.commits - commits_before == 1
+
+
+def test_import_transactions_is_idempotent_on_reimport(repos, conn, monkeypatch):
+    parser = FakeParser("acme", make_transactions=_txn_factory())
+    monkeypatch.setattr(pipeline, "BROKER_PARSERS", {"acme": parser})
+    user_id = uuid.uuid4()
+    pipeline.add_account(conn, user_id=user_id, broker="acme", account_label="m")
+    pipeline.import_transactions(conn, user_id=user_id, account_label="m", file_path=Path("f.csv"))
+
+    saved = pipeline.import_transactions(
+        conn, user_id=user_id, account_label="m", file_path=Path("f.csv")
+    )
+
+    assert saved == 0
+
+
+def test_import_transactions_propagates_a_broker_file_error_without_committing(
+    repos, conn, monkeypatch
+):
+    parser = FakeParser("acme", error=BrokerFileError("bad file"))
+    monkeypatch.setattr(pipeline, "BROKER_PARSERS", {"acme": parser})
+    user_id = uuid.uuid4()
+    pipeline.add_account(conn, user_id=user_id, broker="acme", account_label="m")
+    commits_before = conn.commits
+
+    with pytest.raises(BrokerFileError):
+        pipeline.import_transactions(
+            conn, user_id=user_id, account_label="m", file_path=Path("f.csv")
+        )
+
+    assert conn.commits == commits_before
+
+
+def test_import_transactions_propagates_invalid_transaction_from_a_bad_parse(
+    repos, conn, monkeypatch
+):
+    parser = FakeParser("acme", make_transactions=_txn_factory(native_amount=Decimal("NaN")))
+    monkeypatch.setattr(pipeline, "BROKER_PARSERS", {"acme": parser})
+    user_id = uuid.uuid4()
+    pipeline.add_account(conn, user_id=user_id, broker="acme", account_label="m")
+
+    with pytest.raises(InvalidTransaction):
+        pipeline.import_transactions(
+            conn, user_id=user_id, account_label="m", file_path=Path("f.csv")
+        )
+
+
+# --- list_unmapped_instruments ---
+
+
+def test_list_unmapped_instruments_returns_only_unmapped_triples(repos, conn, monkeypatch):
+    parser = FakeParser("acme", make_transactions=_txn_factory())
+    monkeypatch.setattr(pipeline, "BROKER_PARSERS", {"acme": parser})
+    user_id = uuid.uuid4()
+    pipeline.add_account(conn, user_id=user_id, broker="acme", account_label="m")
+    pipeline.import_transactions(conn, user_id=user_id, account_label="m", file_path=Path("f.csv"))
+    mappings = TickerMappings(isin={}, symbol={})
+
+    unmapped = pipeline.list_unmapped_instruments(conn, user_id=user_id, mappings=mappings)
+
+    assert unmapped == [("ISIN", "IE00B4L5Y983", "acme")]
+
+
+def test_list_unmapped_instruments_excludes_mapped_ones(repos, conn, monkeypatch):
+    parser = FakeParser("acme", make_transactions=_txn_factory())
+    monkeypatch.setattr(pipeline, "BROKER_PARSERS", {"acme": parser})
+    user_id = uuid.uuid4()
+    pipeline.add_account(conn, user_id=user_id, broker="acme", account_label="m")
+    pipeline.import_transactions(conn, user_id=user_id, account_label="m", file_path=Path("f.csv"))
+    mappings = TickerMappings(isin={"IE00B4L5Y983": "IWDA.AS"}, symbol={})
+
+    unmapped = pipeline.list_unmapped_instruments(conn, user_id=user_id, mappings=mappings)
+
+    assert unmapped == []
+
+
+def test_list_unmapped_instruments_never_commits(repos, conn):
+    mappings = TickerMappings(isin={}, symbol={})
+
+    pipeline.list_unmapped_instruments(conn, user_id=uuid.uuid4(), mappings=mappings)
+
+    assert conn.commits == 0
+
+
+# --- import_cashflow ---
+
+
+class FakeCashflowParser:
+    def __init__(self, broker_key, make_transactions=None, error=None):
+        self.broker_key = broker_key
+        self._make_transactions = make_transactions or (lambda account_id: [])
+        self._error = error
+        self.calls = []
+
+    def parse(self, file_path, account_id, resolve_fx_rate):
+        self.calls.append((file_path, account_id, resolve_fx_rate))
+        if self._error is not None:
+            raise self._error
+        return self._make_transactions(account_id)
+
+
+class FakeDataStoreClient:
+    def __init__(self, rates=None):
+        self._rates = rates or {}
+        self.calls = []
+
+    def get_fx_rate(self, base, quote, on_date):
+        self.calls.append((base, quote, on_date))
+        return self._rates.get((base, quote, on_date))
+
+
+def _cashflow_txn_factory(**overrides):
+    def make(account_id):
+        kwargs = dict(
+            account_id=account_id,
+            broker_transaction_ref="cashflow-1",
+            transaction_type="DEPOSIT",
+            trade_datetime=NOW,
+            instrument_identifier=None,
+            instrument_identifier_kind=None,
+            quantity=None,
+            price=None,
+            native_currency="EUR",
+            native_amount=Decimal("100.00"),
+            eur_amount=Decimal("100.0000"),
+            fx_rate=None,
+            fx_rate_source=None,
+            fees_native=None,
+        )
+        kwargs.update(overrides)
+        return [CanonicalTransaction(**kwargs)]
+
+    return make
+
+
+def test_import_cashflow_raises_a_stashed_cashflow_discovery_error(repos, conn, monkeypatch):
+    monkeypatch.setattr(pipeline, "_CASHFLOW_DISCOVERY_ERROR", BrokerPluginError("boom"))
+
+    with pytest.raises(BrokerPluginError, match="boom"):
+        pipeline.import_cashflow(
+            conn,
+            user_id=uuid.uuid4(),
+            account_label="m",
+            file_path=Path("f.csv"),
+            datastore_client=FakeDataStoreClient(),
+        )
+
+
+def test_import_cashflow_rejects_a_broker_with_no_registered_parser(repos, conn, monkeypatch):
+    """The account's own broker (here "acme") has no cashflow parser registered for it -- the
+    account itself resolves fine, since account creation never checks CASHFLOW_PARSERS."""
+    monkeypatch.setattr(pipeline, "CASHFLOW_PARSERS", {})
+    user_id = uuid.uuid4()
+    pipeline.add_account(conn, user_id=user_id, broker="acme", account_label="m")
+
+    with pytest.raises(BrokerParserNotFound):
+        pipeline.import_cashflow(
+            conn,
+            user_id=user_id,
+            account_label="m",
+            file_path=Path("f.csv"),
+            datastore_client=FakeDataStoreClient(),
+        )
+
+
+def test_import_cashflow_requires_an_existing_account(repos, conn, monkeypatch):
+    monkeypatch.setattr(pipeline, "CASHFLOW_PARSERS", {"acme": FakeCashflowParser("acme")})
+
+    with pytest.raises(AccountNotFound):
+        pipeline.import_cashflow(
+            conn,
+            user_id=uuid.uuid4(),
+            account_label="nonexistent",
+            file_path=Path("f.csv"),
+            datastore_client=FakeDataStoreClient(),
+        )
+
+
+def test_import_cashflow_parses_and_saves_transactions(repos, conn, monkeypatch):
+    _, transactions_repo = repos
+    parser = FakeCashflowParser("acme", make_transactions=_cashflow_txn_factory())
+    monkeypatch.setattr(pipeline, "CASHFLOW_PARSERS", {"acme": parser})
+    user_id = uuid.uuid4()
+    pipeline.add_account(conn, user_id=user_id, broker="acme", account_label="m")
+    commits_before = conn.commits
+
+    saved = pipeline.import_cashflow(
+        conn,
+        user_id=user_id,
+        account_label="m",
+        file_path=Path("f.csv"),
+        datastore_client=FakeDataStoreClient(),
+    )
+
+    assert saved == 1
+    assert transactions_repo.saved[0].broker_transaction_ref == "cashflow-1"
+    assert conn.commits - commits_before == 1
+
+
+def test_import_cashflow_passes_a_working_fx_resolver_through_to_the_parser(
+    repos, conn, monkeypatch
+):
+    parser = FakeCashflowParser("acme")
+    monkeypatch.setattr(pipeline, "CASHFLOW_PARSERS", {"acme": parser})
+    user_id = uuid.uuid4()
+    pipeline.add_account(conn, user_id=user_id, broker="acme", account_label="m")
+    client = FakeDataStoreClient(rates={("EUR", "PLN", date(2026, 1, 1)): Decimal("4.30")})
+
+    pipeline.import_cashflow(
+        conn,
+        user_id=user_id,
+        account_label="m",
+        file_path=Path("f.csv"),
+        datastore_client=client,
+    )
+
+    _, _, resolve_fx_rate = parser.calls[0]
+    rate = resolve_fx_rate("PLN", date(2026, 1, 1))
+    assert rate == Decimal("4.30")
+    assert client.calls == [("EUR", "PLN", date(2026, 1, 1))]
+
+
+def test_import_cashflow_memoizes_repeated_fx_rate_lookups_within_one_import(
+    repos, conn, monkeypatch
+):
+    """A cash-ledger export commonly has several rows sharing one (currency, date) -- e.g. a
+    dividend batch -- and resolve_fx_rate must only hit the datastore client once per distinct
+    pair, not once per row."""
+    parser = FakeCashflowParser("acme")
+    monkeypatch.setattr(pipeline, "CASHFLOW_PARSERS", {"acme": parser})
+    user_id = uuid.uuid4()
+    pipeline.add_account(conn, user_id=user_id, broker="acme", account_label="m")
+    client = FakeDataStoreClient(rates={("EUR", "PLN", date(2026, 1, 1)): Decimal("4.30")})
+
+    pipeline.import_cashflow(
+        conn,
+        user_id=user_id,
+        account_label="m",
+        file_path=Path("f.csv"),
+        datastore_client=client,
+    )
+
+    _, _, resolve_fx_rate = parser.calls[0]
+    for _ in range(3):
+        assert resolve_fx_rate("PLN", date(2026, 1, 1)) == Decimal("4.30")
+
+    assert client.calls == [("EUR", "PLN", date(2026, 1, 1))]
+
+
+def test_import_cashflow_is_idempotent_on_reimport(repos, conn, monkeypatch):
+    parser = FakeCashflowParser("acme", make_transactions=_cashflow_txn_factory())
+    monkeypatch.setattr(pipeline, "CASHFLOW_PARSERS", {"acme": parser})
+    user_id = uuid.uuid4()
+    pipeline.add_account(conn, user_id=user_id, broker="acme", account_label="m")
+    pipeline.import_cashflow(
+        conn,
+        user_id=user_id,
+        account_label="m",
+        file_path=Path("f.csv"),
+        datastore_client=FakeDataStoreClient(),
+    )
+
+    saved = pipeline.import_cashflow(
+        conn,
+        user_id=user_id,
+        account_label="m",
+        file_path=Path("f.csv"),
+        datastore_client=FakeDataStoreClient(),
+    )
+
+    assert saved == 0
+
+
+def test_import_cashflow_propagates_a_broker_file_error_without_committing(
+    repos, conn, monkeypatch
+):
+    parser = FakeCashflowParser("acme", error=BrokerFileError("bad file"))
+    monkeypatch.setattr(pipeline, "CASHFLOW_PARSERS", {"acme": parser})
+    user_id = uuid.uuid4()
+    pipeline.add_account(conn, user_id=user_id, broker="acme", account_label="m")
+    commits_before = conn.commits
+
+    with pytest.raises(BrokerFileError):
+        pipeline.import_cashflow(
+            conn,
+            user_id=user_id,
+            account_label="m",
+            file_path=Path("f.csv"),
+            datastore_client=FakeDataStoreClient(),
+        )
+
+    assert conn.commits == commits_before
