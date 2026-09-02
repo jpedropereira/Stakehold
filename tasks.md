@@ -282,7 +282,7 @@ Tests (moved to the private plugin package at task 15, except the last):
 fixture-trimmed-from-a-real-export parser test with a plain fake `resolve_fx_rate` callable;
 `tests/unit/datastore_client/test_http_client.py` (a faked `requests.get`, no live data-store
 instance — matching the documented "that boundary is the API contract itself" policy, stayed
-here — genuinely broker-agnostic); `tests/integration/test_acme_cashflow_import.py` (idempotent
+here — genuinely broker-agnostic); `tests/integration/test_cashflow_import.py` (idempotent
 reimport, broker-mismatch rejection; routed through `pipeline.py` directly with a stub
 `DataStoreClient`, not through `jobs.py`'s real HTTP client — stayed here too, rewritten at task
 15 to exercise a synthetic parser instead of a real one).
@@ -338,7 +338,7 @@ consumer; (3) install it into this workspace's shared venv (`uv pip install --no
 confirm `pipeline.BROKER_PARSERS`/`CASHFLOW_PARSERS` resolve to the new package rather than the
 still-present-but-now-unregistered local files, *then* delete `broker_import/{acme,globex,
 acme_cashflow}.py` and their real-fixture-backed unit tests from this repo, rewriting
-`tests/integration/{test_broker_import,test_acme_cashflow_import}.py` to use a synthetic
+`tests/integration/{test_broker_import,test_cashflow_import}.py` to use a synthetic
 `BrokerParser`/`CashflowParser` instead — they were really testing
 `transactions/repository.py`'s idempotent-insert and multi-user-isolation semantics, not
 broker-specific parsing, so this suite no longer depends on any plugin being installed; (4)

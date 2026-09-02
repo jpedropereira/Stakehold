@@ -112,7 +112,7 @@ def test_importing_a_cashflow_file_twice_is_idempotent(pg_connect):
     assert second == 0
 
 
-def test_cashflow_import_requires_a_acme_account(pg_connect):
+def test_cashflow_import_requires_an_acme_account(pg_connect):
     user_id = uuid.uuid4()
     _add_account(user_id, label="globex-main", broker="globex")
 
