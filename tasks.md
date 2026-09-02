@@ -141,9 +141,9 @@ and multi-user-isolation semantics against live Postgres) under `services/portfo
 ### 6. Broker import
 
 `ticker_mapping/loader.py` (reads/validates `configs/ticker_mappings.yaml`). `broker_import/
-base.py` (the `BrokerParser` Protocol) + `degiro.py` + `ibkr.py`. Flows: `import-transactions
---broker <key> --file <path> --account <id>`, `list-unmapped-instruments`. Tests against fixture
-files for both parsers, including the IBKR content-hash dedup logic.
+base.py` (the `BrokerParser` Protocol) + one parser module per initially-supported broker. Flows:
+`import-transactions --broker <key> --file <path> --account <id>`, `list-unmapped-instruments`.
+Tests against fixture files for each parser, including their content-hash dedup logic.
 
 ### 7. Positions
 

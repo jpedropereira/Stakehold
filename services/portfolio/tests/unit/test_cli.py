@@ -71,11 +71,11 @@ def test_account_add_dispatches_with_converted_types(monkeypatch):
     user_id = uuid.uuid4()
 
     exit_code = cli.main(
-        ["account", "add", "--user", str(user_id), "--broker", "degiro", "--label", "m"]
+        ["account", "add", "--user", str(user_id), "--broker", "acme", "--label", "m"]
     )
 
     assert exit_code == 0
-    assert captured == {"user_id": user_id, "broker": "degiro", "account_label": "m"}
+    assert captured == {"user_id": user_id, "broker": "acme", "account_label": "m"}
     assert isinstance(captured["user_id"], uuid.UUID)
 
 
@@ -86,7 +86,7 @@ def test_account_add_prints_the_created_count(monkeypatch, capsys):
         lambda **kw: {"status": "ok", "rows_saved": 1, "accounts_created": 1},
     )
 
-    cli.main(["account", "add", "--user", str(uuid.uuid4()), "--broker", "degiro", "--label", "m"])
+    cli.main(["account", "add", "--user", str(uuid.uuid4()), "--broker", "acme", "--label", "m"])
 
     assert capsys.readouterr().out == "1 account(s) created\n"
 
@@ -99,7 +99,7 @@ def test_account_add_exits_zero_when_nothing_to_do(monkeypatch):
     )
 
     exit_code = cli.main(
-        ["account", "add", "--user", str(uuid.uuid4()), "--broker", "degiro", "--label", "m"]
+        ["account", "add", "--user", str(uuid.uuid4()), "--broker", "acme", "--label", "m"]
     )
 
     assert exit_code == 0
@@ -121,12 +121,12 @@ def test_account_add_exits_nonzero_when_partial(monkeypatch):
 
 def test_account_add_rejects_a_malformed_user_id():
     with pytest.raises(SystemExit):
-        cli.main(["account", "add", "--user", "not-a-uuid", "--broker", "degiro", "--label", "m"])
+        cli.main(["account", "add", "--user", "not-a-uuid", "--broker", "acme", "--label", "m"])
 
 
 def test_account_add_requires_all_flags():
     with pytest.raises(SystemExit):
-        cli.main(["account", "add", "--user", str(uuid.uuid4()), "--broker", "degiro"])
+        cli.main(["account", "add", "--user", str(uuid.uuid4()), "--broker", "acme"])
 
 
 # --- account list ---
@@ -158,14 +158,14 @@ def test_account_list_prints_one_line_per_account_then_the_count(monkeypatch, ca
             "accounts": [
                 {
                     "id": 1,
-                    "account_label": "degiro-main",
-                    "broker": "degiro",
+                    "account_label": "acme-main",
+                    "broker": "acme",
                     "created_at": "2026-01-01T00:00:00+00:00",
                 },
                 {
                     "id": 2,
-                    "account_label": "ibkr-main",
-                    "broker": "ibkr",
+                    "account_label": "globex-main",
+                    "broker": "globex",
                     "created_at": "2026-01-02T00:00:00+00:00",
                 },
             ],
@@ -176,7 +176,7 @@ def test_account_list_prints_one_line_per_account_then_the_count(monkeypatch, ca
 
     out = capsys.readouterr().out
     assert out == (
-        "1\tdegiro-main\tdegiro\t2026-01-01\n" "2\tibkr-main\tibkr\t2026-01-02\n" "2 account(s)\n"
+        "1\tacme-main\tacme\t2026-01-01\n" "2\tglobex-main\tglobex\t2026-01-02\n" "2 account(s)\n"
     )
 
 
@@ -224,7 +224,7 @@ def test_missing_account_subcommand_exits_nonzero():
 _BASE_TXN_ARGS = [
     "add-transaction",
     "--account",
-    "degiro-main",
+    "acme-main",
     "--ref",
     "manual-1",
     "--type",
@@ -261,7 +261,7 @@ def test_add_transaction_dispatches_with_converted_types(monkeypatch):
     assert exit_code == 0
     assert captured["user_id"] == user_id
     assert isinstance(captured["user_id"], uuid.UUID)
-    assert captured["account_label"] == "degiro-main"
+    assert captured["account_label"] == "acme-main"
     assert captured["broker_transaction_ref"] == "manual-1"
     assert captured["transaction_type"] == "BUY"
     assert captured["trade_datetime"] == datetime(2026, 3, 1, 10, 0, tzinfo=UTC)
@@ -290,7 +290,7 @@ def test_add_transaction_defaults_optional_fields_to_none(monkeypatch):
             "--user",
             str(uuid.uuid4()),
             "--account",
-            "degiro-main",
+            "acme-main",
             "--ref",
             "deposit-1",
             "--type",
@@ -327,7 +327,7 @@ def test_add_transaction_passes_through_fx_rate_and_fees(monkeypatch):
             "--user",
             str(uuid.uuid4()),
             "--account",
-            "ibkr-main",
+            "globex-main",
             "--ref",
             "manual-2",
             "--type",

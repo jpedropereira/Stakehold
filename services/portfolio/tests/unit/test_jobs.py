@@ -235,7 +235,7 @@ def test_run_add_account_reports_ok_and_closes_connection_when_created(monkeypat
     fake_conn = _patch_new_job_common(monkeypatch)
     monkeypatch.setattr(jobs.pipeline, "add_account", lambda conn, **kw: 1)
 
-    result = jobs.run_add_account(user_id=uuid.uuid4(), broker="degiro", account_label="m")
+    result = jobs.run_add_account(user_id=uuid.uuid4(), broker="acme", account_label="m")
 
     assert result == {"status": "ok", "rows_saved": 1, "accounts_created": 1}
     assert fake_conn.closed is True
@@ -245,7 +245,7 @@ def test_run_add_account_reports_nothing_to_do_when_already_exists(monkeypatch):
     _patch_new_job_common(monkeypatch)
     monkeypatch.setattr(jobs.pipeline, "add_account", lambda conn, **kw: 0)
 
-    result = jobs.run_add_account(user_id=uuid.uuid4(), broker="degiro", account_label="m")
+    result = jobs.run_add_account(user_id=uuid.uuid4(), broker="acme", account_label="m")
 
     assert result == {"status": "nothing_to_do", "rows_saved": 0, "accounts_created": 0}
 
@@ -269,7 +269,7 @@ def test_run_add_account_logs_start_before_completion(monkeypatch, caplog):
     _patch_new_job_common(monkeypatch)
     monkeypatch.setattr(jobs.pipeline, "add_account", lambda conn, **kw: 1)
 
-    jobs.run_add_account(user_id=uuid.uuid4(), broker="degiro", account_label="m")
+    jobs.run_add_account(user_id=uuid.uuid4(), broker="acme", account_label="m")
 
     messages = [r.message for r in caplog.records]
     start_index = next(i for i, m in enumerate(messages) if "creating account" in m)
@@ -285,7 +285,7 @@ def test_run_list_accounts_reports_ok_with_the_account_payload(monkeypatch):
     created_at = datetime(2026, 1, 1, tzinfo=UTC)
     user_id = uuid.uuid4()
     accounts = [
-        Account(id=1, user_id=user_id, broker="degiro", account_label="m", created_at=created_at)
+        Account(id=1, user_id=user_id, broker="acme", account_label="m", created_at=created_at)
     ]
     monkeypatch.setattr(jobs.pipeline, "list_accounts", lambda conn, **kw: accounts)
 
@@ -295,7 +295,7 @@ def test_run_list_accounts_reports_ok_with_the_account_payload(monkeypatch):
     assert result["rows_saved"] == 0
     assert result["accounts_listed"] == 1
     assert result["accounts"] == [
-        {"id": 1, "account_label": "m", "broker": "degiro", "created_at": created_at.isoformat()}
+        {"id": 1, "account_label": "m", "broker": "acme", "created_at": created_at.isoformat()}
     ]
 
 

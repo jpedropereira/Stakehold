@@ -13,7 +13,7 @@ Recording every transaction across brokerage accounts — for multiple users, ea
 own — and deriving positions and returns from that record at any point in time, not just "now."
 Two things go in:
 
-- **Transactions** — entered manually, or imported from a broker's export file (Degiro, IBKR
+- **Transactions** — entered manually, or imported from a broker's export file (Acme, Globex
   today; more brokers later). Every transaction's native-currency amount is stored exactly as the
   broker reported it — the immutable source of truth — alongside a EUR-equivalent frozen at
   transaction time.
@@ -66,7 +66,7 @@ flowchart TD
 
     subgraph domain["Domain modules"]
         ACC["accounts/<br/>repository"]
-        IMP["broker_import/<br/>base · degiro · ibkr"]
+        IMP["broker_import/<br/>base · acme · globex"]
         MAP["ticker_mapping/<br/>loader"]
         TXN["transactions/<br/>base · repository"]
         POS["positions/<br/>calculator · repository"]
@@ -139,7 +139,7 @@ worth flagging about the current state rather than the eventual one. First, `pip
 per-flow `service.py`) is where the `with transaction(conn):` boundary lives, the role
 `auth/src/auth/service.py` plays for that service; repository functions never commit, matching
 `accounts/repository.py` and `transactions/repository.py` below. Second, `pipeline.KNOWN_BROKERS`
-is a hardcoded placeholder tuple (`("degiro", "ibkr")`) standing in for the `BROKER_PARSERS`
+is a hardcoded placeholder tuple (`("acme", "globex")`) standing in for the `BROKER_PARSERS`
 registry task 6 hasn't built yet — `account add` validates against it today, and the check moves to
 `tuple(BROKER_PARSERS)` once that registry exists, with no other change to `add_account`.
 
@@ -148,7 +148,7 @@ registry task 6 hasn't built yet — `account add` validates against it today, a
 | Module | Shape | Deviation from the three-file default, and why |
 |---|---|---|
 | `accounts/` | `repository.py` only | No external source and no `base.py` — a broker and an account are user-declared reference data, created through a CLI command, not parsed or fetched. Every read here takes a `user_id`, and every other domain module's queries are reached only by first going through an account scoped to that user — this is the one place multi-user isolation is enforced, not repeated independently by each module. **Deliberately no unscoped `get_by_id(account_id)`** alongside `get_by_label` — that absence is the design, not an oversight: it removes the one shortcut that would let a caller reach an account without proving it owns it. |
-| `broker_import/` | `base.py` (the `BrokerParser` Protocol) + `degiro.py`, `ibkr.py` (the `*_source.py` equivalent — but they read a local export file, not a network call) | **No `repository.py`.** A parser hands back in-memory `CanonicalTransaction` records; persistence is owned entirely by `transactions/repository.py`, so a manually-entered transaction and an imported one are written through the exact same path. Splitting persistence into `broker_import/` would let the two paths drift. |
+| `broker_import/` | `base.py` (the `BrokerParser` Protocol) + `acme.py`, `globex.py` (the `*_source.py` equivalent — but they read a local export file, not a network call) | **No `repository.py`.** A parser hands back in-memory `CanonicalTransaction` records; persistence is owned entirely by `transactions/repository.py`, so a manually-entered transaction and an imported one are written through the exact same path. Splitting persistence into `broker_import/` would let the two paths drift. |
 | `ticker_mapping/` | `loader.py` only | **No `repository.py`.** The mapping lives in a YAML config file (`configs/ticker_mappings.yaml`), not a database table — mirroring `data-store`'s `yfinance_exchange_suffixes.yaml` reference-config pattern. `loader.py` reads and validates the file into an in-memory lookup; nothing here talks to Postgres. No `base.py` — nothing else is expected to implement a "mapping provider." |
 | `transactions/` | `base.py` (the `CanonicalTransaction` record shape) + `repository.py` | `base.py` here holds a **data shape**, not a `Protocol` — the contract is "what a normalized transaction looks like," which multiple producers (`broker_import` parsers, manual CLI entry) must fill in, not a swappable behavior one class implements. |
 | `positions/` | `calculator.py` (pure) + `repository.py` | Same shape as data-store's `returns/`: no `base.py`, no `*_source.py` — the input is this service's own `transactions` and `ticker_mapping` tables, not an external provider. |
@@ -176,7 +176,7 @@ at the top of `pipeline.py`, no branching in flow functions.
 ```python
 # broker_import/base.py  (task 6 -- not built yet)
 class BrokerParser(Protocol):
-    broker_key: str  # the registry key (e.g. "degiro"). accounts.broker is the persisted
+    broker_key: str  # the registry key (e.g. "acme"). accounts.broker is the persisted
                       # source of truth for which broker an account belongs to; nothing on
                       # CanonicalTransaction repeats it (see below).
 
@@ -185,12 +185,12 @@ class BrokerParser(Protocol):
 
         account_id is the resolved accounts.id (BIGINT), supplied by the caller after
         resolving --account through accounts/repository.py's get_by_label -- not discovered
-        from the file itself. Degiro's own export has no account-identifying column at all.
+        from the file itself. Acme's own export has no account-identifying column at all.
         """
         ...
 ```
 
-The canonical intermediate representation both Degiro's flat blotter and IBKR's multi-section dump
+The canonical intermediate representation both Acme's flat blotter and Globex's multi-section dump
 get parsed into -- **built as of task 5** (`transactions/base.py`), so this is the real shape, not
 a proposal:
 
@@ -204,7 +204,7 @@ class CanonicalTransaction:
     transaction_type: str                             # BUY | SELL | DEPOSIT | WITHDRAWAL |
                                                        # DIVIDEND | FX | FEE | ADJUSTMENT
     trade_datetime: datetime
-    instrument_identifier: str | None                 # ISIN (Degiro) or Symbol (IBKR); None for
+    instrument_identifier: str | None                 # ISIN (Acme) or Symbol (Globex); None for
                                                        # cash-only rows (deposits, adjustments)
     instrument_identifier_kind: str | None             # "ISIN" | "SYMBOL"
     quantity: Decimal | None                          # signed: +buy, -sell
@@ -230,14 +230,14 @@ it, and `broker_key` above stays purely a registry key. `account_id` is `int`
 non-EUR row must carry an `fx_rate` — a producer (manual entry, or a future broker parser) that
 skips resolving one is rejected, not persisted as a gap to patch up later.
 
-Registry (task 6 — not built yet; `pipeline.KNOWN_BROKERS`, a hardcoded `("degiro", "ibkr")` tuple,
+Registry (task 6 — not built yet; `pipeline.KNOWN_BROKERS`, a hardcoded `("acme", "globex")` tuple,
 stands in for it today, used only to validate `account add --broker`):
 
 ```python
 # pipeline.py
 BROKER_PARSERS: dict[str, BrokerParser] = {
-    "degiro": DegiroParser(),
-    "ibkr": IbkrParser(),
+    "acme": AcmeParser(),
+    "globex": GlobexParser(),
 }
 ```
 
@@ -249,13 +249,13 @@ grow).
 
 **What each existing parser has to do, concretely:**
 
-- **`degiro.py`**: single flat CSV, one header row. European locale — comma decimals,
+- **`acme.py`**: single flat CSV, one header row. European locale — comma decimals,
   `DD-MM-YYYY` dates — parsed explicitly, not auto-detected. `Value EUR` maps straight to
   `eur_amount` (`fx_rate_source = "broker_reported"` when `Exchange rate`/`AutoFX Fee` are
   populated). Quantity sign gives `transaction_type` (BUY/SELL) directly. The sample file has **no
   account-identifying column at all** — which account a file belongs to is supplied by the caller
   (`--account`), never parsed from the file.
-- **`ibkr.py`**: the file is a multi-section dump (`Statement` / `Summary` / `Transaction History`
+- **`globex.py`**: the file is a multi-section dump (`Statement` / `Summary` / `Transaction History`
   interleaved, different column counts per section) — the parser's first job is filtering to rows
   where the first column is `Transaction History`, everything else is noise for this purpose. ISO
   dates, dot decimals. Instruments are identified by `Symbol`, not ISIN. `Transaction Type` values
@@ -272,16 +272,16 @@ parse it," or the Protocol would need broadening. Accepted for now, same reasoni
 for its single `MarketDataSource` Protocol: both known brokers are file-export-based, and there's
 nothing to generalize from yet.
 
-**Design risk — IBKR row identity.** Degiro gives an `Order ID` that's a genuine natural key.
-IBKR's `Transaction History` rows have no equivalent — re-importing a file whose date range
+**Design risk — Globex row identity.** Acme gives an `Order ID` that's a genuine natural key.
+Globex's `Transaction History` rows have no equivalent — re-importing a file whose date range
 overlaps a previous import (a very likely user workflow: "export everything again to catch up")
 has no broker-given way to tell "already have this row" from "new row." `broker_transaction_ref`
-for IBKR will need to be a content hash (date + symbol + type + amounts) rather than a
+for Globex will need to be a content hash (date + symbol + type + amounts) rather than a
 broker-issued id. Flag this explicitly rather than assume dedup is free — worth confirming the
 hash's exact input fields at schema sign-off, since a hash that's too narrow silently merges two
 genuinely different same-day trades, and one that's too wide creates duplicates on reimport.
 
-**Design risk — matching IBKR's FX companion rows to their parent trade.** `Forex Trade Component`
+**Design risk — matching Globex's FX companion rows to their parent trade.** `Forex Trade Component`
 rows aren't linked to the trade they funded by any explicit key — only by same-day proximity and
 (usually) a proportional amount. On a day with multiple same-currency trades this match is
 heuristic, not exact. The fallback — pricing the trade's EUR-equivalent from `data-store`'s FX rate
@@ -300,12 +300,12 @@ identity — not column-level DDL, which needs its own sign-off pass.
   Nothing here enforces the UUID is real; it's trusted input, the same way a `canonical_ticker` is
   trusted without a foreign key. Authentication — credentials, sessions, login — is out of scope for
   this document and belongs to `auth`.
-- **Broker** — identified by a short key (`"degiro"`, `"ibkr"`, ...). The same set as
+- **Broker** — identified by a short key (`"acme"`, `"globex"`, ...). The same set as
   `broker_import`'s registry keys; effectively reference data, not user-editable.
 - **Account** — identified by a user-chosen id/label; references one Broker and exactly one User (an
   `auth`-issued UUID, not a local row).
-  Any broker-side account identifier (e.g. IBKR's masked `U***57423`) is **not stored at all** — a
-  file never self-identifies its account (see Degiro above), so matching is always by the
+  Any broker-side account identifier (e.g. Globex's masked `U***57423`) is **not stored at all** — a
+  file never self-identifies its account (see Acme above), so matching is always by the
   caller-supplied `--account`, which leaves a stored broker-side id as display-only data with no
   reader. See [`schema.md`](schema.md)'s `accounts` section. Every downstream entity (Transaction,
   PositionSnapshot, ReturnSnapshot) is scoped by Account and therefore transitively by User — there
@@ -634,7 +634,7 @@ table.
 
 | | Needs | Covers |
 |---|---|---|
-| `tests/unit/` | nothing | Broker parsers (`degiro.py`, `ibkr.py`) against fixture files; `positions/calculator.py` and `returns/calculator.py` as pure functions over in-memory transaction/price frames; pipeline orchestration with fake repositories and a fake `DataStoreClient`; the IBKR dedup-hash logic |
+| `tests/unit/` | nothing | Broker parsers (`acme.py`, `globex.py`) against fixture files; `positions/calculator.py` and `returns/calculator.py` as pure functions over in-memory transaction/price frames; pipeline orchestration with fake repositories and a fake `DataStoreClient`; the Globex dedup-hash logic |
 | `tests/integration/` | live Postgres | `transactions/repository.py`'s idempotent-import upsert semantics, `accounts/`, `ticker_mapping/`, `positions/repository.py`, `returns/repository.py`, schema migration idempotency, full rebuild flows end-to-end |
 
 `datastore_client/http_client.py` is tested against a fake implementing the `DataStoreClient`
@@ -650,7 +650,7 @@ itself can currently catch a drift in the other.
 1. `pipeline.py` — the flows; everything else is in service of these.
 2. `transactions/base.py` — the `CanonicalTransaction` shape every producer converges on; read
    this before either parser.
-3. `broker_import/degiro.py` and `broker_import/ibkr.py` — the two very different raw shapes, side
+3. `broker_import/acme.py` and `broker_import/globex.py` — the two very different raw shapes, side
    by side, converging on the same record.
 4. `positions/calculator.py` — the most representative "derived, materialized" domain module;
    `returns/calculator.py` next, since it's the one with an external dependency

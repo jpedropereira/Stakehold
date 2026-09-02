@@ -1,7 +1,7 @@
 """The normalized transaction shape every producer converges on.
 
 Manual entry (pipeline.py's add_manual_transaction) fills this directly; broker_import's parsers
-(task 6) will fill it from a Degiro/IBKR export. No `broker` field: accounts.broker is the
+(task 6) will fill it from a broker export. No `broker` field: accounts.broker is the
 persisted source of truth for which broker an account belongs to (schema.md dropped the
 functionally-dependent transactions.broker column at sign-off), so nothing here needs to carry
 one that could disagree with it. `account_id` is the resolved BIGINT accounts.id, not a

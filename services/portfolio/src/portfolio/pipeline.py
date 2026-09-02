@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 # Placeholder until task 6 builds broker_import/'s BROKER_PARSERS registry, at which point this
 # becomes tuple(BROKER_PARSERS) -- see docs/architecture.md.
-KNOWN_BROKERS = ("degiro", "ibkr")
+KNOWN_BROKERS = ("acme", "globex")
 
 
 def add_account(conn, *, user_id: UUID, broker: str, account_label: str) -> int:

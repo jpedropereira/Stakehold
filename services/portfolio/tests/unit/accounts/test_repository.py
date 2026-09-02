@@ -51,13 +51,13 @@ def test_insert_account_executes_a_parameterized_insert_without_committing():
     conn = FakeConnection(fetch_result=(1,))
     user_id = uuid.uuid4()
 
-    account_id = insert_account(conn, user_id=user_id, broker="degiro", account_label="main")
+    account_id = insert_account(conn, user_id=user_id, broker="acme", account_label="main")
 
     sql, params = conn._cursor.executed[0]
     assert "INSERT INTO accounts" in sql
     assert "ON CONFLICT" in sql
     assert "DO NOTHING" in sql
-    assert params == (user_id, "degiro", "main")
+    assert params == (user_id, "acme", "main")
     assert account_id == 1
     # The caller (pipeline.py) owns the transaction, same as auth's repositories.
     assert conn.committed is False
@@ -66,7 +66,7 @@ def test_insert_account_executes_a_parameterized_insert_without_committing():
 def test_insert_account_returns_none_on_conflict():
     conn = FakeConnection(fetch_result=None)
 
-    account_id = insert_account(conn, user_id=uuid.uuid4(), broker="degiro", account_label="main")
+    account_id = insert_account(conn, user_id=uuid.uuid4(), broker="acme", account_label="main")
 
     assert account_id is None
 
@@ -92,12 +92,12 @@ def test_get_by_label_returns_none_when_no_row():
 def test_get_by_label_returns_an_account():
     user_id = uuid.uuid4()
     created_at = datetime.now(UTC)
-    conn = FakeConnection(fetch_result=(1, user_id, "degiro", "main", created_at))
+    conn = FakeConnection(fetch_result=(1, user_id, "acme", "main", created_at))
 
     account = get_by_label(conn, user_id=user_id, account_label="main")
 
     assert account == Account(
-        id=1, user_id=user_id, broker="degiro", account_label="main", created_at=created_at
+        id=1, user_id=user_id, broker="acme", account_label="main", created_at=created_at
     )
 
 
@@ -106,14 +106,14 @@ def test_list_by_user_maps_every_row_in_order():
     created_at = datetime.now(UTC)
     conn = FakeConnection(
         fetchall_result=[
-            (1, user_id, "degiro", "degiro-main", created_at),
-            (2, user_id, "ibkr", "ibkr-main", created_at),
+            (1, user_id, "acme", "acme-main", created_at),
+            (2, user_id, "globex", "globex-main", created_at),
         ]
     )
 
     accounts = list_by_user(conn, user_id)
 
-    assert [a.account_label for a in accounts] == ["degiro-main", "ibkr-main"]
+    assert [a.account_label for a in accounts] == ["acme-main", "globex-main"]
 
 
 def test_list_by_user_scopes_the_query_by_user_id():

@@ -97,7 +97,7 @@ def conn():
 
 
 def test_add_account_creates_a_new_account_and_commits_once(repos, conn):
-    created = pipeline.add_account(conn, user_id=uuid.uuid4(), broker="degiro", account_label="m")
+    created = pipeline.add_account(conn, user_id=uuid.uuid4(), broker="acme", account_label="m")
 
     assert created == 1
     assert conn.commits == 1
@@ -113,25 +113,25 @@ def test_add_account_rejects_an_unknown_broker_without_touching_the_connection(r
 
 def test_add_account_is_a_no_op_when_the_same_label_and_broker_already_exist(repos, conn):
     user_id = uuid.uuid4()
-    pipeline.add_account(conn, user_id=user_id, broker="degiro", account_label="m")
+    pipeline.add_account(conn, user_id=user_id, broker="acme", account_label="m")
 
-    created = pipeline.add_account(conn, user_id=user_id, broker="degiro", account_label="m")
+    created = pipeline.add_account(conn, user_id=user_id, broker="acme", account_label="m")
 
     assert created == 0
 
 
 def test_add_account_raises_on_label_conflict_with_a_different_broker(repos, conn):
     user_id = uuid.uuid4()
-    pipeline.add_account(conn, user_id=user_id, broker="degiro", account_label="m")
+    pipeline.add_account(conn, user_id=user_id, broker="acme", account_label="m")
 
     with pytest.raises(AccountLabelConflict):
-        pipeline.add_account(conn, user_id=user_id, broker="ibkr", account_label="m")
+        pipeline.add_account(conn, user_id=user_id, broker="globex", account_label="m")
 
 
 def test_add_account_allows_the_same_label_for_a_different_user(repos, conn):
-    pipeline.add_account(conn, user_id=uuid.uuid4(), broker="degiro", account_label="m")
+    pipeline.add_account(conn, user_id=uuid.uuid4(), broker="acme", account_label="m")
 
-    created = pipeline.add_account(conn, user_id=uuid.uuid4(), broker="degiro", account_label="m")
+    created = pipeline.add_account(conn, user_id=uuid.uuid4(), broker="acme", account_label="m")
 
     assert created == 1
 
@@ -153,7 +153,7 @@ def test_add_account_raises_cleanly_when_the_conflicting_row_vanishes_before_rer
     monkeypatch.setattr(pipeline, "accounts_repository", _VanishingAccountsRepo())
 
     with pytest.raises(AccountNotFound):
-        pipeline.add_account(conn, user_id=uuid.uuid4(), broker="degiro", account_label="m")
+        pipeline.add_account(conn, user_id=uuid.uuid4(), broker="acme", account_label="m")
 
 
 # --- list_accounts ---
@@ -161,8 +161,8 @@ def test_add_account_raises_cleanly_when_the_conflicting_row_vanishes_before_rer
 
 def test_list_accounts_returns_only_this_users_accounts(repos, conn):
     user_a, user_b = uuid.uuid4(), uuid.uuid4()
-    pipeline.add_account(conn, user_id=user_a, broker="degiro", account_label="a1")
-    pipeline.add_account(conn, user_id=user_b, broker="degiro", account_label="b1")
+    pipeline.add_account(conn, user_id=user_a, broker="acme", account_label="a1")
+    pipeline.add_account(conn, user_id=user_b, broker="acme", account_label="b1")
 
     accounts = pipeline.list_accounts(conn, user_id=user_a)
 
@@ -206,7 +206,7 @@ def test_add_manual_transaction_requires_an_existing_account(repos, conn):
 def test_add_manual_transaction_scopes_account_lookup_by_user(repos, conn):
     """A label owned by a different user must not resolve -- the isolation chokepoint."""
     owner = uuid.uuid4()
-    pipeline.add_account(conn, user_id=owner, broker="degiro", account_label="m")
+    pipeline.add_account(conn, user_id=owner, broker="acme", account_label="m")
 
     with pytest.raises(AccountNotFound):
         _add_txn(conn, uuid.uuid4(), "m")
@@ -215,7 +215,7 @@ def test_add_manual_transaction_scopes_account_lookup_by_user(repos, conn):
 def test_add_manual_transaction_derives_eur_amount_for_a_eur_transaction(repos, conn):
     accounts_repo, transactions_repo = repos
     user_id = uuid.uuid4()
-    pipeline.add_account(conn, user_id=user_id, broker="degiro", account_label="m")
+    pipeline.add_account(conn, user_id=user_id, broker="acme", account_label="m")
     commits_before = conn.commits
 
     saved = _add_txn(conn, user_id, "m")
@@ -231,7 +231,7 @@ def test_add_manual_transaction_derives_eur_amount_for_a_eur_transaction(repos, 
 def test_add_manual_transaction_derives_eur_amount_from_a_manual_fx_rate(repos, conn):
     _, transactions_repo = repos
     user_id = uuid.uuid4()
-    pipeline.add_account(conn, user_id=user_id, broker="ibkr", account_label="m")
+    pipeline.add_account(conn, user_id=user_id, broker="globex", account_label="m")
 
     _add_txn(
         conn,
@@ -251,7 +251,7 @@ def test_add_manual_transaction_derives_eur_amount_from_a_manual_fx_rate(repos, 
 
 def test_add_manual_transaction_rejects_a_non_eur_transaction_without_a_rate(repos, conn):
     user_id = uuid.uuid4()
-    pipeline.add_account(conn, user_id=user_id, broker="ibkr", account_label="m")
+    pipeline.add_account(conn, user_id=user_id, broker="globex", account_label="m")
     commits_before = conn.commits
 
     with pytest.raises(InvalidTransaction):
@@ -270,7 +270,7 @@ def test_add_manual_transaction_rejects_a_non_eur_transaction_without_a_rate(rep
 
 def test_add_manual_transaction_rejects_a_zero_fx_rate(repos, conn):
     user_id = uuid.uuid4()
-    pipeline.add_account(conn, user_id=user_id, broker="ibkr", account_label="m")
+    pipeline.add_account(conn, user_id=user_id, broker="globex", account_label="m")
     commits_before = conn.commits
 
     with pytest.raises(InvalidTransaction):
@@ -290,7 +290,7 @@ def test_add_manual_transaction_rejects_a_zero_fx_rate(repos, conn):
 
 def test_add_manual_transaction_rejects_a_non_finite_amount(repos, conn):
     user_id = uuid.uuid4()
-    pipeline.add_account(conn, user_id=user_id, broker="degiro", account_label="m")
+    pipeline.add_account(conn, user_id=user_id, broker="acme", account_label="m")
     commits_before = conn.commits
 
     with pytest.raises(InvalidTransaction):
@@ -301,7 +301,7 @@ def test_add_manual_transaction_rejects_a_non_finite_amount(repos, conn):
 
 def test_add_manual_transaction_rejects_an_eur_transaction_carrying_a_rate(repos, conn):
     user_id = uuid.uuid4()
-    pipeline.add_account(conn, user_id=user_id, broker="degiro", account_label="m")
+    pipeline.add_account(conn, user_id=user_id, broker="acme", account_label="m")
 
     with pytest.raises(InvalidTransaction):
         _add_txn(conn, user_id, "m", fx_rate=Decimal("1.0"))
@@ -309,7 +309,7 @@ def test_add_manual_transaction_rejects_an_eur_transaction_carrying_a_rate(repos
 
 def test_add_manual_transaction_propagates_validation_errors_without_committing(repos, conn):
     user_id = uuid.uuid4()
-    pipeline.add_account(conn, user_id=user_id, broker="degiro", account_label="m")
+    pipeline.add_account(conn, user_id=user_id, broker="acme", account_label="m")
     commits_before = conn.commits
 
     with pytest.raises(InvalidTransaction):
@@ -320,7 +320,7 @@ def test_add_manual_transaction_propagates_validation_errors_without_committing(
 
 def test_add_manual_transaction_is_a_no_op_when_the_ref_already_exists(repos, conn):
     user_id = uuid.uuid4()
-    pipeline.add_account(conn, user_id=user_id, broker="degiro", account_label="m")
+    pipeline.add_account(conn, user_id=user_id, broker="acme", account_label="m")
     _add_txn(conn, user_id, "m")
 
     saved = _add_txn(conn, user_id, "m")
@@ -331,7 +331,7 @@ def test_add_manual_transaction_is_a_no_op_when_the_ref_already_exists(repos, co
 def test_add_manual_transaction_passes_through_optional_fields(repos, conn):
     _, transactions_repo = repos
     user_id = uuid.uuid4()
-    pipeline.add_account(conn, user_id=user_id, broker="degiro", account_label="m")
+    pipeline.add_account(conn, user_id=user_id, broker="acme", account_label="m")
 
     _add_txn(conn, user_id, "m", fees_native=Decimal("1.50"))
 

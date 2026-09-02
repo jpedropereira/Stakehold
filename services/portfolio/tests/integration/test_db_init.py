@@ -11,7 +11,7 @@ pytestmark = pytest.mark.integration
 _TABLES = ("accounts", "position_snapshots", "return_snapshots", "transactions")
 
 
-def _insert_account(cur, *, user_id, label="degiro-main", broker="degiro"):
+def _insert_account(cur, *, user_id, label="acme-main", broker="acme"):
     cur.execute(
         "INSERT INTO accounts (user_id, broker, account_label) VALUES (%s, %s, %s) RETURNING id",
         (user_id, broker, label),
@@ -125,12 +125,12 @@ def test_reimporting_the_same_broker_ref_is_a_no_op(pg_connect):
 
 
 def test_the_same_broker_ref_in_two_accounts_is_two_transactions(pg_connect):
-    """Why the key is account-scoped: IBKR's content hash can collide across accounts."""
+    """Why the key is account-scoped: a content-hash-derived ref can collide across accounts."""
     with pg_connect() as conn:
         with conn.cursor() as cur:
             user_id = uuid.uuid4()
-            account_a = _insert_account(cur, user_id=user_id, label="ibkr-a", broker="ibkr")
-            account_b = _insert_account(cur, user_id=user_id, label="ibkr-b", broker="ibkr")
+            account_a = _insert_account(cur, user_id=user_id, label="globex-a", broker="globex")
+            account_b = _insert_account(cur, user_id=user_id, label="globex-b", broker="globex")
             _insert_transaction(cur, account_id=account_a, ref="same-hash")
             _insert_transaction(cur, account_id=account_b, ref="same-hash")
         conn.commit()

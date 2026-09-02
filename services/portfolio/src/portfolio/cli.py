@@ -99,7 +99,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     add_parser = account_subparsers.add_parser("add", help="Create an account")
     add_parser.add_argument("--user", required=True, type=_uuid, help="The auth-issued user id")
-    add_parser.add_argument("--broker", required=True, help="e.g. degiro, ibkr")
+    add_parser.add_argument("--broker", required=True, help="e.g. acme, globex")
     add_parser.add_argument("--label", required=True, help="This user's own name for the account")
     add_parser.set_defaults(handler=_account_add)
 

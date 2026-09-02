@@ -34,16 +34,16 @@ One row per brokerage account a user has told portfolio about.
 |---|---|---|
 | `id` | `BIGSERIAL PRIMARY KEY` | Surrogate PK — what `transactions` and the snapshot tables reference. |
 | `user_id` | `UUID NOT NULL` | The id `auth` issues at signup. Trusted plain column, not a foreign key — there's no local `users` table to reference, and portfolio never opens a connection to `auth`'s database. Not validated against `auth` at write time; see the open items below. |
-| `broker` | `VARCHAR(50) NOT NULL` | e.g. `'degiro'`, `'ibkr'` — matches `broker_import`'s registry keys. Validated at the app layer, not a DB `CHECK`, the same convention data-store uses for `raw_market_data.asset_type`. |
-| `account_label` | `VARCHAR(100) NOT NULL` | User-chosen, e.g. `'degiro-main'` — what `--account` on the CLI actually takes. |
+| `broker` | `VARCHAR(50) NOT NULL` | e.g. `'acme'`, `'globex'` — matches `broker_import`'s registry keys. Validated at the app layer, not a DB `CHECK`, the same convention data-store uses for `raw_market_data.asset_type`. |
+| `account_label` | `VARCHAR(100) NOT NULL` | User-chosen, e.g. `'acme-main'` — what `--account` on the CLI actually takes. |
 | `created_at` | `TIMESTAMPTZ NOT NULL DEFAULT now()` | |
 
 Indexes: `(user_id)` for "list my accounts"; `UNIQUE (user_id, account_label)` so a label is a
 stable, human-chosen handle scoped to its owner, not required to be globally unique.
 
-**Not stored: the broker's own account identifier** (e.g. IBKR's masked `U***57423`). Matching an
+**Not stored: the broker's own account identifier** (e.g. Globex's masked `U***57423`). Matching an
 imported file to an account is always done via the caller-supplied `--account`, never by parsing a
-broker-side id out of the file — Degiro's export doesn't even have an equivalent column — so
+broker-side id out of the file — Acme's export doesn't even have an equivalent column — so
 storing it would be display-only data with no reader.
 
 **No separate `brokers` table.** `broker` is a plain, app-validated string, the same choice
@@ -82,7 +82,7 @@ The immutable ledger. One row per broker-reported line item or manually entered 
 |---|---|---|
 | `id` | `BIGSERIAL PRIMARY KEY` | |
 | `account_id` | `BIGINT NOT NULL REFERENCES accounts(id)` | |
-| `broker_transaction_ref` | `VARCHAR(128) NOT NULL` | Degiro's `Order ID` (a real, broker-issued natural key) or, for IBKR, a content hash of (date, symbol, type, amounts) — see `architecture.md`'s disclosed IBKR-row-identity risk. The exact hash input fields still need confirming before `broker_import/ibkr.py` is written; not decided here. |
+| `broker_transaction_ref` | `VARCHAR(128) NOT NULL` | Acme's `Order ID` (a real, broker-issued natural key) or, for Globex, a content hash of (date, symbol, type, amounts) — see `architecture.md`'s disclosed Globex-row-identity risk. The exact hash input fields still need confirming before `broker_import/globex.py` is written; not decided here. |
 | `transaction_type` | `VARCHAR(20) NOT NULL` | `BUY` \| `SELL` \| `DEPOSIT` \| `WITHDRAWAL` \| `DIVIDEND` \| `FX` \| `FEE` \| `ADJUSTMENT`. App-layer validated, not a DB `CHECK` — an unrecognized broker transaction type is meant to be a parser-level error (per `architecture.md`), not something that reaches this table at all. |
 | `trade_datetime` | `TIMESTAMPTZ NOT NULL` | |
 | `instrument_identifier` | `VARCHAR(50)` | `NULL` for cash-only rows (deposits, adjustments). |
@@ -99,9 +99,9 @@ The immutable ledger. One row per broker-reported line item or manually entered 
 
 Indexes:
 
-- `UNIQUE (account_id, broker_transaction_ref)` — scoped by **account**. IBKR's hash-based ref is
+- `UNIQUE (account_id, broker_transaction_ref)` — scoped by **account**. Globex's hash-based ref is
   derived from content (date, symbol, type, amounts) that two different accounts could plausibly
-  share by coincidence (same-day, same symbol, same size trade), unlike Degiro's genuinely-global
+  share by coincidence (same-day, same symbol, same size trade), unlike Acme's genuinely-global
   UUID `Order ID`. Scoping by account is the conservative choice that's correct for both.
 
   **No `broker` column here, and none in this key.** An earlier draft denormalized
@@ -204,8 +204,8 @@ extending past that point.
 ## Open items, carried forward rather than resolved here
 
 - **Realized gains** have no table yet (see `position_snapshots` above).
-- **The IBKR `broker_transaction_ref` hash's exact input fields** aren't pinned down — needs
-  confirming when `broker_import/ibkr.py` is actually written.
+- **The Globex `broker_transaction_ref` hash's exact input fields** aren't pinned down — needs
+  confirming when `broker_import/globex.py` is actually written.
 - **`position_snapshots.native_currency`/`average_cost_native`'s single-currency-per-instrument
   assumption** is stated, not verified against a real multi-currency same-ticker case.
 - **The `data-store` read API** this schema's `return_snapshots` rebuild depends on now exists
