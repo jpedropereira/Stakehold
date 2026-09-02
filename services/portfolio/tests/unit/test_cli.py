@@ -58,6 +58,19 @@ def test_missing_db_subcommand_exits_nonzero():
     assert exc_info.value.code != 0
 
 
+def test_a_settings_error_prints_a_clean_message_and_exits_nonzero(monkeypatch, capsys):
+    """Missing/invalid configuration (e.g. no PORTFOLIO_DATABASE_URL set) is an operator mistake,
+    not a domain failure -- it must not surface as a raw traceback."""
+
+    def boom():
+        raise cli.SettingsError("PORTFOLIO_DATABASE_URL is not set")
+
+    monkeypatch.setattr(cli.jobs, "run_db_init", boom)
+
+    assert cli.main(["db", "init"]) == 1
+    assert "PORTFOLIO_DATABASE_URL is not set" in capsys.readouterr().err
+
+
 # --- account add ---
 
 
@@ -498,8 +511,6 @@ def test_import_transactions_dispatches_with_converted_types(monkeypatch):
             "import-transactions",
             "--user",
             str(user_id),
-            "--broker",
-            "acme",
             "--file",
             "dev/porfolio/acme.csv",
             "--account",
@@ -510,7 +521,6 @@ def test_import_transactions_dispatches_with_converted_types(monkeypatch):
     assert exit_code == 0
     assert captured["user_id"] == user_id
     assert isinstance(captured["user_id"], uuid.UUID)
-    assert captured["broker"] == "acme"
     assert captured["account_label"] == "acme-main"
     assert captured["file_path"] == Path("dev/porfolio/acme.csv")
     assert isinstance(captured["file_path"], Path)
@@ -528,8 +538,6 @@ def test_import_transactions_prints_the_saved_count(monkeypatch, capsys):
             "import-transactions",
             "--user",
             str(uuid.uuid4()),
-            "--broker",
-            "acme",
             "--file",
             "acme.csv",
             "--account",
@@ -552,8 +560,6 @@ def test_import_transactions_exits_zero_when_nothing_to_do(monkeypatch):
             "import-transactions",
             "--user",
             str(uuid.uuid4()),
-            "--broker",
-            "acme",
             "--file",
             "acme.csv",
             "--account",
@@ -576,8 +582,6 @@ def test_import_transactions_exits_nonzero_when_partial(monkeypatch):
             "import-transactions",
             "--user",
             str(uuid.uuid4()),
-            "--broker",
-            "acme",
             "--file",
             "acme.csv",
             "--account",
@@ -600,8 +604,6 @@ def test_import_transactions_rejects_a_malformed_user_id():
                 "import-transactions",
                 "--user",
                 "not-a-uuid",
-                "--broker",
-                "acme",
                 "--file",
                 "acme.csv",
                 "--account",
@@ -713,8 +715,6 @@ def test_import_cashflow_dispatches_with_converted_types(monkeypatch):
             "import-cashflow",
             "--user",
             str(user_id),
-            "--broker",
-            "acme",
             "--file",
             "dev/porfolio/acme_account.csv",
             "--account",
@@ -725,7 +725,6 @@ def test_import_cashflow_dispatches_with_converted_types(monkeypatch):
     assert exit_code == 0
     assert captured["user_id"] == user_id
     assert isinstance(captured["user_id"], uuid.UUID)
-    assert captured["broker"] == "acme"
     assert captured["account_label"] == "acme-main"
     assert captured["file_path"] == Path("dev/porfolio/acme_account.csv")
     assert isinstance(captured["file_path"], Path)
@@ -743,8 +742,6 @@ def test_import_cashflow_prints_the_saved_count(monkeypatch, capsys):
             "import-cashflow",
             "--user",
             str(uuid.uuid4()),
-            "--broker",
-            "acme",
             "--file",
             "acme_account.csv",
             "--account",
@@ -767,8 +764,6 @@ def test_import_cashflow_exits_zero_when_nothing_to_do(monkeypatch):
             "import-cashflow",
             "--user",
             str(uuid.uuid4()),
-            "--broker",
-            "acme",
             "--file",
             "acme_account.csv",
             "--account",
@@ -791,8 +786,6 @@ def test_import_cashflow_exits_nonzero_when_partial(monkeypatch):
             "import-cashflow",
             "--user",
             str(uuid.uuid4()),
-            "--broker",
-            "acme",
             "--file",
             "acme_account.csv",
             "--account",
@@ -815,8 +808,6 @@ def test_import_cashflow_rejects_a_malformed_user_id():
                 "import-cashflow",
                 "--user",
                 "not-a-uuid",
-                "--broker",
-                "acme",
                 "--file",
                 "acme_account.csv",
                 "--account",

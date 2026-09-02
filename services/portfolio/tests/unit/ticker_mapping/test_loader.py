@@ -105,5 +105,5 @@ def test_resolve_rejects_an_unrecognized_kind(tmp_path):
     path = _write(tmp_path, "isin:\n  IE00B4L5Y983: IWDA.AS\n")
     mappings = load_ticker_mappings(path)
 
-    with pytest.raises(ValueError, match="CUSIP"):
+    with pytest.raises(TickerMappingError, match="CUSIP"):
         mappings.resolve("CUSIP", "037833100", broker="globex")

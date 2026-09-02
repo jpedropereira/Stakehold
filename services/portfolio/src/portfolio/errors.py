@@ -12,11 +12,12 @@ class PortfolioError(Exception):
 
 
 class BrokerParserNotFound(PortfolioError):
-    """`import-transactions --broker` (or `import-cashflow --broker`) named a broker with no
-    parser currently registered under BROKER_PARSERS/CASHFLOW_PARSERS -- either a typo, or the
-    plugin package providing that broker's parser isn't installed. Never raised by
-    `account add`: a broker is a free-text label there, and account creation must work with zero
-    broker plugins installed (see InvalidBroker below for the one check it does perform)."""
+    """`import-transactions`/`import-cashflow` resolved `--account` to an account whose own
+    `broker` column has no parser currently registered under BROKER_PARSERS/CASHFLOW_PARSERS --
+    either a typo when the account was created, or the plugin package providing that broker's
+    parser isn't installed. Never raised by `account add`: a broker is a free-text label there,
+    and account creation must work with zero broker plugins installed (see InvalidBroker below
+    for the one check it does perform)."""
 
 
 class BrokerPluginError(PortfolioError):
@@ -29,8 +30,9 @@ class BrokerPluginError(PortfolioError):
 
 
 class InvalidBroker(PortfolioError):
-    """`account add --broker` was blank or whitespace-only. The only validation account creation
-    performs on `broker` -- it's a free-text label, not checked against a fixed set of names."""
+    """`account add --broker` was blank/whitespace-only, or longer than accounts.broker's column
+    can hold. The only validation account creation performs on `broker` -- it's a free-text
+    label, not checked against a fixed set of names."""
 
 
 class AccountNotFound(PortfolioError):
@@ -52,10 +54,6 @@ class AccountLabelConflict(PortfolioError):
 
 class InvalidTransaction(PortfolioError):
     """A CanonicalTransaction failed transactions/base.py's validation rules."""
-
-
-class BrokerMismatch(PortfolioError):
-    """`import-transactions --broker` disagrees with the resolved account's own broker."""
 
 
 class BrokerFileError(PortfolioError):

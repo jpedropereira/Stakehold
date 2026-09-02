@@ -65,14 +65,12 @@ def _add_account(user_id, *, label, broker):
     assert exit_code == 0
 
 
-def _import(user_id, *, label, broker="acme", file_path=Path("synthetic.csv")):
+def _import(user_id, *, label, file_path=Path("synthetic.csv")):
     return cli.main(
         [
             "import-transactions",
             "--user",
             str(user_id),
-            "--broker",
-            broker,
             "--file",
             str(file_path),
             "--account",

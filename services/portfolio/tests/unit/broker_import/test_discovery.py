@@ -81,6 +81,20 @@ def test_discover_rejects_a_broker_key_that_disagrees_with_the_registered_name(m
         discovery.discover_broker_parsers()
 
 
+def test_discover_wraps_a_failure_to_load_or_instantiate_the_entry_point(monkeypatch):
+    def broken_cls():
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(
+        discovery,
+        "entry_points",
+        _fake_entry_points({discovery.BROKER_PARSER_GROUP: [FakeEntryPoint("acme", broken_cls)]}),
+    )
+
+    with pytest.raises(BrokerPluginError, match="acme"):
+        discovery.discover_broker_parsers()
+
+
 def test_discover_broker_and_cashflow_groups_dont_interfere(monkeypatch):
     broker_cls = lambda: FakeParser("acme")  # noqa: E731
     cashflow_cls = lambda: FakeParser("acme")  # noqa: E731

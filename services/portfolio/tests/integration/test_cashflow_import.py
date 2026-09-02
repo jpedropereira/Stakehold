@@ -1,13 +1,13 @@
-"""import_cashflow against live Postgres: the idempotent-reimport contract and broker-mismatch
-rejection -- see docs/architecture.md's testing section.
+"""import_cashflow against live Postgres: the idempotent-reimport contract and the parser lookup
+against an account's own broker -- see docs/architecture.md's testing section.
 
 Uses a synthetic CashflowParser (monkeypatched into pipeline.CASHFLOW_PARSERS) and a stub
 DataStoreClient, not a real broker plugin or a live data-store instance -- this test is really
 about transactions/repository.py's idempotent-insert semantics and import_cashflow's own
-account-resolution/broker-mismatch logic, not about parsing any particular broker's cash-ledger
-format. A real plugin (e.g. stakehold-brokers, installed separately) isn't a dependency of this
-suite; jobs.run_import_cashflow's own construction of the real HttpDataStoreClient from settings
-is covered by tests/unit/test_jobs.py instead.
+account-resolution logic, not about parsing any particular broker's cash-ledger format. A real
+plugin (e.g. stakehold-brokers, installed separately) isn't a dependency of this suite;
+jobs.run_import_cashflow's own construction of the real HttpDataStoreClient from settings is
+covered by tests/unit/test_jobs.py instead.
 """
 
 import uuid
@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 from portfolio import cli, pipeline
-from portfolio.errors import BrokerMismatch
+from portfolio.errors import BrokerParserNotFound
 from portfolio.transactions.base import CanonicalTransaction
 
 pytestmark = pytest.mark.integration
@@ -93,7 +93,6 @@ def _import(pg_connect, user_id, *, label="acme-main"):
             conn,
             user_id=user_id,
             account_label=label,
-            broker="acme",
             file_path=Path("synthetic_cashflow.csv"),
             datastore_client=StubDataStoreClient(),
         )
@@ -112,17 +111,19 @@ def test_importing_a_cashflow_file_twice_is_idempotent(pg_connect):
     assert second == 0
 
 
-def test_cashflow_import_requires_an_acme_account(pg_connect):
+def test_cashflow_import_requires_a_registered_parser_for_the_accounts_broker(pg_connect):
+    """CASHFLOW_PARSERS only registers "acme" (see _fake_cashflow_parser above); a "globex"
+    account has no parser to look up, since the parser is now selected by the resolved account's
+    own broker column, not a separate --broker argument."""
     user_id = uuid.uuid4()
     _add_account(user_id, label="globex-main", broker="globex")
 
     with pg_connect() as conn:
-        with pytest.raises(BrokerMismatch):
+        with pytest.raises(BrokerParserNotFound):
             pipeline.import_cashflow(
                 conn,
                 user_id=user_id,
                 account_label="globex-main",
-                broker="acme",
                 file_path=Path("synthetic_cashflow.csv"),
                 datastore_client=StubDataStoreClient(),
             )

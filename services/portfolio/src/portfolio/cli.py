@@ -7,6 +7,7 @@ from uuid import UUID
 
 from portfolio import jobs
 from portfolio.run_result import STATUS_NOTHING_TO_DO, STATUS_OK
+from portfolio.settings import SettingsError
 from portfolio.transactions.base import TRANSACTION_TYPES
 
 _SUCCESS_STATUSES = {STATUS_OK, STATUS_NOTHING_TO_DO}
@@ -76,14 +77,14 @@ def _broker_list(_args: argparse.Namespace) -> int:
 
 def _import_transactions(args: argparse.Namespace) -> int:
     result = jobs.run_import_transactions(
-        user_id=args.user, account_label=args.account, broker=args.broker, file_path=args.file
+        user_id=args.user, account_label=args.account, file_path=args.file
     )
     return _report(result, "transaction(s) saved")
 
 
 def _import_cashflow(args: argparse.Namespace) -> int:
     result = jobs.run_import_cashflow(
-        user_id=args.user, account_label=args.account, broker=args.broker, file_path=args.file
+        user_id=args.user, account_label=args.account, file_path=args.file
     )
     return _report(result, "transaction(s) saved")
 
@@ -182,12 +183,11 @@ def _build_parser() -> argparse.ArgumentParser:
 
     import_parser = subparsers.add_parser("import-transactions", help="Import a broker export file")
     import_parser.add_argument("--user", required=True, type=_uuid, help="The auth-issued user id")
-    import_parser.add_argument(
-        "--broker", required=True, help="The key of an installed broker-parser plugin"
-    )
     import_parser.add_argument("--file", required=True, type=Path, help="Path to the export file")
     import_parser.add_argument(
-        "--account", required=True, help="The --label of an existing account"
+        "--account",
+        required=True,
+        help="The --label of an existing account -- its own broker picks the parser used",
     )
     import_parser.set_defaults(handler=_import_transactions)
 
@@ -205,12 +205,11 @@ def _build_parser() -> argparse.ArgumentParser:
     cashflow_parser.add_argument(
         "--user", required=True, type=_uuid, help="The auth-issued user id"
     )
-    cashflow_parser.add_argument(
-        "--broker", required=True, help="The key of an installed cashflow-parser plugin"
-    )
     cashflow_parser.add_argument("--file", required=True, type=Path, help="Path to the export file")
     cashflow_parser.add_argument(
-        "--account", required=True, help="The --label of an existing account for this broker"
+        "--account",
+        required=True,
+        help="The --label of an existing account -- its own broker picks the parser used",
     )
     cashflow_parser.set_defaults(handler=_import_cashflow)
 
@@ -220,7 +219,16 @@ def _build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
-    return args.handler(args)
+    try:
+        return args.handler(args)
+    except SettingsError as exc:
+        # A misconfigured deployment (a missing env var), not a domain failure -- every
+        # PortfolioError is already caught inside jobs.py and reported as a clean partial
+        # result, but SettingsError deliberately isn't one of those (see settings.py), so
+        # without this it would otherwise surface as a raw traceback instead of a one-line,
+        # actionable message.
+        print(f"configuration error: {exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

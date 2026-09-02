@@ -17,8 +17,8 @@ from portfolio.errors import (
     AccountLabelConflict,
     AccountNotFound,
     BrokerFileError,
-    BrokerMismatch,
     BrokerParserNotFound,
+    BrokerPluginError,
     InvalidBroker,
     InvalidTransaction,
 )
@@ -150,6 +150,32 @@ def test_add_account_rejects_a_blank_broker_without_touching_the_connection(repo
     assert conn.commits == 0
 
 
+def test_add_account_rejects_a_broker_longer_than_the_column_can_hold(repos, conn):
+    with pytest.raises(InvalidBroker):
+        pipeline.add_account(conn, user_id=uuid.uuid4(), broker="x" * 51, account_label="m")
+
+    assert conn.commits == 0
+
+
+def test_add_account_strips_surrounding_whitespace_before_storing_the_broker(repos, conn):
+    user_id = uuid.uuid4()
+    pipeline.add_account(conn, user_id=user_id, broker="  acme  ", account_label="m")
+
+    account = pipeline.list_accounts(conn, user_id=user_id)[0]
+
+    assert account.broker == "acme"
+
+
+def test_add_account_is_unaffected_by_a_broker_plugin_discovery_error(repos, conn, monkeypatch):
+    """account creation (and manual entry) must work even if the installed broker-parser plugin
+    set is broken -- see docs/architecture.md's discovery-confinement note."""
+    monkeypatch.setattr(pipeline, "_BROKER_DISCOVERY_ERROR", BrokerPluginError("boom"))
+
+    created = pipeline.add_account(conn, user_id=uuid.uuid4(), broker="acme", account_label="m")
+
+    assert created == 1
+
+
 def test_add_account_is_a_no_op_when_the_same_label_and_broker_already_exist(repos, conn):
     user_id = uuid.uuid4()
     pipeline.add_account(conn, user_id=user_id, broker="acme", account_label="m")
@@ -227,6 +253,13 @@ def test_list_available_brokers_returns_empty_list_with_no_plugins_installed(mon
     monkeypatch.setattr(pipeline, "BROKER_PARSERS", {})
 
     assert pipeline.list_available_brokers() == []
+
+
+def test_list_available_brokers_raises_a_stashed_discovery_error(monkeypatch):
+    monkeypatch.setattr(pipeline, "_BROKER_DISCOVERY_ERROR", BrokerPluginError("boom"))
+
+    with pytest.raises(BrokerPluginError, match="boom"):
+        pipeline.list_available_brokers()
 
 
 # --- add_manual_transaction ---
@@ -441,34 +474,29 @@ def test_import_transactions_requires_an_existing_account(repos, conn, monkeypat
             conn,
             user_id=uuid.uuid4(),
             account_label="nonexistent",
-            broker="acme",
             file_path=Path("f.csv"),
+        )
+
+
+def test_import_transactions_raises_a_stashed_broker_discovery_error(repos, conn, monkeypatch):
+    monkeypatch.setattr(pipeline, "_BROKER_DISCOVERY_ERROR", BrokerPluginError("boom"))
+
+    with pytest.raises(BrokerPluginError, match="boom"):
+        pipeline.import_transactions(
+            conn, user_id=uuid.uuid4(), account_label="m", file_path=Path("f.csv")
         )
 
 
 def test_import_transactions_rejects_a_broker_with_no_registered_parser(repos, conn, monkeypatch):
+    """The account's own broker (here "robinhood") has no parser registered for it -- the
+    account itself resolves fine, since account creation never checks BROKER_PARSERS."""
     monkeypatch.setattr(pipeline, "BROKER_PARSERS", {})
+    user_id = uuid.uuid4()
+    pipeline.add_account(conn, user_id=user_id, broker="robinhood", account_label="m")
 
     with pytest.raises(BrokerParserNotFound):
         pipeline.import_transactions(
-            conn,
-            user_id=uuid.uuid4(),
-            account_label="m",
-            broker="robinhood",
-            file_path=Path("f.csv"),
-        )
-
-
-def test_import_transactions_rejects_a_broker_mismatch(repos, conn, monkeypatch):
-    monkeypatch.setattr(
-        pipeline, "BROKER_PARSERS", {"acme": FakeParser("acme"), "globex": FakeParser("globex")}
-    )
-    user_id = uuid.uuid4()
-    pipeline.add_account(conn, user_id=user_id, broker="acme", account_label="m")
-
-    with pytest.raises(BrokerMismatch):
-        pipeline.import_transactions(
-            conn, user_id=user_id, account_label="m", broker="globex", file_path=Path("f.csv")
+            conn, user_id=user_id, account_label="m", file_path=Path("f.csv")
         )
 
 
@@ -481,7 +509,7 @@ def test_import_transactions_parses_and_saves_transactions(repos, conn, monkeypa
     commits_before = conn.commits
 
     saved = pipeline.import_transactions(
-        conn, user_id=user_id, account_label="m", broker="acme", file_path=Path("f.csv")
+        conn, user_id=user_id, account_label="m", file_path=Path("f.csv")
     )
 
     assert saved == 1
@@ -495,12 +523,10 @@ def test_import_transactions_is_idempotent_on_reimport(repos, conn, monkeypatch)
     monkeypatch.setattr(pipeline, "BROKER_PARSERS", {"acme": parser})
     user_id = uuid.uuid4()
     pipeline.add_account(conn, user_id=user_id, broker="acme", account_label="m")
-    pipeline.import_transactions(
-        conn, user_id=user_id, account_label="m", broker="acme", file_path=Path("f.csv")
-    )
+    pipeline.import_transactions(conn, user_id=user_id, account_label="m", file_path=Path("f.csv"))
 
     saved = pipeline.import_transactions(
-        conn, user_id=user_id, account_label="m", broker="acme", file_path=Path("f.csv")
+        conn, user_id=user_id, account_label="m", file_path=Path("f.csv")
     )
 
     assert saved == 0
@@ -517,7 +543,7 @@ def test_import_transactions_propagates_a_broker_file_error_without_committing(
 
     with pytest.raises(BrokerFileError):
         pipeline.import_transactions(
-            conn, user_id=user_id, account_label="m", broker="acme", file_path=Path("f.csv")
+            conn, user_id=user_id, account_label="m", file_path=Path("f.csv")
         )
 
     assert conn.commits == commits_before
@@ -533,7 +559,7 @@ def test_import_transactions_propagates_invalid_transaction_from_a_bad_parse(
 
     with pytest.raises(InvalidTransaction):
         pipeline.import_transactions(
-            conn, user_id=user_id, account_label="m", broker="acme", file_path=Path("f.csv")
+            conn, user_id=user_id, account_label="m", file_path=Path("f.csv")
         )
 
 
@@ -545,9 +571,7 @@ def test_list_unmapped_instruments_returns_only_unmapped_triples(repos, conn, mo
     monkeypatch.setattr(pipeline, "BROKER_PARSERS", {"acme": parser})
     user_id = uuid.uuid4()
     pipeline.add_account(conn, user_id=user_id, broker="acme", account_label="m")
-    pipeline.import_transactions(
-        conn, user_id=user_id, account_label="m", broker="acme", file_path=Path("f.csv")
-    )
+    pipeline.import_transactions(conn, user_id=user_id, account_label="m", file_path=Path("f.csv"))
     mappings = TickerMappings(isin={}, symbol={})
 
     unmapped = pipeline.list_unmapped_instruments(conn, user_id=user_id, mappings=mappings)
@@ -560,9 +584,7 @@ def test_list_unmapped_instruments_excludes_mapped_ones(repos, conn, monkeypatch
     monkeypatch.setattr(pipeline, "BROKER_PARSERS", {"acme": parser})
     user_id = uuid.uuid4()
     pipeline.add_account(conn, user_id=user_id, broker="acme", account_label="m")
-    pipeline.import_transactions(
-        conn, user_id=user_id, account_label="m", broker="acme", file_path=Path("f.csv")
-    )
+    pipeline.import_transactions(conn, user_id=user_id, account_label="m", file_path=Path("f.csv"))
     mappings = TickerMappings(isin={"IE00B4L5Y983": "IWDA.AS"}, symbol={})
 
     unmapped = pipeline.list_unmapped_instruments(conn, user_id=user_id, mappings=mappings)
@@ -629,15 +651,31 @@ def _cashflow_txn_factory(**overrides):
     return make
 
 
-def test_import_cashflow_rejects_a_broker_with_no_registered_parser(repos, conn, monkeypatch):
-    monkeypatch.setattr(pipeline, "CASHFLOW_PARSERS", {})
+def test_import_cashflow_raises_a_stashed_cashflow_discovery_error(repos, conn, monkeypatch):
+    monkeypatch.setattr(pipeline, "_CASHFLOW_DISCOVERY_ERROR", BrokerPluginError("boom"))
 
-    with pytest.raises(BrokerParserNotFound):
+    with pytest.raises(BrokerPluginError, match="boom"):
         pipeline.import_cashflow(
             conn,
             user_id=uuid.uuid4(),
             account_label="m",
-            broker="acme",
+            file_path=Path("f.csv"),
+            datastore_client=FakeDataStoreClient(),
+        )
+
+
+def test_import_cashflow_rejects_a_broker_with_no_registered_parser(repos, conn, monkeypatch):
+    """The account's own broker (here "acme") has no cashflow parser registered for it -- the
+    account itself resolves fine, since account creation never checks CASHFLOW_PARSERS."""
+    monkeypatch.setattr(pipeline, "CASHFLOW_PARSERS", {})
+    user_id = uuid.uuid4()
+    pipeline.add_account(conn, user_id=user_id, broker="acme", account_label="m")
+
+    with pytest.raises(BrokerParserNotFound):
+        pipeline.import_cashflow(
+            conn,
+            user_id=user_id,
+            account_label="m",
             file_path=Path("f.csv"),
             datastore_client=FakeDataStoreClient(),
         )
@@ -651,23 +689,6 @@ def test_import_cashflow_requires_an_existing_account(repos, conn, monkeypatch):
             conn,
             user_id=uuid.uuid4(),
             account_label="nonexistent",
-            broker="acme",
-            file_path=Path("f.csv"),
-            datastore_client=FakeDataStoreClient(),
-        )
-
-
-def test_import_cashflow_rejects_a_broker_mismatch(repos, conn, monkeypatch):
-    monkeypatch.setattr(pipeline, "CASHFLOW_PARSERS", {"acme": FakeCashflowParser("acme")})
-    user_id = uuid.uuid4()
-    pipeline.add_account(conn, user_id=user_id, broker="globex", account_label="m")
-
-    with pytest.raises(BrokerMismatch):
-        pipeline.import_cashflow(
-            conn,
-            user_id=user_id,
-            account_label="m",
-            broker="acme",
             file_path=Path("f.csv"),
             datastore_client=FakeDataStoreClient(),
         )
@@ -685,7 +706,6 @@ def test_import_cashflow_parses_and_saves_transactions(repos, conn, monkeypatch)
         conn,
         user_id=user_id,
         account_label="m",
-        broker="acme",
         file_path=Path("f.csv"),
         datastore_client=FakeDataStoreClient(),
     )
@@ -708,7 +728,6 @@ def test_import_cashflow_passes_a_working_fx_resolver_through_to_the_parser(
         conn,
         user_id=user_id,
         account_label="m",
-        broker="acme",
         file_path=Path("f.csv"),
         datastore_client=client,
     )
@@ -716,6 +735,33 @@ def test_import_cashflow_passes_a_working_fx_resolver_through_to_the_parser(
     _, _, resolve_fx_rate = parser.calls[0]
     rate = resolve_fx_rate("PLN", date(2026, 1, 1))
     assert rate == Decimal("4.30")
+    assert client.calls == [("EUR", "PLN", date(2026, 1, 1))]
+
+
+def test_import_cashflow_memoizes_repeated_fx_rate_lookups_within_one_import(
+    repos, conn, monkeypatch
+):
+    """A cash-ledger export commonly has several rows sharing one (currency, date) -- e.g. a
+    dividend batch -- and resolve_fx_rate must only hit the datastore client once per distinct
+    pair, not once per row."""
+    parser = FakeCashflowParser("acme")
+    monkeypatch.setattr(pipeline, "CASHFLOW_PARSERS", {"acme": parser})
+    user_id = uuid.uuid4()
+    pipeline.add_account(conn, user_id=user_id, broker="acme", account_label="m")
+    client = FakeDataStoreClient(rates={("EUR", "PLN", date(2026, 1, 1)): Decimal("4.30")})
+
+    pipeline.import_cashflow(
+        conn,
+        user_id=user_id,
+        account_label="m",
+        file_path=Path("f.csv"),
+        datastore_client=client,
+    )
+
+    _, _, resolve_fx_rate = parser.calls[0]
+    for _ in range(3):
+        assert resolve_fx_rate("PLN", date(2026, 1, 1)) == Decimal("4.30")
+
     assert client.calls == [("EUR", "PLN", date(2026, 1, 1))]
 
 
@@ -728,7 +774,6 @@ def test_import_cashflow_is_idempotent_on_reimport(repos, conn, monkeypatch):
         conn,
         user_id=user_id,
         account_label="m",
-        broker="acme",
         file_path=Path("f.csv"),
         datastore_client=FakeDataStoreClient(),
     )
@@ -737,7 +782,6 @@ def test_import_cashflow_is_idempotent_on_reimport(repos, conn, monkeypatch):
         conn,
         user_id=user_id,
         account_label="m",
-        broker="acme",
         file_path=Path("f.csv"),
         datastore_client=FakeDataStoreClient(),
     )
@@ -759,7 +803,6 @@ def test_import_cashflow_propagates_a_broker_file_error_without_committing(
             conn,
             user_id=user_id,
             account_label="m",
-            broker="acme",
             file_path=Path("f.csv"),
             datastore_client=FakeDataStoreClient(),
         )

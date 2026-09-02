@@ -31,8 +31,13 @@ def _discover(group: str) -> dict[str, object]:
                 f"two installed plugins both register {ep.name!r} under entry-point group "
                 f"{group!r} -- uninstall one before continuing"
             )
-        parser_cls = ep.load()
-        parser = parser_cls()
+        try:
+            parser_cls = ep.load()
+            parser = parser_cls()
+        except Exception as exc:
+            raise BrokerPluginError(
+                f"entry point {ep.name!r} in group {group!r} failed to load: {exc}"
+            ) from exc
         if parser.broker_key != ep.name:
             raise BrokerPluginError(
                 f"entry point {ep.name!r} in group {group!r} loaded a parser whose broker_key "

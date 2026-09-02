@@ -148,7 +148,8 @@ version gated account creation on `broker in tuple(BROKER_PARSERS)`, which meant
 no broker-parser plugins available (`BROKER_PARSERS` empty) could create *no* account at all —
 and since `add_manual_transaction` requires an existing account, that also silently broke manual
 entry, a flow with no real dependency on any parser. `broker` is now a free-text label at account
-creation, validated only for non-blank (`InvalidBroker`); `BROKER_PARSERS` is read only by
+creation, validated only for non-blank and within the column's length (`InvalidBroker`);
+`BROKER_PARSERS` is read only by
 `import_transactions` (and the parallel `import_cashflow`, below), the one place a parser is
 actually needed. `pipeline.list_available_brokers()` / `portfolio broker list` reports what's
 currently registered, for discoverability.
@@ -164,6 +165,18 @@ deployment with no such plugin installed still creates accounts and records tran
 manually — see the "Revised after task 6" note above — and `import-transactions`/`import-cashflow`
 fail with a named, self-diagnosing error (`BrokerParserNotFound`) rather than a missing-file
 crash.
+
+**Revised once more — a malformed plugin install no longer takes every command down with it.**
+Discovery for each of the two registries still runs once, at `pipeline.py` import time, but a
+`BrokerPluginError` raised during either one (a duplicate entry-point name, a `broker_key` that
+disagrees with its registered name, or a plugin that fails to load/instantiate at all) is now
+caught right there and stashed as `_BROKER_DISCOVERY_ERROR`/`_CASHFLOW_DISCOVERY_ERROR` instead
+of propagating out of the module import. It's re-raised lazily, only from the functions that
+actually read the affected registry (`list_available_brokers`/`import_transactions` for
+`BROKER_PARSERS`, `import_cashflow` for `CASHFLOW_PARSERS`) — so a broken broker-parser plugin
+still can't block `db init`, `account add`, `add-transaction`, or `list-unmapped-instruments`,
+none of which read either registry. The two registries fail independently of each other too: a
+broken cashflow-parser plugin doesn't stop `import-transactions` from working.
 
 **Built as of task 14** — `import_cashflow`, and `datastore_client/http_client.py`'s
 `get_fx_rate`, pulled forward from task 8 because one broker's cash-ledger export needed a live
@@ -186,15 +199,21 @@ hardcoded to that one broker.
 | `datastore_client/` | `base.py` (a `DataStoreClient` Protocol) + `http_client.py` | This is the `*_source.py` role, but the "provider" is another in-house service's read API rather than a third party. **`get_fx_rate` built at task 14**, pulled forward from its original task 8 slot because a cash-ledger import needed it; the price-series and ticker-existence methods `returns/` needs remain task 8's own work — see "Cross-service prerequisite" below. |
 
 **`errors.py` is not a domain module** — it's a single Foundation-layer file (`PortfolioError` plus
-`UnknownBroker`, `AccountNotFound`, `AccountLabelConflict`, `InvalidTransaction`, and, as of task 6,
-`BrokerMismatch`, `BrokerFileError`, `TickerMappingError`), not one per module, so `jobs.py` can
-catch every domain-level failure `pipeline.py` or a pure validator raises with one
+`InvalidBroker`, `AccountNotFound`, `AccountLabelConflict`, `InvalidTransaction`, and, as of task 6,
+`BrokerFileError`, `TickerMappingError`, plus `BrokerParserNotFound` and `BrokerPluginError` from
+the broker-plugin extraction and `DataStoreApiError` from task 14), not one per module, so
+`jobs.py` can catch every domain-level failure `pipeline.py` or a pure validator raises with one
 `except PortfolioError`. Repositories never raise these — they let the driver's own exceptions
-(e.g. `psycopg.errors.UniqueViolation`) propagate uncaught, same as `auth`. `BrokerMismatch` is
-`import_transactions`'s own guard, not one the original design called for: `--broker` is otherwise
-redundant with the resolved account's own `broker` column, but a cheap explicit check catches
-importing one broker's file into another broker's account as a named error rather than a parser
-crash or, worse, transactions silently attributed to the wrong broker.
+(e.g. `psycopg.errors.UniqueViolation`) propagate uncaught, same as `auth`.
+
+**Revised — `--broker` dropped from `import-transactions`/`import-cashflow`, and `BrokerMismatch`
+removed with it.** The original design took `--broker` as an explicit argument on both commands
+and raised `BrokerMismatch` if it disagreed with the resolved account's own `broker` column — but
+that column is *always* available once `--account` resolves (`AccountNotFound` fires first if it
+doesn't), which made `--broker` pure input to re-validate against data the system already had.
+Both flows now look the parser up from `account.broker` directly, which removes `BrokerMismatch`
+as an error class entirely (nothing is left that can disagree with itself) and one CLI flag users
+had to get right on every import.
 
 **One cross-domain dependency worth disclosing up front**, in the spirit of data-store's disclosed
 deviations: `broker_import/base.py`'s `BrokerParser.parse()` and `CashflowParser.parse()` both
@@ -341,9 +360,10 @@ for discoverability; it does not currently also report `CASHFLOW_PARSERS` availa
 register it under the `stakehold.broker_parsers` entry-point group as `trading212 = "...:
 Trading212Parser"` in whatever package provides it (this one, today; a separate installable
 package, once the extraction below completes) — no change to `pipeline.py`'s flow function,
-`jobs.py`, or `cli.py`'s argument shape. `import-transactions --broker trading212 --file ...
---account ...` works as soon as that package is installed and its metadata is picked up
-(`entry_points()`, at next process start).
+`jobs.py`, or `cli.py`'s argument shape. `import-transactions --file ... --account ...` works
+against a Trading212 account as soon as that package is installed and its metadata is picked up
+(`entry_points()`, at next process start) — the account's own `broker` column, not a CLI flag,
+is what selects `trading212` from the registry.
 
 **A plugin's own parsing rules — locale formats, id-collision handling, per-broker FX
 conventions — are documented in that plugin package's own docs, not here.** This document owns
@@ -441,17 +461,19 @@ identity — not column-level DDL, which needs its own sign-off pass.
 | Ticker linking | — (hand-edit the YAML file) | manual, as unmapped instruments surface | — | `configs/ticker_mappings.yaml` (edited directly, not through the service) |
 | List unmapped instruments | `list-unmapped-instruments --user <id>` | manual, on demand | `transactions` joined to `accounts` (scoped by `user_id`, and to pick up each instrument's owning broker), `configs/ticker_mappings.yaml` | — (read-only report) |
 | Manual transaction entry | `add-transaction --user <id> --account <label> --ref <key> --type <type> --datetime <iso8601> --amount <decimal> --currency <ISO4217> [--instrument <id> --instrument-kind ISIN\|SYMBOL] [--quantity <d>] [--price <d>] [--fx-rate <d>] [--fees <d>]` | ad hoc | `accounts`, scoped by `user_id` | `transactions` (idempotent on `(account_id, broker_transaction_ref)`, keyed by the mandatory `--ref`) |
-| Broker file import | `import-transactions --user <id> --broker <key> --file <path> --account <label>` | manual, on demand | export file, `accounts` scoped by `user_id` | `transactions` (idempotent on `(account_id, broker_transaction_ref)`) |
-| Cash-ledger import | `import-cashflow --user <id> --broker <key> --file <path> --account <label>` | manual, on demand | export file, `accounts` scoped by `user_id`, data-store's FX read API (`datastore_client`) for non-EUR rows | `transactions` (idempotent on `(account_id, broker_transaction_ref)`) |
+| Broker file import | `import-transactions --user <id> --file <path> --account <label>` | manual, on demand | export file, `accounts` scoped by `user_id` | `transactions` (idempotent on `(account_id, broker_transaction_ref)`) |
+| Cash-ledger import | `import-cashflow --user <id> --file <path> --account <label>` | manual, on demand | export file, `accounts` scoped by `user_id`, data-store's FX read API (`datastore_client`) for non-EUR rows | `transactions` (idempotent on `(account_id, broker_transaction_ref)`) |
 | Positions rebuild | `rebuild-positions` | after transactions change | `transactions`, `configs/ticker_mappings.yaml` | `position_snapshots` |
 | Returns rebuild | `rebuild-returns` | after positions rebuild or new prices land | `position_snapshots`, `data-store` read API | `return_snapshots` |
 
 **No separate `brokers` table** ever materialized — `schema.md` settled on `broker` as a plain
 string on `accounts`, so `account add` writes only to `accounts`, never a second table.
-`account add --broker <key>` is free text, checked only for non-blank (`InvalidBroker`) — it is
+`account add --broker <key>` is free text, checked only for non-blank and within the column's
+length (`InvalidBroker`) — it is
 **not** validated against `BROKER_PARSERS` or any other fixed list of names, on purpose: account
 creation and manual transaction entry must both work with zero broker-parser plugins installed.
-`--broker <key>` only needs to match a registered parser at `import-transactions` time.
+The stored `broker` only needs to match a registered parser once `import-transactions`/
+`import-cashflow` looks it up from the account -- neither command takes its own `--broker`.
 
 **A load-bearing consequence of the entity model above, worth stating directly:** `rebuild-positions`
 needs no price data at all — quantity and average cost are pure functions of the transaction log.
@@ -505,10 +527,10 @@ FX-rate lookup mid-parse to get a `eur_amount`. Widening `BrokerParser.parse()` 
 one — was rejected in favor of a second, parallel registry: `CashflowParser`/`CASHFLOW_PARSERS`,
 whose `parse()` takes a plain `resolve_fx_rate` callable instead (see "Extension points" above).
 `pipeline.import_cashflow` resolves rates through `datastore_client` and hands that callable to
-whatever `CashflowParser` is registered for `--broker` — the parser implementation stays pure and
-testable against a fake callable, no HTTP client required. `import-cashflow --user <id> --broker
-<key> --file <path> --account <label>` is its own CLI command, not a file-type-sniffing branch
-inside `import-transactions`.
+whatever `CashflowParser` is registered for the resolved account's `broker` — the parser
+implementation stays pure and testable against a fake callable, no HTTP client required.
+`import-cashflow --user <id> --file <path> --account <label>` is its own CLI command, not a
+file-type-sniffing branch inside `import-transactions`.
 
 **FX resolution contract**: for a non-EUR row, `resolve_fx_rate(currency, on_date)` calls
 `datastore_client.get_fx_rate("EUR", currency, on_date)`, which looks back up to 7 days for the

@@ -24,10 +24,10 @@ class Settings:
     database_url: str
     admin_database_url: str
     ticker_mappings_path: Path
-    # Both optional: only import-acme-cashflows needs a live data-store call, so requiring
-    # these for every command (account add, add-transaction, import-transactions) would break
-    # them for no reason. run_import_acme_cashflows checks both are set itself, the same way
-    # data-store's own API checks internal_api_secret at its own startup rather than here.
+    # Both optional: only import-cashflow needs a live data-store call, so requiring these for
+    # every command (account add, add-transaction, import-transactions) would break them for no
+    # reason. run_import_cashflow checks both are set itself, the same way data-store's own API
+    # checks internal_api_secret at its own startup rather than here.
     datastore_api_url: str | None
     internal_api_secret: str | None
 

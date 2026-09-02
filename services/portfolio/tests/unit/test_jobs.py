@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from portfolio import jobs
 from portfolio.accounts.repository import Account
-from portfolio.errors import AccountNotFound, BrokerMismatch
+from portfolio.errors import AccountNotFound, TickerMappingError
 from portfolio.settings import SettingsError
 from portfolio.ticker_mapping.loader import TickerMappings
 
@@ -414,7 +414,7 @@ def test_run_add_transaction_reports_partial_and_closes_connection_on_domain_err
 
 # --- run_import_transactions ---
 
-_IMPORT_KWARGS = dict(account_label="m", broker="acme", file_path=Path("acme.csv"))
+_IMPORT_KWARGS = dict(account_label="m", file_path=Path("acme.csv"))
 
 
 def test_run_import_transactions_reports_ok_when_saved(monkeypatch):
@@ -442,7 +442,7 @@ def test_run_import_transactions_reports_partial_and_closes_connection_on_domain
     fake_conn = _patch_new_job_common(monkeypatch)
 
     def boom(conn, **kw):
-        raise BrokerMismatch("nope")
+        raise AccountNotFound("nope")
 
     monkeypatch.setattr(jobs.pipeline, "import_transactions", boom)
 
@@ -465,7 +465,6 @@ def test_run_import_transactions_passes_the_file_path_through(monkeypatch):
     jobs.run_import_transactions(user_id=uuid.uuid4(), **_IMPORT_KWARGS)
 
     assert captured["file_path"] == Path("acme.csv")
-    assert captured["broker"] == "acme"
     assert captured["account_label"] == "m"
 
 
@@ -547,9 +546,25 @@ def test_run_list_unmapped_instruments_loads_mappings_from_the_settings_path(mon
     assert captured["path"] == Path("configs/ticker_mappings.yaml")
 
 
+def test_run_list_unmapped_instruments_reports_partial_on_a_missing_mappings_file(monkeypatch):
+    """A missing/malformed configs/ticker_mappings.yaml is a domain error, not a crash -- every
+    sibling job function degrades to a clean `partial` result the same way."""
+    fake_conn = _patch_new_job_common(monkeypatch)
+
+    def boom(path):
+        raise TickerMappingError("Ticker mappings file not found")
+
+    monkeypatch.setattr(jobs, "load_ticker_mappings", boom)
+
+    result = jobs.run_list_unmapped_instruments(user_id=uuid.uuid4())
+
+    assert result == {"status": "partial", "rows_saved": 0, "instruments_unmapped": 0}
+    assert fake_conn.closed is True
+
+
 # --- run_import_cashflow ---
 
-_CASHFLOW_KWARGS = dict(account_label="m", broker="acme", file_path=Path("acme_account.csv"))
+_CASHFLOW_KWARGS = dict(account_label="m", file_path=Path("acme_account.csv"))
 
 
 def _patch_cashflow_job_common(monkeypatch):
@@ -589,7 +604,7 @@ def test_run_import_cashflow_reports_partial_on_domain_error(monkeypatch):
     fake_conn = _patch_cashflow_job_common(monkeypatch)
 
     def boom(conn, **kw):
-        raise BrokerMismatch("nope")
+        raise AccountNotFound("nope")
 
     monkeypatch.setattr(jobs.pipeline, "import_cashflow", boom)
 

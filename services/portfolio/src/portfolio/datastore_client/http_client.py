@@ -3,7 +3,7 @@ data-store/docs/architecture.md's "Read API" section for the endpoint contract t
 """
 
 from datetime import date, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 import requests
 from portfolio.errors import DataStoreApiError
@@ -43,8 +43,20 @@ class HttpDataStoreClient:
                 f"data-store returned {response.status_code} for {base}/{quote}: {exc}"
             ) from exc
 
-        points = response.json()["points"]
+        try:
+            points = response.json()["points"]
+        except (ValueError, KeyError) as exc:
+            # ValueError covers requests' JSONDecodeError (a json.JSONDecodeError subclass) for
+            # a 200 whose body isn't valid JSON at all.
+            raise DataStoreApiError(
+                f"data-store returned a malformed response for {base}/{quote}: {exc}"
+            ) from exc
         if not points:
             return None
-        latest = max(points, key=lambda point: point["date"])
-        return Decimal(latest["rate"])
+        try:
+            latest = max(points, key=lambda point: point["date"])
+            return Decimal(latest["rate"])
+        except (KeyError, TypeError, InvalidOperation) as exc:
+            raise DataStoreApiError(
+                f"data-store returned a malformed fx-rate point for {base}/{quote}: {exc}"
+            ) from exc

@@ -93,6 +93,37 @@ def test_get_fx_rate_raises_on_a_server_error(client, monkeypatch):
         client.get_fx_rate("EUR", "USD", date(2026, 1, 9))
 
 
+def test_get_fx_rate_raises_on_a_response_missing_the_points_key(client, monkeypatch):
+    monkeypatch.setattr(requests, "get", lambda *a, **kw: FakeResponse(200, {}))
+
+    with pytest.raises(DataStoreApiError):
+        client.get_fx_rate("EUR", "USD", date(2026, 1, 9))
+
+
+def test_get_fx_rate_raises_on_a_point_missing_the_rate_key(client, monkeypatch):
+    monkeypatch.setattr(
+        requests,
+        "get",
+        lambda *a, **kw: FakeResponse(200, {"points": [{"date": "2026-01-09"}]}),
+    )
+
+    with pytest.raises(DataStoreApiError):
+        client.get_fx_rate("EUR", "USD", date(2026, 1, 9))
+
+
+def test_get_fx_rate_raises_on_a_point_with_an_unparseable_rate(client, monkeypatch):
+    monkeypatch.setattr(
+        requests,
+        "get",
+        lambda *a, **kw: FakeResponse(
+            200, {"points": [{"date": "2026-01-09", "rate": "not-a-number"}]}
+        ),
+    )
+
+    with pytest.raises(DataStoreApiError):
+        client.get_fx_rate("EUR", "USD", date(2026, 1, 9))
+
+
 def test_get_fx_rate_raises_when_the_request_itself_fails(client, monkeypatch):
     def boom(*a, **kw):
         raise requests.ConnectionError("connection refused")

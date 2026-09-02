@@ -240,7 +240,7 @@ def run_add_transaction(
 
 
 def run_import_transactions(
-    *, user_id: UUID, account_label: str, broker: str, file_path: Path
+    *, user_id: UUID, account_label: str, file_path: Path
 ) -> dict[str, int | str]:
     """Parse and persist one broker export file. See pipeline.import_transactions for what
     `saved` means."""
@@ -249,18 +249,16 @@ def run_import_transactions(
     conn = get_connection(settings.database_url)
     try:
         logger.info(
-            "import-transactions: importing %s into account %r (user %s, broker=%r).",
+            "import-transactions: importing %s into account %r (user %s).",
             file_path,
             account_label,
             user_id,
-            broker,
         )
         try:
             saved = pipeline.import_transactions(
                 conn,
                 user_id=user_id,
                 account_label=account_label,
-                broker=broker,
                 file_path=file_path,
             )
         except PortfolioError as exc:
@@ -279,11 +277,15 @@ def run_list_unmapped_instruments(*, user_id: UUID) -> dict[str, int | str]:
     empty result is still reported as `nothing_to_do`, not `ok`, per the logging rule."""
     configure_logging()
     settings = load_settings()
-    mappings = load_ticker_mappings(settings.ticker_mappings_path)
     conn = get_connection(settings.database_url)
     try:
         logger.info("list-unmapped-instruments: checking instruments for user %s.", user_id)
-        unmapped = pipeline.list_unmapped_instruments(conn, user_id=user_id, mappings=mappings)
+        try:
+            mappings = load_ticker_mappings(settings.ticker_mappings_path)
+            unmapped = pipeline.list_unmapped_instruments(conn, user_id=user_id, mappings=mappings)
+        except PortfolioError as exc:
+            logger.error("list-unmapped-instruments: failed -- %s", exc)
+            return build_run_result(units_total=1, rows_saved=0, failed=1, instruments_unmapped=0)
     finally:
         conn.close()
 
@@ -299,7 +301,7 @@ def run_list_unmapped_instruments(*, user_id: UUID) -> dict[str, int | str]:
 
 
 def run_import_cashflow(
-    *, user_id: UUID, account_label: str, broker: str, file_path: Path
+    *, user_id: UUID, account_label: str, file_path: Path
 ) -> dict[str, int | str]:
     """Parse and persist one broker's cash-ledger ("Account") export. See
     pipeline.import_cashflow for what `saved` means.
@@ -322,18 +324,16 @@ def run_import_cashflow(
     conn = get_connection(settings.database_url)
     try:
         logger.info(
-            "import-cashflow: importing %s into account %r (user %s, broker=%r).",
+            "import-cashflow: importing %s into account %r (user %s).",
             file_path,
             account_label,
             user_id,
-            broker,
         )
         try:
             saved = pipeline.import_cashflow(
                 conn,
                 user_id=user_id,
                 account_label=account_label,
-                broker=broker,
                 file_path=file_path,
                 datastore_client=datastore_client,
             )

@@ -30,7 +30,7 @@ class TickerMappings:
             return self.isin.get(identifier)
         if kind == "SYMBOL":
             return self.symbol.get(broker, {}).get(identifier)
-        raise ValueError(f"unrecognized instrument_identifier_kind: {kind!r}")
+        raise TickerMappingError(f"unrecognized instrument_identifier_kind: {kind!r}")
 
 
 def load_ticker_mappings(path: Path) -> TickerMappings:
