@@ -671,6 +671,8 @@ def test_run_rebuild_positions_reports_ok_with_the_payload(monkeypatch):
         positions_removed=0,
         blocked=[],
         anomalies=[],
+        positions_with_anomalies=0,
+        failed_pairs=[],
     )
     monkeypatch.setattr(jobs.pipeline, "rebuild_positions", lambda conn, **kw: outcome)
 
@@ -683,7 +685,9 @@ def test_run_rebuild_positions_reports_ok_with_the_payload(monkeypatch):
         "positions_removed": 0,
         "instruments_blocked": 0,
         "positions_with_anomalies": 0,
+        "pairs_failed": 0,
         "blocked_instruments": [],
+        "failed_pairs": [],
     }
     assert fake_conn.closed is True
 
@@ -694,13 +698,43 @@ def test_run_rebuild_positions_reports_nothing_to_do_with_no_accounts(monkeypatc
         jobs, "load_ticker_mappings", lambda path: TickerMappings(isin={}, symbol={})
     )
     outcome = RebuildOutcome(
-        snapshots_saved=0, positions_rebuilt=0, positions_removed=0, blocked=[], anomalies=[]
+        snapshots_saved=0,
+        positions_rebuilt=0,
+        positions_removed=0,
+        blocked=[],
+        anomalies=[],
+        positions_with_anomalies=0,
+        failed_pairs=[],
     )
     monkeypatch.setattr(jobs.pipeline, "rebuild_positions", lambda conn, **kw: outcome)
 
     result = jobs.run_rebuild_positions(user_id=uuid.uuid4())
 
     assert result["status"] == "nothing_to_do"
+
+
+def test_run_rebuild_positions_reports_ok_when_only_pruning_occurred(monkeypatch):
+    """positions_removed alone must still count as work done -- a run that only pruned stale
+    snapshots is not the same as a run that touched nothing (regression test: units_total used
+    to omit positions_removed, so this used to report `nothing_to_do`)."""
+    _patch_new_job_common(monkeypatch)
+    monkeypatch.setattr(
+        jobs, "load_ticker_mappings", lambda path: TickerMappings(isin={}, symbol={})
+    )
+    outcome = RebuildOutcome(
+        snapshots_saved=0,
+        positions_rebuilt=0,
+        positions_removed=1,
+        blocked=[],
+        anomalies=[],
+        positions_with_anomalies=0,
+        failed_pairs=[],
+    )
+    monkeypatch.setattr(jobs.pipeline, "rebuild_positions", lambda conn, **kw: outcome)
+
+    result = jobs.run_rebuild_positions(user_id=uuid.uuid4())
+
+    assert result["status"] == "ok"
 
 
 def test_run_rebuild_positions_reports_partial_with_blocked_instruments(monkeypatch):
@@ -715,6 +749,8 @@ def test_run_rebuild_positions_reports_partial_with_blocked_instruments(monkeypa
         positions_removed=0,
         blocked=[("ISIN", "IE00B4L5Y983", "acme")],
         anomalies=[],
+        positions_with_anomalies=0,
+        failed_pairs=[],
     )
     monkeypatch.setattr(jobs.pipeline, "rebuild_positions", lambda conn, **kw: outcome)
 
@@ -724,6 +760,33 @@ def test_run_rebuild_positions_reports_partial_with_blocked_instruments(monkeypa
     assert result["instruments_blocked"] == 1
     assert result["blocked_instruments"] == [
         {"kind": "ISIN", "identifier": "IE00B4L5Y983", "broker": "acme"}
+    ]
+
+
+def test_run_rebuild_positions_reports_partial_with_failed_pairs(monkeypatch):
+    """A driver-level failure saving one pair must flip the run to partial too, and surface the
+    pair -- the same treatment blocked instruments already get, not a silent drop."""
+    _patch_new_job_common(monkeypatch)
+    monkeypatch.setattr(
+        jobs, "load_ticker_mappings", lambda path: TickerMappings(isin={}, symbol={})
+    )
+    outcome = RebuildOutcome(
+        snapshots_saved=0,
+        positions_rebuilt=0,
+        positions_removed=0,
+        blocked=[],
+        anomalies=[],
+        positions_with_anomalies=0,
+        failed_pairs=[("m", "IWDA.AS", "connection reset")],
+    )
+    monkeypatch.setattr(jobs.pipeline, "rebuild_positions", lambda conn, **kw: outcome)
+
+    result = jobs.run_rebuild_positions(user_id=uuid.uuid4())
+
+    assert result["status"] == "partial"
+    assert result["pairs_failed"] == 1
+    assert result["failed_pairs"] == [
+        {"account_label": "m", "ticker": "IWDA.AS", "error": "connection reset"}
     ]
 
 
@@ -747,6 +810,9 @@ def test_run_rebuild_positions_reports_partial_on_a_domain_error(monkeypatch):
         "positions_removed": 0,
         "instruments_blocked": 0,
         "positions_with_anomalies": 0,
+        "pairs_failed": 0,
+        "blocked_instruments": [],
+        "failed_pairs": [],
     }
     assert fake_conn.closed is True
 
@@ -775,7 +841,13 @@ def test_run_rebuild_positions_passes_the_account_label_through(monkeypatch):
     def fake_rebuild(conn, **kw):
         captured.update(kw)
         return RebuildOutcome(
-            snapshots_saved=0, positions_rebuilt=0, positions_removed=0, blocked=[], anomalies=[]
+            snapshots_saved=0,
+            positions_rebuilt=0,
+            positions_removed=0,
+            blocked=[],
+            anomalies=[],
+            positions_with_anomalies=0,
+            failed_pairs=[],
         )
 
     monkeypatch.setattr(jobs.pipeline, "rebuild_positions", fake_rebuild)
@@ -787,7 +859,10 @@ def test_run_rebuild_positions_passes_the_account_label_through(monkeypatch):
     assert captured["account_label"] == "m"
 
 
-def test_run_rebuild_positions_counts_positions_with_anomalies(monkeypatch):
+def test_run_rebuild_positions_reports_positions_with_anomalies_from_the_outcome(monkeypatch):
+    """positions_with_anomalies is passed through verbatim from RebuildOutcome, not re-derived
+    from len(anomalies) -- two anomaly messages for the same position must still report 1, so
+    this deliberately sets a count that disagrees with the raw message count."""
     _patch_new_job_common(monkeypatch)
     monkeypatch.setattr(
         jobs, "load_ticker_mappings", lambda path: TickerMappings(isin={}, symbol={})
@@ -797,7 +872,12 @@ def test_run_rebuild_positions_counts_positions_with_anomalies(monkeypatch):
         positions_rebuilt=1,
         positions_removed=0,
         blocked=[],
-        anomalies=["IWDA.AS in account 1: quantity went negative"],
+        anomalies=[
+            "IWDA.AS in account 1: traded in both 'EUR' and 'PLN'",
+            "IWDA.AS in account 1: quantity went negative",
+        ],
+        positions_with_anomalies=1,
+        failed_pairs=[],
     )
     monkeypatch.setattr(jobs.pipeline, "rebuild_positions", lambda conn, **kw: outcome)
 
@@ -814,7 +894,13 @@ def test_run_rebuild_positions_logs_start_before_completion(monkeypatch, caplog)
         jobs, "load_ticker_mappings", lambda path: TickerMappings(isin={}, symbol={})
     )
     outcome = RebuildOutcome(
-        snapshots_saved=1, positions_rebuilt=1, positions_removed=0, blocked=[], anomalies=[]
+        snapshots_saved=1,
+        positions_rebuilt=1,
+        positions_removed=0,
+        blocked=[],
+        anomalies=[],
+        positions_with_anomalies=0,
+        failed_pairs=[],
     )
     monkeypatch.setattr(jobs.pipeline, "rebuild_positions", lambda conn, **kw: outcome)
 

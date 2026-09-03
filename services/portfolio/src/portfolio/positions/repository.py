@@ -36,19 +36,22 @@ def replace_snapshots(
     transaction so a concurrent reader never observes the pair with zero rows (docs/schema.md)."""
     with conn.cursor() as cur:
         cur.execute(_DELETE_SQL, (account_id, canonical_ticker))
-        for snapshot in snapshots:
-            cur.execute(
+        if snapshots:
+            cur.executemany(
                 _INSERT_SQL,
-                (
-                    snapshot.account_id,
-                    snapshot.canonical_ticker,
-                    snapshot.as_of_date,
-                    snapshot.quantity,
-                    snapshot.average_cost_native,
-                    snapshot.native_currency,
-                    snapshot.average_cost_eur,
-                    snapshot.cost_basis_eur,
-                ),
+                [
+                    (
+                        snapshot.account_id,
+                        snapshot.canonical_ticker,
+                        snapshot.as_of_date,
+                        snapshot.quantity,
+                        snapshot.average_cost_native,
+                        snapshot.native_currency,
+                        snapshot.average_cost_eur,
+                        snapshot.cost_basis_eur,
+                    )
+                    for snapshot in snapshots
+                ],
             )
     return len(snapshots)
 

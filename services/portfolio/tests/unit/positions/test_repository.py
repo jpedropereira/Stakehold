@@ -33,6 +33,9 @@ class FakeCursor:
     def execute(self, sql, params=None):
         self.executed.append((sql, params))
 
+    def executemany(self, sql, params_seq):
+        self.executed.append((sql, list(params_seq)))
+
     def __enter__(self):
         return self
 
@@ -91,8 +94,9 @@ def test_replace_snapshots_deletes_before_inserting():
     executed = conn._cursor.executed
     assert "DELETE FROM position_snapshots" in executed[0][0]
     assert executed[0][1] == (1, "IWDA.AS")
-    assert all("INSERT INTO position_snapshots" in sql for sql, _ in executed[1:])
-    assert len(executed) == 3  # one delete, two inserts
+    assert "INSERT INTO position_snapshots" in executed[1][0]
+    assert len(executed[1][1]) == 2  # one batched insert covering both rows
+    assert len(executed) == 2  # one delete, one batched insert
 
 
 def test_replace_snapshots_deletes_even_with_an_empty_replacement_set():
@@ -129,17 +133,19 @@ def test_replace_snapshots_inserts_the_snapshots_own_fields():
 
     replace_snapshots(conn, account_id=1, canonical_ticker="IWDA.AS", snapshots=[snapshot])
 
-    _, params = conn._cursor.executed[1]
-    assert params == (
-        snapshot.account_id,
-        snapshot.canonical_ticker,
-        snapshot.as_of_date,
-        snapshot.quantity,
-        snapshot.average_cost_native,
-        snapshot.native_currency,
-        snapshot.average_cost_eur,
-        snapshot.cost_basis_eur,
-    )
+    _, params_list = conn._cursor.executed[1]
+    assert params_list == [
+        (
+            snapshot.account_id,
+            snapshot.canonical_ticker,
+            snapshot.as_of_date,
+            snapshot.quantity,
+            snapshot.average_cost_native,
+            snapshot.native_currency,
+            snapshot.average_cost_eur,
+            snapshot.cost_basis_eur,
+        )
+    ]
 
 
 # --- list_tickers ---

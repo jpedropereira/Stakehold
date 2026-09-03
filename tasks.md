@@ -36,8 +36,8 @@ one-time snapshot.
 
 One task is `ready` today: **8** (returns), unblocked since both its dependencies — 7 (positions)
 and 3 (data-store read API) — are now `done`. **9** stays `blocked` — it depends on 5, 6, 7 (all
-`done`) and 8 (still `blocked`). **11** stays `blocked` too — it depends on both 10 (now `done`)
-and 9 (portfolio HTTP API, still `blocked`).
+`done`) and 8 (not yet `done`, only `ready`). **11** stays `blocked` too — it depends on both 10
+(now `done`) and 9 (portfolio HTTP API, still `blocked`).
 
 ## Tasks
 
@@ -183,10 +183,15 @@ synthetic parser instead of a real one).
 own `with transaction(conn):` opened by `pipeline.rebuild_positions`, not by the repository —
 `schema.md`'s atomicity requirement is per-pair, not per-run). Flow: `rebuild-positions --user <id>
 [--account <label>]`, resolved via `AskUserQuestion` — the original flow table showed the command
-bare, with no flags. New read on `transactions/repository.py`: `list_by_account`, the account-scoped
-replay source (every prior read there was either `user_id`-scoped or a write). An unmapped
-instrument blocks only its own ticker, reported by name with a `partial` status, never a silent
-skip — every other `(account, ticker)` in the run still gets rebuilt.
+bare, with no flags. New read on `transactions/repository.py`: `list_by_accounts`, fetching every
+relevant account's transaction log in one batched round trip rather than one query per account
+(`list_by_account` is a thin single-account wrapper over it) — every prior read there was either
+`user_id`-scoped or a write. An unmapped instrument blocks only its own ticker, reported by name
+with a `partial` status, never a silent skip — every other `(account, ticker)` in the run still
+gets rebuilt. A driver-level failure on one `(account, ticker)` pair (as opposed to a
+`PortfolioError`) is caught at that same per-pair transaction boundary, logged, and reported in
+`failed_pairs` rather than aborting every account still left to process — see
+`docs/architecture.md`'s "A rebuild's own failure isolation."
 
 **Three decisions left open by both `architecture.md` and `schema.md`, settled here and recorded in
 both**: cost basis is sourced from `native_amount`/`eur_amount` (the broker's own frozen cash-flow
@@ -210,11 +215,14 @@ rebuild time, and "blocked means don't touch" must not become "blocked means del
 Tests: `tests/unit/positions/{test_calculator,test_repository}.py` (the calculator suite is the
 bulk — average-cost blending, sell-to-zero reset, re-buy after close, both anomaly cases, and the
 two-account/two-currency independence case guarding against a same-instrument mix-up); additions to
-`tests/unit/{test_pipeline,test_jobs,test_cli}.py` and
+`tests/unit/{test_pipeline,test_jobs,test_cli}.py` (including the batched-fetch call count, a
+non-BUY/SELL row never reaching the mapping check, and a driver-level failure on one pair being
+isolated and reported rather than aborting the run) and
 `tests/unit/transactions/test_repository.py`; `tests/integration/test_rebuild_positions.py` (live
 Postgres, seeded through the real CLI/pipeline stack — the delete-then-insert replacement contract a
-fake can't prove, `--account` scoping, per-user isolation, and an unmapped instrument blocking with
-exit code 1).
+fake can't prove, `--account` scoping, the whole-portfolio case rebuilding every account via the
+batched fetch, per-user isolation, an unmapped instrument blocking with exit code 1, and a bad
+`--account` label exiting cleanly rather than crashing).
 
 ### 8. Returns
 

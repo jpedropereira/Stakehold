@@ -832,7 +832,9 @@ def test_rebuild_positions_dispatches_with_converted_user_id_and_no_account(monk
             "positions_removed": 0,
             "instruments_blocked": 0,
             "positions_with_anomalies": 0,
+            "pairs_failed": 0,
             "blocked_instruments": [],
+            "failed_pairs": [],
         }
 
     monkeypatch.setattr(cli.jobs, "run_rebuild_positions", fake_run)
@@ -855,7 +857,9 @@ def test_rebuild_positions_passes_the_optional_account_label(monkeypatch):
             "positions_removed": 0,
             "instruments_blocked": 0,
             "positions_with_anomalies": 0,
+            "pairs_failed": 0,
             "blocked_instruments": [],
+            "failed_pairs": [],
         }
 
     monkeypatch.setattr(cli.jobs, "run_rebuild_positions", fake_run)
@@ -876,9 +880,11 @@ def test_rebuild_positions_prints_blocked_instruments_then_the_count(monkeypatch
             "positions_removed": 0,
             "instruments_blocked": 1,
             "positions_with_anomalies": 0,
+            "pairs_failed": 0,
             "blocked_instruments": [
                 {"kind": "ISIN", "identifier": "IE00B4L5Y983", "broker": "acme"}
             ],
+            "failed_pairs": [],
         },
     )
 
@@ -886,6 +892,31 @@ def test_rebuild_positions_prints_blocked_instruments_then_the_count(monkeypatch
 
     out = capsys.readouterr().out
     assert out == "ISIN\tIE00B4L5Y983\tacme\n1 position snapshot(s) saved\n"
+
+
+def test_rebuild_positions_prints_failed_pairs_then_the_count(monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli.jobs,
+        "run_rebuild_positions",
+        lambda **kw: {
+            "status": "partial",
+            "rows_saved": 0,
+            "positions_rebuilt": 0,
+            "positions_removed": 0,
+            "instruments_blocked": 0,
+            "positions_with_anomalies": 0,
+            "pairs_failed": 1,
+            "blocked_instruments": [],
+            "failed_pairs": [
+                {"account_label": "m", "ticker": "IWDA.AS", "error": "connection reset"}
+            ],
+        },
+    )
+
+    cli.main(["rebuild-positions", "--user", str(uuid.uuid4())])
+
+    out = capsys.readouterr().out
+    assert out == "m\tIWDA.AS\tconnection reset\n0 position snapshot(s) saved\n"
 
 
 def test_rebuild_positions_prints_only_the_count_when_nothing_blocked(monkeypatch, capsys):
@@ -899,7 +930,9 @@ def test_rebuild_positions_prints_only_the_count_when_nothing_blocked(monkeypatc
             "positions_removed": 0,
             "instruments_blocked": 0,
             "positions_with_anomalies": 0,
+            "pairs_failed": 0,
             "blocked_instruments": [],
+            "failed_pairs": [],
         },
     )
 
@@ -919,7 +952,9 @@ def test_rebuild_positions_exits_zero_when_nothing_to_do(monkeypatch):
             "positions_removed": 0,
             "instruments_blocked": 0,
             "positions_with_anomalies": 0,
+            "pairs_failed": 0,
             "blocked_instruments": [],
+            "failed_pairs": [],
         },
     )
 
@@ -937,9 +972,11 @@ def test_rebuild_positions_exits_nonzero_when_partial(monkeypatch):
             "positions_removed": 0,
             "instruments_blocked": 1,
             "positions_with_anomalies": 0,
+            "pairs_failed": 0,
             "blocked_instruments": [
                 {"kind": "ISIN", "identifier": "IE00B4L5Y983", "broker": "acme"}
             ],
+            "failed_pairs": [],
         },
     )
 

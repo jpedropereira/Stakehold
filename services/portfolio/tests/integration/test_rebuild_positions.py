@@ -129,6 +129,25 @@ def test_rebuild_is_scoped_to_one_account_via_the_account_flag(pg_connect):
     assert count == 1
 
 
+def test_rebuild_with_no_account_flag_rebuilds_every_account_for_the_user(pg_connect):
+    """Regression coverage for the batched multi-account fetch (transactions_repository.
+    list_by_accounts): a whole-portfolio rebuild across two accounts must still rebuild both,
+    not just the first one a naive single-row ANY(%s) param might silently mishandle."""
+    user_id = uuid.uuid4()
+    _add_account(user_id, label="a")
+    _add_account(user_id, label="b")
+    _add_buy(user_id, account_label="a", ref="t1")
+    _add_buy(user_id, account_label="b", ref="t2")
+
+    exit_code = _rebuild(user_id)
+
+    assert exit_code == 0
+    with pg_connect() as conn, conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM position_snapshots")
+        (count,) = cur.fetchone()
+    assert count == 2
+
+
 def test_rebuild_is_isolated_per_user(pg_connect):
     user_a, user_b = uuid.uuid4(), uuid.uuid4()
     _add_account(user_a, label="a")
@@ -150,6 +169,18 @@ def test_rebuild_is_isolated_per_user(pg_connect):
             )
             (account_a_id,) = cur.fetchone()
     assert rows == [(account_a_id,)]
+
+
+def test_rebuild_with_an_unknown_account_label_exits_cleanly_rather_than_crashing(pg_connect):
+    """A bad --account label raises AccountNotFound (a PortfolioError) before the replay loop
+    even starts -- jobs.py's domain-error path must still report a clean partial result through
+    the real CLI, not an uncaught KeyError from cli.py reading blocked_instruments."""
+    user_id = uuid.uuid4()
+    _add_account(user_id, label="m")
+
+    exit_code = _rebuild(user_id, account_label="does-not-exist")
+
+    assert exit_code == 1
 
 
 def test_an_unmapped_instrument_blocks_its_rebuild_and_exits_nonzero(

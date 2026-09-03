@@ -188,14 +188,20 @@ hardcoded to that one broker.
 
 **Built as of task 7** — `rebuild_positions`, and the new `positions/calculator.py` +
 `positions/repository.py` it composes. Needed a new read this task added to
-`transactions/repository.py`: `list_by_account(conn, account_id)`, the account-scoped replay
-source — every prior read there was either scoped by `user_id` (`list_distinct_instruments`) or a
-write. Unlike every flow above it, this one opens more than one transaction boundary per call: one
-`with transaction(conn):` per `(account, canonical_ticker)` pair, so each pair's delete-then-insert
-replacement is atomic on its own without making the whole rebuild one all-or-nothing transaction
-(`schema.md`'s "Loading strategy" for `position_snapshots`). See "Three decisions task 7 had to
-settle" below the flows table for the cost-basis, transaction-type, and anomaly-handling choices
-that weren't pinned down before this task.
+`transactions/repository.py`: `list_by_accounts(conn, account_ids, *, transaction_types=None)`,
+which fetches every one of `account_ids`' transaction logs in one round trip and groups them by
+`account_id` — every prior read there was either scoped by `user_id`
+(`list_distinct_instruments`) or a write. `list_by_account(conn, account_id)` is a thin
+single-account wrapper over it, kept for a caller that only ever needs one. Unlike every flow
+above it, this one opens more than one transaction boundary per call: one `with transaction(conn):`
+per `(account, canonical_ticker)` pair, so each pair's delete-then-insert replacement is atomic on
+its own without making the whole rebuild one all-or-nothing transaction (`schema.md`'s "Loading
+strategy" for `position_snapshots`). That same per-pair boundary is also the run's
+failure-isolation unit: a driver-level failure (not a `PortfolioError`) writing or pruning one
+pair is caught there, logged, and reported in the run result rather than aborting every account
+still left to process — see "A rebuild's own failure isolation" below. See "Three decisions task 7
+had to settle" below the flows table for the cost-basis, transaction-type, and anomaly-handling
+choices that weren't pinned down before this task.
 
 ## The three-file shape of a domain module
 
@@ -502,6 +508,32 @@ process every other account/instrument normally, and report the blocked ones by 
 completion summary with a `partial` status, following the same `run_result` contract and
 `nothing_to_do` vs. `partial` vs. `ok` distinction data-store already established (and the
 repo-wide logging rule: "nothing to do" must never look like "something failed silently").
+
+**A known sharp edge in that blocking rule**: it's keyed by
+`(instrument_identifier_kind, instrument_identifier)`, the only key `mappings.resolve` can look
+up — there is no way to tell, from an unresolved identifier alone, which resolved ticker (if any)
+names the same real-world instrument. If one account's transactions for a single holding are
+split across a mapped identifier kind (e.g. `ISIN`) and an unmapped one for that broker (e.g.
+`SYMBOL`), that ticker's snapshot is built only from the mapped rows — silently a partial view,
+not the blocked-and-untouched outcome described above. The fix lives in
+`configs/ticker_mappings.yaml` (map every identifier kind a broker actually emits for an
+instrument), not in `rebuild_positions` itself — there's no reliable way for the code to infer
+that two different identifier strings name the same instrument without the mapping saying so for
+both.
+
+**A rebuild's own failure isolation** — the per-`(account, ticker)` transaction boundary above is
+also where a driver-level failure (a constraint violation, a dropped connection; anything that
+isn't a `PortfolioError`, since repositories never raise those) is caught, logged with its
+traceback, and reported in `failed_pairs`/`pairs_failed` rather than propagating and aborting
+every account still left to rebuild. This is deliberately narrower than a general "catch
+everything" policy: it only wraps the two repository calls inside the per-pair loop
+(`replace_snapshots`, `delete_snapshots`), the same boundary `shared.db.connection.transaction`
+already rolls back on any exception — which is what leaves the connection usable for the next
+pair instead of stuck in Postgres's aborted-transaction state. Every other flow in this file keeps
+the plain "an uncaught exception means nothing committed" contract; `rebuild_positions` earns
+this extra handling specifically because it is the one flow that is *not* single-transaction, so
+without it a failure partway through would silently discard the accurate count of what had
+already, durably, succeeded.
 
 **Three decisions task 7 had to settle, none of which were pinned down before it started:**
 
@@ -818,8 +850,8 @@ table.
 
 | | Needs | Covers |
 |---|---|---|
-| `tests/unit/` | nothing | **Built as of task 6**: `ticker_mapping/loader.py`; `pipeline.import_transactions`/`list_unmapped_instruments` against fake repositories and a fake `BrokerParser`. **Built as of task 14**: `datastore_client/http_client.py` against a faked `requests.get`; `pipeline.import_cashflow` against a fake `DataStoreClient` and a fake `CashflowParser`. **Broker-plugin discovery**: `broker_import/discovery.py` against a faked `entry_points()` (`tests/unit/broker_import/test_discovery.py`) — no installed plugin required. Any given broker's own parsing logic is tested in that plugin's own repo, against its own fixtures, not here. **Built as of task 7**: `positions/calculator.py` as a pure function over in-memory `CanonicalTransaction` sequences (average-cost blending, sell-to-zero reset, the two anomaly cases, and the cross-account/cross-currency independence case); `pipeline.rebuild_positions` against fake repositories (blocked-instrument reporting, per-pair commit boundaries, account/user scoping, stale-ticker pruning). **Not yet built**: `returns/calculator.py` as a pure function over in-memory price frames (task 8) |
-| `tests/integration/` | live Postgres | **Built as of task 6**: re-importing the same file is a no-op (`tests/integration/test_broker_import.py`, against a synthetic `BrokerParser`), `list_distinct_instruments`'s multi-user isolation and broker attribution; task 4/5's `accounts`, `transactions` idempotent-upsert, and schema-migration-idempotency coverage. **Built as of task 14**: `import_cashflow`'s idempotent reimport and broker-mismatch rejection (`test_cashflow_import.py`, against a synthetic `CashflowParser`), routed through `pipeline.py` directly with a stub `DataStoreClient` rather than through `jobs.py`'s real `HttpDataStoreClient` — see below. Neither integration test depends on any broker plugin being installed. **Built as of task 7**: `rebuild-positions` end-to-end through the real CLI/pipeline/repository stack (`test_rebuild_positions.py`) — the delete-then-insert replacement contract a fake can't prove (a re-run replaces rows rather than duplicating them), `--account` scoping, per-user isolation, and an unmapped instrument blocking with exit code 1. **Not yet built**: `ticker_mapping/` (nothing there talks to Postgres — see the module table), `returns/repository.py`, the returns rebuild flow end-to-end (task 8) |
+| `tests/unit/` | nothing | **Built as of task 6**: `ticker_mapping/loader.py`; `pipeline.import_transactions`/`list_unmapped_instruments` against fake repositories and a fake `BrokerParser`. **Built as of task 14**: `datastore_client/http_client.py` against a faked `requests.get`; `pipeline.import_cashflow` against a fake `DataStoreClient` and a fake `CashflowParser`. **Broker-plugin discovery**: `broker_import/discovery.py` against a faked `entry_points()` (`tests/unit/broker_import/test_discovery.py`) — no installed plugin required. Any given broker's own parsing logic is tested in that plugin's own repo, against its own fixtures, not here. **Built as of task 7**: `positions/calculator.py` as a pure function over in-memory `CanonicalTransaction` sequences (average-cost blending, sell-to-zero reset, the two anomaly cases, and the cross-account/cross-currency independence case); `pipeline.rebuild_positions` against fake repositories (blocked-instrument reporting, per-pair commit boundaries, account/user scoping, stale-ticker pruning, the one-batched-call fetch across every account in a whole-portfolio rebuild, and a driver-level failure on one pair being caught and reported in `failed_pairs` rather than aborting the rest of the run). **Not yet built**: `returns/calculator.py` as a pure function over in-memory price frames (task 8) |
+| `tests/integration/` | live Postgres | **Built as of task 6**: re-importing the same file is a no-op (`tests/integration/test_broker_import.py`, against a synthetic `BrokerParser`), `list_distinct_instruments`'s multi-user isolation and broker attribution; task 4/5's `accounts`, `transactions` idempotent-upsert, and schema-migration-idempotency coverage. **Built as of task 14**: `import_cashflow`'s idempotent reimport and broker-mismatch rejection (`test_cashflow_import.py`, against a synthetic `CashflowParser`), routed through `pipeline.py` directly with a stub `DataStoreClient` rather than through `jobs.py`'s real `HttpDataStoreClient` — see below. Neither integration test depends on any broker plugin being installed. **Built as of task 7**: `rebuild-positions` end-to-end through the real CLI/pipeline/repository stack (`test_rebuild_positions.py`) — the delete-then-insert replacement contract a fake can't prove (a re-run replaces rows rather than duplicating them), `--account` scoping and the whole-portfolio (no `--account`) case rebuilding every account via the batched `list_by_accounts` fetch, per-user isolation, an unmapped instrument blocking with exit code 1, and a bad `--account` label exiting cleanly rather than crashing. **Not yet built**: `ticker_mapping/` (nothing there talks to Postgres — see the module table), `returns/repository.py`, the returns rebuild flow end-to-end (task 8) |
 
 **`datastore_client/http_client.py` itself is tested against a faked `requests.get`, not a live
 data-store instance** — status codes, the lookback-window request shape, and error mapping to

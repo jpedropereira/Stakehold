@@ -84,6 +84,7 @@ class FakeTransactionsRepo:
     def __init__(self, accounts_repo):
         self.saved = []
         self._accounts_repo = accounts_repo
+        self.list_by_accounts_calls: list[list[int]] = []
 
     def insert_transactions(self, conn, transactions):
         existing = {(t.account_id, t.broker_transaction_ref) for t in self.saved}
@@ -106,9 +107,20 @@ class FakeTransactionsRepo:
             pairs.add((txn.instrument_identifier_kind, txn.instrument_identifier, account.broker))
         return sorted(pairs)
 
-    def list_by_account(self, conn, account_id):
-        rows = [t for t in self.saved if t.account_id == account_id]
-        return sorted(rows, key=lambda t: (t.trade_datetime, t.broker_transaction_ref))
+    def list_by_accounts(self, conn, account_ids, *, transaction_types=None):
+        self.list_by_accounts_calls.append(list(account_ids))
+        grouped: dict[int, list] = {}
+        for txn in self.saved:
+            if txn.account_id not in account_ids:
+                continue
+            if transaction_types is not None and txn.transaction_type not in transaction_types:
+                continue
+            grouped.setdefault(txn.account_id, []).append(txn)
+        for account_id, rows in grouped.items():
+            grouped[account_id] = sorted(
+                rows, key=lambda t: (t.trade_datetime, t.broker_transaction_ref)
+            )
+        return grouped
 
 
 class FakePositionsRepo:
@@ -120,9 +132,14 @@ class FakePositionsRepo:
         self.snapshots: dict[tuple[int, str], list] = {}
         self.replace_calls = []
         self.delete_calls = []
+        # Pairs that should raise instead of writing -- lets a test simulate a driver-level
+        # failure (a constraint violation, a dropped connection) for one specific pair.
+        self.failing_pairs: set[tuple[int, str]] = set()
 
     def replace_snapshots(self, conn, *, account_id, canonical_ticker, snapshots):
         self.replace_calls.append((account_id, canonical_ticker))
+        if (account_id, canonical_ticker) in self.failing_pairs:
+            raise RuntimeError(f"simulated failure for {canonical_ticker}")
         self.snapshots[(account_id, canonical_ticker)] = list(snapshots)
         return len(snapshots)
 
@@ -131,6 +148,8 @@ class FakePositionsRepo:
 
     def delete_snapshots(self, conn, *, account_id, canonical_ticker):
         self.delete_calls.append((account_id, canonical_ticker))
+        if (account_id, canonical_ticker) in self.failing_pairs:
+            raise RuntimeError(f"simulated failure for {canonical_ticker}")
         existing = self.snapshots.pop((account_id, canonical_ticker), None)
         return len(existing) if existing else 0
 
@@ -924,6 +943,103 @@ def test_rebuild_positions_rebuilds_every_other_instrument_when_one_is_blocked(r
     assert (account.id, "VUSA.AS") in positions_repo.snapshots
 
 
+def test_rebuild_positions_fetches_every_account_in_one_batched_call(repos, conn):
+    """A whole-portfolio rebuild must not query each account's transactions separately -- one
+    call to list_by_accounts covering every account, not one call per account (regression test
+    for the N+1 query pattern list_by_account, one call per account, used to cost)."""
+    accounts_repo, transactions_repo, _ = repos
+    user_id = uuid.uuid4()
+    account_a = _seed_account(accounts_repo, user_id=user_id, label="a")
+    account_b = _seed_account(accounts_repo, user_id=user_id, label="b")
+    transactions_repo.saved.append(_position_txn(account_id=account_a.id))
+    transactions_repo.saved.append(
+        _position_txn(account_id=account_b.id, broker_transaction_ref="ref-2")
+    )
+    mappings = TickerMappings(isin={_ISIN: "IWDA.AS"}, symbol={})
+
+    pipeline.rebuild_positions(conn, user_id=user_id, mappings=mappings)
+
+    assert len(transactions_repo.list_by_accounts_calls) == 1
+    assert sorted(transactions_repo.list_by_accounts_calls[0]) == sorted(
+        [account_a.id, account_b.id]
+    )
+
+
+def test_rebuild_positions_ignores_non_position_moving_transaction_types(repos, conn):
+    """A DIVIDEND row (or any non-BUY/SELL type) must never be checked against the ticker
+    mapping at all -- not resolved, not reported as blocked -- the same as before this read
+    moved its BUY/SELL filtering into the batched fetch itself."""
+    accounts_repo, transactions_repo, positions_repo = repos
+    user_id = uuid.uuid4()
+    account = _seed_account(accounts_repo, user_id=user_id)
+    transactions_repo.saved.append(
+        _position_txn(
+            account_id=account.id,
+            transaction_type="DIVIDEND",
+            instrument_identifier="IE00UNMAPPED9",
+            quantity=None,
+            price=None,
+        )
+    )
+    mappings = TickerMappings(isin={}, symbol={})  # nothing mapped
+
+    outcome = pipeline.rebuild_positions(conn, user_id=user_id, mappings=mappings)
+
+    assert outcome.blocked == []
+    assert outcome.positions_rebuilt == 0
+    assert positions_repo.snapshots == {}
+
+
+def test_rebuild_positions_isolates_a_failed_pair_and_continues(repos, conn):
+    """A driver-level failure saving one (account, ticker) pair must not abort the run -- every
+    other pair still gets rebuilt, and the failure is reported in failed_pairs rather than
+    propagating and losing whatever else the run already accomplished."""
+    accounts_repo, transactions_repo, positions_repo = repos
+    user_id = uuid.uuid4()
+    account = _seed_account(accounts_repo, user_id=user_id)
+    transactions_repo.saved.append(
+        _position_txn(account_id=account.id, broker_transaction_ref="ref-1")
+    )
+    transactions_repo.saved.append(
+        _position_txn(
+            account_id=account.id,
+            broker_transaction_ref="ref-2",
+            instrument_identifier="IE00XXXXXXX9",
+        )
+    )
+    mappings = TickerMappings(isin={_ISIN: "IWDA.AS", "IE00XXXXXXX9": "VUSA.AS"}, symbol={})
+    positions_repo.failing_pairs.add((account.id, "IWDA.AS"))
+
+    outcome = pipeline.rebuild_positions(conn, user_id=user_id, mappings=mappings)
+
+    assert outcome.failed_pairs == [
+        (account.account_label, "IWDA.AS", "simulated failure for IWDA.AS")
+    ]
+    assert outcome.positions_rebuilt == 1
+    assert (account.id, "VUSA.AS") in positions_repo.snapshots
+    assert (account.id, "IWDA.AS") not in positions_repo.snapshots
+
+
+def test_rebuild_positions_a_failed_prune_is_isolated_too(repos, conn):
+    """Same isolation for the pruning path -- a failed delete_snapshots for one stale ticker must
+    not stop the run or lose the report of what happened."""
+    accounts_repo, transactions_repo, positions_repo = repos
+    user_id = uuid.uuid4()
+    account = _seed_account(accounts_repo, user_id=user_id)
+    transactions_repo.saved.append(_position_txn(account_id=account.id))
+    positions_repo.snapshots[(account.id, "OLD.AS")] = ["stale"]
+    positions_repo.failing_pairs.add((account.id, "OLD.AS"))
+    mappings = TickerMappings(isin={_ISIN: "IWDA.AS"}, symbol={})
+
+    outcome = pipeline.rebuild_positions(conn, user_id=user_id, mappings=mappings)
+
+    assert outcome.failed_pairs == [
+        (account.account_label, "OLD.AS", "simulated failure for OLD.AS")
+    ]
+    assert outcome.positions_removed == 0
+    assert (account.id, "OLD.AS") in positions_repo.snapshots  # left in place, not lost
+
+
 def test_rebuild_positions_commits_once_per_account_ticker_pair(repos, conn):
     accounts_repo, transactions_repo, _ = repos
     user_id = uuid.uuid4()
@@ -1039,6 +1155,36 @@ def test_rebuild_positions_surfaces_calculator_anomalies(repos, conn):
 
     assert len(outcome.anomalies) == 1
     assert "IWDA.AS" in outcome.anomalies[0]
+    assert outcome.positions_with_anomalies == 1
+
+
+def test_rebuild_positions_counts_a_ticker_with_two_anomalies_as_one_position(repos, conn):
+    """Two anomaly messages for the same (account, ticker) -- a currency mismatch and the
+    negative-quantity it triggers -- must still count as one affected position, not two."""
+    accounts_repo, transactions_repo, _ = repos
+    user_id = uuid.uuid4()
+    account = _seed_account(accounts_repo, user_id=user_id)
+    transactions_repo.saved.append(_position_txn(account_id=account.id))
+    transactions_repo.saved.append(
+        _position_txn(
+            account_id=account.id,
+            broker_transaction_ref="ref-2",
+            transaction_type="SELL",
+            trade_datetime=datetime(2026, 3, 2, 10, 0, tzinfo=UTC),
+            quantity=Decimal("-20"),
+            native_currency="PLN",
+            native_amount=Decimal("1900.00"),
+            eur_amount=Decimal("442.0000"),
+            fx_rate=Decimal("4.3000"),
+            fx_rate_source="broker_reported",
+        )
+    )
+    mappings = TickerMappings(isin={_ISIN: "IWDA.AS"}, symbol={})
+
+    outcome = pipeline.rebuild_positions(conn, user_id=user_id, mappings=mappings)
+
+    assert len(outcome.anomalies) == 2
+    assert outcome.positions_with_anomalies == 1
 
 
 def test_rebuild_positions_prunes_a_ticker_no_longer_produced(repos, conn):

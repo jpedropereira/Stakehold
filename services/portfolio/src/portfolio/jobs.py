@@ -371,7 +371,7 @@ def run_rebuild_positions(
             )
         except PortfolioError as exc:
             logger.error("rebuild-positions: failed -- %s", exc)
-            return build_run_result(
+            result = build_run_result(
                 units_total=1,
                 rows_saved=0,
                 failed=1,
@@ -379,7 +379,14 @@ def run_rebuild_positions(
                 positions_removed=0,
                 instruments_blocked=0,
                 positions_with_anomalies=0,
+                pairs_failed=0,
             )
+            # Every other return path in this function carries blocked_instruments and
+            # failed_pairs -- cli.py reads both unconditionally, so the error path must supply
+            # them too, not just the named counts build_run_result covers.
+            result["blocked_instruments"] = []
+            result["failed_pairs"] = []
+            return result
     finally:
         conn.close()
 
@@ -392,28 +399,42 @@ def run_rebuild_positions(
         )
     for message in outcome.anomalies:
         logger.warning("rebuild-positions: %s", message)
+    # Each failed pair was already logged with its traceback at the point of failure
+    # (pipeline.rebuild_positions), so this is only the completion tally, not a re-log.
 
     logger.info(
         "rebuild-positions: done, %d position(s) saved across %d ticker(s), %d removed, "
-        "%d instrument(s) blocked.",
+        "%d instrument(s) blocked, %d pair(s) failed.",
         outcome.snapshots_saved,
         outcome.positions_rebuilt,
         outcome.positions_removed,
         len(outcome.blocked),
+        len(outcome.failed_pairs),
     )
     result = build_run_result(
-        units_total=outcome.positions_rebuilt + len(outcome.blocked),
+        units_total=(
+            outcome.positions_rebuilt
+            + outcome.positions_removed
+            + len(outcome.blocked)
+            + len(outcome.failed_pairs)
+        ),
         rows_saved=outcome.snapshots_saved,
-        failed=len(outcome.blocked),
+        failed=len(outcome.blocked) + len(outcome.failed_pairs),
         positions_rebuilt=outcome.positions_rebuilt,
         positions_removed=outcome.positions_removed,
         instruments_blocked=len(outcome.blocked),
-        positions_with_anomalies=len(outcome.anomalies),
+        positions_with_anomalies=outcome.positions_with_anomalies,
+        pairs_failed=len(outcome.failed_pairs),
     )
-    # The blocked-instrument payload is merged in after build_run_result, same carve-out
-    # run_list_accounts/run_list_unmapped_instruments use -- **extra is for named counts only.
+    # The blocked-instrument/failed-pair payloads are merged in after build_run_result, same
+    # carve-out run_list_accounts/run_list_unmapped_instruments use -- **extra is for named
+    # counts only.
     result["blocked_instruments"] = [
         {"kind": kind, "identifier": identifier, "broker": broker}
         for kind, identifier, broker in outcome.blocked
+    ]
+    result["failed_pairs"] = [
+        {"account_label": account_label, "ticker": ticker, "error": error}
+        for account_label, ticker, error in outcome.failed_pairs
     ]
     return result

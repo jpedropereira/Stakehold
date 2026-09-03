@@ -89,17 +89,26 @@ def _import_cashflow(args: argparse.Namespace) -> int:
     return _report(result, "transaction(s) saved")
 
 
+def _print_instrument_rows(instruments: list[dict[str, str]]) -> None:
+    for instrument in instruments:
+        print(f"{instrument['kind']}\t{instrument['identifier']}\t{instrument['broker']}")
+
+
+def _print_failed_pairs(pairs: list[dict[str, str]]) -> None:
+    for pair in pairs:
+        print(f"{pair['account_label']}\t{pair['ticker']}\t{pair['error']}")
+
+
 def _rebuild_positions(args: argparse.Namespace) -> int:
     result = jobs.run_rebuild_positions(user_id=args.user, account_label=args.account)
-    for instrument in result["blocked_instruments"]:
-        print(f"{instrument['kind']}\t{instrument['identifier']}\t{instrument['broker']}")
+    _print_instrument_rows(result["blocked_instruments"])
+    _print_failed_pairs(result["failed_pairs"])
     return _report(result, "position snapshot(s) saved")
 
 
 def _list_unmapped_instruments(args: argparse.Namespace) -> int:
     result = jobs.run_list_unmapped_instruments(user_id=args.user)
-    for instrument in result["unmapped_instruments"]:
-        print(f"{instrument['kind']}\t{instrument['identifier']}\t{instrument['broker']}")
+    _print_instrument_rows(result["unmapped_instruments"])
     return _report(result, "instrument(s) unmapped", count_key="instruments_unmapped")
 
 

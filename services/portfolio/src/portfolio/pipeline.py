@@ -80,6 +80,15 @@ def list_available_brokers() -> list[str]:
     return sorted(BROKER_PARSERS)
 
 
+def _resolve_account(conn, *, user_id: UUID, account_label: str) -> Account:
+    """Resolve `account_label` to this user's own Account, or raise the isolation chokepoint's
+    domain error. Shared by every flow that starts from a caller-supplied --account label."""
+    account = accounts_repository.get_by_label(conn, user_id=user_id, account_label=account_label)
+    if account is None:
+        raise AccountNotFound(f"no account {account_label!r} for this user")
+    return account
+
+
 def _resolve_import_context(
     conn,
     *,
@@ -97,9 +106,7 @@ def _resolve_import_context(
     if discovery_error is not None:
         raise discovery_error
 
-    account = accounts_repository.get_by_label(conn, user_id=user_id, account_label=account_label)
-    if account is None:
-        raise AccountNotFound(f"no account {account_label!r} for this user")
+    account = _resolve_account(conn, user_id=user_id, account_label=account_label)
 
     parser = registry.get(account.broker)
     if parser is None:
@@ -186,9 +193,7 @@ def add_manual_transaction(
     this user (the isolation chokepoint in action) or InvalidTransaction if the entry fails
     transactions/base.py's rules -- including a missing --fx-rate for a non-EUR currency.
     """
-    account = accounts_repository.get_by_label(conn, user_id=user_id, account_label=account_label)
-    if account is None:
-        raise AccountNotFound(f"no account {account_label!r} for this user")
+    account = _resolve_account(conn, user_id=user_id, account_label=account_label)
 
     if native_currency == "EUR":
         if fx_rate is not None:
@@ -324,6 +329,8 @@ class RebuildOutcome:
     positions_removed: int
     blocked: list[tuple[str, str, str]]  # (kind, identifier, broker)
     anomalies: list[str]
+    positions_with_anomalies: int
+    failed_pairs: list[tuple[str, str, str]]  # (account_label, canonical_ticker, error message)
 
 
 def rebuild_positions(
@@ -334,7 +341,10 @@ def rebuild_positions(
     Needs no price or FX data -- quantity and average cost are pure functions of the transaction
     log (docs/architecture.md). Scoped per account: an --account rebuilds only that account
     (raising AccountNotFound if it doesn't resolve for this user, the isolation chokepoint);
-    omitting it rebuilds every account this user owns.
+    omitting it rebuilds every account this user owns. Every account's transaction log is fetched
+    in one batched read (transactions_repository.list_by_accounts) rather than one query per
+    account, so this scales in round trips with the number of rebuilds, not the number of
+    accounts in it.
 
     An unmapped instrument blocks only its own ticker -- reported in `blocked`, never a silent
     skip -- while every other (account, ticker) in the run still gets rebuilt. A ledger anomaly
@@ -342,34 +352,49 @@ def rebuild_positions(
     negative) is reported in `anomalies` but never blocks anything -- see
     positions/calculator.py's "warn but compute" policy.
 
+    A known sharp edge, not fixable from inside this function: blocking is keyed by
+    (instrument_identifier_kind, instrument_identifier), the only key `mappings.resolve` can look
+    up -- there is no way to know, from an unresolved identifier alone, which (if any) resolved
+    ticker it's actually the same real-world instrument as. If one account's transactions for a
+    single holding are split across a mapped identifier kind (e.g. ISIN) and an unmapped one for
+    that broker (e.g. SYMBOL), that ticker's snapshot is built only from the mapped rows -- it is
+    silently a partial view, not the blocked-and-untouched outcome the paragraph above describes,
+    because the code has no way to know the two identifiers name the same instrument until
+    configs/ticker_mappings.yaml says so for both. The fix lives in that YAML file (map every
+    identifier kind a broker actually emits for an instrument), not in this function.
+
     Each (account, ticker) pair's delete-then-insert is wrapped in its own transaction here,
     rather than inside positions/repository.py, so that pair's replacement is atomic without
-    inverting the "repositories never commit" rule for that one module.
+    inverting the "repositories never commit" rule for that one module. That same per-pair
+    boundary is also this function's failure-isolation unit: a driver-level failure writing or
+    pruning one pair (a constraint violation, a dropped connection) is caught, logged with its
+    traceback, and reported in `failed_pairs` rather than aborting the whole run -- every other
+    (account, ticker) still gets attempted, the same partial-tolerance already extended to
+    unmapped instruments and anomalies. `shared.db.connection.transaction` rolls back on any
+    exception before this catches it, which is what leaves the connection usable for the next
+    pair rather than stuck in Postgres's aborted-transaction state.
     """
     if account_label is not None:
-        account = accounts_repository.get_by_label(
-            conn, user_id=user_id, account_label=account_label
-        )
-        if account is None:
-            raise AccountNotFound(f"no account {account_label!r} for this user")
-        accounts = [account]
+        accounts = [_resolve_account(conn, user_id=user_id, account_label=account_label)]
     else:
         accounts = accounts_repository.list_by_user(conn, user_id)
 
     blocked: list[tuple[str, str, str]] = []
     anomalies: list[str] = []
+    failed_pairs: list[tuple[str, str, str]] = []
     snapshots_saved = 0
     positions_rebuilt = 0
     positions_removed = 0
+    positions_with_anomalies = 0
+
+    transactions_by_account = transactions_repository.list_by_accounts(
+        conn, [account.id for account in accounts], transaction_types=_POSITION_MOVING_TYPES
+    )
 
     for account in accounts:
-        transactions = transactions_repository.list_by_account(conn, account.id)
-
         by_ticker: dict[str, list[CanonicalTransaction]] = {}
         account_blocked: list[tuple[str, str, str]] = []
-        for txn in transactions:
-            if txn.transaction_type not in _POSITION_MOVING_TYPES:
-                continue
+        for txn in transactions_by_account.get(account.id, []):
             ticker = mappings.resolve(
                 txn.instrument_identifier_kind, txn.instrument_identifier, broker=account.broker
             )
@@ -383,12 +408,32 @@ def rebuild_positions(
         for ticker, ticker_transactions in by_ticker.items():
             snapshots, ticker_anomalies = replay(account.id, ticker, ticker_transactions)
             anomalies.extend(ticker_anomalies)
-            with transaction(conn):
-                saved = positions_repository.replace_snapshots(
-                    conn, account_id=account.id, canonical_ticker=ticker, snapshots=snapshots
+            if ticker_anomalies:
+                positions_with_anomalies += 1
+            try:
+                with transaction(conn):
+                    saved = positions_repository.replace_snapshots(
+                        conn, account_id=account.id, canonical_ticker=ticker, snapshots=snapshots
+                    )
+            except Exception as exc:
+                failed_pairs.append((account.account_label, ticker, str(exc)))
+                logger.error(
+                    "rebuild-positions: account %r ticker %s -- failed to save snapshots, "
+                    "leaving its previous snapshots in place -- %s",
+                    account.account_label,
+                    ticker,
+                    exc,
+                    exc_info=True,
                 )
+                continue
             snapshots_saved += saved
             positions_rebuilt += 1
+            logger.info(
+                "rebuild-positions: account %r ticker %s -- %d snapshot(s) saved.",
+                account.account_label,
+                ticker,
+                saved,
+            )
 
         # Pruning a ticker this rebuild no longer produced (e.g. a mapping was re-pointed) is
         # only safe when nothing in this account is currently blocked -- a blocked instrument's
@@ -400,12 +445,28 @@ def rebuild_positions(
                 by_ticker
             )
             for ticker in stale_tickers:
-                with transaction(conn):
-                    removed = positions_repository.delete_snapshots(
-                        conn, account_id=account.id, canonical_ticker=ticker
+                try:
+                    with transaction(conn):
+                        positions_repository.delete_snapshots(
+                            conn, account_id=account.id, canonical_ticker=ticker
+                        )
+                except Exception as exc:
+                    failed_pairs.append((account.account_label, ticker, str(exc)))
+                    logger.error(
+                        "rebuild-positions: account %r ticker %s -- failed to remove stale "
+                        "snapshots -- %s",
+                        account.account_label,
+                        ticker,
+                        exc,
+                        exc_info=True,
                     )
-                if removed:
-                    positions_removed += 1
+                    continue
+                positions_removed += 1
+                logger.info(
+                    "rebuild-positions: account %r ticker %s -- stale snapshot(s) removed.",
+                    account.account_label,
+                    ticker,
+                )
 
         blocked.extend(account_blocked)
 
@@ -415,4 +476,6 @@ def rebuild_positions(
         positions_removed=positions_removed,
         blocked=sorted(set(blocked)),
         anomalies=anomalies,
+        positions_with_anomalies=positions_with_anomalies,
+        failed_pairs=failed_pairs,
     )

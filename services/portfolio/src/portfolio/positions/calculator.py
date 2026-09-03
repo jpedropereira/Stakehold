@@ -17,6 +17,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date
 from decimal import ROUND_HALF_UP, Decimal
+from itertools import groupby
 
 from portfolio.transactions.base import CanonicalTransaction
 
@@ -65,11 +66,6 @@ def replay(
         key=lambda t: (t.trade_datetime, t.broker_transaction_ref),
     )
 
-    rows_by_date: dict[date, list[CanonicalTransaction]] = {}
-    for txn in relevant:
-        as_of_date = txn.trade_datetime.astimezone(UTC).date()
-        rows_by_date.setdefault(as_of_date, []).append(txn)
-
     anomalies: list[str] = []
     snapshots: list[PositionSnapshot] = []
 
@@ -78,8 +74,12 @@ def replay(
     cost_eur = _ZERO
     native_currency: str | None = None
 
-    for as_of_date in sorted(rows_by_date):
-        for txn in rows_by_date[as_of_date]:
+    # `relevant` is already sorted by trade_datetime, and date-truncating an ascending datetime
+    # sequence keeps it ascending, so grouping consecutive equal dates needs no re-sort.
+    for as_of_date, day_transactions in groupby(
+        relevant, key=lambda t: t.trade_datetime.astimezone(UTC).date()
+    ):
+        for txn in day_transactions:
             if native_currency is not None and txn.native_currency != native_currency:
                 anomalies.append(
                     f"{canonical_ticker} in account {account_id}: traded in both "
