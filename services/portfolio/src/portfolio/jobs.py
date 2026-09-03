@@ -438,3 +438,86 @@ def run_rebuild_positions(
         for account_label, ticker, error in outcome.failed_pairs
     ]
     return result
+
+
+def run_rebuild_returns(*, user_id: UUID, account_label: str | None = None) -> dict[str, int | str]:
+    """Compute return_snapshots from position_snapshots, data-store's price/FX series, and this
+    user's DIVIDEND transactions. See pipeline.rebuild_returns for what each count means.
+
+    Needs a live data-store instance, same as import-cashflow -- DATASTORE_API_URL and
+    INTERNAL_API_SECRET must both be set, checked here rather than in settings.py itself.
+
+    A ticker data-store doesn't track (or has no computed returns for) blocks only that ticker
+    -- reported here, and in the run's `partial` status, per docs/architecture.md's "never a
+    silent skip" rule -- while every other (account, ticker) still gets rebuilt.
+    """
+    configure_logging()
+    settings = load_settings()
+    if not settings.datastore_api_url or not settings.internal_api_secret:
+        raise SettingsError(
+            "DATASTORE_API_URL and INTERNAL_API_SECRET must both be set for rebuild-returns"
+        )
+    datastore_client = HttpDataStoreClient(
+        base_url=settings.datastore_api_url, internal_api_secret=settings.internal_api_secret
+    )
+
+    scope = f"account {account_label!r}" if account_label else "every account"
+    conn = get_connection(settings.database_url)
+    try:
+        logger.info("rebuild-returns: rebuilding returns for user %s (%s).", user_id, scope)
+        try:
+            mappings = load_ticker_mappings(settings.ticker_mappings_path)
+            outcome = pipeline.rebuild_returns(
+                conn,
+                user_id=user_id,
+                mappings=mappings,
+                datastore_client=datastore_client,
+                account_label=account_label,
+            )
+        except PortfolioError as exc:
+            logger.error("rebuild-returns: failed -- %s", exc)
+            result = build_run_result(
+                units_total=1,
+                rows_saved=0,
+                failed=1,
+                tickers_rebuilt=0,
+                tickers_blocked=0,
+                pairs_failed=0,
+            )
+            # Every other return path in this function carries blocked_tickers and
+            # failed_pairs -- cli.py reads both unconditionally, so the error path must supply
+            # them too, not just the named counts build_run_result covers.
+            result["blocked_tickers"] = []
+            result["failed_pairs"] = []
+            return result
+    finally:
+        conn.close()
+
+    # Each blocked ticker and failed pair was already logged with its own reason
+    # (pipeline.rebuild_returns), so this is only the completion tally, not a re-log.
+
+    logger.info(
+        "rebuild-returns: done, %d return snapshot(s) saved across %d ticker(s), %d blocked, "
+        "%d pair(s) failed.",
+        outcome.snapshots_saved,
+        outcome.tickers_rebuilt,
+        len(outcome.blocked),
+        len(outcome.failed_pairs),
+    )
+    result = build_run_result(
+        units_total=outcome.tickers_rebuilt + len(outcome.blocked) + len(outcome.failed_pairs),
+        rows_saved=outcome.snapshots_saved,
+        failed=len(outcome.blocked) + len(outcome.failed_pairs),
+        tickers_rebuilt=outcome.tickers_rebuilt,
+        tickers_blocked=len(outcome.blocked),
+        pairs_failed=len(outcome.failed_pairs),
+    )
+    result["blocked_tickers"] = [
+        {"account_label": account_label, "ticker": ticker}
+        for account_label, ticker in outcome.blocked
+    ]
+    result["failed_pairs"] = [
+        {"account_label": account_label, "ticker": ticker, "error": error}
+        for account_label, ticker, error in outcome.failed_pairs
+    ]
+    return result

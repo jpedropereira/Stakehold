@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 from portfolio import pipeline
 from portfolio.accounts.repository import Account
+from portfolio.datastore_client.base import PricePoint, TickerInfo
 from portfolio.errors import (
     AccountLabelConflict,
     AccountNotFound,
@@ -22,6 +23,7 @@ from portfolio.errors import (
     InvalidBroker,
     InvalidTransaction,
 )
+from portfolio.positions.calculator import PositionSnapshot
 from portfolio.ticker_mapping.loader import TickerMappings
 from portfolio.transactions.base import CanonicalTransaction
 
@@ -153,6 +155,9 @@ class FakePositionsRepo:
         existing = self.snapshots.pop((account_id, canonical_ticker), None)
         return len(existing) if existing else 0
 
+    def list_snapshots(self, conn, *, account_id, canonical_ticker):
+        return list(self.snapshots.get((account_id, canonical_ticker), []))
+
 
 @pytest.fixture
 def repos(monkeypatch):
@@ -163,6 +168,16 @@ def repos(monkeypatch):
     monkeypatch.setattr(pipeline, "transactions_repository", transactions_repo)
     monkeypatch.setattr(pipeline, "positions_repository", positions_repo)
     return accounts_repo, transactions_repo, positions_repo
+
+
+@pytest.fixture
+def returns_repo(repos, monkeypatch):
+    """A separate fixture, not folded into `repos`, so every existing
+    `accounts_repo, transactions_repo, positions_repo = repos` unpack in this file keeps
+    working unchanged -- only rebuild_returns tests need this one too."""
+    fake = FakeReturnsRepo()
+    monkeypatch.setattr(pipeline, "returns_repository", fake)
+    return fake
 
 
 @pytest.fixture
@@ -669,13 +684,72 @@ class FakeCashflowParser:
 
 
 class FakeDataStoreClient:
-    def __init__(self, rates=None):
+    """`.calls` stays get_fx_rate's own 3-tuple log, unchanged -- import_cashflow's tests already
+    depend on that exact shape. The three methods rebuild_returns needs get their own call logs
+    instead of overloading it."""
+
+    def __init__(
+        self,
+        rates=None,
+        price_series=None,
+        fx_series=None,
+        ticker_info=None,
+        price_series_errors=None,
+        ticker_info_errors=None,
+    ):
         self._rates = rates or {}
+        self._price_series = price_series or {}
+        self._fx_series = fx_series or {}
+        self._ticker_info = ticker_info or {}
+        self._price_series_errors = price_series_errors or {}
+        self._ticker_info_errors = ticker_info_errors or {}
         self.calls = []
+        self.price_series_calls = []
+        self.fx_rate_series_calls = []
+        self.ticker_info_calls = []
 
     def get_fx_rate(self, base, quote, on_date):
         self.calls.append((base, quote, on_date))
         return self._rates.get((base, quote, on_date))
+
+    def get_price_series(self, ticker, start, end):
+        self.price_series_calls.append((ticker, start, end))
+        if ticker in self._price_series_errors:
+            raise self._price_series_errors[ticker]
+        return self._price_series.get(ticker, [])
+
+    def get_fx_rate_series(self, base, quote, start, end):
+        self.fx_rate_series_calls.append((base, quote, start, end))
+        return self._fx_series.get((base, quote), [])
+
+    def get_ticker_info(self, ticker):
+        self.ticker_info_calls.append(ticker)
+        if ticker in self._ticker_info_errors:
+            raise self._ticker_info_errors[ticker]
+        return self._ticker_info.get(ticker, TickerInfo(exists=True, has_returns=True))
+
+
+class FakeReturnsRepo:
+    """Records every upsert_snapshots call, keyed by (account_id, canonical_ticker) -- mirrors
+    FakePositionsRepo's shape, but merges by price_date rather than replacing wholesale, since
+    upsert_snapshots is a true upsert, not delete-then-insert."""
+
+    def __init__(self):
+        self.snapshots: dict[tuple[int, str], dict] = {}
+        self.upsert_calls: list[tuple[int, str]] = []
+        self.failing_pairs: set[tuple[int, str]] = set()
+
+    def upsert_snapshots(self, conn, snapshots):
+        if not snapshots:
+            return 0
+        key = (snapshots[0].account_id, snapshots[0].canonical_ticker)
+        self.upsert_calls.append(key)
+        if key in self.failing_pairs:
+            raise RuntimeError(f"simulated failure for {key[1]}")
+        by_date = self.snapshots.setdefault(key, {})
+        for snapshot in snapshots:
+            by_date[snapshot.price_date] = snapshot
+        return len(snapshots)
 
 
 def _cashflow_txn_factory(**overrides):
@@ -1230,3 +1304,421 @@ def test_rebuild_positions_with_no_transactions_reports_nothing(repos, conn):
     assert outcome.positions_rebuilt == 0
     assert outcome.snapshots_saved == 0
     assert outcome.blocked == []
+
+
+# --- rebuild_returns ---
+
+
+def _dividend_txn(**overrides):
+    kwargs = dict(
+        account_id=1,
+        broker_transaction_ref="div-1",
+        transaction_type="DIVIDEND",
+        trade_datetime=NOW,
+        instrument_identifier=_ISIN,
+        instrument_identifier_kind="ISIN",
+        quantity=None,
+        price=None,
+        native_currency="EUR",
+        native_amount=Decimal("12.00"),
+        eur_amount=Decimal("12.0000"),
+        fx_rate=None,
+        fx_rate_source=None,
+        fees_native=None,
+    )
+    kwargs.update(overrides)
+    return CanonicalTransaction(**kwargs)
+
+
+def _position_snapshot(**overrides):
+    values = dict(
+        account_id=1,
+        canonical_ticker="IWDA.AS",
+        as_of_date=date(2026, 1, 5),
+        quantity=Decimal("10.000000"),
+        average_cost_native=Decimal("95.000000"),
+        native_currency="EUR",
+        average_cost_eur=Decimal("95.000000"),
+        cost_basis_eur=Decimal("950.0000"),
+    )
+    values.update(overrides)
+    return PositionSnapshot(**values)
+
+
+def test_rebuild_returns_saves_snapshots_for_a_tracked_ticker(repos, returns_repo, conn):
+    accounts_repo, transactions_repo, positions_repo = repos
+    user_id = uuid.uuid4()
+    account = _seed_account(accounts_repo, user_id=user_id)
+    positions_repo.snapshots[(account.id, "IWDA.AS")] = [
+        _position_snapshot(account_id=account.id, as_of_date=date(2026, 1, 5)),
+        _position_snapshot(
+            account_id=account.id,
+            as_of_date=date(2026, 1, 10),
+            quantity=Decimal("0.000000"),
+            average_cost_eur=Decimal("0.000000"),
+            cost_basis_eur=Decimal("0.0000"),
+        ),
+    ]
+    client = FakeDataStoreClient(
+        price_series={
+            "IWDA.AS": [PricePoint(date=date(2026, 1, 6), split_adjusted_close=Decimal("100.00"))]
+        }
+    )
+    mappings = TickerMappings(isin={}, symbol={})
+
+    outcome = pipeline.rebuild_returns(
+        conn, user_id=user_id, mappings=mappings, datastore_client=client
+    )
+
+    assert outcome.blocked == []
+    assert outcome.tickers_rebuilt == 1
+    assert outcome.snapshots_saved == 1
+    assert (account.id, "IWDA.AS") in returns_repo.snapshots
+
+
+def test_rebuild_returns_reports_an_untracked_ticker_as_blocked(repos, returns_repo, conn):
+    accounts_repo, transactions_repo, positions_repo = repos
+    user_id = uuid.uuid4()
+    account = _seed_account(accounts_repo, user_id=user_id)
+    positions_repo.snapshots[(account.id, "IWDA.AS")] = [_position_snapshot(account_id=account.id)]
+    client = FakeDataStoreClient(
+        ticker_info={"IWDA.AS": TickerInfo(exists=False, has_returns=False)}
+    )
+    mappings = TickerMappings(isin={}, symbol={})
+
+    outcome = pipeline.rebuild_returns(
+        conn, user_id=user_id, mappings=mappings, datastore_client=client
+    )
+
+    assert outcome.blocked == [(account.account_label, "IWDA.AS")]
+    assert outcome.tickers_rebuilt == 0
+    assert returns_repo.snapshots == {}
+
+
+def test_rebuild_returns_rebuilds_every_other_ticker_when_one_is_blocked(repos, returns_repo, conn):
+    accounts_repo, transactions_repo, positions_repo = repos
+    user_id = uuid.uuid4()
+    account = _seed_account(accounts_repo, user_id=user_id)
+    positions_repo.snapshots[(account.id, "IWDA.AS")] = [
+        _position_snapshot(account_id=account.id, canonical_ticker="IWDA.AS")
+    ]
+    positions_repo.snapshots[(account.id, "VUSA.AS")] = [
+        _position_snapshot(account_id=account.id, canonical_ticker="VUSA.AS")
+    ]
+    client = FakeDataStoreClient(
+        ticker_info={"IWDA.AS": TickerInfo(exists=False, has_returns=False)},
+        price_series={
+            "VUSA.AS": [PricePoint(date=date(2026, 1, 6), split_adjusted_close=Decimal("50.00"))]
+        },
+    )
+    mappings = TickerMappings(isin={}, symbol={})
+
+    outcome = pipeline.rebuild_returns(
+        conn, user_id=user_id, mappings=mappings, datastore_client=client
+    )
+
+    assert outcome.blocked == [(account.account_label, "IWDA.AS")]
+    assert outcome.tickers_rebuilt == 1
+    assert (account.id, "VUSA.AS") in returns_repo.snapshots
+
+
+def test_rebuild_returns_isolates_a_failed_pair_and_continues(repos, returns_repo, conn):
+    accounts_repo, transactions_repo, positions_repo = repos
+    user_id = uuid.uuid4()
+    account = _seed_account(accounts_repo, user_id=user_id)
+    positions_repo.snapshots[(account.id, "IWDA.AS")] = [
+        _position_snapshot(account_id=account.id, canonical_ticker="IWDA.AS")
+    ]
+    positions_repo.snapshots[(account.id, "VUSA.AS")] = [
+        _position_snapshot(account_id=account.id, canonical_ticker="VUSA.AS")
+    ]
+    client = FakeDataStoreClient(
+        price_series={
+            "VUSA.AS": [PricePoint(date=date(2026, 1, 6), split_adjusted_close=Decimal("50.00"))]
+        },
+        price_series_errors={"IWDA.AS": RuntimeError("data-store unreachable")},
+    )
+    mappings = TickerMappings(isin={}, symbol={})
+
+    outcome = pipeline.rebuild_returns(
+        conn, user_id=user_id, mappings=mappings, datastore_client=client
+    )
+
+    assert outcome.failed_pairs == [(account.account_label, "IWDA.AS", "data-store unreachable")]
+    assert outcome.tickers_rebuilt == 1
+    assert (account.id, "VUSA.AS") in returns_repo.snapshots
+    assert (account.id, "IWDA.AS") not in returns_repo.snapshots
+
+
+def test_rebuild_returns_treats_a_ticker_info_failure_as_a_failed_pair_not_blocked(
+    repos, returns_repo, conn
+):
+    accounts_repo, transactions_repo, positions_repo = repos
+    user_id = uuid.uuid4()
+    account = _seed_account(accounts_repo, user_id=user_id)
+    positions_repo.snapshots[(account.id, "IWDA.AS")] = [_position_snapshot(account_id=account.id)]
+    client = FakeDataStoreClient(ticker_info_errors={"IWDA.AS": RuntimeError("data-store down")})
+    mappings = TickerMappings(isin={}, symbol={})
+
+    outcome = pipeline.rebuild_returns(
+        conn, user_id=user_id, mappings=mappings, datastore_client=client
+    )
+
+    assert outcome.blocked == []
+    assert outcome.failed_pairs == [(account.account_label, "IWDA.AS", "data-store down")]
+
+
+def test_rebuild_returns_caches_ticker_info_across_accounts(repos, returns_repo, conn):
+    accounts_repo, transactions_repo, positions_repo = repos
+    user_id = uuid.uuid4()
+    account_a = _seed_account(accounts_repo, user_id=user_id, label="a")
+    account_b = _seed_account(accounts_repo, user_id=user_id, label="b")
+    positions_repo.snapshots[(account_a.id, "IWDA.AS")] = [
+        _position_snapshot(account_id=account_a.id)
+    ]
+    positions_repo.snapshots[(account_b.id, "IWDA.AS")] = [
+        _position_snapshot(account_id=account_b.id)
+    ]
+    client = FakeDataStoreClient(
+        price_series={
+            "IWDA.AS": [PricePoint(date=date(2026, 1, 6), split_adjusted_close=Decimal("100.00"))]
+        }
+    )
+    mappings = TickerMappings(isin={}, symbol={})
+
+    pipeline.rebuild_returns(conn, user_id=user_id, mappings=mappings, datastore_client=client)
+
+    assert client.ticker_info_calls == ["IWDA.AS"]
+
+
+def test_rebuild_returns_scopes_to_one_account_via_account_label(repos, returns_repo, conn):
+    accounts_repo, transactions_repo, positions_repo = repos
+    user_id = uuid.uuid4()
+    account_a = _seed_account(accounts_repo, user_id=user_id, label="a")
+    account_b = _seed_account(accounts_repo, user_id=user_id, label="b")
+    positions_repo.snapshots[(account_a.id, "IWDA.AS")] = [
+        _position_snapshot(account_id=account_a.id)
+    ]
+    positions_repo.snapshots[(account_b.id, "IWDA.AS")] = [
+        _position_snapshot(account_id=account_b.id)
+    ]
+    client = FakeDataStoreClient(
+        price_series={
+            "IWDA.AS": [PricePoint(date=date(2026, 1, 6), split_adjusted_close=Decimal("100.00"))]
+        }
+    )
+    mappings = TickerMappings(isin={}, symbol={})
+
+    outcome = pipeline.rebuild_returns(
+        conn, user_id=user_id, mappings=mappings, datastore_client=client, account_label="a"
+    )
+
+    assert outcome.tickers_rebuilt == 1
+    assert (account_a.id, "IWDA.AS") in returns_repo.snapshots
+    assert (account_b.id, "IWDA.AS") not in returns_repo.snapshots
+
+
+def test_rebuild_returns_raises_account_not_found_for_a_bad_label(repos, returns_repo, conn):
+    with pytest.raises(AccountNotFound):
+        pipeline.rebuild_returns(
+            conn,
+            user_id=uuid.uuid4(),
+            mappings=TickerMappings(isin={}, symbol={}),
+            datastore_client=FakeDataStoreClient(),
+            account_label="nope",
+        )
+
+
+def test_rebuild_returns_is_isolated_per_user(repos, returns_repo, conn):
+    accounts_repo, transactions_repo, positions_repo = repos
+    user_a, user_b = uuid.uuid4(), uuid.uuid4()
+    account_a = _seed_account(accounts_repo, user_id=user_a, label="a")
+    _seed_account(accounts_repo, user_id=user_b, label="b")
+    positions_repo.snapshots[(account_a.id, "IWDA.AS")] = [
+        _position_snapshot(account_id=account_a.id)
+    ]
+    client = FakeDataStoreClient(
+        price_series={
+            "IWDA.AS": [PricePoint(date=date(2026, 1, 6), split_adjusted_close=Decimal("100.00"))]
+        }
+    )
+
+    outcome = pipeline.rebuild_returns(
+        conn, user_id=user_b, mappings=TickerMappings(isin={}, symbol={}), datastore_client=client
+    )
+
+    assert outcome.tickers_rebuilt == 0
+
+
+def test_rebuild_returns_commits_once_per_pair(repos, returns_repo, conn):
+    accounts_repo, transactions_repo, positions_repo = repos
+    user_id = uuid.uuid4()
+    account = _seed_account(accounts_repo, user_id=user_id)
+    positions_repo.snapshots[(account.id, "IWDA.AS")] = [
+        _position_snapshot(account_id=account.id, canonical_ticker="IWDA.AS")
+    ]
+    positions_repo.snapshots[(account.id, "VUSA.AS")] = [
+        _position_snapshot(account_id=account.id, canonical_ticker="VUSA.AS")
+    ]
+    client = FakeDataStoreClient(
+        price_series={
+            "IWDA.AS": [PricePoint(date=date(2026, 1, 6), split_adjusted_close=Decimal("100.00"))],
+            "VUSA.AS": [PricePoint(date=date(2026, 1, 6), split_adjusted_close=Decimal("50.00"))],
+        }
+    )
+    commits_before = conn.commits
+
+    pipeline.rebuild_returns(
+        conn,
+        user_id=user_id,
+        mappings=TickerMappings(isin={}, symbol={}),
+        datastore_client=client,
+    )
+
+    assert conn.commits - commits_before == 2
+
+
+def test_rebuild_returns_uses_todays_date_as_the_window_end_for_an_open_position(
+    repos, returns_repo, conn
+):
+    accounts_repo, transactions_repo, positions_repo = repos
+    user_id = uuid.uuid4()
+    account = _seed_account(accounts_repo, user_id=user_id)
+    positions_repo.snapshots[(account.id, "IWDA.AS")] = [
+        _position_snapshot(
+            account_id=account.id, as_of_date=date(2026, 1, 5), quantity=Decimal("10.000000")
+        )
+    ]
+    client = FakeDataStoreClient(price_series={"IWDA.AS": []})
+    mappings = TickerMappings(isin={}, symbol={})
+
+    pipeline.rebuild_returns(conn, user_id=user_id, mappings=mappings, datastore_client=client)
+
+    ticker, start, end = client.price_series_calls[0]
+    assert ticker == "IWDA.AS"
+    assert start == date(2026, 1, 5)
+    assert end == date.today()
+
+
+def test_rebuild_returns_uses_the_closing_date_as_the_window_end_for_a_closed_position(
+    repos, returns_repo, conn
+):
+    accounts_repo, transactions_repo, positions_repo = repos
+    user_id = uuid.uuid4()
+    account = _seed_account(accounts_repo, user_id=user_id)
+    positions_repo.snapshots[(account.id, "IWDA.AS")] = [
+        _position_snapshot(account_id=account.id, as_of_date=date(2026, 1, 5)),
+        _position_snapshot(
+            account_id=account.id,
+            as_of_date=date(2026, 1, 10),
+            quantity=Decimal("0.000000"),
+            average_cost_eur=Decimal("0.000000"),
+            cost_basis_eur=Decimal("0.0000"),
+        ),
+    ]
+    client = FakeDataStoreClient(price_series={"IWDA.AS": []})
+    mappings = TickerMappings(isin={}, symbol={})
+
+    pipeline.rebuild_returns(conn, user_id=user_id, mappings=mappings, datastore_client=client)
+
+    _, start, end = client.price_series_calls[0]
+    assert start == date(2026, 1, 5)
+    assert end == date(2026, 1, 10)
+
+
+def test_rebuild_returns_resolves_dividend_transactions_via_mappings(repos, returns_repo, conn):
+    accounts_repo, transactions_repo, positions_repo = repos
+    user_id = uuid.uuid4()
+    account = _seed_account(accounts_repo, user_id=user_id)
+    positions_repo.snapshots[(account.id, "IWDA.AS")] = [
+        _position_snapshot(account_id=account.id, as_of_date=date(2026, 1, 5))
+    ]
+    transactions_repo.saved.append(
+        _dividend_txn(
+            account_id=account.id,
+            trade_datetime=datetime(2026, 1, 8, 10, tzinfo=UTC),
+            eur_amount=Decimal("15.0000"),
+        )
+    )
+    client = FakeDataStoreClient(
+        price_series={
+            "IWDA.AS": [PricePoint(date=date(2026, 1, 9), split_adjusted_close=Decimal("100.00"))]
+        }
+    )
+    mappings = TickerMappings(isin={_ISIN: "IWDA.AS"}, symbol={})
+
+    pipeline.rebuild_returns(conn, user_id=user_id, mappings=mappings, datastore_client=client)
+
+    saved = returns_repo.snapshots[(account.id, "IWDA.AS")][date(2026, 1, 9)]
+    assert saved.dividends_received_eur == Decimal("15.0000")
+
+
+def test_rebuild_returns_excludes_an_unresolvable_dividend_without_blocking_the_pair(
+    repos, returns_repo, conn
+):
+    accounts_repo, transactions_repo, positions_repo = repos
+    user_id = uuid.uuid4()
+    account = _seed_account(accounts_repo, user_id=user_id)
+    positions_repo.snapshots[(account.id, "IWDA.AS")] = [_position_snapshot(account_id=account.id)]
+    transactions_repo.saved.append(
+        _dividend_txn(account_id=account.id, instrument_identifier="IE00UNMAPPED9")
+    )
+    client = FakeDataStoreClient(
+        price_series={
+            "IWDA.AS": [PricePoint(date=date(2026, 1, 6), split_adjusted_close=Decimal("100.00"))]
+        }
+    )
+    mappings = TickerMappings(isin={}, symbol={})  # the dividend's own ISIN is unmapped too
+
+    outcome = pipeline.rebuild_returns(
+        conn, user_id=user_id, mappings=mappings, datastore_client=client
+    )
+
+    assert outcome.blocked == []
+    saved = returns_repo.snapshots[(account.id, "IWDA.AS")][date(2026, 1, 6)]
+    assert saved.dividends_received_eur == Decimal("0.0000")
+
+
+def test_rebuild_returns_fetches_dividend_transactions_in_one_batched_call(
+    repos, returns_repo, conn
+):
+    accounts_repo, transactions_repo, positions_repo = repos
+    user_id = uuid.uuid4()
+    account_a = _seed_account(accounts_repo, user_id=user_id, label="a")
+    account_b = _seed_account(accounts_repo, user_id=user_id, label="b")
+    positions_repo.snapshots[(account_a.id, "IWDA.AS")] = [
+        _position_snapshot(account_id=account_a.id)
+    ]
+    positions_repo.snapshots[(account_b.id, "IWDA.AS")] = [
+        _position_snapshot(account_id=account_b.id)
+    ]
+    client = FakeDataStoreClient(
+        price_series={
+            "IWDA.AS": [PricePoint(date=date(2026, 1, 6), split_adjusted_close=Decimal("100.00"))]
+        }
+    )
+
+    pipeline.rebuild_returns(
+        conn, user_id=user_id, mappings=TickerMappings(isin={}, symbol={}), datastore_client=client
+    )
+
+    assert len(transactions_repo.list_by_accounts_calls) == 1
+    assert sorted(transactions_repo.list_by_accounts_calls[0]) == sorted(
+        [account_a.id, account_b.id]
+    )
+
+
+def test_rebuild_returns_with_no_tracked_tickers_reports_nothing(repos, returns_repo, conn):
+    accounts_repo, transactions_repo, positions_repo = repos
+    user_id = uuid.uuid4()
+    _seed_account(accounts_repo, user_id=user_id)
+    client = FakeDataStoreClient()
+
+    outcome = pipeline.rebuild_returns(
+        conn, user_id=user_id, mappings=TickerMappings(isin={}, symbol={}), datastore_client=client
+    )
+
+    assert outcome.tickers_rebuilt == 0
+    assert outcome.snapshots_saved == 0
+    assert outcome.blocked == []
+    assert outcome.failed_pairs == []

@@ -3,6 +3,7 @@ from datetime import date
 from portfolio.positions.calculator import PositionSnapshot
 from portfolio.positions.repository import (
     delete_snapshots,
+    list_snapshots,
     list_tickers,
     replace_snapshots,
 )
@@ -189,3 +190,37 @@ def test_delete_snapshots_does_not_commit():
     delete_snapshots(conn, account_id=1, canonical_ticker="IWDA.AS")
 
     assert conn.committed is False
+
+
+# --- list_snapshots ---
+
+
+def test_list_snapshots_returns_every_stored_row_as_position_snapshots():
+    from decimal import Decimal
+
+    row = (
+        1,
+        "IWDA.AS",
+        date(2026, 1, 5),
+        Decimal("10.000000"),
+        Decimal("95.000000"),
+        "EUR",
+        Decimal("95.000000"),
+        Decimal("950.0000"),
+    )
+    conn = FakeReadConnection(rows=[row])
+
+    result = list_snapshots(conn, account_id=1, canonical_ticker="IWDA.AS")
+
+    assert result == [PositionSnapshot(*row)]
+
+
+def test_list_snapshots_scopes_by_account_and_ticker_ordered_by_as_of_date():
+    conn = FakeReadConnection(rows=[])
+
+    list_snapshots(conn, account_id=7, canonical_ticker="IWDA.AS")
+
+    sql, params = conn._cursor.executed[0]
+    assert "WHERE account_id = %s AND canonical_ticker = %s" in sql
+    assert "ORDER BY as_of_date" in sql
+    assert params == (7, "IWDA.AS")
