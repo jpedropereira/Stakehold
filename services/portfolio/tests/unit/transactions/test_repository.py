@@ -4,6 +4,8 @@ from decimal import Decimal
 from portfolio.transactions.base import CanonicalTransaction
 from portfolio.transactions.repository import (
     insert_transactions,
+    list_by_account,
+    list_by_accounts,
     list_distinct_instruments,
 )
 
@@ -146,3 +148,113 @@ def test_list_distinct_instruments_filters_out_cash_only_rows():
 
     sql, _ = conn._cursor.executed[0]
     assert "IS NOT NULL" in sql
+
+
+# --- list_by_account ---
+
+
+def test_list_by_account_returns_canonical_transactions_in_row_order():
+    txn = _txn()
+    conn = FakeReadConnection(
+        rows=[
+            (
+                txn.account_id,
+                txn.broker_transaction_ref,
+                txn.transaction_type,
+                txn.trade_datetime,
+                txn.instrument_identifier,
+                txn.instrument_identifier_kind,
+                txn.quantity,
+                txn.price,
+                txn.native_currency,
+                txn.native_amount,
+                txn.eur_amount,
+                txn.fx_rate,
+                txn.fx_rate_source,
+                txn.fees_native,
+            )
+        ]
+    )
+
+    result = list_by_account(conn, account_id=1)
+
+    assert result == [txn]
+
+
+def test_list_by_account_scopes_by_account_id():
+    conn = FakeReadConnection(rows=[])
+
+    list_by_account(conn, account_id=42)
+
+    sql, params = conn._cursor.executed[0]
+    assert "WHERE account_id = ANY(%s)" in sql
+    assert params == [[42]]
+
+
+def test_list_by_account_orders_by_account_then_trade_datetime_then_ref():
+    conn = FakeReadConnection(rows=[])
+
+    list_by_account(conn, account_id=1)
+
+    sql, _ = conn._cursor.executed[0]
+    assert "ORDER BY account_id, trade_datetime, broker_transaction_ref" in sql
+
+
+def test_list_by_account_filters_by_transaction_type_when_given():
+    conn = FakeReadConnection(rows=[])
+
+    list_by_account(conn, account_id=1, transaction_types=("BUY", "SELL"))
+
+    sql, params = conn._cursor.executed[0]
+    assert "AND transaction_type = ANY(%s)" in sql
+    assert params == [[1], ["BUY", "SELL"]]
+
+
+# --- list_by_accounts ---
+
+
+def test_list_by_accounts_groups_rows_by_account_id():
+    txn_a = _txn(account_id=1, broker_transaction_ref="a")
+    txn_b = _txn(account_id=2, broker_transaction_ref="b")
+    conn = FakeReadConnection(
+        rows=[
+            (
+                txn.account_id,
+                txn.broker_transaction_ref,
+                txn.transaction_type,
+                txn.trade_datetime,
+                txn.instrument_identifier,
+                txn.instrument_identifier_kind,
+                txn.quantity,
+                txn.price,
+                txn.native_currency,
+                txn.native_amount,
+                txn.eur_amount,
+                txn.fx_rate,
+                txn.fx_rate_source,
+                txn.fees_native,
+            )
+            for txn in (txn_a, txn_b)
+        ]
+    )
+
+    result = list_by_accounts(conn, [1, 2])
+
+    assert result == {1: [txn_a], 2: [txn_b]}
+
+
+def test_list_by_accounts_with_no_ids_executes_nothing():
+    conn = FakeReadConnection(rows=[])
+
+    result = list_by_accounts(conn, [])
+
+    assert result == {}
+    assert conn._cursor.executed == []
+
+
+def test_list_by_accounts_an_account_with_no_rows_has_no_key():
+    conn = FakeReadConnection(rows=[])
+
+    result = list_by_accounts(conn, [1])
+
+    assert result == {}

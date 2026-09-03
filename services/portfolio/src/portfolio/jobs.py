@@ -345,3 +345,96 @@ def run_import_cashflow(
 
     logger.info("import-cashflow: done, %d transaction(s) saved.", saved)
     return build_run_result(units_total=saved, rows_saved=saved, failed=0, transactions_saved=saved)
+
+
+def run_rebuild_positions(
+    *, user_id: UUID, account_label: str | None = None
+) -> dict[str, int | str]:
+    """Replay this user's transaction log into position_snapshots. See
+    pipeline.rebuild_positions for what each count means.
+
+    An unmapped instrument blocks only its own ticker -- reported here, and in the run's
+    `partial` status, per docs/architecture.md's "never a silent skip" rule -- while every other
+    (account, ticker) still gets rebuilt. A ledger anomaly (docs/schema.md's "warn but compute"
+    policy) is logged but never affects `status`.
+    """
+    configure_logging()
+    settings = load_settings()
+    scope = f"account {account_label!r}" if account_label else "every account"
+    conn = get_connection(settings.database_url)
+    try:
+        logger.info("rebuild-positions: rebuilding positions for user %s (%s).", user_id, scope)
+        try:
+            mappings = load_ticker_mappings(settings.ticker_mappings_path)
+            outcome = pipeline.rebuild_positions(
+                conn, user_id=user_id, mappings=mappings, account_label=account_label
+            )
+        except PortfolioError as exc:
+            logger.error("rebuild-positions: failed -- %s", exc)
+            result = build_run_result(
+                units_total=1,
+                rows_saved=0,
+                failed=1,
+                positions_rebuilt=0,
+                positions_removed=0,
+                instruments_blocked=0,
+                positions_with_anomalies=0,
+                pairs_failed=0,
+            )
+            # Every other return path in this function carries blocked_instruments and
+            # failed_pairs -- cli.py reads both unconditionally, so the error path must supply
+            # them too, not just the named counts build_run_result covers.
+            result["blocked_instruments"] = []
+            result["failed_pairs"] = []
+            return result
+    finally:
+        conn.close()
+
+    for kind, identifier, broker in outcome.blocked:
+        logger.warning(
+            "rebuild-positions: instrument blocked -- %s %s (broker %s) has no ticker mapping.",
+            kind,
+            identifier,
+            broker,
+        )
+    for message in outcome.anomalies:
+        logger.warning("rebuild-positions: %s", message)
+    # Each failed pair was already logged with its traceback at the point of failure
+    # (pipeline.rebuild_positions), so this is only the completion tally, not a re-log.
+
+    logger.info(
+        "rebuild-positions: done, %d position(s) saved across %d ticker(s), %d removed, "
+        "%d instrument(s) blocked, %d pair(s) failed.",
+        outcome.snapshots_saved,
+        outcome.positions_rebuilt,
+        outcome.positions_removed,
+        len(outcome.blocked),
+        len(outcome.failed_pairs),
+    )
+    result = build_run_result(
+        units_total=(
+            outcome.positions_rebuilt
+            + outcome.positions_removed
+            + len(outcome.blocked)
+            + len(outcome.failed_pairs)
+        ),
+        rows_saved=outcome.snapshots_saved,
+        failed=len(outcome.blocked) + len(outcome.failed_pairs),
+        positions_rebuilt=outcome.positions_rebuilt,
+        positions_removed=outcome.positions_removed,
+        instruments_blocked=len(outcome.blocked),
+        positions_with_anomalies=outcome.positions_with_anomalies,
+        pairs_failed=len(outcome.failed_pairs),
+    )
+    # The blocked-instrument/failed-pair payloads are merged in after build_run_result, same
+    # carve-out run_list_accounts/run_list_unmapped_instruments use -- **extra is for named
+    # counts only.
+    result["blocked_instruments"] = [
+        {"kind": kind, "identifier": identifier, "broker": broker}
+        for kind, identifier, broker in outcome.blocked
+    ]
+    result["failed_pairs"] = [
+        {"account_label": account_label, "ticker": ticker, "error": error}
+        for account_label, ticker, error in outcome.failed_pairs
+    ]
+    return result

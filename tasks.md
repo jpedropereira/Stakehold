@@ -24,8 +24,8 @@ one-time snapshot.
 | 4 | [Portfolio foundation & schema sign-off](#4-portfolio-foundation--schema-sign-off) | — | done |
 | 5 | [Accounts & manual transactions](#5-accounts--manual-transactions) | 4 | done |
 | 6 | [Broker import](#6-broker-import) | 5 | done |
-| 7 | [Positions](#7-positions) | 6 | ready |
-| 8 | [Returns](#8-returns) | 7, 3 | blocked |
+| 7 | [Positions](#7-positions) | 6 | done |
+| 8 | [Returns](#8-returns) | 7, 3 | ready |
 | 9 | [Portfolio HTTP API](#9-portfolio-http-api) | 5, 6, 7, 8 | blocked |
 | 10 | [Web foundation & auth pages](#10-web-foundation--auth-pages) | 2 | done |
 | 11 | [Portfolio entry UI](#11-portfolio-entry-ui) | 10, 9 | blocked |
@@ -34,8 +34,10 @@ one-time snapshot.
 | 14 | [Broker cash-ledger import](#14-broker-cash-ledger-import) | 6 | done |
 | 15 | [Extract broker-parser plugins to a private repo](#15-extract-broker-parser-plugins-to-a-private-repo) | 6, 14 | done |
 
-One task is `ready` today: **7** (positions), unblocked since task 6 is `done`. **11** stays
-`blocked` — it depends on both 10 (now `done`) and 9 (portfolio HTTP API, still `blocked`).
+One task is `ready` today: **8** (returns), unblocked since both its dependencies — 7 (positions)
+and 3 (data-store read API) — are now `done`. **9** stays `blocked` — it depends on 5, 6, 7 (all
+`done`) and 8 (not yet `done`, only `ready`). **11** stays `blocked` too — it depends on both 10
+(now `done`) and 9 (portfolio HTTP API, still `blocked`).
 
 ## Tasks
 
@@ -174,12 +176,53 @@ partial-fill case; `tests/unit/ticker_mapping/` (stayed here — genuinely broke
 multi-user isolation, against live Postgres — stayed here too, rewritten at task 15 to exercise a
 synthetic parser instead of a real one).
 
-### 7. Positions
+### 7. Positions — done
 
 `positions/calculator.py` (pure function replaying the transaction log) + `repository.py`
-(delete-then-insert per `(account_id, canonical_ticker)`, each pair's replacement atomic). Flow:
-`rebuild-positions`. An unmapped instrument blocks its own rebuild with a `partial` status, never a
-silent skip. Tests.
+(delete-then-insert per `(account_id, canonical_ticker)`, each pair's replacement wrapped in its
+own `with transaction(conn):` opened by `pipeline.rebuild_positions`, not by the repository —
+`schema.md`'s atomicity requirement is per-pair, not per-run). Flow: `rebuild-positions --user <id>
+[--account <label>]`, resolved via `AskUserQuestion` — the original flow table showed the command
+bare, with no flags. New read on `transactions/repository.py`: `list_by_accounts`, fetching every
+relevant account's transaction log in one batched round trip rather than one query per account
+(`list_by_account` is a thin single-account wrapper over it) — every prior read there was either
+`user_id`-scoped or a write. An unmapped instrument blocks only its own ticker, reported by name
+with a `partial` status, never a silent skip — every other `(account, ticker)` in the run still
+gets rebuilt. A driver-level failure on one `(account, ticker)` pair (as opposed to a
+`PortfolioError`) is caught at that same per-pair transaction boundary, logged, and reported in
+`failed_pairs` rather than aborting every account still left to process — see
+`docs/architecture.md`'s "A rebuild's own failure isolation."
+
+**Three decisions left open by both `architecture.md` and `schema.md`, settled here and recorded in
+both**: cost basis is sourced from `native_amount`/`eur_amount` (the broker's own frozen cash-flow
+figures), not `quantity * price` — so `average_cost_eur` needs no FX arithmetic in the calculator at
+all; only `BUY`/`SELL` move a position, since `validate()` guarantees neither `DIVIDEND` nor `FEE`
+nor `ADJUSTMENT` carries a quantity or price; a ledger anomaly (the same ticker traded in two
+currencies within one account, or a running quantity going negative) warns but still computes,
+reserving `partial` for unmapped instruments alone. A related note added to `schema.md`: the same
+instrument held in two *different* accounts, each in its own currency, is ordinary and fully
+supported — each account replays independently, and `average_cost_eur` is a blend of each
+purchase's own frozen `eur_amount`, not derivable from `average_cost_native` by any single
+`fx_rate`.
+
+**One piece beyond the task's literal wording, added deliberately**: `positions/repository.py`
+gained `list_tickers`/`delete_snapshots` so a rebuild prunes a ticker it no longer produces (e.g. a
+mapping in `configs/ticker_mappings.yaml` was re-pointed) — otherwise a "full rebuild" would leave
+stale rows behind forever. Pruning is skipped for any account with a blocked instrument, since a
+blocked instrument's old `canonical_ticker` is indistinguishable from a genuinely stale one at
+rebuild time, and "blocked means don't touch" must not become "blocked means delete."
+
+Tests: `tests/unit/positions/{test_calculator,test_repository}.py` (the calculator suite is the
+bulk — average-cost blending, sell-to-zero reset, re-buy after close, both anomaly cases, and the
+two-account/two-currency independence case guarding against a same-instrument mix-up); additions to
+`tests/unit/{test_pipeline,test_jobs,test_cli}.py` (including the batched-fetch call count, a
+non-BUY/SELL row never reaching the mapping check, and a driver-level failure on one pair being
+isolated and reported rather than aborting the run) and
+`tests/unit/transactions/test_repository.py`; `tests/integration/test_rebuild_positions.py` (live
+Postgres, seeded through the real CLI/pipeline stack — the delete-then-insert replacement contract a
+fake can't prove, `--account` scoping, the whole-portfolio case rebuilding every account via the
+batched fetch, per-user isolation, an unmapped instrument blocking with exit code 1, and a bad
+`--account` label exiting cleanly rather than crashing).
 
 ### 8. Returns
 

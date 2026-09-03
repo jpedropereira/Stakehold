@@ -147,9 +147,9 @@ Derived, materialized, rebuildable — never hand-edited.
 | `as_of_date` | `DATE NOT NULL` | Part of PK. Event-driven grain — one row per date a transaction actually changed this position. "Position as of date D" is read as the latest row with `as_of_date <= D`, not a row that must exist for every calendar date. |
 | `quantity` | `NUMERIC(20,6) NOT NULL` | Running total after this date's transactions. |
 | `average_cost_native` | `NUMERIC(18,6) NOT NULL` | Blended average cost per unit, in the instrument's trading currency. |
-| `native_currency` | `VARCHAR(10) NOT NULL` | Assumes one trading currency per instrument per account. Flagged, not verified against a real case of the same ticker traded in two currencies on the same account. |
-| `average_cost_eur` | `NUMERIC(18,6) NOT NULL` | Blended average cost per unit, in EUR. |
-| `cost_basis_eur` | `NUMERIC(20,4) NOT NULL` | `quantity * average_cost_eur`, stored rather than recomputed by every reader — denormalized the same way `market_returns.split_adjusted_close` is denormalized from `raw_market_data`. |
+| `native_currency` | `VARCHAR(10) NOT NULL` | Assumes one trading currency per instrument **per account** — violated only if the same account itself trades one instrument in two currencies, which `positions/calculator.py` (task 7) detects and reports as an anomaly (logged, `positions_with_anomalies` in the run result) but still computes rather than blocking. The same instrument held in *two different accounts*, each in its own currency, is ordinary and fully supported — each account replays independently, keyed separately by this table's own `account_id`, and nothing here spans accounts to notice or warn about it. |
+| `average_cost_eur` | `NUMERIC(18,6) NOT NULL` | Blended average cost per unit, in EUR — specifically, a blend of each purchase's own frozen `transactions.eur_amount`, not `average_cost_native` converted by any single `fx_rate`. Two purchases at different `fx_rate`s leave this column and `average_cost_native` unrelated by any single conversion factor: `average_cost_native` blends native-currency amounts, `average_cost_eur` blends already-converted EUR amounts recorded at each purchase's own rate. A portfolio-wide total for one instrument across several accounts (possibly in different currencies) is `sum(cost_basis_eur)` — summing `average_cost_native` across accounts is meaningless once currencies differ. |
+| `cost_basis_eur` | `NUMERIC(20,4) NOT NULL` | `quantity * average_cost_eur`, computed at full precision from the running (unrounded) totals and quantized once at this column's own precision — not the rounded product of the already-rounded `quantity`/`average_cost_eur` values above. Stored rather than recomputed by every reader — denormalized the same way `market_returns.split_adjusted_close` is denormalized from `raw_market_data`. Historical, not re-translated: unaffected by FX movement between purchase and now, since `transactions.eur_amount` (its ultimate source) is frozen at transaction time and never revised (`architecture.md`'s currency decision) — a change here only ever comes from a rebuild. |
 | `calculated_at` | `TIMESTAMPTZ NOT NULL DEFAULT now()` | |
 
 `PRIMARY KEY (account_id, canonical_ticker, as_of_date)`. Its own index already serves "latest
@@ -207,8 +207,11 @@ extending past that point.
 ## Open items, carried forward rather than resolved here
 
 - **Realized gains** have no table yet (see `position_snapshots` above).
-- **`position_snapshots.native_currency`/`average_cost_native`'s single-currency-per-instrument
-  assumption** is stated, not verified against a real multi-currency same-ticker case.
+- **`position_snapshots.native_currency`'s single-currency-per-instrument assumption is scoped to
+  one account, and a violation is handled, not just flagged** (task 7): within one account it warns
+  but still computes (`positions/calculator.py`'s anomaly reporting); across two accounts it isn't
+  a violation at all (see the `native_currency`/`average_cost_eur` notes above). Still not verified
+  against a real multi-currency same-ticker case in a single account — only exercised by tests.
 - **The `data-store` read API** this schema's `return_snapshots` rebuild depends on now exists
   (task 3 of [`tasks.md`](../../../tasks.md)) — see `architecture.md`'s cross-service prerequisite.
   Portfolio's own `datastore_client/http_client.py` now exists too, but only its `get_fx_rate`

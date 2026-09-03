@@ -186,6 +186,23 @@ live FX lookup" below for why. Its `broker` parameter and the parallel `CASHFLOW
 registry are a later generalization (same extraction prep as above) — task 14 itself built it
 hardcoded to that one broker.
 
+**Built as of task 7** — `rebuild_positions`, and the new `positions/calculator.py` +
+`positions/repository.py` it composes. Needed a new read this task added to
+`transactions/repository.py`: `list_by_accounts(conn, account_ids, *, transaction_types=None)`,
+which fetches every one of `account_ids`' transaction logs in one round trip and groups them by
+`account_id` — every prior read there was either scoped by `user_id`
+(`list_distinct_instruments`) or a write. `list_by_account(conn, account_id)` is a thin
+single-account wrapper over it, kept for a caller that only ever needs one. Unlike every flow
+above it, this one opens more than one transaction boundary per call: one `with transaction(conn):`
+per `(account, canonical_ticker)` pair, so each pair's delete-then-insert replacement is atomic on
+its own without making the whole rebuild one all-or-nothing transaction (`schema.md`'s "Loading
+strategy" for `position_snapshots`). That same per-pair boundary is also the run's
+failure-isolation unit: a driver-level failure (not a `PortfolioError`) writing or pruning one
+pair is caught there, logged, and reported in the run result rather than aborting every account
+still left to process — see "A rebuild's own failure isolation" below. See "Three decisions task 7
+had to settle" below the flows table for the cost-basis, transaction-type, and anomaly-handling
+choices that weren't pinned down before this task.
+
 ## The three-file shape of a domain module
 
 | Module | Shape | Deviation from the three-file default, and why |
@@ -194,7 +211,7 @@ hardcoded to that one broker.
 | `broker_import/` | `base.py` (the `BrokerParser` and `CashflowParser` Protocols) + `discovery.py` (entry-point lookup, populating `pipeline.py`'s two registries) | **No `repository.py`.** A parser hands back in-memory `CanonicalTransaction` records; persistence is owned entirely by `transactions/repository.py`, so a manually-entered transaction and an imported one are written through the exact same path. Splitting persistence into `broker_import/` would let the two paths drift. **No concrete implementation lives in this module at all** — every `BrokerParser`/`CashflowParser` is an entry-point plugin from a separately-installed package; `discovery.py` is the only file here `pipeline.py` imports directly, and it never imports a concrete parser either. |
 | `ticker_mapping/` | `loader.py` only | **No `repository.py`.** The mapping lives in a YAML config file (`configs/ticker_mappings.yaml`), not a database table — mirroring `data-store`'s `yfinance_exchange_suffixes.yaml` reference-config pattern. `loader.py` reads and validates the file into an in-memory lookup; nothing here talks to Postgres. No `base.py` — nothing else is expected to implement a "mapping provider." |
 | `transactions/` | `base.py` (the `CanonicalTransaction` record shape) + `repository.py` | `base.py` here holds a **data shape**, not a `Protocol` — the contract is "what a normalized transaction looks like," which multiple producers (`broker_import` parsers, manual CLI entry) must fill in, not a swappable behavior one class implements. |
-| `positions/` | `calculator.py` (pure) + `repository.py` | Same shape as data-store's `returns/`: no `base.py`, no `*_source.py` — the input is this service's own `transactions` and `ticker_mapping` tables, not an external provider. |
+| `positions/` | `calculator.py` (pure) + `repository.py` | **Built at task 7.** Same shape as data-store's `returns/`: no `base.py`, no `*_source.py` — the input is this service's own `transactions` and `ticker_mapping` tables, not an external provider. One deliberate deviation from "repositories never commit": `positions/repository.py` still never commits, but `pipeline.rebuild_positions` opens the `with transaction(conn):` boundary once *per `(account, canonical_ticker)` pair* rather than once per flow, because `schema.md`'s delete-then-insert contract requires each pair's replacement to be atomic on its own, not the whole rebuild run. |
 | `returns/` | `calculator.py` (pure) + `repository.py` | Same shape again, plus one more thing to disclose: it also needs prices and FX rates from `datastore_client`. Those are fetched by `pipeline.py` and handed into `calculator.py` as plain data — the calculator itself stays pure and knows nothing about HTTP, keeping it as unit-testable as data-store's `returns/calculator.py`. |
 | `datastore_client/` | `base.py` (a `DataStoreClient` Protocol) + `http_client.py` | This is the `*_source.py` role, but the "provider" is another in-house service's read API rather than a third party. **`get_fx_rate` built at task 14**, pulled forward from its original task 8 slot because a cash-ledger import needed it; the price-series and ticker-existence methods `returns/` needs remain task 8's own work — see "Cross-service prerequisite" below. |
 
@@ -463,7 +480,7 @@ identity — not column-level DDL, which needs its own sign-off pass.
 | Manual transaction entry | `add-transaction --user <id> --account <label> --ref <key> --type <type> --datetime <iso8601> --amount <decimal> --currency <ISO4217> [--instrument <id> --instrument-kind ISIN\|SYMBOL] [--quantity <d>] [--price <d>] [--fx-rate <d>] [--fees <d>]` | ad hoc | `accounts`, scoped by `user_id` | `transactions` (idempotent on `(account_id, broker_transaction_ref)`, keyed by the mandatory `--ref`) |
 | Broker file import | `import-transactions --user <id> --file <path> --account <label>` | manual, on demand | export file, `accounts` scoped by `user_id` | `transactions` (idempotent on `(account_id, broker_transaction_ref)`) |
 | Cash-ledger import | `import-cashflow --user <id> --file <path> --account <label>` | manual, on demand | export file, `accounts` scoped by `user_id`, data-store's FX read API (`datastore_client`) for non-EUR rows | `transactions` (idempotent on `(account_id, broker_transaction_ref)`) |
-| Positions rebuild | `rebuild-positions` | after transactions change | `transactions`, `configs/ticker_mappings.yaml` | `position_snapshots` |
+| Positions rebuild | `rebuild-positions --user <id> [--account <label>]` | after transactions change | `transactions`, `configs/ticker_mappings.yaml` | `position_snapshots` |
 | Returns rebuild | `rebuild-returns` | after positions rebuild or new prices land | `position_snapshots`, `data-store` read API | `return_snapshots` |
 
 **No separate `brokers` table** ever materialized — `schema.md` settled on `broker` as a plain
@@ -491,6 +508,60 @@ process every other account/instrument normally, and report the blocked ones by 
 completion summary with a `partial` status, following the same `run_result` contract and
 `nothing_to_do` vs. `partial` vs. `ok` distinction data-store already established (and the
 repo-wide logging rule: "nothing to do" must never look like "something failed silently").
+
+**A known sharp edge in that blocking rule**: it's keyed by
+`(instrument_identifier_kind, instrument_identifier)`, the only key `mappings.resolve` can look
+up — there is no way to tell, from an unresolved identifier alone, which resolved ticker (if any)
+names the same real-world instrument. If one account's transactions for a single holding are
+split across a mapped identifier kind (e.g. `ISIN`) and an unmapped one for that broker (e.g.
+`SYMBOL`), that ticker's snapshot is built only from the mapped rows — silently a partial view,
+not the blocked-and-untouched outcome described above. The fix lives in
+`configs/ticker_mappings.yaml` (map every identifier kind a broker actually emits for an
+instrument), not in `rebuild_positions` itself — there's no reliable way for the code to infer
+that two different identifier strings name the same instrument without the mapping saying so for
+both.
+
+**A rebuild's own failure isolation** — the per-`(account, ticker)` transaction boundary above is
+also where a driver-level failure (a constraint violation, a dropped connection; anything that
+isn't a `PortfolioError`, since repositories never raise those) is caught, logged with its
+traceback, and reported in `failed_pairs`/`pairs_failed` rather than propagating and aborting
+every account still left to rebuild. This is deliberately narrower than a general "catch
+everything" policy: it only wraps the two repository calls inside the per-pair loop
+(`replace_snapshots`, `delete_snapshots`), the same boundary `shared.db.connection.transaction`
+already rolls back on any exception — which is what leaves the connection usable for the next
+pair instead of stuck in Postgres's aborted-transaction state. Every other flow in this file keeps
+the plain "an uncaught exception means nothing committed" contract; `rebuild_positions` earns
+this extra handling specifically because it is the one flow that is *not* single-transaction, so
+without it a failure partway through would silently discard the accurate count of what had
+already, durably, succeeded.
+
+**Three decisions task 7 had to settle, none of which were pinned down before it started:**
+
+- **Cost basis is sourced from `native_amount`/`eur_amount`**, the broker's own frozen cash-flow
+  figures (`schema.md`'s "immutable source of truth"), not `quantity * price`. The consequence
+  worth keeping in mind: `average_cost_eur` needs no FX arithmetic in `positions/calculator.py` at
+  all — it never divides by `fx_rate` — because `eur_amount` already froze that conversion at
+  transaction time. One corollary that isn't obvious from the columns alone: `average_cost_eur` is
+  a *blend of each purchase's own frozen `eur_amount`*, not derivable from `average_cost_native` by
+  any single `fx_rate` — see `schema.md`'s note on the same instrument held in two currencies.
+- **Only `BUY` and `SELL` move a position.** Every other `transaction_type` is a cash event —
+  `validate()` doesn't even guarantee a `DIVIDEND`/`FEE`/`ADJUSTMENT` row carries a `quantity` or
+  `price` — so those are left entirely to `returns/` (task 8), never touched here.
+- **A ledger anomaly warns but still computes, rather than blocking.** Two cases:
+  `position_snapshots.native_currency`'s single-currency-per-instrument-per-account assumption
+  being violated within one account, and a running quantity going negative. Both are logged
+  (`positions_with_anomalies` in the run result) and the snapshot is still written; only an
+  unmapped instrument flips the run to `partial`. Rationale: unlike an unmapped instrument, there
+  is no action a user can take from the CLI to resolve either anomaly, so blocking the rebuild
+  would only make the portfolio look emptier without giving them a way to fix it.
+
+**Pruning a ticker `rebuild-positions` no longer produces** (e.g. a mapping in
+`configs/ticker_mappings.yaml` was re-pointed to a different `canonical_ticker`) is handled, but
+conservatively: `pipeline.rebuild_positions` only deletes a stale `(account, ticker)` pair when
+that account currently has **zero** blocked instruments. A blocked instrument's old
+`canonical_ticker` — from before its mapping was removed — is indistinguishable from a genuinely
+stale one at rebuild time, and "blocked means don't touch, not delete" means the ambiguous case
+must never delete. An account with any blocked instrument simply skips pruning for that run.
 
 ### Manual transaction entry
 
@@ -779,8 +850,8 @@ table.
 
 | | Needs | Covers |
 |---|---|---|
-| `tests/unit/` | nothing | **Built as of task 6**: `ticker_mapping/loader.py`; `pipeline.import_transactions`/`list_unmapped_instruments` against fake repositories and a fake `BrokerParser`. **Built as of task 14**: `datastore_client/http_client.py` against a faked `requests.get`; `pipeline.import_cashflow` against a fake `DataStoreClient` and a fake `CashflowParser`. **Broker-plugin discovery**: `broker_import/discovery.py` against a faked `entry_points()` (`tests/unit/broker_import/test_discovery.py`) — no installed plugin required. Any given broker's own parsing logic is tested in that plugin's own repo, against its own fixtures, not here. **Not yet built**: `positions/calculator.py` and `returns/calculator.py` as pure functions over in-memory transaction/price frames (tasks 7–8) |
-| `tests/integration/` | live Postgres | **Built as of task 6**: re-importing the same file is a no-op (`tests/integration/test_broker_import.py`, against a synthetic `BrokerParser`), `list_distinct_instruments`'s multi-user isolation and broker attribution; task 4/5's `accounts`, `transactions` idempotent-upsert, and schema-migration-idempotency coverage. **Built as of task 14**: `import_cashflow`'s idempotent reimport and broker-mismatch rejection (`test_cashflow_import.py`, against a synthetic `CashflowParser`), routed through `pipeline.py` directly with a stub `DataStoreClient` rather than through `jobs.py`'s real `HttpDataStoreClient` — see below. Neither integration test depends on any broker plugin being installed. **Not yet built**: `ticker_mapping/` (nothing there talks to Postgres — see the module table), `positions/repository.py`, `returns/repository.py`, full rebuild flows end-to-end (tasks 7–8) |
+| `tests/unit/` | nothing | **Built as of task 6**: `ticker_mapping/loader.py`; `pipeline.import_transactions`/`list_unmapped_instruments` against fake repositories and a fake `BrokerParser`. **Built as of task 14**: `datastore_client/http_client.py` against a faked `requests.get`; `pipeline.import_cashflow` against a fake `DataStoreClient` and a fake `CashflowParser`. **Broker-plugin discovery**: `broker_import/discovery.py` against a faked `entry_points()` (`tests/unit/broker_import/test_discovery.py`) — no installed plugin required. Any given broker's own parsing logic is tested in that plugin's own repo, against its own fixtures, not here. **Built as of task 7**: `positions/calculator.py` as a pure function over in-memory `CanonicalTransaction` sequences (average-cost blending, sell-to-zero reset, the two anomaly cases, and the cross-account/cross-currency independence case); `pipeline.rebuild_positions` against fake repositories (blocked-instrument reporting, per-pair commit boundaries, account/user scoping, stale-ticker pruning, the one-batched-call fetch across every account in a whole-portfolio rebuild, and a driver-level failure on one pair being caught and reported in `failed_pairs` rather than aborting the rest of the run). **Not yet built**: `returns/calculator.py` as a pure function over in-memory price frames (task 8) |
+| `tests/integration/` | live Postgres | **Built as of task 6**: re-importing the same file is a no-op (`tests/integration/test_broker_import.py`, against a synthetic `BrokerParser`), `list_distinct_instruments`'s multi-user isolation and broker attribution; task 4/5's `accounts`, `transactions` idempotent-upsert, and schema-migration-idempotency coverage. **Built as of task 14**: `import_cashflow`'s idempotent reimport and broker-mismatch rejection (`test_cashflow_import.py`, against a synthetic `CashflowParser`), routed through `pipeline.py` directly with a stub `DataStoreClient` rather than through `jobs.py`'s real `HttpDataStoreClient` — see below. Neither integration test depends on any broker plugin being installed. **Built as of task 7**: `rebuild-positions` end-to-end through the real CLI/pipeline/repository stack (`test_rebuild_positions.py`) — the delete-then-insert replacement contract a fake can't prove (a re-run replaces rows rather than duplicating them), `--account` scoping and the whole-portfolio (no `--account`) case rebuilding every account via the batched `list_by_accounts` fetch, per-user isolation, an unmapped instrument blocking with exit code 1, and a bad `--account` label exiting cleanly rather than crashing. **Not yet built**: `ticker_mapping/` (nothing there talks to Postgres — see the module table), `returns/repository.py`, the returns rebuild flow end-to-end (task 8) |
 
 **`datastore_client/http_client.py` itself is tested against a faked `requests.get`, not a live
 data-store instance** — status codes, the lookback-window request shape, and error mapping to

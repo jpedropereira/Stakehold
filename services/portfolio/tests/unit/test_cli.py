@@ -814,3 +814,180 @@ def test_import_cashflow_rejects_a_malformed_user_id():
                 "acme-main",
             ]
         )
+
+
+# --- rebuild-positions ---
+
+
+def test_rebuild_positions_dispatches_with_converted_user_id_and_no_account(monkeypatch):
+    captured = {}
+
+    def fake_run(*, user_id, account_label):
+        captured["user_id"] = user_id
+        captured["account_label"] = account_label
+        return {
+            "status": "nothing_to_do",
+            "rows_saved": 0,
+            "positions_rebuilt": 0,
+            "positions_removed": 0,
+            "instruments_blocked": 0,
+            "positions_with_anomalies": 0,
+            "pairs_failed": 0,
+            "blocked_instruments": [],
+            "failed_pairs": [],
+        }
+
+    monkeypatch.setattr(cli.jobs, "run_rebuild_positions", fake_run)
+    user_id = uuid.uuid4()
+
+    cli.main(["rebuild-positions", "--user", str(user_id)])
+
+    assert captured == {"user_id": user_id, "account_label": None}
+
+
+def test_rebuild_positions_passes_the_optional_account_label(monkeypatch):
+    captured = {}
+
+    def fake_run(*, user_id, account_label):
+        captured["account_label"] = account_label
+        return {
+            "status": "ok",
+            "rows_saved": 1,
+            "positions_rebuilt": 1,
+            "positions_removed": 0,
+            "instruments_blocked": 0,
+            "positions_with_anomalies": 0,
+            "pairs_failed": 0,
+            "blocked_instruments": [],
+            "failed_pairs": [],
+        }
+
+    monkeypatch.setattr(cli.jobs, "run_rebuild_positions", fake_run)
+
+    cli.main(["rebuild-positions", "--user", str(uuid.uuid4()), "--account", "main"])
+
+    assert captured["account_label"] == "main"
+
+
+def test_rebuild_positions_prints_blocked_instruments_then_the_count(monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli.jobs,
+        "run_rebuild_positions",
+        lambda **kw: {
+            "status": "partial",
+            "rows_saved": 1,
+            "positions_rebuilt": 1,
+            "positions_removed": 0,
+            "instruments_blocked": 1,
+            "positions_with_anomalies": 0,
+            "pairs_failed": 0,
+            "blocked_instruments": [
+                {"kind": "ISIN", "identifier": "IE00B4L5Y983", "broker": "acme"}
+            ],
+            "failed_pairs": [],
+        },
+    )
+
+    cli.main(["rebuild-positions", "--user", str(uuid.uuid4())])
+
+    out = capsys.readouterr().out
+    assert out == "ISIN\tIE00B4L5Y983\tacme\n1 position snapshot(s) saved\n"
+
+
+def test_rebuild_positions_prints_failed_pairs_then_the_count(monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli.jobs,
+        "run_rebuild_positions",
+        lambda **kw: {
+            "status": "partial",
+            "rows_saved": 0,
+            "positions_rebuilt": 0,
+            "positions_removed": 0,
+            "instruments_blocked": 0,
+            "positions_with_anomalies": 0,
+            "pairs_failed": 1,
+            "blocked_instruments": [],
+            "failed_pairs": [
+                {"account_label": "m", "ticker": "IWDA.AS", "error": "connection reset"}
+            ],
+        },
+    )
+
+    cli.main(["rebuild-positions", "--user", str(uuid.uuid4())])
+
+    out = capsys.readouterr().out
+    assert out == "m\tIWDA.AS\tconnection reset\n0 position snapshot(s) saved\n"
+
+
+def test_rebuild_positions_prints_only_the_count_when_nothing_blocked(monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli.jobs,
+        "run_rebuild_positions",
+        lambda **kw: {
+            "status": "ok",
+            "rows_saved": 3,
+            "positions_rebuilt": 1,
+            "positions_removed": 0,
+            "instruments_blocked": 0,
+            "positions_with_anomalies": 0,
+            "pairs_failed": 0,
+            "blocked_instruments": [],
+            "failed_pairs": [],
+        },
+    )
+
+    cli.main(["rebuild-positions", "--user", str(uuid.uuid4())])
+
+    assert capsys.readouterr().out == "3 position snapshot(s) saved\n"
+
+
+def test_rebuild_positions_exits_zero_when_nothing_to_do(monkeypatch):
+    monkeypatch.setattr(
+        cli.jobs,
+        "run_rebuild_positions",
+        lambda **kw: {
+            "status": "nothing_to_do",
+            "rows_saved": 0,
+            "positions_rebuilt": 0,
+            "positions_removed": 0,
+            "instruments_blocked": 0,
+            "positions_with_anomalies": 0,
+            "pairs_failed": 0,
+            "blocked_instruments": [],
+            "failed_pairs": [],
+        },
+    )
+
+    assert cli.main(["rebuild-positions", "--user", str(uuid.uuid4())]) == 0
+
+
+def test_rebuild_positions_exits_nonzero_when_partial(monkeypatch):
+    monkeypatch.setattr(
+        cli.jobs,
+        "run_rebuild_positions",
+        lambda **kw: {
+            "status": "partial",
+            "rows_saved": 0,
+            "positions_rebuilt": 0,
+            "positions_removed": 0,
+            "instruments_blocked": 1,
+            "positions_with_anomalies": 0,
+            "pairs_failed": 0,
+            "blocked_instruments": [
+                {"kind": "ISIN", "identifier": "IE00B4L5Y983", "broker": "acme"}
+            ],
+            "failed_pairs": [],
+        },
+    )
+
+    assert cli.main(["rebuild-positions", "--user", str(uuid.uuid4())]) == 1
+
+
+def test_rebuild_positions_requires_the_user_flag():
+    with pytest.raises(SystemExit):
+        cli.main(["rebuild-positions"])
+
+
+def test_rebuild_positions_rejects_a_malformed_user_id():
+    with pytest.raises(SystemExit):
+        cli.main(["rebuild-positions", "--user", "not-a-uuid"])

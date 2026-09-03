@@ -18,6 +18,14 @@ _DISTINCT_INSTRUMENTS_SQL = """
     ORDER BY t.instrument_identifier_kind, t.instrument_identifier, a.broker
 """
 
+_LIST_BY_ACCOUNTS_SQL = """
+    SELECT account_id, broker_transaction_ref, transaction_type, trade_datetime,
+           instrument_identifier, instrument_identifier_kind, quantity, price,
+           native_currency, native_amount, eur_amount, fx_rate, fx_rate_source, fees_native
+    FROM transactions
+    WHERE account_id = ANY(%s)
+"""
+
 _INSERT_SQL = """
     INSERT INTO transactions (
         account_id, broker_transaction_ref, transaction_type, trade_datetime,
@@ -78,3 +86,47 @@ def list_distinct_instruments(conn, user_id: UUID) -> list[tuple[str, str, str]]
     with conn.cursor() as cur:
         cur.execute(_DISTINCT_INSTRUMENTS_SQL, (user_id,))
         return [(kind, identifier, broker) for kind, identifier, broker in cur.fetchall()]
+
+
+def list_by_accounts(
+    conn, account_ids: Sequence[int], *, transaction_types: Sequence[str] | None = None
+) -> dict[int, list[CanonicalTransaction]]:
+    """Every one of `account_ids`' transaction logs in one round trip, grouped by account_id and
+    each ordered oldest first -- the read the positions rebuild (task 7) replays. Avoids the N+1
+    query a rebuild spanning every account a user owns would otherwise cost by fetching one
+    account at a time. Unscoped by user_id, like insert_transactions: the caller only ever
+    reaches this with account_ids already resolved through accounts/repository.py, the isolation
+    chokepoint. `transaction_types`, when given, filters at the SQL level so rows a caller would
+    only discard anyway (rebuild_positions' cash-only rows) never cross the wire. An account_id
+    with no matching rows simply has no key -- read via `.get(account_id, [])`, not
+    `[account_id]`."""
+    if not account_ids:
+        return {}
+
+    sql = _LIST_BY_ACCOUNTS_SQL
+    params: list[object] = [list(account_ids)]
+    if transaction_types is not None:
+        sql += " AND transaction_type = ANY(%s)"
+        params.append(list(transaction_types))
+    sql += " ORDER BY account_id, trade_datetime, broker_transaction_ref"
+
+    with conn.cursor() as cur:
+        cur.execute(sql, params)
+        grouped: dict[int, list[CanonicalTransaction]] = {}
+        for row in cur.fetchall():
+            txn = CanonicalTransaction(*row)
+            grouped.setdefault(txn.account_id, []).append(txn)
+        return grouped
+
+
+def list_by_account(
+    conn, account_id: int, *, transaction_types: Sequence[str] | None = None
+) -> list[CanonicalTransaction]:
+    """One account's transaction log, oldest first -- a single-account view over
+    list_by_accounts, for a caller that only ever needs one (e.g. a rebuild scoped via
+    --account). Ordered by (trade_datetime, broker_transaction_ref) -- the ref is only a
+    tiebreaker for same-timestamp rows, served by the existing (account_id, trade_datetime)
+    index."""
+    return list_by_accounts(conn, [account_id], transaction_types=transaction_types).get(
+        account_id, []
+    )
