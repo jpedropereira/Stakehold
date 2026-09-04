@@ -26,17 +26,16 @@ one-time snapshot.
 | 6 | [Broker import](#6-broker-import) | 5 | done |
 | 7 | [Positions](#7-positions) | 6 | done |
 | 8 | [Returns](#8-returns) | 7, 3 | done |
-| 9 | [Portfolio HTTP API](#9-portfolio-http-api) | 5, 6, 7, 8 | ready |
+| 9 | [Portfolio HTTP API](#9-portfolio-http-api) | 5, 6, 7, 8 | done |
 | 10 | [Web foundation & auth pages](#10-web-foundation--auth-pages) | 2 | done |
-| 11 | [Portfolio entry UI](#11-portfolio-entry-ui) | 10, 9 | blocked |
+| 11 | [Portfolio entry UI](#11-portfolio-entry-ui) | 10, 9 | ready |
 | 12 | [Portfolio view UI](#12-portfolio-view-ui) | 11 | blocked |
 | 13 | [End-to-end integration & smoke test](#13-end-to-end-integration--smoke-test) | 12 | blocked |
 | 14 | [Broker cash-ledger import](#14-broker-cash-ledger-import) | 6 | done |
 | 15 | [Extract broker-parser plugins to a private repo](#15-extract-broker-parser-plugins-to-a-private-repo) | 6, 14 | done |
 
-One task is `ready` today: **9** (portfolio HTTP API), unblocked now that 5, 6, 7, and 8 (returns)
-are all `done`. **11** stays `blocked` — it depends on both 10 (`done`) and 9 (`ready`, not yet
-`done`).
+One task is `ready` today: **11** (portfolio entry UI), unblocked now that both its
+dependencies — 10 and 9 (portfolio HTTP API) — are `done`. **12** stays `blocked` on 11.
 
 ## Tasks
 
@@ -287,13 +286,66 @@ with `jobs.HttpDataStoreClient` monkeypatched to a stub, matching task 14's own
 `test_cashflow_import.py` precedent that the real HTTP path is `http_client.py`'s own unit tests'
 job).
 
-### 9. Portfolio HTTP API
+### 9. Portfolio HTTP API — done
 
-Not yet designed anywhere — `portfolio/docs/architecture.md` only shows it as a future box in the
-layering diagram. FastAPI routes that are argument-parsing-plus-a-call into `jobs.py`, same as
-`cli.py` — accounts, transactions (manual entry + import), positions, returns. Shared-secret check
-for `web`'s server-to-server calls. Update `services/portfolio/docs/architecture.md` (new entry
-point per the [architecture rule](.claude/rules/architecture.md)).
+New `src/portfolio/api/{app,routes,security,models}.py`. Routes are argument-parsing-plus-a-call
+into `jobs.py`, `cli.py`'s own shape — accounts, manual/imported transactions, positions, returns.
+`X-Internal-Secret` shared-secret check (`PORTFOLIO_INTERNAL_SECRET`) for `web`'s future
+server-to-server calls, matching `auth`'s inbound convention rather than data-store's
+`Authorization: Bearer` — deliberately a separate credential from the existing unprefixed
+`INTERNAL_API_SECRET` (portfolio's own *outbound* credential to data-store), so the two rotate
+independently. `create_app(settings: Settings | None = None)` is injectable, `auth`'s shape;
+`/docs`/`/redoc`/`/openapi.json` disabled, `data-store`'s shape. `account_label`/`user_id` are
+always a query parameter or a body field, never a path segment (labels are free text that can
+contain `/`). Broker-file imports take a multipart `UploadFile` streamed to a size-capped temp
+file, deleted in a `finally` on both the success and error path. `portfolio serve` new CLI
+subcommand (`cli.py`, lazy-imports `uvicorn`/`fastapi`). New `Dockerfile`, `docker-compose.yml`
+`db-init`/`api` services, `PORTFOLIO_INTERNAL_SECRET`/`PORTFOLIO_API_PORT` in `.env.example` and
+`ci.yml`.
+
+**Two preparatory changes, not in the original scope, both required before routes could exist
+sensibly:**
+
+`jobs.py` used to catch every `PortfolioError` and collapse it into a generic `{"status":
+"partial", "rows_saved": 0}` result, the exception's message only logged — an HTTP layer reading
+that dict alone couldn't distinguish "account not found" from "unparseable broker file" from
+"data-store unreachable." `jobs.py` now lets `PortfolioError` propagate; `cli.py`'s `main()`
+catches it alongside the pre-existing `SettingsError` clause; the API maps each subclass to its
+own status code via app-level exception handlers (`AccountNotFound`→404,
+`AccountLabelConflict`→409, four validation/parsing errors→422, `DataStoreApiError`→502,
+everything else→500). `partial` now means only genuine partial success — the two rebuild flows'
+own per-pair `blocked`/`failed_pairs` handling, unchanged.
+
+`returns/repository.py` was write-only (`upsert_snapshots`, no reads at all), and
+`positions/repository.py` could read only one `(account, ticker)` pair at a time — neither served
+a "list my current positions" or "return history" request. Added `list_latest_snapshots`
+(positions), `list_snapshots`/`list_latest_snapshots` (returns, its first reads), four pipeline
+read flows (`list_transactions`/`list_positions`/`list_returns`/`list_latest_returns`, each
+resolving `account_label` through the existing user-isolation chokepoint), and matching `jobs.py`
+`get_*` functions returning plain dicts rather than a run result — mirroring data-store's own
+`get_price_series` convention, since there's nothing to save and no `{"status", "rows_saved"}` to
+report. Returns are served per ticker; aggregating across tickers into one portfolio-level series
+is deliberately deferred to task 12, where the chart's actual shape will settle a real design
+question (trading calendars differ per ticker) that the original scope didn't anticipate.
+
+Tests: unit coverage for the two propagation-refactor changes (`tests/unit/test_jobs.py`,
+`tests/unit/test_cli.py`), the new repository reads and pipeline flows
+(`tests/unit/{positions,returns}/test_repository.py`, `tests/unit/test_pipeline.py`,
+`tests/unit/test_jobs.py`), and the API itself under `tests/unit/api/` (security, app-level
+exception mapping parametrized over every `PortfolioError` subclass, and route-level argument
+coercion/status-code/upload-temp-file tests against a bare app with the secret dependency
+overridden, `data-store`'s own `tests/unit/api/conftest.py` pattern). Integration:
+`tests/integration/test_api.py`, a real `create_app()` against live Postgres — create-account-
+then-list-it, an unknown account label returning 404 not 500, a second user's account label
+staying invisible to the first, a missing secret returning 401 on every route but `/health`, and
+add-transaction → rebuild-positions → read-positions end to end.
+
+`services/portfolio/docs/architecture.md` updated throughout (new entry point per the
+[architecture rule](.claude/rules/architecture.md)): the layering and deployment diagrams, the
+flow table (an HTTP-endpoint column plus four new read-only rows), the configuration table, a new
+"HTTP API" section (the error-mapping table, the account_label-never-a-path-segment decision, the
+upload-to-temp-file contract, per-ticker returns, known limitations), and the testing/"where to
+start reading" sections. No `schema.md` change — no DDL.
 
 ### 10. Web foundation & auth pages — done
 
