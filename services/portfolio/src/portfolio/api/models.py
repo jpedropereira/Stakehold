@@ -1,0 +1,158 @@
+"""Request/response models for the portfolio HTTP API.
+
+Kept separate from routes.py, matching data-store's own split -- the response contract, what a
+future web.PortfolioClient will consume, is visible in one place. Numeric fields stay `Decimal`,
+never `float`: Pydantic v2 serializes `Decimal` to a JSON string in JSON mode, preserving a
+NUMERIC column's exact precision the way a float round-trip would not (data-store's own
+models.py docstring). Request models mirror cli.py's argparse coercers -- a UUID, a Decimal, a
+tz-aware datetime -- so a malformed request 422s the same way a malformed CLI flag would exit 1.
+"""
+
+from datetime import date, datetime
+from decimal import Decimal
+from uuid import UUID
+
+from portfolio.transactions.base import TRANSACTION_TYPES
+from pydantic import BaseModel, field_validator
+
+
+class AccountCreateRequest(BaseModel):
+    user_id: UUID
+    broker: str
+    account_label: str
+
+
+class RebuildRequest(BaseModel):
+    user_id: UUID
+    account_label: str | None = None
+
+
+class AccountResponse(BaseModel):
+    id: int
+    account_label: str
+    broker: str
+    created_at: datetime
+
+
+class TransactionCreateRequest(BaseModel):
+    user_id: UUID
+    account_label: str
+    broker_transaction_ref: str
+    transaction_type: str
+    trade_datetime: datetime
+    native_amount: Decimal
+    native_currency: str
+    instrument_identifier: str | None = None
+    instrument_identifier_kind: str | None = None
+    quantity: Decimal | None = None
+    price: Decimal | None = None
+    fx_rate: Decimal | None = None
+    fees_native: Decimal | None = None
+
+    @field_validator("transaction_type")
+    @classmethod
+    def _check_transaction_type(cls, value: str) -> str:
+        if value not in TRANSACTION_TYPES:
+            raise ValueError(f"transaction_type must be one of {TRANSACTION_TYPES}")
+        return value
+
+    @field_validator("trade_datetime")
+    @classmethod
+    def _require_utc_offset(cls, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            raise ValueError("trade_datetime must include a UTC offset")
+        return value
+
+
+class TransactionResponse(BaseModel):
+    account_id: int
+    broker_transaction_ref: str
+    transaction_type: str
+    trade_datetime: datetime
+    instrument_identifier: str | None
+    instrument_identifier_kind: str | None
+    quantity: Decimal | None
+    price: Decimal | None
+    native_currency: str
+    native_amount: Decimal
+    eur_amount: Decimal
+    fx_rate: Decimal | None
+    fx_rate_source: str | None
+    fees_native: Decimal | None
+
+
+class PositionResponse(BaseModel):
+    account_id: int
+    canonical_ticker: str
+    as_of_date: date
+    quantity: Decimal
+    average_cost_native: Decimal
+    native_currency: str
+    average_cost_eur: Decimal
+    cost_basis_eur: Decimal
+
+
+class ReturnResponse(BaseModel):
+    account_id: int
+    canonical_ticker: str
+    price_date: date
+    quantity: Decimal
+    market_value_native: Decimal
+    market_value_eur: Decimal
+    cost_basis_eur: Decimal
+    unrealized_return_eur: Decimal
+    unrealized_return_pct: Decimal | None
+    dividends_received_eur: Decimal
+    total_return_eur: Decimal
+    total_return_pct: Decimal | None
+
+
+class UnmappedInstrumentResponse(BaseModel):
+    kind: str
+    identifier: str
+    broker: str
+
+
+class FailedPairResponse(BaseModel):
+    account_label: str
+    ticker: str
+    error: str
+
+
+class BlockedTickerResponse(BaseModel):
+    account_label: str
+    ticker: str
+
+
+class AccountWriteResponse(BaseModel):
+    status: str
+    rows_saved: int
+    accounts_created: int
+
+
+class TransactionsWriteResponse(BaseModel):
+    status: str
+    rows_saved: int
+    transactions_saved: int
+
+
+class RebuildPositionsResponse(BaseModel):
+    status: str
+    rows_saved: int
+    positions_rebuilt: int
+    positions_removed: int
+    instruments_blocked: int
+    positions_with_anomalies: int
+    pairs_failed: int
+    blocked_instruments: list[UnmappedInstrumentResponse]
+    failed_pairs: list[FailedPairResponse]
+
+
+class RebuildReturnsResponse(BaseModel):
+    status: str
+    rows_saved: int
+    tickers_rebuilt: int
+    tickers_blocked: int
+    pairs_failed: int
+    blocked_tickers: list[BlockedTickerResponse]
+    failed_pairs: list[FailedPairResponse]
