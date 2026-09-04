@@ -513,20 +513,23 @@ def rebuild_returns(
     canonical_ticker itself is already resolved on position_snapshots -- resolving each
     DIVIDEND transaction's instrument to the same canonical_ticker its BUY/SELL rows resolved
     to, via the same mappings.resolve rebuild_positions already uses. A DIVIDEND row that
-    doesn't resolve is silently excluded from dividends_received_eur, the same sharp edge
-    already documented for positions (an instrument split across a mapped and an unmapped
-    identifier kind for one broker) -- it does not block the pair, since the ticker may still
-    be fully rebuildable from its BUY/SELL rows.
+    doesn't resolve -- including a cash-only row with no instrument attached at all, which
+    validate() permits and mappings.resolve can't be called on -- is silently excluded from
+    dividends_received_eur, the same sharp edge already documented for positions (an instrument
+    split across a mapped and an unmapped identifier kind for one broker) -- it does not block
+    the pair, since the ticker may still be fully rebuildable from its BUY/SELL rows.
 
     A ticker data-store has never ingested, or has no computed returns for (`get_ticker_info`),
-    blocks only that (account, ticker) pair -- reported in `blocked`, never a silent skip, same
-    "never a silent skip" contract rebuild_positions established for unmapped instruments. A
-    `DataStoreApiError` (or any other failure) fetching or saving one pair is caught, logged,
-    and reported in `failed_pairs` rather than aborting every other account/ticker still left to
-    process -- deliberately broader than rebuild_positions's own per-pair catch, which only
-    wraps driver-level exceptions: this is the first rebuild flow with an HTTP dependency, and a
-    data-store call failing for one ticker must not abort the run any more than a bad database
-    write would.
+    or that has no position_snapshots rows left by the time they're read here (list_tickers and
+    the snapshot read are two separate queries, so a concurrent rebuild-positions run can empty
+    one between them), blocks only that (account, ticker) pair -- reported in `blocked`, never a
+    silent skip, same "never a silent skip" contract rebuild_positions established for unmapped
+    instruments. A `DataStoreApiError` (or any other failure) fetching or saving one pair is
+    caught, logged, and reported in `failed_pairs` rather than aborting every other account/ticker
+    still left to process -- deliberately broader than rebuild_positions's own per-pair catch,
+    which only wraps driver-level exceptions: this is the first rebuild flow with an HTTP
+    dependency, and a data-store call failing for one ticker must not abort the run any more than
+    a bad database write would.
 
     The window fetched per pair is bounded, not open-ended (docs/architecture.md's ReturnSnapshot
     note): from the position's first stored snapshot (always its opening date) through today if
@@ -552,6 +555,12 @@ def rebuild_returns(
     for account in accounts:
         dividends_by_ticker: dict[str, list[DividendEvent]] = {}
         for txn in dividend_txns_by_account.get(account.id, []):
+            if txn.instrument_identifier_kind is None:
+                # A cash-only DIVIDEND row (validate() allows both instrument fields to be
+                # None) has no instrument to resolve -- treated the same as an unresolvable
+                # one, not passed to mappings.resolve, which raises TickerMappingError for any
+                # kind other than "ISIN"/"SYMBOL" rather than returning None for it.
+                continue
             ticker = mappings.resolve(
                 txn.instrument_identifier_kind, txn.instrument_identifier, broker=account.broker
             )
@@ -593,6 +602,16 @@ def rebuild_returns(
                 conn, account_id=account.id, canonical_ticker=ticker
             )
             if not position_snapshots:
+                # list_tickers and list_snapshots are two separate reads of the same table --
+                # a ticker can lose its rows between them (e.g. a concurrent rebuild-positions
+                # run). Reported in `blocked`, same as an untracked ticker, never a silent skip.
+                blocked.append((account.account_label, ticker))
+                logger.warning(
+                    "rebuild-returns: account %r ticker %s -- no position snapshots found "
+                    "(rebuild-positions may not have run yet, or ran concurrently) -- skipping.",
+                    account.account_label,
+                    ticker,
+                )
                 continue
 
             start = position_snapshots[0].as_of_date

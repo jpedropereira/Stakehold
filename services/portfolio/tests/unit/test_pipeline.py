@@ -1679,6 +1679,60 @@ def test_rebuild_returns_excludes_an_unresolvable_dividend_without_blocking_the_
     assert saved.dividends_received_eur == Decimal("0.0000")
 
 
+def test_rebuild_returns_excludes_a_cash_only_dividend_without_aborting_the_run(
+    repos, returns_repo, conn
+):
+    """A DIVIDEND row with no instrument attached at all (instrument_identifier and
+    instrument_identifier_kind both None -- validate() permits this, cli.py's --instrument is
+    optional) must be treated the same as an unresolvable one: silently excluded from
+    dividends_received_eur, not a crash that aborts every other account/ticker in the run."""
+    accounts_repo, transactions_repo, positions_repo = repos
+    user_id = uuid.uuid4()
+    account = _seed_account(accounts_repo, user_id=user_id)
+    positions_repo.snapshots[(account.id, "IWDA.AS")] = [_position_snapshot(account_id=account.id)]
+    transactions_repo.saved.append(
+        _dividend_txn(
+            account_id=account.id, instrument_identifier=None, instrument_identifier_kind=None
+        )
+    )
+    client = FakeDataStoreClient(
+        price_series={
+            "IWDA.AS": [PricePoint(date=date(2026, 1, 6), split_adjusted_close=Decimal("100.00"))]
+        }
+    )
+    mappings = TickerMappings(isin={}, symbol={})
+
+    outcome = pipeline.rebuild_returns(
+        conn, user_id=user_id, mappings=mappings, datastore_client=client
+    )
+
+    assert outcome.blocked == []
+    assert outcome.failed_pairs == []
+    saved = returns_repo.snapshots[(account.id, "IWDA.AS")][date(2026, 1, 6)]
+    assert saved.dividends_received_eur == Decimal("0.0000")
+
+
+def test_rebuild_returns_reports_a_ticker_with_no_position_snapshots_as_blocked(
+    repos, returns_repo, conn
+):
+    """list_tickers and list_snapshots are two separate reads of the same table -- if a ticker
+    list_tickers returned has no rows left by the time list_snapshots runs (e.g. a concurrent
+    rebuild-positions run), that must be reported in `blocked`, never a silent skip."""
+    accounts_repo, transactions_repo, positions_repo = repos
+    user_id = uuid.uuid4()
+    account = _seed_account(accounts_repo, user_id=user_id)
+    positions_repo.snapshots[(account.id, "IWDA.AS")] = []
+    client = FakeDataStoreClient()
+
+    outcome = pipeline.rebuild_returns(
+        conn, user_id=user_id, mappings=TickerMappings(isin={}, symbol={}), datastore_client=client
+    )
+
+    assert outcome.blocked == [(account.account_label, "IWDA.AS")]
+    assert outcome.tickers_rebuilt == 0
+    assert returns_repo.snapshots == {}
+
+
 def test_rebuild_returns_fetches_dividend_transactions_in_one_batched_call(
     repos, returns_repo, conn
 ):
