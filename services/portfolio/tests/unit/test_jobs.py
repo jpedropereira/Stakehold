@@ -8,7 +8,7 @@ import pytest
 from portfolio import jobs
 from portfolio.accounts.repository import Account
 from portfolio.errors import AccountNotFound, TickerMappingError
-from portfolio.pipeline import RebuildOutcome
+from portfolio.pipeline import RebuildOutcome, ReturnsRebuildOutcome
 from portfolio.settings import SettingsError
 from portfolio.ticker_mapping.loader import TickerMappings
 
@@ -908,5 +908,197 @@ def test_run_rebuild_positions_logs_start_before_completion(monkeypatch, caplog)
 
     messages = [r.message for r in caplog.records]
     start_index = next(i for i, m in enumerate(messages) if "rebuilding positions" in m)
+    done_index = next(i for i, m in enumerate(messages) if "done" in m)
+    assert start_index < done_index
+
+
+# --- run_rebuild_returns ---
+
+
+def _patch_returns_job_common(monkeypatch):
+    monkeypatch.setattr(
+        jobs,
+        "load_settings",
+        lambda: _fake_settings(
+            datastore_api_url="http://datastore:8000",
+            internal_api_secret="secret",  # pragma: allowlist secret
+        ),
+    )
+    monkeypatch.setattr(
+        jobs, "load_ticker_mappings", lambda path: TickerMappings(isin={}, symbol={})
+    )
+    fake_conn = _SimpleFakeConnection()
+    monkeypatch.setattr(jobs, "get_connection", lambda url: fake_conn)
+    return fake_conn
+
+
+def test_run_rebuild_returns_reports_ok_with_the_payload(monkeypatch):
+    fake_conn = _patch_returns_job_common(monkeypatch)
+    outcome = ReturnsRebuildOutcome(
+        snapshots_saved=5, tickers_rebuilt=1, blocked=[], failed_pairs=[]
+    )
+    monkeypatch.setattr(jobs.pipeline, "rebuild_returns", lambda conn, **kw: outcome)
+
+    result = jobs.run_rebuild_returns(user_id=uuid.uuid4())
+
+    assert result == {
+        "status": "ok",
+        "rows_saved": 5,
+        "tickers_rebuilt": 1,
+        "tickers_blocked": 0,
+        "pairs_failed": 0,
+        "blocked_tickers": [],
+        "failed_pairs": [],
+    }
+    assert fake_conn.closed is True
+
+
+def test_run_rebuild_returns_reports_nothing_to_do_with_no_tickers(monkeypatch):
+    _patch_returns_job_common(monkeypatch)
+    outcome = ReturnsRebuildOutcome(
+        snapshots_saved=0, tickers_rebuilt=0, blocked=[], failed_pairs=[]
+    )
+    monkeypatch.setattr(jobs.pipeline, "rebuild_returns", lambda conn, **kw: outcome)
+
+    result = jobs.run_rebuild_returns(user_id=uuid.uuid4())
+
+    assert result["status"] == "nothing_to_do"
+
+
+def test_run_rebuild_returns_reports_partial_with_blocked_tickers(monkeypatch):
+    """A ticker data-store doesn't track must flip the run to partial -- never a quiet ok."""
+    _patch_returns_job_common(monkeypatch)
+    outcome = ReturnsRebuildOutcome(
+        snapshots_saved=0, tickers_rebuilt=0, blocked=[("m", "IWDA.AS")], failed_pairs=[]
+    )
+    monkeypatch.setattr(jobs.pipeline, "rebuild_returns", lambda conn, **kw: outcome)
+
+    result = jobs.run_rebuild_returns(user_id=uuid.uuid4())
+
+    assert result["status"] == "partial"
+    assert result["tickers_blocked"] == 1
+    assert result["blocked_tickers"] == [{"account_label": "m", "ticker": "IWDA.AS"}]
+
+
+def test_run_rebuild_returns_reports_partial_with_failed_pairs(monkeypatch):
+    _patch_returns_job_common(monkeypatch)
+    outcome = ReturnsRebuildOutcome(
+        snapshots_saved=0,
+        tickers_rebuilt=0,
+        blocked=[],
+        failed_pairs=[("m", "IWDA.AS", "connection reset")],
+    )
+    monkeypatch.setattr(jobs.pipeline, "rebuild_returns", lambda conn, **kw: outcome)
+
+    result = jobs.run_rebuild_returns(user_id=uuid.uuid4())
+
+    assert result["status"] == "partial"
+    assert result["pairs_failed"] == 1
+    assert result["failed_pairs"] == [
+        {"account_label": "m", "ticker": "IWDA.AS", "error": "connection reset"}
+    ]
+
+
+def test_run_rebuild_returns_reports_partial_on_a_domain_error(monkeypatch):
+    fake_conn = _patch_returns_job_common(monkeypatch)
+
+    def boom(conn, **kw):
+        raise AccountNotFound("nope")
+
+    monkeypatch.setattr(jobs.pipeline, "rebuild_returns", boom)
+
+    result = jobs.run_rebuild_returns(user_id=uuid.uuid4(), account_label="nope")
+
+    assert result == {
+        "status": "partial",
+        "rows_saved": 0,
+        "tickers_rebuilt": 0,
+        "tickers_blocked": 0,
+        "pairs_failed": 0,
+        "blocked_tickers": [],
+        "failed_pairs": [],
+    }
+    assert fake_conn.closed is True
+
+
+def test_run_rebuild_returns_requires_datastore_api_url(monkeypatch):
+    monkeypatch.setattr(
+        jobs,
+        "load_settings",
+        lambda: _fake_settings(datastore_api_url=None, internal_api_secret="secret"),
+    )
+
+    with pytest.raises(SettingsError):
+        jobs.run_rebuild_returns(user_id=uuid.uuid4())
+
+
+def test_run_rebuild_returns_requires_internal_api_secret(monkeypatch):
+    monkeypatch.setattr(
+        jobs,
+        "load_settings",
+        lambda: _fake_settings(datastore_api_url="http://datastore:8000", internal_api_secret=None),
+    )
+
+    with pytest.raises(SettingsError):
+        jobs.run_rebuild_returns(user_id=uuid.uuid4())
+
+
+def test_run_rebuild_returns_builds_the_http_client_from_settings(monkeypatch):
+    _patch_returns_job_common(monkeypatch)
+    captured = {}
+
+    class FakeHttpDataStoreClient:
+        def __init__(self, base_url, internal_api_secret):
+            captured["base_url"] = base_url
+            captured["internal_api_secret"] = internal_api_secret
+
+    monkeypatch.setattr(jobs, "HttpDataStoreClient", FakeHttpDataStoreClient)
+    monkeypatch.setattr(
+        jobs.pipeline,
+        "rebuild_returns",
+        lambda conn, **kw: ReturnsRebuildOutcome(
+            snapshots_saved=0, tickers_rebuilt=0, blocked=[], failed_pairs=[]
+        ),
+    )
+
+    jobs.run_rebuild_returns(user_id=uuid.uuid4())
+
+    assert captured == {
+        "base_url": "http://datastore:8000",
+        "internal_api_secret": "secret",  # pragma: allowlist secret
+    }
+
+
+def test_run_rebuild_returns_passes_the_account_label_through(monkeypatch):
+    _patch_returns_job_common(monkeypatch)
+    captured = {}
+
+    def fake_rebuild(conn, **kw):
+        captured.update(kw)
+        return ReturnsRebuildOutcome(
+            snapshots_saved=0, tickers_rebuilt=0, blocked=[], failed_pairs=[]
+        )
+
+    monkeypatch.setattr(jobs.pipeline, "rebuild_returns", fake_rebuild)
+    user_id = uuid.uuid4()
+
+    jobs.run_rebuild_returns(user_id=user_id, account_label="m")
+
+    assert captured["user_id"] == user_id
+    assert captured["account_label"] == "m"
+
+
+def test_run_rebuild_returns_logs_start_before_completion(monkeypatch, caplog):
+    caplog.set_level(logging.INFO)
+    _patch_returns_job_common(monkeypatch)
+    outcome = ReturnsRebuildOutcome(
+        snapshots_saved=1, tickers_rebuilt=1, blocked=[], failed_pairs=[]
+    )
+    monkeypatch.setattr(jobs.pipeline, "rebuild_returns", lambda conn, **kw: outcome)
+
+    jobs.run_rebuild_returns(user_id=uuid.uuid4())
+
+    messages = [r.message for r in caplog.records]
+    start_index = next(i for i, m in enumerate(messages) if "rebuilding returns" in m)
     done_index = next(i for i, m in enumerate(messages) if "done" in m)
     assert start_index < done_index

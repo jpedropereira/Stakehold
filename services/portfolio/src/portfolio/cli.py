@@ -106,6 +106,18 @@ def _rebuild_positions(args: argparse.Namespace) -> int:
     return _report(result, "position snapshot(s) saved")
 
 
+def _print_blocked_tickers(tickers: list[dict[str, str]]) -> None:
+    for ticker in tickers:
+        print(f"{ticker['account_label']}\t{ticker['ticker']}")
+
+
+def _rebuild_returns(args: argparse.Namespace) -> int:
+    result = jobs.run_rebuild_returns(user_id=args.user, account_label=args.account)
+    _print_blocked_tickers(result["blocked_tickers"])
+    _print_failed_pairs(result["failed_pairs"])
+    return _report(result, "return snapshot(s) saved")
+
+
 def _list_unmapped_instruments(args: argparse.Namespace) -> int:
     result = jobs.run_list_unmapped_instruments(user_id=args.user)
     _print_instrument_rows(result["unmapped_instruments"])
@@ -239,6 +251,15 @@ def _build_parser() -> argparse.ArgumentParser:
         "--account", help="The --label of one account to rebuild; omit to rebuild every account"
     )
     positions_parser.set_defaults(handler=_rebuild_positions)
+
+    returns_parser = subparsers.add_parser(
+        "rebuild-returns", help="Compute return snapshots from positions, prices, FX and dividends"
+    )
+    returns_parser.add_argument("--user", required=True, type=_uuid, help="The auth-issued user id")
+    returns_parser.add_argument(
+        "--account", help="The --label of one account to rebuild; omit to rebuild every account"
+    )
+    returns_parser.set_defaults(handler=_rebuild_returns)
 
     return parser
 

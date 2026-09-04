@@ -76,16 +76,34 @@ CREATE TABLE IF NOT EXISTS position_snapshots (
 -- Derived, materialized, rebuildable. Daily grain, unlike position_snapshots: a return moves
 -- every priced day even with no transactions, mirroring data-store's market_returns.
 CREATE TABLE IF NOT EXISTS return_snapshots (
-    account_id             BIGINT        NOT NULL REFERENCES accounts (id),
-    canonical_ticker       VARCHAR(20)   NOT NULL,
-    price_date             DATE          NOT NULL,
-    quantity               NUMERIC(20,6) NOT NULL,
-    market_value_native    NUMERIC(20,4) NOT NULL,
-    market_value_eur       NUMERIC(20,4) NOT NULL,
-    cost_basis_eur         NUMERIC(20,4) NOT NULL,
-    unrealized_return_eur  NUMERIC(20,4) NOT NULL,
+    account_id              BIGINT        NOT NULL REFERENCES accounts (id),
+    canonical_ticker        VARCHAR(20)   NOT NULL,
+    price_date              DATE          NOT NULL,
+    quantity                NUMERIC(20,6) NOT NULL,
+    market_value_native     NUMERIC(20,4) NOT NULL,
+    market_value_eur        NUMERIC(20,4) NOT NULL,
+    cost_basis_eur          NUMERIC(20,4) NOT NULL,
+    -- Price-only -- market_value_eur minus cost_basis_eur. Dividends deliberately do not enter
+    -- this column; see dividends_received_eur/total_return_eur below (docs/schema.md).
+    unrealized_return_eur   NUMERIC(20,4) NOT NULL,
     -- Nullable on purpose: undefined, not zero, when a position closes to a zero cost basis.
-    unrealized_return_pct  NUMERIC(18,8),
-    calculated_at          TIMESTAMPTZ   NOT NULL DEFAULT now(),
+    unrealized_return_pct   NUMERIC(18,8),
+    -- Signed cumulative sum of this (account, ticker)'s DIVIDEND-type transactions.eur_amount
+    -- up to and including price_date -- already EUR, frozen at transaction time, so this needs
+    -- no FX arithmetic. See docs/schema.md.
+    dividends_received_eur  NUMERIC(20,4) NOT NULL DEFAULT 0,
+    -- unrealized_return_eur + dividends_received_eur: price change plus the income the
+    -- position produced.
+    total_return_eur        NUMERIC(20,4) NOT NULL DEFAULT 0,
+    -- Nullable on the same rule as unrealized_return_pct.
+    total_return_pct        NUMERIC(18,8),
+    calculated_at           TIMESTAMPTZ   NOT NULL DEFAULT now(),
     PRIMARY KEY (account_id, canonical_ticker, price_date)
 );
+
+-- Migrates a database created before dividends were added to return_snapshots (tasks 1-7).
+-- ADD COLUMN IF NOT EXISTS is already idempotent -- no DO $$ guard needed, unlike a type change.
+ALTER TABLE return_snapshots
+    ADD COLUMN IF NOT EXISTS dividends_received_eur NUMERIC(20,4) NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS total_return_eur       NUMERIC(20,4) NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS total_return_pct       NUMERIC(18,8);

@@ -27,6 +27,14 @@ _INSERT_SQL = """
 
 _LIST_TICKERS_SQL = "SELECT DISTINCT canonical_ticker FROM position_snapshots WHERE account_id = %s"
 
+_LIST_SNAPSHOTS_SQL = """
+    SELECT account_id, canonical_ticker, as_of_date, quantity, average_cost_native,
+           native_currency, average_cost_eur, cost_basis_eur
+    FROM position_snapshots
+    WHERE account_id = %s AND canonical_ticker = %s
+    ORDER BY as_of_date
+"""
+
 
 def replace_snapshots(
     conn, *, account_id: int, canonical_ticker: str, snapshots: Sequence[PositionSnapshot]
@@ -71,3 +79,12 @@ def delete_snapshots(conn, *, account_id: int, canonical_ticker: str) -> int:
     with conn.cursor() as cur:
         cur.execute(_DELETE_SQL, (account_id, canonical_ticker))
         return cur.rowcount
+
+
+def list_snapshots(conn, *, account_id: int, canonical_ticker: str) -> list[PositionSnapshot]:
+    """Every stored snapshot for one (account, ticker), oldest first -- the position's full
+    history, needed by rebuild_returns to know quantity/cost_basis_eur as of each priced day."""
+    with conn.cursor() as cur:
+        cur.execute(_LIST_SNAPSHOTS_SQL, (account_id, canonical_ticker))
+        rows = cur.fetchall()
+    return [PositionSnapshot(*row) for row in rows]

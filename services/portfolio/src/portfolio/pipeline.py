@@ -10,7 +10,7 @@ service.py's repository modules.
 
 import logging
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 from uuid import UUID
@@ -22,7 +22,7 @@ from portfolio.broker_import.discovery import (
     discover_broker_parsers,
     discover_cashflow_parsers,
 )
-from portfolio.datastore_client.base import DataStoreClient
+from portfolio.datastore_client.base import DataStoreClient, TickerInfo
 from portfolio.errors import (
     AccountLabelConflict,
     AccountNotFound,
@@ -33,6 +33,8 @@ from portfolio.errors import (
 )
 from portfolio.positions import repository as positions_repository
 from portfolio.positions.calculator import replay
+from portfolio.returns import repository as returns_repository
+from portfolio.returns.calculator import DividendEvent, compute_returns
 from portfolio.ticker_mapping.loader import TickerMappings
 from portfolio.transactions import repository as transactions_repository
 from portfolio.transactions.base import (
@@ -477,5 +479,189 @@ def rebuild_positions(
         blocked=sorted(set(blocked)),
         anomalies=anomalies,
         positions_with_anomalies=positions_with_anomalies,
+        failed_pairs=failed_pairs,
+    )
+
+
+_DIVIDEND_TYPES = ("DIVIDEND",)
+
+
+@dataclass(frozen=True)
+class ReturnsRebuildOutcome:
+    snapshots_saved: int
+    tickers_rebuilt: int
+    blocked: list[tuple[str, str]]  # (account_label, canonical_ticker) -- not tracked by data-store
+    failed_pairs: list[tuple[str, str, str]]  # (account_label, canonical_ticker, error message)
+
+
+def rebuild_returns(
+    conn,
+    *,
+    user_id: UUID,
+    mappings: TickerMappings,
+    datastore_client: DataStoreClient,
+    account_label: str | None = None,
+) -> ReturnsRebuildOutcome:
+    """Compute return_snapshots for every (account, ticker) pair that ever had a position,
+    from position_snapshots plus data-store's price/FX series plus this pair's own DIVIDEND
+    transactions (docs/architecture.md's cross-service prerequisite; docs/schema.md's
+    return_snapshots columns).
+
+    Scoped per account, same as rebuild_positions: an --account rebuilds only that account
+    (raising AccountNotFound if it doesn't resolve for this user), omitting it rebuilds every
+    account this user owns. `mappings` is needed here for exactly one thing --
+    canonical_ticker itself is already resolved on position_snapshots -- resolving each
+    DIVIDEND transaction's instrument to the same canonical_ticker its BUY/SELL rows resolved
+    to, via the same mappings.resolve rebuild_positions already uses. A DIVIDEND row that
+    doesn't resolve -- including a cash-only row with no instrument attached at all, which
+    validate() permits and mappings.resolve can't be called on -- is silently excluded from
+    dividends_received_eur, the same sharp edge already documented for positions (an instrument
+    split across a mapped and an unmapped identifier kind for one broker) -- it does not block
+    the pair, since the ticker may still be fully rebuildable from its BUY/SELL rows.
+
+    A ticker data-store has never ingested, or has no computed returns for (`get_ticker_info`),
+    or that has no position_snapshots rows left by the time they're read here (list_tickers and
+    the snapshot read are two separate queries, so a concurrent rebuild-positions run can empty
+    one between them), blocks only that (account, ticker) pair -- reported in `blocked`, never a
+    silent skip, same "never a silent skip" contract rebuild_positions established for unmapped
+    instruments. A `DataStoreApiError` (or any other failure) fetching or saving one pair is
+    caught, logged, and reported in `failed_pairs` rather than aborting every other account/ticker
+    still left to process -- deliberately broader than rebuild_positions's own per-pair catch,
+    which only wraps driver-level exceptions: this is the first rebuild flow with an HTTP
+    dependency, and a data-store call failing for one ticker must not abort the run any more than
+    a bad database write would.
+
+    The window fetched per pair is bounded, not open-ended (docs/architecture.md's ReturnSnapshot
+    note): from the position's first stored snapshot (always its opening date) through today if
+    still open, or through its closing date if the latest snapshot shows zero quantity --
+    `compute_returns` itself never invents a date outside what data-store's price series actually
+    returns for that window.
+    """
+    if account_label is not None:
+        accounts = [_resolve_account(conn, user_id=user_id, account_label=account_label)]
+    else:
+        accounts = accounts_repository.list_by_user(conn, user_id)
+
+    dividend_txns_by_account = transactions_repository.list_by_accounts(
+        conn, [account.id for account in accounts], transaction_types=_DIVIDEND_TYPES
+    )
+
+    blocked: list[tuple[str, str]] = []
+    failed_pairs: list[tuple[str, str, str]] = []
+    snapshots_saved = 0
+    tickers_rebuilt = 0
+    ticker_info_cache: dict[str, TickerInfo] = {}
+
+    for account in accounts:
+        dividends_by_ticker: dict[str, list[DividendEvent]] = {}
+        for txn in dividend_txns_by_account.get(account.id, []):
+            if txn.instrument_identifier_kind is None:
+                # A cash-only DIVIDEND row (validate() allows both instrument fields to be
+                # None) has no instrument to resolve -- treated the same as an unresolvable
+                # one, not passed to mappings.resolve, which raises TickerMappingError for any
+                # kind other than "ISIN"/"SYMBOL" rather than returning None for it.
+                continue
+            ticker = mappings.resolve(
+                txn.instrument_identifier_kind, txn.instrument_identifier, broker=account.broker
+            )
+            if ticker is None:
+                continue
+            dividends_by_ticker.setdefault(ticker, []).append(
+                DividendEvent(
+                    date=txn.trade_datetime.astimezone(UTC).date(), eur_amount=txn.eur_amount
+                )
+            )
+
+        for ticker in positions_repository.list_tickers(conn, account.id):
+            if ticker not in ticker_info_cache:
+                try:
+                    ticker_info_cache[ticker] = datastore_client.get_ticker_info(ticker)
+                except Exception as exc:
+                    failed_pairs.append((account.account_label, ticker, str(exc)))
+                    logger.error(
+                        "rebuild-returns: account %r ticker %s -- failed to check data-store "
+                        "for ticker info -- %s",
+                        account.account_label,
+                        ticker,
+                        exc,
+                        exc_info=True,
+                    )
+                    continue
+
+            ticker_info = ticker_info_cache[ticker]
+            if not ticker_info.exists or not ticker_info.has_returns:
+                blocked.append((account.account_label, ticker))
+                logger.warning(
+                    "rebuild-returns: ticker %s has no computed returns in data-store -- check "
+                    "it's tracked and calculate-returns has run for it.",
+                    ticker,
+                )
+                continue
+
+            position_snapshots = positions_repository.list_snapshots(
+                conn, account_id=account.id, canonical_ticker=ticker
+            )
+            if not position_snapshots:
+                # list_tickers and list_snapshots are two separate reads of the same table --
+                # a ticker can lose its rows between them (e.g. a concurrent rebuild-positions
+                # run). Reported in `blocked`, same as an untracked ticker, never a silent skip.
+                blocked.append((account.account_label, ticker))
+                logger.warning(
+                    "rebuild-returns: account %r ticker %s -- no position snapshots found "
+                    "(rebuild-positions may not have run yet, or ran concurrently) -- skipping.",
+                    account.account_label,
+                    ticker,
+                )
+                continue
+
+            start = position_snapshots[0].as_of_date
+            end = (
+                position_snapshots[-1].as_of_date
+                if position_snapshots[-1].quantity == 0
+                else date.today()
+            )
+
+            try:
+                prices = datastore_client.get_price_series(ticker, start, end)
+                currencies = {s.native_currency for s in position_snapshots} - {"EUR"}
+                fx_rates = {
+                    currency: datastore_client.get_fx_rate_series("EUR", currency, start, end)
+                    for currency in currencies
+                }
+                return_snapshots = compute_returns(
+                    account.id,
+                    ticker,
+                    position_snapshots,
+                    prices,
+                    fx_rates,
+                    dividends_by_ticker.get(ticker, []),
+                )
+                with transaction(conn):
+                    saved = returns_repository.upsert_snapshots(conn, return_snapshots)
+            except Exception as exc:
+                failed_pairs.append((account.account_label, ticker, str(exc)))
+                logger.error(
+                    "rebuild-returns: account %r ticker %s -- failed to compute/save return "
+                    "snapshots -- %s",
+                    account.account_label,
+                    ticker,
+                    exc,
+                    exc_info=True,
+                )
+                continue
+
+            snapshots_saved += saved
+            tickers_rebuilt += 1
+            logger.info(
+                "rebuild-returns: account %r ticker %s -- %d return snapshot(s) saved.",
+                account.account_label,
+                ticker,
+                saved,
+            )
+
+    return ReturnsRebuildOutcome(
+        snapshots_saved=snapshots_saved,
+        tickers_rebuilt=tickers_rebuilt,
+        blocked=sorted(set(blocked)),
         failed_pairs=failed_pairs,
     )

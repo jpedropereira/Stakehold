@@ -191,7 +191,25 @@ Derived, materialized, rebuildable.
 | `cost_basis_eur` | `NUMERIC(20,4) NOT NULL` | Carried from `position_snapshots.cost_basis_eur`. |
 | `unrealized_return_eur` | `NUMERIC(20,4) NOT NULL` | `market_value_eur - cost_basis_eur`. |
 | `unrealized_return_pct` | `NUMERIC(18,8)` | `unrealized_return_eur / cost_basis_eur`. Nullable — undefined (not zero) when `cost_basis_eur = 0`, i.e. the row for the trading day a position sells down to zero quantity. That row is still written (the position was open that day), but no further rows follow it — see `architecture.md`'s bounded-grain note on `ReturnSnapshot`. |
+| `dividends_received_eur` | `NUMERIC(20,4) NOT NULL DEFAULT 0` | **Added at task 8, amending this table's original sign-off.** Cumulative signed sum of this `(account_id, canonical_ticker)`'s `DIVIDEND`-type `transactions.eur_amount` with `trade_datetime` (date, UTC) `<= price_date`. Needs no FX arithmetic at all — `eur_amount` is already frozen in EUR at transaction time (this table's own "immutable source of truth" convention, same as `transactions`), so this is a running sum over already-stored data, never a `datastore_client` call. A signed sum also nets out withholding tax automatically **if** the broker plugin types that tax as its own negative `DIVIDEND` row; if a plugin instead types it as a `FEE`, it isn't captured here — `FEE`/`ADJUSTMENT` still feed nothing, the same open gap as the missing `realized_gains` table below. |
+| `total_return_eur` | `NUMERIC(20,4) NOT NULL DEFAULT 0` | **Added at task 8.** `unrealized_return_eur + dividends_received_eur` — price change plus the income the position produced. `unrealized_return_eur` deliberately stays price-only; this is the separate "what did this holding actually return" figure, mirroring how `market_returns` keeps `price_return` and `simple_return` (price+dividend) as separate columns rather than merging them. |
+| `total_return_pct` | `NUMERIC(18,8)` | **Added at task 8.** `total_return_eur / cost_basis_eur`. Nullable on exactly the same rule as `unrealized_return_pct`: undefined, not zero, when `cost_basis_eur = 0`. |
 | `calculated_at` | `TIMESTAMPTZ NOT NULL DEFAULT now()` | Bumped on every upsert, same convention as `market_returns.calculated_at` — reflects the last rebuild, not the first. |
+
+**The three dividend columns above are a schema amendment made mid-task 8, not part of the
+original sign-off.** The table as originally designed computed only mark-to-market return
+(`unrealized_return_eur`), with no path for `DIVIDEND` transactions at all — an oversight against
+`architecture.md`'s own task-7 note that cash events are "left entirely to `returns/`." Per
+[`data-schema.md`](../../../.claude/rules/data-schema.md) this addition was proposed and signed
+off before being written: three new columns only (`dividends_received_eur`, `total_return_eur`,
+`total_return_pct`), no other table, index, or key touched. `db/schema.sql` carries both the
+updated `CREATE TABLE IF NOT EXISTS` (so a fresh database gets the columns in their natural
+position) and an idempotent `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` below it (so a database
+created during tasks 1–7 gets migrated on its next `portfolio db init`) — the same
+pattern data-store's `etf_holdings.weight_percent` widening uses, minus the `DO $$` existence
+guard a plain column addition doesn't need. The `NOT NULL DEFAULT 0` on the two non-nullable new
+columns never actually backfills a real row: `return_snapshots` had no writer at all before task
+8, so every pre-task-8 database's table is empty.
 
 `PRIMARY KEY (account_id, canonical_ticker, price_date)`.
 
@@ -214,10 +232,21 @@ extending past that point.
   against a real multi-currency same-ticker case in a single account — only exercised by tests.
 - **The `data-store` read API** this schema's `return_snapshots` rebuild depends on now exists
   (task 3 of [`tasks.md`](../../../tasks.md)) — see `architecture.md`'s cross-service prerequisite.
-  Portfolio's own `datastore_client/http_client.py` now exists too, but only its `get_fx_rate`
-  method (task 14, pulled forward for Acme's cash-ledger import); the price-series and
-  ticker-existence methods `return_snapshots`'s rebuild needs are still the returns task's own
-  work. `accounts`, `transactions`, and `position_snapshots` need nothing from it either way.
+  **Built as of task 8**: `datastore_client/http_client.py`'s `get_price_series`,
+  `get_fx_rate_series`, and `get_ticker_info`, alongside `get_fx_rate` (task 14). `accounts`,
+  `transactions`, and `position_snapshots` need nothing from it either way.
+- **`dividends_received_eur`'s signed-sum netting depends on how a broker plugin classifies
+  withholding tax** (task 8): a tax row typed as `DIVIDEND` (even negative) nets out correctly; one
+  typed as `FEE` doesn't get captured at all, since `FEE`/`ADJUSTMENT` still feed nothing. Worth
+  checking against each installed plugin's own row classification, documented in that plugin's own
+  repo (see `architecture.md`'s "Extension points" section), not assumed here.
+- **A `DIVIDEND` transaction's instrument can fail to resolve to the same `canonical_ticker` its
+  `BUY`/`SELL` rows did** (task 8), the identical sharp edge `architecture.md` already documents
+  for `position_snapshots`: if one account's dividend rows for a holding arrive under a different,
+  unmapped identifier kind than its trade rows, that dividend is silently excluded from
+  `dividends_received_eur` rather than blocking the ticker's rebuild. Fixed the same way — map
+  every identifier kind a broker actually emits for an instrument in
+  `configs/ticker_mappings.yaml` — not in code.
 - **The YAML → database migration path for ticker mappings**, once a UI exists, isn't designed
   yet — see `architecture.md`'s cross-cutting decision on ticker-mapping storage.
 - **`accounts.user_id` is unvalidated at write time.** There's no foreign key (no local `users`

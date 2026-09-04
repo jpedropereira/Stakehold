@@ -991,3 +991,162 @@ def test_rebuild_positions_requires_the_user_flag():
 def test_rebuild_positions_rejects_a_malformed_user_id():
     with pytest.raises(SystemExit):
         cli.main(["rebuild-positions", "--user", "not-a-uuid"])
+
+
+# --- rebuild-returns ---
+
+
+def test_rebuild_returns_dispatches_with_converted_user_id_and_no_account(monkeypatch):
+    captured = {}
+
+    def fake_run(*, user_id, account_label):
+        captured["user_id"] = user_id
+        captured["account_label"] = account_label
+        return {
+            "status": "nothing_to_do",
+            "rows_saved": 0,
+            "tickers_rebuilt": 0,
+            "tickers_blocked": 0,
+            "pairs_failed": 0,
+            "blocked_tickers": [],
+            "failed_pairs": [],
+        }
+
+    monkeypatch.setattr(cli.jobs, "run_rebuild_returns", fake_run)
+    user_id = uuid.uuid4()
+
+    cli.main(["rebuild-returns", "--user", str(user_id)])
+
+    assert captured == {"user_id": user_id, "account_label": None}
+
+
+def test_rebuild_returns_passes_the_optional_account_label(monkeypatch):
+    captured = {}
+
+    def fake_run(*, user_id, account_label):
+        captured["account_label"] = account_label
+        return {
+            "status": "ok",
+            "rows_saved": 1,
+            "tickers_rebuilt": 1,
+            "tickers_blocked": 0,
+            "pairs_failed": 0,
+            "blocked_tickers": [],
+            "failed_pairs": [],
+        }
+
+    monkeypatch.setattr(cli.jobs, "run_rebuild_returns", fake_run)
+
+    cli.main(["rebuild-returns", "--user", str(uuid.uuid4()), "--account", "main"])
+
+    assert captured["account_label"] == "main"
+
+
+def test_rebuild_returns_prints_blocked_tickers_then_the_count(monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli.jobs,
+        "run_rebuild_returns",
+        lambda **kw: {
+            "status": "partial",
+            "rows_saved": 1,
+            "tickers_rebuilt": 1,
+            "tickers_blocked": 1,
+            "pairs_failed": 0,
+            "blocked_tickers": [{"account_label": "m", "ticker": "IWDA.AS"}],
+            "failed_pairs": [],
+        },
+    )
+
+    cli.main(["rebuild-returns", "--user", str(uuid.uuid4())])
+
+    out = capsys.readouterr().out
+    assert out == "m\tIWDA.AS\n1 return snapshot(s) saved\n"
+
+
+def test_rebuild_returns_prints_failed_pairs_then_the_count(monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli.jobs,
+        "run_rebuild_returns",
+        lambda **kw: {
+            "status": "partial",
+            "rows_saved": 0,
+            "tickers_rebuilt": 0,
+            "tickers_blocked": 0,
+            "pairs_failed": 1,
+            "blocked_tickers": [],
+            "failed_pairs": [
+                {"account_label": "m", "ticker": "IWDA.AS", "error": "connection reset"}
+            ],
+        },
+    )
+
+    cli.main(["rebuild-returns", "--user", str(uuid.uuid4())])
+
+    out = capsys.readouterr().out
+    assert out == "m\tIWDA.AS\tconnection reset\n0 return snapshot(s) saved\n"
+
+
+def test_rebuild_returns_prints_only_the_count_when_nothing_blocked(monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli.jobs,
+        "run_rebuild_returns",
+        lambda **kw: {
+            "status": "ok",
+            "rows_saved": 3,
+            "tickers_rebuilt": 1,
+            "tickers_blocked": 0,
+            "pairs_failed": 0,
+            "blocked_tickers": [],
+            "failed_pairs": [],
+        },
+    )
+
+    cli.main(["rebuild-returns", "--user", str(uuid.uuid4())])
+
+    assert capsys.readouterr().out == "3 return snapshot(s) saved\n"
+
+
+def test_rebuild_returns_exits_zero_when_nothing_to_do(monkeypatch):
+    monkeypatch.setattr(
+        cli.jobs,
+        "run_rebuild_returns",
+        lambda **kw: {
+            "status": "nothing_to_do",
+            "rows_saved": 0,
+            "tickers_rebuilt": 0,
+            "tickers_blocked": 0,
+            "pairs_failed": 0,
+            "blocked_tickers": [],
+            "failed_pairs": [],
+        },
+    )
+
+    assert cli.main(["rebuild-returns", "--user", str(uuid.uuid4())]) == 0
+
+
+def test_rebuild_returns_exits_nonzero_when_partial(monkeypatch):
+    monkeypatch.setattr(
+        cli.jobs,
+        "run_rebuild_returns",
+        lambda **kw: {
+            "status": "partial",
+            "rows_saved": 0,
+            "tickers_rebuilt": 0,
+            "tickers_blocked": 1,
+            "pairs_failed": 0,
+            "blocked_tickers": [{"account_label": "m", "ticker": "IWDA.AS"}],
+            "failed_pairs": [],
+        },
+    )
+
+    assert cli.main(["rebuild-returns", "--user", str(uuid.uuid4())]) == 1
+
+
+def test_rebuild_returns_requires_the_user_flag():
+    with pytest.raises(SystemExit):
+        cli.main(["rebuild-returns"])
+
+
+def test_rebuild_returns_rejects_a_malformed_user_id():
+    with pytest.raises(SystemExit):
+        cli.main(["rebuild-returns", "--user", "not-a-uuid"])

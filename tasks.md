@@ -25,8 +25,8 @@ one-time snapshot.
 | 5 | [Accounts & manual transactions](#5-accounts--manual-transactions) | 4 | done |
 | 6 | [Broker import](#6-broker-import) | 5 | done |
 | 7 | [Positions](#7-positions) | 6 | done |
-| 8 | [Returns](#8-returns) | 7, 3 | ready |
-| 9 | [Portfolio HTTP API](#9-portfolio-http-api) | 5, 6, 7, 8 | blocked |
+| 8 | [Returns](#8-returns) | 7, 3 | done |
+| 9 | [Portfolio HTTP API](#9-portfolio-http-api) | 5, 6, 7, 8 | ready |
 | 10 | [Web foundation & auth pages](#10-web-foundation--auth-pages) | 2 | done |
 | 11 | [Portfolio entry UI](#11-portfolio-entry-ui) | 10, 9 | blocked |
 | 12 | [Portfolio view UI](#12-portfolio-view-ui) | 11 | blocked |
@@ -34,10 +34,9 @@ one-time snapshot.
 | 14 | [Broker cash-ledger import](#14-broker-cash-ledger-import) | 6 | done |
 | 15 | [Extract broker-parser plugins to a private repo](#15-extract-broker-parser-plugins-to-a-private-repo) | 6, 14 | done |
 
-One task is `ready` today: **8** (returns), unblocked since both its dependencies — 7 (positions)
-and 3 (data-store read API) — are now `done`. **9** stays `blocked` — it depends on 5, 6, 7 (all
-`done`) and 8 (not yet `done`, only `ready`). **11** stays `blocked` too — it depends on both 10
-(now `done`) and 9 (portfolio HTTP API, still `blocked`).
+One task is `ready` today: **9** (portfolio HTTP API), unblocked now that 5, 6, 7, and 8 (returns)
+are all `done`. **11** stays `blocked` — it depends on both 10 (`done`) and 9 (`ready`, not yet
+`done`).
 
 ## Tasks
 
@@ -224,19 +223,69 @@ fake can't prove, `--account` scoping, the whole-portfolio case rebuilding every
 batched fetch, per-user isolation, an unmapped instrument blocking with exit code 1, and a bad
 `--account` label exiting cleanly rather than crashing).
 
-### 8. Returns
+### 8. Returns — done
 
-`datastore_client/base.py` (the `DataStoreClient` Protocol) and `http_client.py` (the real
-implementation, calling task 3's API) already exist as of task 14, pulled forward because a
-cash-ledger import needed an FX lookup — but only `get_fx_rate` (a single-date lookup) is built.
-This task extends `http_client.py` with the price-series and ticker-existence methods (`GET
-/prices/{ticker}`, `GET /tickers/{ticker}`) and, if a whole-range FX signature turns out cleaner
-for `returns/calculator.py`'s needs than repeated single-date `get_fx_rate` calls, widens that too
-— not a from-scratch build. `returns/calculator.py` (pure, takes prices/FX as plain data) +
-`repository.py` (true upsert, matching `market_returns`'s grid shape). Flow: `rebuild-returns`.
-Tests (a stub `DataStoreClient` covers everything except the real HTTP client against a live
-task-3 endpoint, which `datastore_client/http_client.py`'s own unit tests — faking `requests.get`,
-not a live instance — already cover for `get_fx_rate`).
+`datastore_client/http_client.py` extended with `get_price_series`, `get_fx_rate_series`, and
+`get_ticker_info` (`GET /prices/{ticker}`, `GET /fx/{base}/{quote}` widened to a range, `GET
+/tickers/{ticker}`), alongside `get_fx_rate` (task 14, untouched). `get_fx_rate_series` was built
+as a new sibling method rather than reusing single-date `get_fx_rate` per priced day — one HTTP
+call per `(account, ticker)` pair needing FX conversion, not one per date, given a rebuild can
+span years of daily prices. New `returns/calculator.py` (pure `compute_returns`, no I/O) +
+`returns/repository.py` (`upsert_snapshots`, a true upsert matching `market_returns`'s loading
+strategy). New `positions/repository.py` read: `list_snapshots(account_id, canonical_ticker)`,
+the position's full history — needed to know quantity/cost basis as of each priced day. New
+`pipeline.rebuild_returns` / `jobs.run_rebuild_returns` / `rebuild-returns --user <id> [--account
+<label>]`, mirroring `rebuild_positions`'s shape: a ticker data-store doesn't track (or has no
+computed returns for) blocks only that `(account, ticker)` pair, loudly, via a new
+`get_ticker_info` pre-check cached per ticker for the run; a `DataStoreApiError` (or any other
+failure) fetching or saving one pair is caught and reported in `failed_pairs` rather than
+aborting the run — deliberately broader than `rebuild_positions`'s own per-pair catch, since this
+is the first rebuild flow with an HTTP dependency.
+
+**One design decision the original scope explicitly left open, settled during implementation**:
+whether to widen `get_fx_rate` to a range signature or add a new sibling method. Went with a new
+`get_fx_rate_series`, leaving `get_fx_rate` untouched for `import-cashflow`'s existing single-date
+use — see `docs/architecture.md`'s cross-service prerequisite section for the full reasoning.
+
+**A gap in the original design surfaced during planning, requiring a schema amendment, not just
+new code**: as originally signed off, `return_snapshots` computed only mark-to-market return
+(`unrealized_return_eur`) with no path for `DIVIDEND` transactions at all — contradicting
+`docs/architecture.md`'s own task-7 note that cash events are "left entirely to `returns/`."
+Total return is price change plus dividends received, so three columns were added to
+`return_snapshots` — `dividends_received_eur`, `total_return_eur`, `total_return_pct` — proposed
+and signed off per [`data-schema.md`](.claude/rules/data-schema.md) before being written.
+`unrealized_return_eur`/`unrealized_return_pct` are unchanged, kept as the pure price-only
+figures; `db/schema.sql` carries both the updated `CREATE TABLE` (for a fresh database) and an
+idempotent `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` (to migrate a database created during tasks
+1–7), the same pattern data-store's `etf_holdings.weight_percent` widening used. The practical
+consequence for `rebuild_returns`: it needs `mappings: TickerMappings` after all, to resolve each
+`DIVIDEND` transaction's `instrument_identifier`/`kind` to the same `canonical_ticker` its
+account's `BUY`/`SELL` rows resolved to — `position_snapshots.canonical_ticker` being pre-resolved
+doesn't help here, since dividends are read from `transactions` directly. A `DIVIDEND` row that
+doesn't resolve is silently excluded from `dividends_received_eur` rather than blocking the
+ticker — the same sharp edge already documented for positions (an instrument split across a
+mapped and an unmapped identifier kind for one broker), not a new one. `FEE`/`ADJUSTMENT` rows
+still feed nothing anywhere in the service — an explicit, open gap, same status as the
+already-flagged missing `realized_gains` table.
+
+Tests: `tests/unit/datastore_client/test_http_client.py` (the three new methods, faking
+`requests.get`, same convention `get_fx_rate`'s own tests use); `tests/unit/returns/
+{test_calculator,test_repository}.py` (pure-function coverage including EUR/non-EUR conversion, a
+price date preceding any FX point being skipped rather than zeroed, the zero-cost-basis → `None`
+pct rule, dividend accumulation including a reopened-position case, and the true-upsert SQL
+shape); `tests/unit/positions/test_repository.py` (the new `list_snapshots` read);
+`tests/unit/test_pipeline.py` (`rebuild_returns` against fake repositories and a fake
+`DataStoreClient` — ticker-existence blocking, an isolated failure per pair, the bounded window
+for an open vs. closed position, `DIVIDEND` resolution via `mappings`, and the batched
+dividend-transaction fetch); `tests/unit/{test_jobs,test_cli}.py` (the settings guard, run-result
+shape, and CLI wiring, mirroring `rebuild-positions`'s own tests);
+`tests/integration/test_rebuild_returns.py` (live Postgres, seeded through the real CLI stack —
+the true-upsert contract a fake can't prove, a closed position's window stopping at the closing
+date, an untracked ticker blocking with exit code 1, `--account` scoping, per-user isolation, and
+a real `DIVIDEND` transaction flowing through to `dividends_received_eur`/`total_return_eur` —
+with `jobs.HttpDataStoreClient` monkeypatched to a stub, matching task 14's own
+`test_cashflow_import.py` precedent that the real HTTP path is `http_client.py`'s own unit tests'
+job).
 
 ### 9. Portfolio HTTP API
 
