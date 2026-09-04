@@ -127,3 +127,6 @@ jobs:
           # `db init` uses it once to create the `portfolio` role below, itself.
           APP_POSTGRES_ADMIN_DATABASE_URL: postgresql://app_postgres_admin:ci-throwaway-admin@localhost:5435/app  # pragma: allowlist secret
           PORTFOLIO_DATABASE_URL: postgresql://portfolio:ci-throwaway@localhost:5435/app  # pragma: allowlist secret
+          # portfolio's own HTTP API inbound secret (task 9) -- separate from AUTH_INTERNAL_SECRET
+          # above, matching the same inbound/outbound split settings.py documents.
+          PORTFOLIO_INTERNAL_SECRET: ci-throwaway-portfolio-internal-secret  # pragma: allowlist secret

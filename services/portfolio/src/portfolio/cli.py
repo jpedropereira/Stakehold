@@ -125,6 +125,18 @@ def _list_unmapped_instruments(args: argparse.Namespace) -> int:
     return _report(result, "instrument(s) unmapped", count_key="instruments_unmapped")
 
 
+def _serve(_args: argparse.Namespace) -> int:
+    # Imported lazily so every other command doesn't pay for importing FastAPI/uvicorn --
+    # only `portfolio serve` needs them. Mirrors auth's cli.py._serve.
+    import uvicorn
+    from portfolio.api.app import create_app
+    from portfolio.settings import load_settings
+
+    settings = load_settings()
+    uvicorn.run(create_app(settings), host=settings.api_host, port=settings.api_port)
+    return 0
+
+
 def _add_transaction(args: argparse.Namespace) -> int:
     result = jobs.run_add_transaction(
         user_id=args.user,
@@ -261,6 +273,9 @@ def _build_parser() -> argparse.ArgumentParser:
         "--account", help="The --label of one account to rebuild; omit to rebuild every account"
     )
     returns_parser.set_defaults(handler=_rebuild_returns)
+
+    serve_parser = subparsers.add_parser("serve", help="Run the HTTP API")
+    serve_parser.set_defaults(handler=_serve)
 
     return parser
 

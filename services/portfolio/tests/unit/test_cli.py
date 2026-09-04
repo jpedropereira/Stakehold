@@ -1167,3 +1167,28 @@ def test_rebuild_returns_requires_the_user_flag():
 def test_rebuild_returns_rejects_a_malformed_user_id():
     with pytest.raises(SystemExit):
         cli.main(["rebuild-returns", "--user", "not-a-uuid"])
+
+
+# --- serve ---
+
+
+def test_serve_dispatches_to_uvicorn_with_settings(monkeypatch):
+    captured = {}
+
+    fake_settings = type(
+        "S", (), {"api_host": "127.0.0.1", "api_port": 9002, "database_url": "postgresql://x"}
+    )()
+    fake_app = object()
+
+    monkeypatch.setattr("portfolio.settings.load_settings", lambda: fake_settings)
+    monkeypatch.setattr("portfolio.api.app.create_app", lambda settings: fake_app)
+
+    def fake_run(app, *, host, port):
+        captured["app"] = app
+        captured["host"] = host
+        captured["port"] = port
+
+    monkeypatch.setattr("uvicorn.run", fake_run)
+
+    assert cli.main(["serve"]) == 0
+    assert captured == {"app": fake_app, "host": "127.0.0.1", "port": 9002}
