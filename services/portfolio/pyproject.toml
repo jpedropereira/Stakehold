@@ -4,11 +4,14 @@ version = "0.1.0"
 description = "Portfolio service"
 requires-python = ">=3.14"
 dependencies = [
+    "fastapi>=0.115",
     "psycopg[binary]>=3.3",
     "python-dotenv>=1.0",
+    "python-multipart>=0.0.20",
     "pyyaml>=6.0",
     "requests>=2.32",
     "shared",
+    "uvicorn[standard]>=0.34",
 ]
 
 [project.scripts]

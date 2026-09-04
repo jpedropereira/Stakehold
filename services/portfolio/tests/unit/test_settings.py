@@ -105,3 +105,48 @@ def test_datastore_api_url_and_internal_api_secret_load_from_env(monkeypatch):
 
     assert result.datastore_api_url == "http://localhost:8082"
     assert result.internal_api_secret == "shared-secret"  # pragma: allowlist secret
+
+
+def test_api_internal_secret_defaults_to_none(monkeypatch):
+    monkeypatch.setenv("PORTFOLIO_DATABASE_URL", "postgresql://user:pass@localhost/app")
+    monkeypatch.delenv("PORTFOLIO_INTERNAL_SECRET", raising=False)
+
+    result = load_settings()
+
+    assert result.api_internal_secret is None
+
+
+def test_api_internal_secret_loads_from_its_own_prefixed_var(monkeypatch):
+    """Deliberately a separate var from the unprefixed INTERNAL_API_SECRET (portfolio's outbound
+    credential to data-store) -- this one is inbound, matching auth's AUTH_INTERNAL_SECRET
+    convention, and must rotate independently of the outbound one."""
+    monkeypatch.setenv("PORTFOLIO_DATABASE_URL", "postgresql://user:pass@localhost/app")
+    monkeypatch.setenv("PORTFOLIO_INTERNAL_SECRET", "inbound-secret")
+    monkeypatch.setenv("INTERNAL_API_SECRET", "outbound-secret")
+
+    result = load_settings()
+
+    assert result.api_internal_secret == "inbound-secret"  # pragma: allowlist secret
+    assert result.internal_api_secret == "outbound-secret"  # pragma: allowlist secret
+
+
+def test_api_host_and_port_default(monkeypatch):
+    monkeypatch.setenv("PORTFOLIO_DATABASE_URL", "postgresql://user:pass@localhost/app")
+    monkeypatch.delenv("PORTFOLIO_API_HOST", raising=False)
+    monkeypatch.delenv("PORTFOLIO_API_PORT", raising=False)
+
+    result = load_settings()
+
+    assert result.api_host == "0.0.0.0"
+    assert result.api_port == 8002
+
+
+def test_api_host_and_port_load_from_env(monkeypatch):
+    monkeypatch.setenv("PORTFOLIO_DATABASE_URL", "postgresql://user:pass@localhost/app")
+    monkeypatch.setenv("PORTFOLIO_API_HOST", "127.0.0.1")
+    monkeypatch.setenv("PORTFOLIO_API_PORT", "9001")
+
+    result = load_settings()
+
+    assert result.api_host == "127.0.0.1"
+    assert result.api_port == 9001

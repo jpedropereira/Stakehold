@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from dotenv import load_dotenv
+from shared.env import int_env
 
 # Config paths are resolved against the service directory, not the process's working
 # directory -- same reasoning and mechanism as data-store/settings.py's _SERVICE_ROOT/_resolve.
@@ -30,6 +31,15 @@ class Settings:
     # checks internal_api_secret at its own startup rather than here.
     datastore_api_url: str | None
     internal_api_secret: str | None
+    # The HTTP API's own inbound credential -- deliberately a separate, prefixed var from the
+    # unprefixed internal_api_secret above (which is portfolio's *outbound* credential to
+    # data-store). Keeping them distinct lets each side rotate independently; sharing one secret
+    # both ways would mean a leak on either edge compromises both. Optional here for the same
+    # reason internal_api_secret is: the CLI must keep working with no API ever run, and
+    # api/app.py checks this itself at its own startup, data-store's own pattern.
+    api_internal_secret: str | None
+    api_host: str
+    api_port: int
 
 
 def load_settings() -> Settings:
@@ -63,4 +73,8 @@ def load_settings() -> Settings:
         # Deliberately not PORTFOLIO_-prefixed: this is the one shared credential both portfolio
         # and data-store must agree on, matching data-store's own env var name exactly.
         internal_api_secret=os.environ.get("INTERNAL_API_SECRET") or None,
+        api_internal_secret=os.environ.get("PORTFOLIO_INTERNAL_SECRET") or None,
+        api_host=os.environ.get("PORTFOLIO_API_HOST", "0.0.0.0"),
+        # 8002: web is 8000, auth is 8001, data-store's read API is 8082.
+        api_port=int_env("PORTFOLIO_API_PORT", 8002),
     )
