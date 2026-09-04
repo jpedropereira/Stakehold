@@ -24,6 +24,7 @@ from portfolio.errors import (
     InvalidTransaction,
 )
 from portfolio.positions.calculator import PositionSnapshot
+from portfolio.returns.calculator import ReturnSnapshot
 from portfolio.ticker_mapping.loader import TickerMappings
 from portfolio.transactions.base import CanonicalTransaction
 
@@ -124,6 +125,11 @@ class FakeTransactionsRepo:
             )
         return grouped
 
+    def list_by_account(self, conn, account_id, *, transaction_types=None):
+        return self.list_by_accounts(conn, [account_id], transaction_types=transaction_types).get(
+            account_id, []
+        )
+
 
 class FakePositionsRepo:
     """Records every replace_snapshots/delete_snapshots call, keyed by (account_id,
@@ -157,6 +163,13 @@ class FakePositionsRepo:
 
     def list_snapshots(self, conn, *, account_id, canonical_ticker):
         return list(self.snapshots.get((account_id, canonical_ticker), []))
+
+    def list_latest_snapshots(self, conn, account_id):
+        latest = []
+        for (aid, _ticker), rows in self.snapshots.items():
+            if aid == account_id and rows:
+                latest.append(max(rows, key=lambda s: s.as_of_date))
+        return sorted(latest, key=lambda s: s.canonical_ticker)
 
 
 @pytest.fixture
@@ -750,6 +763,28 @@ class FakeReturnsRepo:
         for snapshot in snapshots:
             by_date[snapshot.price_date] = snapshot
         return len(snapshots)
+
+    def list_snapshots(self, conn, *, account_id, canonical_ticker=None, start=None, end=None):
+        rows = []
+        for (aid, ticker), by_date in self.snapshots.items():
+            if aid != account_id:
+                continue
+            if canonical_ticker is not None and ticker != canonical_ticker:
+                continue
+            for price_date, snapshot in by_date.items():
+                if start is not None and price_date < start:
+                    continue
+                if end is not None and price_date > end:
+                    continue
+                rows.append(snapshot)
+        return sorted(rows, key=lambda s: (s.canonical_ticker, s.price_date))
+
+    def list_latest_snapshots(self, conn, account_id):
+        latest = []
+        for (aid, _ticker), by_date in self.snapshots.items():
+            if aid == account_id and by_date:
+                latest.append(max(by_date.values(), key=lambda s: s.price_date))
+        return sorted(latest, key=lambda s: s.canonical_ticker)
 
 
 def _cashflow_txn_factory(**overrides):
@@ -1776,3 +1811,137 @@ def test_rebuild_returns_with_no_tracked_tickers_reports_nothing(repos, returns_
     assert outcome.snapshots_saved == 0
     assert outcome.blocked == []
     assert outcome.failed_pairs == []
+
+
+# --- list_transactions ---
+
+
+def _return_snapshot(**overrides):
+    values = dict(
+        account_id=1,
+        canonical_ticker="IWDA.AS",
+        price_date=date(2026, 1, 6),
+        quantity=Decimal("10.000000"),
+        market_value_native=Decimal("1000.0000"),
+        market_value_eur=Decimal("1000.0000"),
+        cost_basis_eur=Decimal("950.0000"),
+        unrealized_return_eur=Decimal("50.0000"),
+        unrealized_return_pct=Decimal("0.05263158"),
+        dividends_received_eur=Decimal("0.0000"),
+        total_return_eur=Decimal("50.0000"),
+        total_return_pct=Decimal("0.05263158"),
+    )
+    values.update(overrides)
+    return ReturnSnapshot(**values)
+
+
+def test_list_transactions_returns_the_accounts_own_log(repos, conn):
+    accounts_repo, transactions_repo, positions_repo = repos
+    user_id = uuid.uuid4()
+    account = _seed_account(accounts_repo, user_id=user_id)
+    transactions_repo.saved.append(_position_txn(account_id=account.id))
+
+    result = pipeline.list_transactions(conn, user_id=user_id, account_label="m")
+
+    assert result == [_position_txn(account_id=account.id)]
+
+
+def test_list_transactions_raises_for_an_unknown_account_label(repos, conn):
+    with pytest.raises(AccountNotFound):
+        pipeline.list_transactions(conn, user_id=uuid.uuid4(), account_label="nope")
+
+
+def test_list_transactions_never_returns_another_users_account(repos, conn):
+    accounts_repo, transactions_repo, positions_repo = repos
+    owner, other = uuid.uuid4(), uuid.uuid4()
+    _seed_account(accounts_repo, user_id=owner, label="m")
+
+    with pytest.raises(AccountNotFound):
+        pipeline.list_transactions(conn, user_id=other, account_label="m")
+
+
+# --- list_positions ---
+
+
+def test_list_positions_returns_the_latest_snapshot_per_ticker(repos, conn):
+    accounts_repo, transactions_repo, positions_repo = repos
+    user_id = uuid.uuid4()
+    account = _seed_account(accounts_repo, user_id=user_id)
+    positions_repo.snapshots[(account.id, "IWDA.AS")] = [_position_snapshot(account_id=account.id)]
+
+    result = pipeline.list_positions(conn, user_id=user_id, account_label="m")
+
+    assert result == [_position_snapshot(account_id=account.id)]
+
+
+def test_list_positions_raises_for_an_unknown_account_label(repos, conn):
+    with pytest.raises(AccountNotFound):
+        pipeline.list_positions(conn, user_id=uuid.uuid4(), account_label="nope")
+
+
+# --- list_returns ---
+
+
+def test_list_returns_returns_this_accounts_history(repos, returns_repo, conn):
+    accounts_repo, transactions_repo, positions_repo = repos
+    user_id = uuid.uuid4()
+    account = _seed_account(accounts_repo, user_id=user_id)
+    returns_repo.snapshots[(account.id, "IWDA.AS")] = {
+        date(2026, 1, 6): _return_snapshot(account_id=account.id)
+    }
+
+    result = pipeline.list_returns(conn, user_id=user_id, account_label="m")
+
+    assert result == [_return_snapshot(account_id=account.id)]
+
+
+def test_list_returns_filters_by_ticker_and_date_range(repos, returns_repo, conn):
+    accounts_repo, transactions_repo, positions_repo = repos
+    user_id = uuid.uuid4()
+    account = _seed_account(accounts_repo, user_id=user_id)
+    returns_repo.snapshots[(account.id, "IWDA.AS")] = {
+        date(2026, 1, 6): _return_snapshot(account_id=account.id, price_date=date(2026, 1, 6))
+    }
+    returns_repo.snapshots[(account.id, "VUSA.AS")] = {
+        date(2026, 1, 6): _return_snapshot(
+            account_id=account.id, canonical_ticker="VUSA.AS", price_date=date(2026, 1, 6)
+        )
+    }
+
+    result = pipeline.list_returns(
+        conn,
+        user_id=user_id,
+        account_label="m",
+        canonical_ticker="IWDA.AS",
+        start=date(2026, 1, 1),
+        end=date(2026, 1, 31),
+    )
+
+    assert [s.canonical_ticker for s in result] == ["IWDA.AS"]
+
+
+def test_list_returns_raises_for_an_unknown_account_label(repos, returns_repo, conn):
+    with pytest.raises(AccountNotFound):
+        pipeline.list_returns(conn, user_id=uuid.uuid4(), account_label="nope")
+
+
+# --- list_latest_returns ---
+
+
+def test_list_latest_returns_returns_one_row_per_ticker(repos, returns_repo, conn):
+    accounts_repo, transactions_repo, positions_repo = repos
+    user_id = uuid.uuid4()
+    account = _seed_account(accounts_repo, user_id=user_id)
+    returns_repo.snapshots[(account.id, "IWDA.AS")] = {
+        date(2026, 1, 5): _return_snapshot(account_id=account.id, price_date=date(2026, 1, 5)),
+        date(2026, 1, 6): _return_snapshot(account_id=account.id, price_date=date(2026, 1, 6)),
+    }
+
+    result = pipeline.list_latest_returns(conn, user_id=user_id, account_label="m")
+
+    assert [s.price_date for s in result] == [date(2026, 1, 6)]
+
+
+def test_list_latest_returns_raises_for_an_unknown_account_label(repos, returns_repo, conn):
+    with pytest.raises(AccountNotFound):
+        pipeline.list_latest_returns(conn, user_id=uuid.uuid4(), account_label="nope")

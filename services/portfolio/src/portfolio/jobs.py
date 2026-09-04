@@ -6,7 +6,8 @@ be, by construction, untested by the other. See docs/architecture.md's layering 
 """
 
 import logging
-from datetime import datetime
+from dataclasses import asdict
+from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 from uuid import UUID
@@ -464,3 +465,99 @@ def run_rebuild_returns(*, user_id: UUID, account_label: str | None = None) -> d
         for account_label, ticker, error in outcome.failed_pairs
     ]
     return result
+
+
+def get_transactions(*, user_id: UUID, account_label: str) -> list[dict]:
+    """One account's transaction log, oldest first -- for the read API. Named `get_*` rather
+    than `run_*`, and returns data rather than a run result, matching data-store's own read-job
+    convention (jobs.get_price_series): there is nothing to save and no {"status", "rows_saved"}
+    to report. Raises AccountNotFound if account_label doesn't resolve for this user."""
+    configure_logging()
+    settings = load_settings()
+    conn = get_connection(settings.database_url)
+    try:
+        logger.info(
+            "get-transactions: listing transactions for account %r (user %s).",
+            account_label,
+            user_id,
+        )
+        transactions = pipeline.list_transactions(
+            conn, user_id=user_id, account_label=account_label
+        )
+    finally:
+        conn.close()
+
+    logger.info("get-transactions: done, %d transaction(s) found.", len(transactions))
+    return [asdict(txn) for txn in transactions]
+
+
+def get_positions(*, user_id: UUID, account_label: str) -> list[dict]:
+    """This account's current holdings -- one snapshot per canonical_ticker, its most recent
+    as_of_date. Raises AccountNotFound if account_label doesn't resolve for this user."""
+    configure_logging()
+    settings = load_settings()
+    conn = get_connection(settings.database_url)
+    try:
+        logger.info(
+            "get-positions: listing positions for account %r (user %s).", account_label, user_id
+        )
+        positions = pipeline.list_positions(conn, user_id=user_id, account_label=account_label)
+    finally:
+        conn.close()
+
+    logger.info("get-positions: done, %d position(s) found.", len(positions))
+    return [asdict(position) for position in positions]
+
+
+def get_returns(
+    *,
+    user_id: UUID,
+    account_label: str,
+    canonical_ticker: str | None = None,
+    start: date | None = None,
+    end: date | None = None,
+) -> list[dict]:
+    """This account's return history, optionally narrowed to one ticker and/or a date range.
+    Served per ticker -- aggregating across tickers into one portfolio-level series is left to
+    the caller (see pipeline.list_returns). Raises AccountNotFound if account_label doesn't
+    resolve for this user."""
+    configure_logging()
+    settings = load_settings()
+    conn = get_connection(settings.database_url)
+    try:
+        logger.info(
+            "get-returns: listing returns for account %r (user %s).", account_label, user_id
+        )
+        returns = pipeline.list_returns(
+            conn,
+            user_id=user_id,
+            account_label=account_label,
+            canonical_ticker=canonical_ticker,
+            start=start,
+            end=end,
+        )
+    finally:
+        conn.close()
+
+    logger.info("get-returns: done, %d return snapshot(s) found.", len(returns))
+    return [asdict(snapshot) for snapshot in returns]
+
+
+def get_latest_returns(*, user_id: UUID, account_label: str) -> list[dict]:
+    """This account's most recent return snapshot per ticker -- a "current returns" summary.
+    Raises AccountNotFound if account_label doesn't resolve for this user."""
+    configure_logging()
+    settings = load_settings()
+    conn = get_connection(settings.database_url)
+    try:
+        logger.info(
+            "get-latest-returns: listing latest returns for account %r (user %s).",
+            account_label,
+            user_id,
+        )
+        returns = pipeline.list_latest_returns(conn, user_id=user_id, account_label=account_label)
+    finally:
+        conn.close()
+
+    logger.info("get-latest-returns: done, %d return snapshot(s) found.", len(returns))
+    return [asdict(snapshot) for snapshot in returns]

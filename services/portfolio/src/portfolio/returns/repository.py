@@ -12,8 +12,28 @@ pipeline.py wraps each (account, ticker) pair's upsert_snapshots call in its own
 """
 
 from collections.abc import Sequence
+from datetime import date
 
 from portfolio.returns.calculator import ReturnSnapshot
+
+_SELECT_COLUMNS = """
+    account_id, canonical_ticker, price_date, quantity, market_value_native,
+    market_value_eur, cost_basis_eur, unrealized_return_eur, unrealized_return_pct,
+    dividends_received_eur, total_return_eur, total_return_pct
+"""
+
+_LIST_SNAPSHOTS_SQL = f"""
+    SELECT {_SELECT_COLUMNS}
+    FROM return_snapshots
+    WHERE account_id = %s
+"""
+
+_LIST_LATEST_SNAPSHOTS_SQL = f"""
+    SELECT DISTINCT ON (canonical_ticker) {_SELECT_COLUMNS}
+    FROM return_snapshots
+    WHERE account_id = %s
+    ORDER BY canonical_ticker, price_date DESC
+"""
 
 _UPSERT_SQL = """
     INSERT INTO return_snapshots (
@@ -62,3 +82,43 @@ def upsert_snapshots(conn, snapshots: Sequence[ReturnSnapshot]) -> int:
             ],
         )
     return len(snapshots)
+
+
+def list_snapshots(
+    conn,
+    *,
+    account_id: int,
+    canonical_ticker: str | None = None,
+    start: date | None = None,
+    end: date | None = None,
+) -> list[ReturnSnapshot]:
+    """This account's return history, ordered by ticker then date -- optionally narrowed to one
+    ticker and/or a date range, for a return-over-time read. `canonical_ticker`/`start`/`end` are
+    filtered at the SQL level, the same optional-filter shape
+    transactions/repository.list_by_accounts uses for transaction_types."""
+    sql = _LIST_SNAPSHOTS_SQL
+    params: list[object] = [account_id]
+    if canonical_ticker is not None:
+        sql += " AND canonical_ticker = %s"
+        params.append(canonical_ticker)
+    if start is not None:
+        sql += " AND price_date >= %s"
+        params.append(start)
+    if end is not None:
+        sql += " AND price_date <= %s"
+        params.append(end)
+    sql += " ORDER BY canonical_ticker, price_date"
+
+    with conn.cursor() as cur:
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+    return [ReturnSnapshot(*row) for row in rows]
+
+
+def list_latest_snapshots(conn, account_id: int) -> list[ReturnSnapshot]:
+    """The most recent return snapshot per ticker for this account -- one row per
+    canonical_ticker, for a "current returns" summary read without scanning the whole history."""
+    with conn.cursor() as cur:
+        cur.execute(_LIST_LATEST_SNAPSHOTS_SQL, (account_id,))
+        rows = cur.fetchall()
+    return [ReturnSnapshot(*row) for row in rows]

@@ -1,6 +1,6 @@
 import logging
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -9,8 +9,11 @@ from portfolio import jobs
 from portfolio.accounts.repository import Account
 from portfolio.errors import AccountNotFound, TickerMappingError
 from portfolio.pipeline import RebuildOutcome, ReturnsRebuildOutcome
+from portfolio.positions.calculator import PositionSnapshot
+from portfolio.returns.calculator import ReturnSnapshot
 from portfolio.settings import SettingsError
 from portfolio.ticker_mapping.loader import TickerMappings
+from portfolio.transactions.base import CanonicalTransaction
 
 _FAKE_DATABASE_URL = "postgresql://portfolio:pw@localhost/app"  # pragma: allowlist secret
 _FAKE_ADMIN_DATABASE_URL = "postgresql://admin:pw@localhost/app"  # pragma: allowlist secret
@@ -1084,3 +1087,259 @@ def test_run_rebuild_returns_logs_start_before_completion(monkeypatch, caplog):
     start_index = next(i for i, m in enumerate(messages) if "rebuilding returns" in m)
     done_index = next(i for i, m in enumerate(messages) if "done" in m)
     assert start_index < done_index
+
+
+# --- get_transactions ---
+
+
+def test_get_transactions_returns_dicts_and_closes_connection(monkeypatch):
+    fake_conn = _patch_new_job_common(monkeypatch)
+    txn = CanonicalTransaction(
+        account_id=1,
+        broker_transaction_ref="ref-1",
+        transaction_type="BUY",
+        trade_datetime=datetime(2026, 1, 5, tzinfo=UTC),
+        instrument_identifier="IE00B4L5Y983",
+        instrument_identifier_kind="ISIN",
+        quantity=Decimal("10"),
+        price=Decimal("95.00"),
+        native_currency="EUR",
+        native_amount=Decimal("-950.00"),
+        eur_amount=Decimal("-950.0000"),
+        fx_rate=None,
+        fx_rate_source=None,
+        fees_native=None,
+    )
+    monkeypatch.setattr(jobs.pipeline, "list_transactions", lambda conn, **kw: [txn])
+
+    result = jobs.get_transactions(user_id=uuid.uuid4(), account_label="m")
+
+    assert result == [
+        {
+            "account_id": 1,
+            "broker_transaction_ref": "ref-1",
+            "transaction_type": "BUY",
+            "trade_datetime": txn.trade_datetime,
+            "instrument_identifier": "IE00B4L5Y983",
+            "instrument_identifier_kind": "ISIN",
+            "quantity": Decimal("10"),
+            "price": Decimal("95.00"),
+            "native_currency": "EUR",
+            "native_amount": Decimal("-950.00"),
+            "eur_amount": Decimal("-950.0000"),
+            "fx_rate": None,
+            "fx_rate_source": None,
+            "fees_native": None,
+        }
+    ]
+    assert fake_conn.closed is True
+
+
+def test_get_transactions_propagates_account_not_found(monkeypatch):
+    _patch_new_job_common(monkeypatch)
+
+    def boom(conn, **kw):
+        raise AccountNotFound("nope")
+
+    monkeypatch.setattr(jobs.pipeline, "list_transactions", boom)
+
+    with pytest.raises(AccountNotFound):
+        jobs.get_transactions(user_id=uuid.uuid4(), account_label="nope")
+
+
+def test_get_transactions_passes_user_and_account_through(monkeypatch):
+    _patch_new_job_common(monkeypatch)
+    captured = {}
+
+    def fake_list_transactions(conn, **kw):
+        captured.update(kw)
+        return []
+
+    monkeypatch.setattr(jobs.pipeline, "list_transactions", fake_list_transactions)
+    user_id = uuid.uuid4()
+
+    jobs.get_transactions(user_id=user_id, account_label="m")
+
+    assert captured == {"user_id": user_id, "account_label": "m"}
+
+
+# --- get_positions ---
+
+
+def test_get_positions_returns_dicts_and_closes_connection(monkeypatch):
+    fake_conn = _patch_new_job_common(monkeypatch)
+    snapshot = PositionSnapshot(
+        account_id=1,
+        canonical_ticker="IWDA.AS",
+        as_of_date=date(2026, 1, 5),
+        quantity=Decimal("10.000000"),
+        average_cost_native=Decimal("95.000000"),
+        native_currency="EUR",
+        average_cost_eur=Decimal("95.000000"),
+        cost_basis_eur=Decimal("950.0000"),
+    )
+    monkeypatch.setattr(jobs.pipeline, "list_positions", lambda conn, **kw: [snapshot])
+
+    result = jobs.get_positions(user_id=uuid.uuid4(), account_label="m")
+
+    assert result == [
+        {
+            "account_id": 1,
+            "canonical_ticker": "IWDA.AS",
+            "as_of_date": date(2026, 1, 5),
+            "quantity": Decimal("10.000000"),
+            "average_cost_native": Decimal("95.000000"),
+            "native_currency": "EUR",
+            "average_cost_eur": Decimal("95.000000"),
+            "cost_basis_eur": Decimal("950.0000"),
+        }
+    ]
+    assert fake_conn.closed is True
+
+
+def test_get_positions_propagates_account_not_found(monkeypatch):
+    _patch_new_job_common(monkeypatch)
+
+    def boom(conn, **kw):
+        raise AccountNotFound("nope")
+
+    monkeypatch.setattr(jobs.pipeline, "list_positions", boom)
+
+    with pytest.raises(AccountNotFound):
+        jobs.get_positions(user_id=uuid.uuid4(), account_label="nope")
+
+
+# --- get_returns ---
+
+
+def test_get_returns_returns_dicts_and_closes_connection(monkeypatch):
+    fake_conn = _patch_new_job_common(monkeypatch)
+    snapshot = ReturnSnapshot(
+        account_id=1,
+        canonical_ticker="IWDA.AS",
+        price_date=date(2026, 1, 6),
+        quantity=Decimal("10.000000"),
+        market_value_native=Decimal("1000.0000"),
+        market_value_eur=Decimal("1000.0000"),
+        cost_basis_eur=Decimal("950.0000"),
+        unrealized_return_eur=Decimal("50.0000"),
+        unrealized_return_pct=Decimal("0.05263158"),
+        dividends_received_eur=Decimal("0.0000"),
+        total_return_eur=Decimal("50.0000"),
+        total_return_pct=Decimal("0.05263158"),
+    )
+    monkeypatch.setattr(jobs.pipeline, "list_returns", lambda conn, **kw: [snapshot])
+
+    result = jobs.get_returns(user_id=uuid.uuid4(), account_label="m")
+
+    assert result == [
+        {
+            "account_id": 1,
+            "canonical_ticker": "IWDA.AS",
+            "price_date": date(2026, 1, 6),
+            "quantity": Decimal("10.000000"),
+            "market_value_native": Decimal("1000.0000"),
+            "market_value_eur": Decimal("1000.0000"),
+            "cost_basis_eur": Decimal("950.0000"),
+            "unrealized_return_eur": Decimal("50.0000"),
+            "unrealized_return_pct": Decimal("0.05263158"),
+            "dividends_received_eur": Decimal("0.0000"),
+            "total_return_eur": Decimal("50.0000"),
+            "total_return_pct": Decimal("0.05263158"),
+        }
+    ]
+    assert fake_conn.closed is True
+
+
+def test_get_returns_passes_filters_through(monkeypatch):
+    _patch_new_job_common(monkeypatch)
+    captured = {}
+
+    def fake_list_returns(conn, **kw):
+        captured.update(kw)
+        return []
+
+    monkeypatch.setattr(jobs.pipeline, "list_returns", fake_list_returns)
+    user_id = uuid.uuid4()
+
+    jobs.get_returns(
+        user_id=user_id,
+        account_label="m",
+        canonical_ticker="IWDA.AS",
+        start=date(2026, 1, 1),
+        end=date(2026, 1, 31),
+    )
+
+    assert captured == {
+        "user_id": user_id,
+        "account_label": "m",
+        "canonical_ticker": "IWDA.AS",
+        "start": date(2026, 1, 1),
+        "end": date(2026, 1, 31),
+    }
+
+
+def test_get_returns_propagates_account_not_found(monkeypatch):
+    _patch_new_job_common(monkeypatch)
+
+    def boom(conn, **kw):
+        raise AccountNotFound("nope")
+
+    monkeypatch.setattr(jobs.pipeline, "list_returns", boom)
+
+    with pytest.raises(AccountNotFound):
+        jobs.get_returns(user_id=uuid.uuid4(), account_label="nope")
+
+
+# --- get_latest_returns ---
+
+
+def test_get_latest_returns_returns_dicts_and_closes_connection(monkeypatch):
+    fake_conn = _patch_new_job_common(monkeypatch)
+    snapshot = ReturnSnapshot(
+        account_id=1,
+        canonical_ticker="IWDA.AS",
+        price_date=date(2026, 1, 6),
+        quantity=Decimal("10.000000"),
+        market_value_native=Decimal("1000.0000"),
+        market_value_eur=Decimal("1000.0000"),
+        cost_basis_eur=Decimal("950.0000"),
+        unrealized_return_eur=Decimal("50.0000"),
+        unrealized_return_pct=Decimal("0.05263158"),
+        dividends_received_eur=Decimal("0.0000"),
+        total_return_eur=Decimal("50.0000"),
+        total_return_pct=Decimal("0.05263158"),
+    )
+    monkeypatch.setattr(jobs.pipeline, "list_latest_returns", lambda conn, **kw: [snapshot])
+
+    result = jobs.get_latest_returns(user_id=uuid.uuid4(), account_label="m")
+
+    assert result == [
+        {
+            "account_id": 1,
+            "canonical_ticker": "IWDA.AS",
+            "price_date": date(2026, 1, 6),
+            "quantity": Decimal("10.000000"),
+            "market_value_native": Decimal("1000.0000"),
+            "market_value_eur": Decimal("1000.0000"),
+            "cost_basis_eur": Decimal("950.0000"),
+            "unrealized_return_eur": Decimal("50.0000"),
+            "unrealized_return_pct": Decimal("0.05263158"),
+            "dividends_received_eur": Decimal("0.0000"),
+            "total_return_eur": Decimal("50.0000"),
+            "total_return_pct": Decimal("0.05263158"),
+        }
+    ]
+    assert fake_conn.closed is True
+
+
+def test_get_latest_returns_propagates_account_not_found(monkeypatch):
+    _patch_new_job_common(monkeypatch)
+
+    def boom(conn, **kw):
+        raise AccountNotFound("nope")
+
+    monkeypatch.setattr(jobs.pipeline, "list_latest_returns", boom)
+
+    with pytest.raises(AccountNotFound):
+        jobs.get_latest_returns(user_id=uuid.uuid4(), account_label="nope")
