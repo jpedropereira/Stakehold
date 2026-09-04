@@ -14,7 +14,6 @@ from uuid import UUID
 from portfolio import pipeline
 from portfolio.accounts.repository import Account
 from portfolio.datastore_client.http_client import HttpDataStoreClient
-from portfolio.errors import PortfolioError
 from portfolio.run_result import build_run_result
 from portfolio.settings import SettingsError, load_settings
 from portfolio.ticker_mapping.loader import load_ticker_mappings
@@ -125,13 +124,9 @@ def run_add_account(*, user_id: UUID, broker: str, account_label: str) -> dict[s
             broker,
             user_id,
         )
-        try:
-            created = pipeline.add_account(
-                conn, user_id=user_id, broker=broker, account_label=account_label
-            )
-        except PortfolioError as exc:
-            logger.error("account add: failed -- %s", exc)
-            return build_run_result(units_total=1, rows_saved=0, failed=1, accounts_created=0)
+        created = pipeline.add_account(
+            conn, user_id=user_id, broker=broker, account_label=account_label
+        )
     finally:
         conn.close()
 
@@ -212,26 +207,22 @@ def run_add_transaction(
             account_label,
             user_id,
         )
-        try:
-            saved = pipeline.add_manual_transaction(
-                conn,
-                user_id=user_id,
-                account_label=account_label,
-                broker_transaction_ref=broker_transaction_ref,
-                transaction_type=transaction_type,
-                trade_datetime=trade_datetime,
-                native_amount=native_amount,
-                native_currency=native_currency,
-                instrument_identifier=instrument_identifier,
-                instrument_identifier_kind=instrument_identifier_kind,
-                quantity=quantity,
-                price=price,
-                fx_rate=fx_rate,
-                fees_native=fees_native,
-            )
-        except PortfolioError as exc:
-            logger.error("add-transaction: failed -- %s", exc)
-            return build_run_result(units_total=1, rows_saved=0, failed=1, transactions_saved=0)
+        saved = pipeline.add_manual_transaction(
+            conn,
+            user_id=user_id,
+            account_label=account_label,
+            broker_transaction_ref=broker_transaction_ref,
+            transaction_type=transaction_type,
+            trade_datetime=trade_datetime,
+            native_amount=native_amount,
+            native_currency=native_currency,
+            instrument_identifier=instrument_identifier,
+            instrument_identifier_kind=instrument_identifier_kind,
+            quantity=quantity,
+            price=price,
+            fx_rate=fx_rate,
+            fees_native=fees_native,
+        )
     finally:
         conn.close()
 
@@ -254,16 +245,12 @@ def run_import_transactions(
             account_label,
             user_id,
         )
-        try:
-            saved = pipeline.import_transactions(
-                conn,
-                user_id=user_id,
-                account_label=account_label,
-                file_path=file_path,
-            )
-        except PortfolioError as exc:
-            logger.error("import-transactions: failed -- %s", exc)
-            return build_run_result(units_total=1, rows_saved=0, failed=1, transactions_saved=0)
+        saved = pipeline.import_transactions(
+            conn,
+            user_id=user_id,
+            account_label=account_label,
+            file_path=file_path,
+        )
     finally:
         conn.close()
 
@@ -280,12 +267,8 @@ def run_list_unmapped_instruments(*, user_id: UUID) -> dict[str, int | str]:
     conn = get_connection(settings.database_url)
     try:
         logger.info("list-unmapped-instruments: checking instruments for user %s.", user_id)
-        try:
-            mappings = load_ticker_mappings(settings.ticker_mappings_path)
-            unmapped = pipeline.list_unmapped_instruments(conn, user_id=user_id, mappings=mappings)
-        except PortfolioError as exc:
-            logger.error("list-unmapped-instruments: failed -- %s", exc)
-            return build_run_result(units_total=1, rows_saved=0, failed=1, instruments_unmapped=0)
+        mappings = load_ticker_mappings(settings.ticker_mappings_path)
+        unmapped = pipeline.list_unmapped_instruments(conn, user_id=user_id, mappings=mappings)
     finally:
         conn.close()
 
@@ -329,17 +312,13 @@ def run_import_cashflow(
             account_label,
             user_id,
         )
-        try:
-            saved = pipeline.import_cashflow(
-                conn,
-                user_id=user_id,
-                account_label=account_label,
-                file_path=file_path,
-                datastore_client=datastore_client,
-            )
-        except PortfolioError as exc:
-            logger.error("import-cashflow: failed -- %s", exc)
-            return build_run_result(units_total=1, rows_saved=0, failed=1, transactions_saved=0)
+        saved = pipeline.import_cashflow(
+            conn,
+            user_id=user_id,
+            account_label=account_label,
+            file_path=file_path,
+            datastore_client=datastore_client,
+        )
     finally:
         conn.close()
 
@@ -364,29 +343,10 @@ def run_rebuild_positions(
     conn = get_connection(settings.database_url)
     try:
         logger.info("rebuild-positions: rebuilding positions for user %s (%s).", user_id, scope)
-        try:
-            mappings = load_ticker_mappings(settings.ticker_mappings_path)
-            outcome = pipeline.rebuild_positions(
-                conn, user_id=user_id, mappings=mappings, account_label=account_label
-            )
-        except PortfolioError as exc:
-            logger.error("rebuild-positions: failed -- %s", exc)
-            result = build_run_result(
-                units_total=1,
-                rows_saved=0,
-                failed=1,
-                positions_rebuilt=0,
-                positions_removed=0,
-                instruments_blocked=0,
-                positions_with_anomalies=0,
-                pairs_failed=0,
-            )
-            # Every other return path in this function carries blocked_instruments and
-            # failed_pairs -- cli.py reads both unconditionally, so the error path must supply
-            # them too, not just the named counts build_run_result covers.
-            result["blocked_instruments"] = []
-            result["failed_pairs"] = []
-            return result
+        mappings = load_ticker_mappings(settings.ticker_mappings_path)
+        outcome = pipeline.rebuild_positions(
+            conn, user_id=user_id, mappings=mappings, account_label=account_label
+        )
     finally:
         conn.close()
 
@@ -465,31 +425,14 @@ def run_rebuild_returns(*, user_id: UUID, account_label: str | None = None) -> d
     conn = get_connection(settings.database_url)
     try:
         logger.info("rebuild-returns: rebuilding returns for user %s (%s).", user_id, scope)
-        try:
-            mappings = load_ticker_mappings(settings.ticker_mappings_path)
-            outcome = pipeline.rebuild_returns(
-                conn,
-                user_id=user_id,
-                mappings=mappings,
-                datastore_client=datastore_client,
-                account_label=account_label,
-            )
-        except PortfolioError as exc:
-            logger.error("rebuild-returns: failed -- %s", exc)
-            result = build_run_result(
-                units_total=1,
-                rows_saved=0,
-                failed=1,
-                tickers_rebuilt=0,
-                tickers_blocked=0,
-                pairs_failed=0,
-            )
-            # Every other return path in this function carries blocked_tickers and
-            # failed_pairs -- cli.py reads both unconditionally, so the error path must supply
-            # them too, not just the named counts build_run_result covers.
-            result["blocked_tickers"] = []
-            result["failed_pairs"] = []
-            return result
+        mappings = load_ticker_mappings(settings.ticker_mappings_path)
+        outcome = pipeline.rebuild_returns(
+            conn,
+            user_id=user_id,
+            mappings=mappings,
+            datastore_client=datastore_client,
+            account_label=account_label,
+        )
     finally:
         conn.close()
 

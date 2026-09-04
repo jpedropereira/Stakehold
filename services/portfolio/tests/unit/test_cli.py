@@ -71,6 +71,23 @@ def test_a_settings_error_prints_a_clean_message_and_exits_nonzero(monkeypatch, 
     assert "PORTFOLIO_DATABASE_URL is not set" in capsys.readouterr().err
 
 
+def test_a_domain_error_prints_a_clean_message_and_exits_nonzero(monkeypatch, capsys):
+    """jobs.py deliberately lets a PortfolioError (e.g. an unknown account label) propagate
+    rather than swallowing it into a partial result -- main() is what maps it to a one-line
+    stderr message and a nonzero exit, not a raw traceback."""
+
+    def boom(**kw):
+        raise cli.PortfolioError("account not found: 'nope'")
+
+    monkeypatch.setattr(cli.jobs, "run_add_account", boom)
+
+    assert (
+        cli.main(["account", "add", "--user", str(uuid.uuid4()), "--broker", "x", "--label", "m"])
+        == 1
+    )
+    assert "account not found: 'nope'" in capsys.readouterr().err
+
+
 # --- account add ---
 
 

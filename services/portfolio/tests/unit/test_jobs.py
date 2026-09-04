@@ -261,7 +261,7 @@ def test_run_add_account_reports_nothing_to_do_when_already_exists(monkeypatch):
     assert result == {"status": "nothing_to_do", "rows_saved": 0, "accounts_created": 0}
 
 
-def test_run_add_account_reports_partial_and_closes_connection_on_domain_error(monkeypatch):
+def test_run_add_account_propagates_domain_error_and_closes_connection(monkeypatch):
     fake_conn = _patch_new_job_common(monkeypatch)
 
     def boom(conn, **kw):
@@ -269,9 +269,9 @@ def test_run_add_account_reports_partial_and_closes_connection_on_domain_error(m
 
     monkeypatch.setattr(jobs.pipeline, "add_account", boom)
 
-    result = jobs.run_add_account(user_id=uuid.uuid4(), broker="nope", account_label="m")
+    with pytest.raises(AccountNotFound):
+        jobs.run_add_account(user_id=uuid.uuid4(), broker="nope", account_label="m")
 
-    assert result == {"status": "partial", "rows_saved": 0, "accounts_created": 0}
     assert fake_conn.closed is True
 
 
@@ -399,7 +399,7 @@ def test_run_add_transaction_reports_nothing_to_do_when_ref_already_exists(monke
     assert result == {"status": "nothing_to_do", "rows_saved": 0, "transactions_saved": 0}
 
 
-def test_run_add_transaction_reports_partial_and_closes_connection_on_domain_error(monkeypatch):
+def test_run_add_transaction_propagates_domain_error_and_closes_connection(monkeypatch):
     fake_conn = _patch_new_job_common(monkeypatch)
 
     def boom(conn, **kw):
@@ -407,9 +407,9 @@ def test_run_add_transaction_reports_partial_and_closes_connection_on_domain_err
 
     monkeypatch.setattr(jobs.pipeline, "add_manual_transaction", boom)
 
-    result = jobs.run_add_transaction(user_id=uuid.uuid4(), **_TXN_KWARGS)
+    with pytest.raises(AccountNotFound):
+        jobs.run_add_transaction(user_id=uuid.uuid4(), **_TXN_KWARGS)
 
-    assert result == {"status": "partial", "rows_saved": 0, "transactions_saved": 0}
     assert fake_conn.closed is True
 
 
@@ -437,7 +437,7 @@ def test_run_import_transactions_reports_nothing_to_do_on_a_reimport(monkeypatch
     assert result == {"status": "nothing_to_do", "rows_saved": 0, "transactions_saved": 0}
 
 
-def test_run_import_transactions_reports_partial_and_closes_connection_on_domain_error(
+def test_run_import_transactions_propagates_domain_error_and_closes_connection(
     monkeypatch,
 ):
     fake_conn = _patch_new_job_common(monkeypatch)
@@ -447,9 +447,9 @@ def test_run_import_transactions_reports_partial_and_closes_connection_on_domain
 
     monkeypatch.setattr(jobs.pipeline, "import_transactions", boom)
 
-    result = jobs.run_import_transactions(user_id=uuid.uuid4(), **_IMPORT_KWARGS)
+    with pytest.raises(AccountNotFound):
+        jobs.run_import_transactions(user_id=uuid.uuid4(), **_IMPORT_KWARGS)
 
-    assert result == {"status": "partial", "rows_saved": 0, "transactions_saved": 0}
     assert fake_conn.closed is True
 
 
@@ -547,9 +547,9 @@ def test_run_list_unmapped_instruments_loads_mappings_from_the_settings_path(mon
     assert captured["path"] == Path("configs/ticker_mappings.yaml")
 
 
-def test_run_list_unmapped_instruments_reports_partial_on_a_missing_mappings_file(monkeypatch):
-    """A missing/malformed configs/ticker_mappings.yaml is a domain error, not a crash -- every
-    sibling job function degrades to a clean `partial` result the same way."""
+def test_run_list_unmapped_instruments_propagates_error_on_a_missing_mappings_file(monkeypatch):
+    """A missing/malformed configs/ticker_mappings.yaml is a domain error -- jobs.py lets it
+    propagate to the caller (cli.py, or the future HTTP API) rather than swallowing it."""
     fake_conn = _patch_new_job_common(monkeypatch)
 
     def boom(path):
@@ -557,9 +557,9 @@ def test_run_list_unmapped_instruments_reports_partial_on_a_missing_mappings_fil
 
     monkeypatch.setattr(jobs, "load_ticker_mappings", boom)
 
-    result = jobs.run_list_unmapped_instruments(user_id=uuid.uuid4())
+    with pytest.raises(TickerMappingError):
+        jobs.run_list_unmapped_instruments(user_id=uuid.uuid4())
 
-    assert result == {"status": "partial", "rows_saved": 0, "instruments_unmapped": 0}
     assert fake_conn.closed is True
 
 
@@ -601,7 +601,7 @@ def test_run_import_cashflow_reports_nothing_to_do_on_a_reimport(monkeypatch):
     assert result == {"status": "nothing_to_do", "rows_saved": 0, "transactions_saved": 0}
 
 
-def test_run_import_cashflow_reports_partial_on_domain_error(monkeypatch):
+def test_run_import_cashflow_propagates_domain_error_and_closes_connection(monkeypatch):
     fake_conn = _patch_cashflow_job_common(monkeypatch)
 
     def boom(conn, **kw):
@@ -609,9 +609,9 @@ def test_run_import_cashflow_reports_partial_on_domain_error(monkeypatch):
 
     monkeypatch.setattr(jobs.pipeline, "import_cashflow", boom)
 
-    result = jobs.run_import_cashflow(user_id=uuid.uuid4(), **_CASHFLOW_KWARGS)
+    with pytest.raises(AccountNotFound):
+        jobs.run_import_cashflow(user_id=uuid.uuid4(), **_CASHFLOW_KWARGS)
 
-    assert result == {"status": "partial", "rows_saved": 0, "transactions_saved": 0}
     assert fake_conn.closed is True
 
 
@@ -790,7 +790,7 @@ def test_run_rebuild_positions_reports_partial_with_failed_pairs(monkeypatch):
     ]
 
 
-def test_run_rebuild_positions_reports_partial_on_a_domain_error(monkeypatch):
+def test_run_rebuild_positions_propagates_domain_error_and_closes_connection(monkeypatch):
     fake_conn = _patch_new_job_common(monkeypatch)
 
     def boom(conn, **kw):
@@ -801,23 +801,13 @@ def test_run_rebuild_positions_reports_partial_on_a_domain_error(monkeypatch):
     )
     monkeypatch.setattr(jobs.pipeline, "rebuild_positions", boom)
 
-    result = jobs.run_rebuild_positions(user_id=uuid.uuid4(), account_label="nope")
+    with pytest.raises(AccountNotFound):
+        jobs.run_rebuild_positions(user_id=uuid.uuid4(), account_label="nope")
 
-    assert result == {
-        "status": "partial",
-        "rows_saved": 0,
-        "positions_rebuilt": 0,
-        "positions_removed": 0,
-        "instruments_blocked": 0,
-        "positions_with_anomalies": 0,
-        "pairs_failed": 0,
-        "blocked_instruments": [],
-        "failed_pairs": [],
-    }
     assert fake_conn.closed is True
 
 
-def test_run_rebuild_positions_reports_partial_on_a_missing_mappings_file(monkeypatch):
+def test_run_rebuild_positions_propagates_error_on_a_missing_mappings_file(monkeypatch):
     fake_conn = _patch_new_job_common(monkeypatch)
 
     def boom(path):
@@ -825,9 +815,9 @@ def test_run_rebuild_positions_reports_partial_on_a_missing_mappings_file(monkey
 
     monkeypatch.setattr(jobs, "load_ticker_mappings", boom)
 
-    result = jobs.run_rebuild_positions(user_id=uuid.uuid4())
+    with pytest.raises(TickerMappingError):
+        jobs.run_rebuild_positions(user_id=uuid.uuid4())
 
-    assert result["status"] == "partial"
     assert fake_conn.closed is True
 
 
@@ -999,7 +989,7 @@ def test_run_rebuild_returns_reports_partial_with_failed_pairs(monkeypatch):
     ]
 
 
-def test_run_rebuild_returns_reports_partial_on_a_domain_error(monkeypatch):
+def test_run_rebuild_returns_propagates_domain_error_and_closes_connection(monkeypatch):
     fake_conn = _patch_returns_job_common(monkeypatch)
 
     def boom(conn, **kw):
@@ -1007,17 +997,9 @@ def test_run_rebuild_returns_reports_partial_on_a_domain_error(monkeypatch):
 
     monkeypatch.setattr(jobs.pipeline, "rebuild_returns", boom)
 
-    result = jobs.run_rebuild_returns(user_id=uuid.uuid4(), account_label="nope")
+    with pytest.raises(AccountNotFound):
+        jobs.run_rebuild_returns(user_id=uuid.uuid4(), account_label="nope")
 
-    assert result == {
-        "status": "partial",
-        "rows_saved": 0,
-        "tickers_rebuilt": 0,
-        "tickers_blocked": 0,
-        "pairs_failed": 0,
-        "blocked_tickers": [],
-        "failed_pairs": [],
-    }
     assert fake_conn.closed is True
 
 
