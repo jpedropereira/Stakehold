@@ -71,6 +71,23 @@ def test_a_settings_error_prints_a_clean_message_and_exits_nonzero(monkeypatch, 
     assert "PORTFOLIO_DATABASE_URL is not set" in capsys.readouterr().err
 
 
+def test_a_domain_error_prints_a_clean_message_and_exits_nonzero(monkeypatch, capsys):
+    """jobs.py deliberately lets a PortfolioError (e.g. an unknown account label) propagate
+    rather than swallowing it into a partial result -- main() is what maps it to a one-line
+    stderr message and a nonzero exit, not a raw traceback."""
+
+    def boom(**kw):
+        raise cli.PortfolioError("account not found: 'nope'")
+
+    monkeypatch.setattr(cli.jobs, "run_add_account", boom)
+
+    assert (
+        cli.main(["account", "add", "--user", str(uuid.uuid4()), "--broker", "x", "--label", "m"])
+        == 1
+    )
+    assert "account not found: 'nope'" in capsys.readouterr().err
+
+
 # --- account add ---
 
 
@@ -117,20 +134,6 @@ def test_account_add_exits_zero_when_nothing_to_do(monkeypatch):
     )
 
     assert exit_code == 0
-
-
-def test_account_add_exits_nonzero_when_partial(monkeypatch):
-    monkeypatch.setattr(
-        cli.jobs,
-        "run_add_account",
-        lambda **kw: {"status": "partial", "rows_saved": 0, "accounts_created": 0},
-    )
-
-    exit_code = cli.main(
-        ["account", "add", "--user", str(uuid.uuid4()), "--broker", "x", "--label", "m"]
-    )
-
-    assert exit_code == 1
 
 
 def test_account_add_rejects_a_malformed_user_id():
@@ -444,16 +447,20 @@ def test_add_transaction_exits_zero_when_nothing_to_do(monkeypatch):
     assert exit_code == 0
 
 
-def test_add_transaction_exits_nonzero_when_partial(monkeypatch):
-    monkeypatch.setattr(
-        cli.jobs,
-        "run_add_transaction",
-        lambda **kw: {"status": "partial", "rows_saved": 0, "transactions_saved": 0},
-    )
+def test_add_transaction_propagates_a_domain_error_and_exits_nonzero(monkeypatch, capsys):
+    """run_add_transaction can no longer return `partial` itself -- jobs.py lets a PortfolioError
+    (e.g. an unknown account label) propagate instead of catching it, so this is what main()'s
+    generic domain-error handling actually has to cover for this command."""
+
+    def boom(**kw):
+        raise cli.PortfolioError("account not found: 'm'")
+
+    monkeypatch.setattr(cli.jobs, "run_add_transaction", boom)
 
     exit_code = cli.main(["add-transaction", "--user", str(uuid.uuid4()), *_BASE_TXN_ARGS[1:]])
 
     assert exit_code == 1
+    assert "account not found: 'm'" in capsys.readouterr().err
 
 
 def test_add_transaction_rejects_a_malformed_datetime():
@@ -570,12 +577,15 @@ def test_import_transactions_exits_zero_when_nothing_to_do(monkeypatch):
     assert exit_code == 0
 
 
-def test_import_transactions_exits_nonzero_when_partial(monkeypatch):
-    monkeypatch.setattr(
-        cli.jobs,
-        "run_import_transactions",
-        lambda **kw: {"status": "partial", "rows_saved": 0, "transactions_saved": 0},
-    )
+def test_import_transactions_propagates_a_domain_error_and_exits_nonzero(monkeypatch, capsys):
+    """run_import_transactions can no longer return `partial` itself -- jobs.py lets a
+    PortfolioError (e.g. an unparseable broker file) propagate instead of catching it, so this
+    is what main()'s generic domain-error handling actually has to cover for this command."""
+
+    def boom(**kw):
+        raise cli.PortfolioError("could not parse acme.csv")
+
+    monkeypatch.setattr(cli.jobs, "run_import_transactions", boom)
 
     exit_code = cli.main(
         [
@@ -590,6 +600,7 @@ def test_import_transactions_exits_nonzero_when_partial(monkeypatch):
     )
 
     assert exit_code == 1
+    assert "could not parse acme.csv" in capsys.readouterr().err
 
 
 def test_import_transactions_requires_all_flags():
@@ -774,12 +785,15 @@ def test_import_cashflow_exits_zero_when_nothing_to_do(monkeypatch):
     assert exit_code == 0
 
 
-def test_import_cashflow_exits_nonzero_when_partial(monkeypatch):
-    monkeypatch.setattr(
-        cli.jobs,
-        "run_import_cashflow",
-        lambda **kw: {"status": "partial", "rows_saved": 0, "transactions_saved": 0},
-    )
+def test_import_cashflow_propagates_a_domain_error_and_exits_nonzero(monkeypatch, capsys):
+    """run_import_cashflow can no longer return `partial` itself -- jobs.py lets a PortfolioError
+    (e.g. data-store unreachable) propagate instead of catching it, so this is what main()'s
+    generic domain-error handling actually has to cover for this command."""
+
+    def boom(**kw):
+        raise cli.PortfolioError("data-store unreachable")
+
+    monkeypatch.setattr(cli.jobs, "run_import_cashflow", boom)
 
     exit_code = cli.main(
         [
@@ -794,6 +808,7 @@ def test_import_cashflow_exits_nonzero_when_partial(monkeypatch):
     )
 
     assert exit_code == 1
+    assert "data-store unreachable" in capsys.readouterr().err
 
 
 def test_import_cashflow_requires_all_flags():
@@ -1150,3 +1165,28 @@ def test_rebuild_returns_requires_the_user_flag():
 def test_rebuild_returns_rejects_a_malformed_user_id():
     with pytest.raises(SystemExit):
         cli.main(["rebuild-returns", "--user", "not-a-uuid"])
+
+
+# --- serve ---
+
+
+def test_serve_dispatches_to_uvicorn_with_settings(monkeypatch):
+    captured = {}
+
+    fake_settings = type(
+        "S", (), {"api_host": "127.0.0.1", "api_port": 9002, "database_url": "postgresql://x"}
+    )()
+    fake_app = object()
+
+    monkeypatch.setattr("portfolio.settings.load_settings", lambda: fake_settings)
+    monkeypatch.setattr("portfolio.api.app.create_app", lambda settings: fake_app)
+
+    def fake_run(app, *, host, port):
+        captured["app"] = app
+        captured["host"] = host
+        captured["port"] = port
+
+    monkeypatch.setattr("uvicorn.run", fake_run)
+
+    assert cli.main(["serve"]) == 0
+    assert captured == {"app": fake_app, "host": "127.0.0.1", "port": 9002}

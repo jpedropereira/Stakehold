@@ -39,7 +39,6 @@ machinery. See "Cross-service prerequisite" below.
 
 - Not a source of truth for market prices or FX rates — that's `data-store`.
 - Not a tax-lot / FIFO engine — cost basis is average-cost, blended (see cross-cutting decisions).
-- Not (yet) an HTTP service — CLI only, though the design keeps that door open.
 - Not a place that guesses a ticker mapping. An unmapped instrument blocks its own calculation,
   visibly, never a silent skip.
 - Not the owner of *authentication or user identity* — credentials, sessions, login, and the
@@ -56,7 +55,7 @@ Dependencies point one way, downward. Nothing in a lower layer imports from a hi
 flowchart TD
     subgraph entry["Entry points"]
         CLI["cli.py<br/><i>argparse, one handler per command</i>"]
-        API["HTTP API<br/><i>planned, not built yet</i>"]
+        API["api/<br/><i>FastAPI, built at task 9</i>"]
     end
 
     subgraph orch["Orchestration"]
@@ -85,7 +84,7 @@ flowchart TD
     DSAPI(["data-store read API<br/><i>built (task 3)</i>"])
 
     CLI --> JOBS
-    API -.future.-> JOBS
+    API --> JOBS
     JOBS --> PIPE
     JOBS --> SET
     JOBS --> DB
@@ -118,11 +117,11 @@ when its copy turned out near-identical to data-store's. Portfolio imports
 holds only `schema.sql`, which is genuinely portfolio's own. Repository modules import
 `transaction`; `jobs.py` imports `get_connection` and `apply_schema`.
 
-**`jobs.py` is the seam that matters**, for the same reason as data-store's: each `run_*` there is
-one complete operation — load settings, open a connection, run the flow, close the connection,
-return a structured result. `cli.py` is argument parsing plus a call into it, and nothing else. A
-future HTTP API route is a call into it and nothing else. Anything that lived in only one of those
-two would be, by construction, untested by the other.
+**`jobs.py` is the seam that matters**, for the same reason as data-store's: each `run_*`/`get_*`
+there is one complete operation — load settings, open a connection, run the flow, close the
+connection, return a result. `cli.py` is argument parsing plus a call into it, and nothing else.
+`api/routes.py` (built at task 9) is a call into it and nothing else, too. Anything that lived in
+only one of those two would be, by construction, untested by the other.
 
 That result is a plain dict of builtins, built by portfolio's own `run_result.py` — following the
 same two-key `{"status", "rows_saved"}` plus per-flow named-counts contract as
@@ -256,10 +255,11 @@ the ticker may still be fully computable from its `BUY`/`SELL` rows regardless.
 **`errors.py` is not a domain module** — it's a single Foundation-layer file (`PortfolioError` plus
 `InvalidBroker`, `AccountNotFound`, `AccountLabelConflict`, `InvalidTransaction`, and, as of task 6,
 `BrokerFileError`, `TickerMappingError`, plus `BrokerParserNotFound` and `BrokerPluginError` from
-the broker-plugin extraction and `DataStoreApiError` from task 14), not one per module, so
-`jobs.py` can catch every domain-level failure `pipeline.py` or a pure validator raises with one
-`except PortfolioError`. Repositories never raise these — they let the driver's own exceptions
-(e.g. `psycopg.errors.UniqueViolation`) propagate uncaught, same as `auth`.
+the broker-plugin extraction and `DataStoreApiError` from task 14), not one per module, so every
+domain-level failure `pipeline.py` or a pure validator raises shares one parent. Repositories
+never raise these — they let the driver's own exceptions (e.g. `psycopg.errors.UniqueViolation`)
+propagate uncaught, same as `auth`. **`jobs.py` itself no longer catches `PortfolioError`** — see
+"HTTP API" below for why that changed at task 9 and what each entry point does with it instead.
 
 **Revised — `--broker` dropped from `import-transactions`/`import-cashflow`, and `BrokerMismatch`
 removed with it.** The original design took `--broker` as an explicit argument on both commands
@@ -508,18 +508,21 @@ identity — not column-level DDL, which needs its own sign-off pass.
 
 ## The flows
 
-| Flow | Command | Cadence | Reads | Writes |
-|---|---|---|---|---|
-| Account setup | `account add --user <id> --broker <key> --label <label>` | rare, manual | — | `accounts` |
-| Account listing | `account list --user <id>` | manual, on demand | `accounts`, scoped by `user_id` | — (read-only report) |
-| Broker-plugin discovery | `broker list` | manual, on demand | `BROKER_PARSERS` (in-memory) | — (read-only report) |
-| Ticker linking | — (hand-edit the YAML file) | manual, as unmapped instruments surface | — | `configs/ticker_mappings.yaml` (edited directly, not through the service) |
-| List unmapped instruments | `list-unmapped-instruments --user <id>` | manual, on demand | `transactions` joined to `accounts` (scoped by `user_id`, and to pick up each instrument's owning broker), `configs/ticker_mappings.yaml` | — (read-only report) |
-| Manual transaction entry | `add-transaction --user <id> --account <label> --ref <key> --type <type> --datetime <iso8601> --amount <decimal> --currency <ISO4217> [--instrument <id> --instrument-kind ISIN\|SYMBOL] [--quantity <d>] [--price <d>] [--fx-rate <d>] [--fees <d>]` | ad hoc | `accounts`, scoped by `user_id` | `transactions` (idempotent on `(account_id, broker_transaction_ref)`, keyed by the mandatory `--ref`) |
-| Broker file import | `import-transactions --user <id> --file <path> --account <label>` | manual, on demand | export file, `accounts` scoped by `user_id` | `transactions` (idempotent on `(account_id, broker_transaction_ref)`) |
-| Cash-ledger import | `import-cashflow --user <id> --file <path> --account <label>` | manual, on demand | export file, `accounts` scoped by `user_id`, data-store's FX read API (`datastore_client`) for non-EUR rows | `transactions` (idempotent on `(account_id, broker_transaction_ref)`) |
-| Positions rebuild | `rebuild-positions --user <id> [--account <label>]` | after transactions change | `transactions`, `configs/ticker_mappings.yaml` | `position_snapshots` |
-| Returns rebuild | `rebuild-returns --user <id> [--account <label>]` | after positions rebuild or new prices land | `position_snapshots`, `transactions` (`DIVIDEND` rows), `configs/ticker_mappings.yaml`, `data-store` read API | `return_snapshots` |
+| Flow | Command | HTTP endpoint (task 9) | Cadence | Reads | Writes |
+|---|---|---|---|---|---|
+| Account setup | `account add --user <id> --broker <key> --label <label>` | `POST /accounts` | rare, manual | — | `accounts` |
+| Account listing | `account list --user <id>` | `GET /accounts` | manual, on demand | `accounts`, scoped by `user_id` | — (read-only report) |
+| Broker-plugin discovery | `broker list` | `GET /brokers` | manual, on demand | `BROKER_PARSERS` (in-memory) | — (read-only report) |
+| Ticker linking | — (hand-edit the YAML file) | — | manual, as unmapped instruments surface | — | `configs/ticker_mappings.yaml` (edited directly, not through the service) |
+| List unmapped instruments | `list-unmapped-instruments --user <id>` | `GET /instruments/unmapped` | manual, on demand | `transactions` joined to `accounts` (scoped by `user_id`, and to pick up each instrument's owning broker), `configs/ticker_mappings.yaml` | — (read-only report) |
+| Manual transaction entry | `add-transaction --user <id> --account <label> --ref <key> --type <type> --datetime <iso8601> --amount <decimal> --currency <ISO4217> [--instrument <id> --instrument-kind ISIN\|SYMBOL] [--quantity <d>] [--price <d>] [--fx-rate <d>] [--fees <d>]` | `POST /transactions` | ad hoc | `accounts`, scoped by `user_id` | `transactions` (idempotent on `(account_id, broker_transaction_ref)`, keyed by the mandatory `--ref`) |
+| Broker file import | `import-transactions --user <id> --file <path> --account <label>` | `POST /transactions/import` (multipart) | manual, on demand | export file, `accounts` scoped by `user_id` | `transactions` (idempotent on `(account_id, broker_transaction_ref)`) |
+| Cash-ledger import | `import-cashflow --user <id> --file <path> --account <label>` | `POST /cashflows/import` (multipart) | manual, on demand | export file, `accounts` scoped by `user_id`, data-store's FX read API (`datastore_client`) for non-EUR rows | `transactions` (idempotent on `(account_id, broker_transaction_ref)`) |
+| Transaction listing | — (CLI has none) | `GET /transactions` | on demand | `transactions`, scoped through the resolved account | — (read-only report) |
+| Positions rebuild | `rebuild-positions --user <id> [--account <label>]` | `POST /positions/rebuild` | after transactions change | `transactions`, `configs/ticker_mappings.yaml` | `position_snapshots` |
+| Position listing | — (CLI has none) | `GET /positions` | on demand | `position_snapshots`, latest row per ticker | — (read-only report) |
+| Returns rebuild | `rebuild-returns --user <id> [--account <label>]` | `POST /returns/rebuild` | after positions rebuild or new prices land | `position_snapshots`, `transactions` (`DIVIDEND` rows), `configs/ticker_mappings.yaml`, `data-store` read API | `return_snapshots` |
+| Return listing | — (CLI has none) | `GET /returns`, `GET /returns/latest` | on demand | `return_snapshots`, optionally filtered by ticker/date range | — (read-only report) |
 
 **No separate `brokers` table** ever materialized — `schema.md` settled on `broker` as a plain
 string on `accounts`, so `account add` writes only to `accounts`, never a second table.
@@ -657,6 +660,94 @@ for a non-English export — are documented in that plugin's own `docs/architect
 for the same reason as "Extension points" above: those specifics are exactly what stays out of
 this repo.
 
+## HTTP API
+
+**Built at task 9.** `src/portfolio/api/{app,routes,security,models}.py` — FastAPI routes that
+are argument-parsing-plus-a-call-into-`jobs.py`, the same shape `cli.py` has, per the flow table
+above. Mirrors `auth`'s shape more than `data-store`'s: an injectable `Settings` argument to
+`create_app()` (so tests build an app with a known secret without touching the environment), and
+`X-Internal-Secret` rather than `Authorization: Bearer` — the header `web`'s `HttpAuthClient`
+already sends, so a future `PortfolioClient` in `web` is a copy of that module, not a new shape.
+`app.state.settings` (set once in `create_app()`) is threaded through every route's own
+`Depends(get_settings)` into the matching `jobs.py` call's `settings` keyword, rather than each
+`run_*`/`get_*` re-deriving it via its own `load_settings()` — the same `Settings` instance a test
+built into `create_app()` is therefore what every route, not just `/health`, actually queries
+against. `cli.py` never passes `settings`, so each job's own `load_settings()` fallback keeps the
+CLI's behaviour unchanged.
+`/docs`, `/redoc`, `/openapi.json` are disabled, `data-store`'s reasoning: they mount as plain
+Starlette routes no router-level dependency covers, and this is a service-to-service API with no
+`/docs`, `/redoc`, `/openapi.json` are disabled, `data-store`'s reasoning: they mount as plain
+Starlette routes no router-level dependency covers, and this is a service-to-service API with no
+interactive audience.
+
+**`account_label` and `user_id` are always a query parameter or a request-body field, never a
+path segment.** A label is user-chosen free text up to 100 characters and may contain `/`, which
+no amount of path-segment escaping survives cleanly through a proxy; `user_id` is likewise
+explicit, matching `cli.py`'s `--user` and this document's existing "`user_id` is trusted input"
+stance (see "Conceptual entity model" above) — the shared secret proves a legitimate internal
+caller, not a specific user.
+
+**Error mapping moved the `except PortfolioError` out of `jobs.py`, into each entry point.**
+Before this task, every `run_*` job caught `PortfolioError` and collapsed it into a generic
+`{"status": "partial", "rows_saved": 0}` result, with the exception's message only logged — an
+HTTP layer reading that dict alone could not tell "account not found" from "unparseable broker
+file" from "data-store unreachable." `jobs.py` now lets `PortfolioError` propagate; `cli.py`
+catches it in `main()` (alongside the pre-existing `SettingsError` clause) and prints a one-line
+stderr message; the API maps each subclass to its own status code via `app.py`'s exception
+handlers, `auth`'s pattern of app-level handlers rather than per-route `try`/`except`:
+
+| Exception | Status | Why |
+|---|---|---|
+| `AccountNotFound` | 404 | `--account`/`account_label` didn't resolve for this user — the isolation chokepoint |
+| `AccountLabelConflict` | 409 | a label re-used under a different broker |
+| `InvalidBroker`, `InvalidTransaction`, `BrokerFileError`, `BrokerParserNotFound` | 422 | a caller-supplied value failed validation or parsing |
+| `TickerMappingError`, `BrokerPluginError` | 500 | a server-side configuration/plugin problem, not a caller mistake |
+| `DataStoreApiError` | 502 | the upstream `data-store` call failed |
+| any other `PortfolioError`, `SettingsError` | 500 | fails closed rather than leaking a raw traceback |
+
+**One practical consequence: `partial` now means only genuine partial success.** The two rebuild
+endpoints (`POST /positions/rebuild`, `POST /returns/rebuild`) can still report `status: partial`
+via `pipeline.rebuild_positions`/`rebuild_returns`'s own per-pair `blocked`/`failed_pairs`
+handling (unchanged by this task) — a real half-succeeded run, returned as **200**, with the
+blocked/failed detail in the body, not an error status, since the caller needs that list to know
+which instruments to map. Every write endpoint, rebuild routes included, goes through the same
+`routes._write_status_code`: `ok` is **201**, anything else (`nothing_to_do`, or a rebuild's own
+`partial`) is **200** — a domain error on any of them reaches the API as an exception instead, per
+the table above.
+
+**Broker-file imports take a multipart `UploadFile`.** `import-transactions`/`import-cashflow`
+both take a local filesystem `Path` in `jobs.py` — unchanged by this task, since the CLI still
+needs that — so the two upload routes (`_save_upload_to_tempfile` in `routes.py`) stream the
+request body to a size-capped (20 MB) temp file in chunks, call the job with that path, and
+delete the file in a `finally`, on both the success and the error path. A caller-supplied
+server-side path was deliberately not offered as an alternative to a real upload — that would be
+an arbitrary-file-read primitive sitting behind one shared secret.
+
+**Returns are served per ticker**, not aggregated across a portfolio. `GET /returns` takes an
+optional `ticker`/`start`/`end` filter and returns one series per matching `(account, ticker)`
+pair; there is no endpoint that sums market value or return across every ticker an account holds
+into one portfolio-level series. This is deliberate, not an oversight: different tickers can sit
+on different trading calendars, so summing across them is a real design question — how to handle
+a date one ticker priced and another didn't — not a serialization detail, and it's left to task
+12 (the view UI), where the chart's actual shape will settle the question.
+
+**Known limitations, same category as `data-store`'s own read API:**
+
+- **One connection per request.** `jobs.py`'s `run_*`/`get_*` functions open and close their own
+  connection, exactly as they already do for the CLI — `psycopg_pool` (as `auth`'s API already
+  uses) is the intended fix if request volume ever makes per-request connection setup a
+  bottleneck. `/health` pays this cost too, independent of any real traffic: Docker's own
+  healthcheck (`docker-compose.yml`, 10s interval) opens and closes a fresh connection every tick
+  for the container's whole lifetime — the same fix would absorb this cost as well.
+- **`GET /transactions` is unpaginated and untyped by date range** — it returns an account's
+  entire transaction log every time, the same shape `transactions_repository.list_by_account`
+  already had before this task; a large account's history is not yet a concern this API solves.
+- **The shared secret is caller-agnostic.** `X-Internal-Secret` proves "a legitimate internal
+  caller" (i.e., `web`), not cryptographically that a specific `user_id` came from a session that
+  service actually authenticated — the same accepted gap `auth/docs/architecture.md` documents
+  for its own shared-secret model, and the same reasoning behind treating `user_id` as trusted
+  input ("Conceptual entity model" above).
+
 ## Cross-service prerequisite: the data-store read API
 
 **This section describes what portfolio needs from it; `data-store`'s own `docs/architecture.md`
@@ -718,7 +809,7 @@ of its own:
 
 | File | Committed? | Why |
 |---|---|---|
-| `.env` (`PORTFOLIO_DATABASE_URL`, `APP_POSTGRES_ADMIN_DATABASE_URL`, `DATASTORE_API_URL`, `INTERNAL_API_SECRET`) | no — gitignored | Credentials, per-environment. **Not** the bare `DATABASE_URL`: data-store already owns that name, and both suites can run in one pytest process where a shared name would collide — the same reasoning behind `AUTH_DATABASE_URL`. `PORTFOLIO_DATABASE_URL` names the *service*, not the instance, so a future service sharing `app-postgres` gets its own name and its own role. `APP_POSTGRES_ADMIN_DATABASE_URL` is the one exception — it names the *instance*, because the admin role it points at is the shared container's own bootstrap role, not any one service's; see the role/schema paragraph above. **`INTERNAL_API_SECRET` is likewise deliberately unprefixed** (built at task 14), matching data-store's own env var name exactly — it's the one shared credential both sides of an internal call must agree on, not a portfolio-owned setting. Both are optional at `load_settings()` — only `import-cashflow` needs them, checked by `run_import_cashflow` itself. |
+| `.env` (`PORTFOLIO_DATABASE_URL`, `APP_POSTGRES_ADMIN_DATABASE_URL`, `DATASTORE_API_URL`, `INTERNAL_API_SECRET`, `PORTFOLIO_INTERNAL_SECRET`, `PORTFOLIO_API_HOST`, `PORTFOLIO_API_PORT`) | no — gitignored | Credentials, per-environment. **Not** the bare `DATABASE_URL`: data-store already owns that name, and both suites can run in one pytest process where a shared name would collide — the same reasoning behind `AUTH_DATABASE_URL`. `PORTFOLIO_DATABASE_URL` names the *service*, not the instance, so a future service sharing `app-postgres` gets its own name and its own role. `APP_POSTGRES_ADMIN_DATABASE_URL` is the one exception — it names the *instance*, because the admin role it points at is the shared container's own bootstrap role, not any one service's; see the role/schema paragraph above. **`INTERNAL_API_SECRET` is likewise deliberately unprefixed** (built at task 14), matching data-store's own env var name exactly — it's the one shared credential both sides of an internal *outbound* call (to data-store) must agree on, not a portfolio-owned setting. **`PORTFOLIO_INTERNAL_SECRET` (built at task 9) is a separate, prefixed credential for the *inbound* direction** — what `web` sends as `X-Internal-Secret` when calling portfolio's own HTTP API, matching `AUTH_INTERNAL_SECRET`'s convention. Keeping the inbound and outbound secrets distinct means either can be rotated without touching the other; a deployment could otherwise be tempted to reuse one secret both ways, at the cost of one leak compromising both edges. `PORTFOLIO_API_HOST`/`PORTFOLIO_API_PORT` default to `0.0.0.0`/`8002` (web is 8000, auth 8001, data-store's read API 8082). All four API-related settings are optional at `load_settings()` — the CLI must keep working with no API ever run; `create_app()` checks `PORTFOLIO_INTERNAL_SECRET` itself at startup, data-store's own pattern, and `import-cashflow`/`rebuild-returns` check `DATASTORE_API_URL`/`INTERNAL_API_SECRET` themselves. |
 | `.env.example` | yes | Template, matching data-store's convention |
 | `configs/ticker_mappings.yaml` | no — gitignored | This deployment's own ISIN/symbol → canonical-ticker choices — personal/deployment data, not generic reference data, the same reasoning `data-store` applies to `etfs.yaml`/`tracked_tickers.yaml`. |
 | `configs/ticker_mappings.yaml.example` | yes | Template, matching `data-store`'s `etfs.yaml.example` convention. |
@@ -741,7 +832,7 @@ resolves its own config paths — `PORTFOLIO_TICKER_MAPPINGS_PATH`, an env var o
 flowchart TB
     subgraph pf["portfolio"]
         PCLI["portfolio CLI"]
-        PAPI["portfolio HTTP API<br/><i>planned</i>"]
+        PAPI["portfolio HTTP API<br/><i>built (task 9)</i>"]
         PJOBS["jobs.py"]
     end
 
@@ -753,13 +844,13 @@ flowchart TB
     end
 
     subgraph au["auth"]
-        AUAPI["auth HTTP API<br/><i>planned</i>"]
+        AUAPI["auth HTTP API<br/><i>built (task 2)</i>"]
     end
 
     AUDB[("auth-postgres<br/><i>dedicated instance -- users, sessions.<br/>Isolated deliberately: credential data,<br/>kept out of app-postgres's blast radius</i>")]
 
     PCLI --> PJOBS
-    PAPI -.future.-> PJOBS
+    PAPI --> PJOBS
     PJOBS --> APPDB
     PJOBS -->|"datastore_client<br/>(HTTP -- FX, prices, ticker info; task 14 + task 8)"| DSAPI
     DSAPI --> DSDB
@@ -841,18 +932,20 @@ requirement later.
 
 **Positions and returns are materialized — rebuilt into stored tables from the transaction log,
 not computed live on every read.** Matches `data-store`'s own `returns/` shape (full rebuild per
-run), and means a future HTTP API serves reads from a table, not from replaying years of
-transactions on every request. *Rejected: compute on every read* — simpler to reason about
-freshness, but gets slower as transaction history grows, and would force the future API to either
-replay history per request or build its own cache — reinventing materialization anyway, just less
-deliberately.
+run), and means the HTTP API's `GET /positions`/`GET /returns` (task 9) serve reads from a table,
+not from replaying years of transactions on every request. *Rejected: compute on every read* —
+simpler to reason about freshness, but gets slower as transaction history grows, and would have
+forced the API to either replay history per request or build its own cache — reinventing
+materialization anyway, just less deliberately.
 
-**CLI first; orchestration is plain callables so a future HTTP API adds a caller, not a rewrite.**
-Mirrors data-store's `jobs.py` seam — `cli.py`/a future API route are both argument parsing plus
-one call into `jobs.run_*`. *Rejected: build the domain against a web framework's handlers from day
-one* — couples domain logic to HTTP concerns (request parsing, status codes) before an API is
-actually being built, the same coupling `jobs.py` exists to prevent between data-store's CLI and
-Airflow.
+**CLI first; orchestration is plain callables so the HTTP API added a caller, not a rewrite.**
+Mirrors data-store's `jobs.py` seam — `cli.py`/`api/routes.py` are both argument parsing plus one
+call into `jobs.run_*`/`jobs.get_*`. *Rejected: build the domain against a web framework's
+handlers from day one* — would have coupled domain logic to HTTP concerns (request parsing,
+status codes) years before task 9 needed them, the same coupling `jobs.py` exists to prevent
+between data-store's CLI and Airflow. Confirmed rather than merely assumed at task 9: the API
+route bodies really did end up as one call into an existing `jobs.py` function each, with no
+domain logic duplicated.
 
 **Every account belongs to exactly one user, and `accounts/repository.py` is the single chokepoint
 every other domain module's queries pass through to get there.** Isolation is enforced in one
@@ -897,8 +990,8 @@ table.
 
 | | Needs | Covers |
 |---|---|---|
-| `tests/unit/` | nothing | **Built as of task 6**: `ticker_mapping/loader.py`; `pipeline.import_transactions`/`list_unmapped_instruments` against fake repositories and a fake `BrokerParser`. **Built as of task 14**: `datastore_client/http_client.py` against a faked `requests.get`; `pipeline.import_cashflow` against a fake `DataStoreClient` and a fake `CashflowParser`. **Broker-plugin discovery**: `broker_import/discovery.py` against a faked `entry_points()` (`tests/unit/broker_import/test_discovery.py`) — no installed plugin required. Any given broker's own parsing logic is tested in that plugin's own repo, against its own fixtures, not here. **Built as of task 7**: `positions/calculator.py` as a pure function over in-memory `CanonicalTransaction` sequences (average-cost blending, sell-to-zero reset, the two anomaly cases, and the cross-account/cross-currency independence case); `pipeline.rebuild_positions` against fake repositories (blocked-instrument reporting, per-pair commit boundaries, account/user scoping, stale-ticker pruning, the one-batched-call fetch across every account in a whole-portfolio rebuild, and a driver-level failure on one pair being caught and reported in `failed_pairs` rather than aborting the rest of the run). **Built as of task 8**: `returns/calculator.py` as a pure function over in-memory `PositionSnapshot`/`PricePoint`/`FxPoint`/`DividendEvent` sequences (EUR vs. non-EUR conversion, a price date preceding any FX point being skipped rather than zeroed, the zero-cost-basis → `None` pct rule for both `unrealized_return_pct` and `total_return_pct`, dividend accumulation including the reopened-position case); `datastore_client/http_client.py`'s three new methods against a faked `requests.get`, same convention as `get_fx_rate`'s own tests; `pipeline.rebuild_returns` against fake repositories and a fake `DataStoreClient` (ticker-existence blocking, an isolated `DataStoreApiError`-style failure per pair, the bounded window for an open vs. closed position, `DIVIDEND` resolution via `mappings` including the unresolvable-instrument case, and the batched dividend-transaction fetch) |
-| `tests/integration/` | live Postgres | **Built as of task 6**: re-importing the same file is a no-op (`tests/integration/test_broker_import.py`, against a synthetic `BrokerParser`), `list_distinct_instruments`'s multi-user isolation and broker attribution; task 4/5's `accounts`, `transactions` idempotent-upsert, and schema-migration-idempotency coverage. **Built as of task 14**: `import_cashflow`'s idempotent reimport and broker-mismatch rejection (`test_cashflow_import.py`, against a synthetic `CashflowParser`), routed through `pipeline.py` directly with a stub `DataStoreClient` rather than through `jobs.py`'s real `HttpDataStoreClient` — see below. Neither integration test depends on any broker plugin being installed. **Built as of task 7**: `rebuild-positions` end-to-end through the real CLI/pipeline/repository stack (`test_rebuild_positions.py`) — the delete-then-insert replacement contract a fake can't prove (a re-run replaces rows rather than duplicating them), `--account` scoping and the whole-portfolio (no `--account`) case rebuilding every account via the batched `list_by_accounts` fetch, per-user isolation, an unmapped instrument blocking with exit code 1, and a bad `--account` label exiting cleanly rather than crashing. **Built as of task 8**: `rebuild-returns` end-to-end through the real CLI stack (`test_rebuild_returns.py`) — a true-upsert re-run overwriting values in place rather than duplicating rows (the contract a fake can't prove), a closed position's window stopping at the closing date, an untracked ticker blocking with exit code 1, `--account` scoping, per-user isolation, and a real `DIVIDEND` transaction flowing through to `dividends_received_eur`/`total_return_eur`. `jobs.HttpDataStoreClient` is monkeypatched to a stub for all of these — matching `test_cashflow_import.py`'s precedent that the real HTTP path is `http_client.py`'s own unit tests' job, not this suite's. **Still not built**: `ticker_mapping/` (nothing there talks to Postgres — see the module table) |
+| `tests/unit/` | nothing | **Built as of task 6**: `ticker_mapping/loader.py`; `pipeline.import_transactions`/`list_unmapped_instruments` against fake repositories and a fake `BrokerParser`. **Built as of task 14**: `datastore_client/http_client.py` against a faked `requests.get`; `pipeline.import_cashflow` against a fake `DataStoreClient` and a fake `CashflowParser`. **Broker-plugin discovery**: `broker_import/discovery.py` against a faked `entry_points()` (`tests/unit/broker_import/test_discovery.py`) — no installed plugin required. Any given broker's own parsing logic is tested in that plugin's own repo, against its own fixtures, not here. **Built as of task 7**: `positions/calculator.py` as a pure function over in-memory `CanonicalTransaction` sequences (average-cost blending, sell-to-zero reset, the two anomaly cases, and the cross-account/cross-currency independence case); `pipeline.rebuild_positions` against fake repositories (blocked-instrument reporting, per-pair commit boundaries, account/user scoping, stale-ticker pruning, the one-batched-call fetch across every account in a whole-portfolio rebuild, and a driver-level failure on one pair being caught and reported in `failed_pairs` rather than aborting the rest of the run). **Built as of task 8**: `returns/calculator.py` as a pure function over in-memory `PositionSnapshot`/`PricePoint`/`FxPoint`/`DividendEvent` sequences (EUR vs. non-EUR conversion, a price date preceding any FX point being skipped rather than zeroed, the zero-cost-basis → `None` pct rule for both `unrealized_return_pct` and `total_return_pct`, dividend accumulation including the reopened-position case); `datastore_client/http_client.py`'s three new methods against a faked `requests.get`, same convention as `get_fx_rate`'s own tests; `pipeline.rebuild_returns` against fake repositories and a fake `DataStoreClient` (ticker-existence blocking, an isolated `DataStoreApiError`-style failure per pair, the bounded window for an open vs. closed position, `DIVIDEND` resolution via `mappings` including the unresolvable-instrument case, and the batched dividend-transaction fetch). **Built as of task 9**: the four new read flows (`list_transactions`/`list_positions`/`list_returns`/`list_latest_returns`) and the two new repository reads each backs (`positions_repository.list_latest_snapshots`, `returns_repository.list_snapshots`/`list_latest_snapshots`) against fake repositories/connections; `tests/unit/api/` (`test_security.py` calling `require_internal_secret` directly, including the non-ASCII-header-is-401-not-500 regression; `test_app.py` — `/docs`/`/redoc`/`/openapi.json` all 404, `create_app` raising `SettingsError` with no secret configured, every exception handler's status mapping parametrized over each `PortfolioError` subclass; `test_routes_{accounts,transactions,positions,returns}.py` against a bare app with `require_internal_secret` overridden, `data-store`'s own `tests/unit/api/conftest.py` pattern — argument coercion, status codes, and the upload routes' temp-file-deleted-on-both-success-and-raise contract). |
+| `tests/integration/` | live Postgres | **Built as of task 6**: re-importing the same file is a no-op (`tests/integration/test_broker_import.py`, against a synthetic `BrokerParser`), `list_distinct_instruments`'s multi-user isolation and broker attribution; task 4/5's `accounts`, `transactions` idempotent-upsert, and schema-migration-idempotency coverage. **Built as of task 14**: `import_cashflow`'s idempotent reimport and broker-mismatch rejection (`test_cashflow_import.py`, against a synthetic `CashflowParser`), routed through `pipeline.py` directly with a stub `DataStoreClient` rather than through `jobs.py`'s real `HttpDataStoreClient` — see below. Neither integration test depends on any broker plugin being installed. **Built as of task 7**: `rebuild-positions` end-to-end through the real CLI/pipeline/repository stack (`test_rebuild_positions.py`) — the delete-then-insert replacement contract a fake can't prove (a re-run replaces rows rather than duplicating them), `--account` scoping and the whole-portfolio (no `--account`) case rebuilding every account via the batched `list_by_accounts` fetch, per-user isolation, an unmapped instrument blocking with exit code 1, and a bad `--account` label exiting cleanly rather than crashing. **Built as of task 8**: `rebuild-returns` end-to-end through the real CLI stack (`test_rebuild_returns.py`) — a true-upsert re-run overwriting values in place rather than duplicating rows (the contract a fake can't prove), a closed position's window stopping at the closing date, an untracked ticker blocking with exit code 1, `--account` scoping, per-user isolation, and a real `DIVIDEND` transaction flowing through to `dividends_received_eur`/`total_return_eur`. `jobs.HttpDataStoreClient` is monkeypatched to a stub for all of these — matching `test_cashflow_import.py`'s precedent that the real HTTP path is `http_client.py`'s own unit tests' job, not this suite's. **Built as of task 9**: `test_api.py` drives a real `create_app()` with `TestClient` against live Postgres — create-account-then-list-it, an unknown account label returning 404 not 500, a second user's account label staying invisible to the first (the isolation chokepoint through the real HTTP boundary), a missing secret returning 401 on every route but `/health`, and add-transaction → rebuild-positions → read-positions end to end. **Still not built**: `ticker_mapping/` (nothing there talks to Postgres — see the module table) |
 
 **`datastore_client/http_client.py` itself is tested against a faked `requests.get`, not a live
 data-store instance** — status codes, the lookback-window request shape, and error mapping to
@@ -925,5 +1018,7 @@ neither service's suite by itself can currently catch a drift in the other.
 4. `positions/calculator.py` — the most representative "derived, materialized" domain module;
    `returns/calculator.py` next, since it's the one with an external dependency
    (`datastore_client`) deliberately kept out of the pure function itself.
-5. `jobs.py` — how configuration, a connection and a flow become one runnable operation, ready for
-   a future API caller alongside the CLI.
+5. `jobs.py` — how configuration, a connection and a flow become one runnable operation, called by
+   both the CLI and the HTTP API.
+6. `api/routes.py` and `api/app.py` — the HTTP entry point; read after `jobs.py`, since a route is
+   argument parsing plus one call into it and nothing else. See "HTTP API" above.

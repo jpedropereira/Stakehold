@@ -6,6 +6,7 @@ from pathlib import Path
 from uuid import UUID
 
 from portfolio import jobs
+from portfolio.errors import PortfolioError
 from portfolio.run_result import STATUS_NOTHING_TO_DO, STATUS_OK
 from portfolio.settings import SettingsError
 from portfolio.transactions.base import TRANSACTION_TYPES
@@ -122,6 +123,18 @@ def _list_unmapped_instruments(args: argparse.Namespace) -> int:
     result = jobs.run_list_unmapped_instruments(user_id=args.user)
     _print_instrument_rows(result["unmapped_instruments"])
     return _report(result, "instrument(s) unmapped", count_key="instruments_unmapped")
+
+
+def _serve(_args: argparse.Namespace) -> int:
+    # Imported lazily so every other command doesn't pay for importing FastAPI/uvicorn --
+    # only `portfolio serve` needs them. Mirrors auth's cli.py._serve.
+    import uvicorn
+    from portfolio.api.app import create_app
+    from portfolio.settings import load_settings
+
+    settings = load_settings()
+    uvicorn.run(create_app(settings), host=settings.api_host, port=settings.api_port)
+    return 0
 
 
 def _add_transaction(args: argparse.Namespace) -> int:
@@ -261,6 +274,9 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     returns_parser.set_defaults(handler=_rebuild_returns)
 
+    serve_parser = subparsers.add_parser("serve", help="Run the HTTP API")
+    serve_parser.set_defaults(handler=_serve)
+
     return parser
 
 
@@ -270,12 +286,17 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return args.handler(args)
     except SettingsError as exc:
-        # A misconfigured deployment (a missing env var), not a domain failure -- every
-        # PortfolioError is already caught inside jobs.py and reported as a clean partial
-        # result, but SettingsError deliberately isn't one of those (see settings.py), so
-        # without this it would otherwise surface as a raw traceback instead of a one-line,
-        # actionable message.
+        # A misconfigured deployment (a missing env var) -- without this it would otherwise
+        # surface as a raw traceback instead of a one-line, actionable message.
         print(f"configuration error: {exc}", file=sys.stderr)
+        return 1
+    except PortfolioError as exc:
+        # A domain failure (e.g. an unknown account label, an unparseable broker file).
+        # jobs.py deliberately lets these propagate rather than swallowing them into a
+        # partial result, so every entry point maps them at its own boundary -- this is
+        # cli.py's; api/app.py maps the same exceptions to status codes instead (via each
+        # exc's own status_code -- see errors.py).
+        print(f"error: {exc}", file=sys.stderr)
         return 1
 
 

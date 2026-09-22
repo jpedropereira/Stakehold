@@ -1,6 +1,6 @@
 import logging
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -9,8 +9,11 @@ from portfolio import jobs
 from portfolio.accounts.repository import Account
 from portfolio.errors import AccountNotFound, TickerMappingError
 from portfolio.pipeline import RebuildOutcome, ReturnsRebuildOutcome
+from portfolio.positions.calculator import PositionSnapshot
+from portfolio.returns.calculator import ReturnSnapshot
 from portfolio.settings import SettingsError
 from portfolio.ticker_mapping.loader import TickerMappings
+from portfolio.transactions.base import CanonicalTransaction
 
 _FAKE_DATABASE_URL = "postgresql://portfolio:pw@localhost/app"  # pragma: allowlist secret
 _FAKE_ADMIN_DATABASE_URL = "postgresql://admin:pw@localhost/app"  # pragma: allowlist secret
@@ -261,7 +264,7 @@ def test_run_add_account_reports_nothing_to_do_when_already_exists(monkeypatch):
     assert result == {"status": "nothing_to_do", "rows_saved": 0, "accounts_created": 0}
 
 
-def test_run_add_account_reports_partial_and_closes_connection_on_domain_error(monkeypatch):
+def test_run_add_account_propagates_domain_error_and_closes_connection(monkeypatch):
     fake_conn = _patch_new_job_common(monkeypatch)
 
     def boom(conn, **kw):
@@ -269,9 +272,9 @@ def test_run_add_account_reports_partial_and_closes_connection_on_domain_error(m
 
     monkeypatch.setattr(jobs.pipeline, "add_account", boom)
 
-    result = jobs.run_add_account(user_id=uuid.uuid4(), broker="nope", account_label="m")
+    with pytest.raises(AccountNotFound):
+        jobs.run_add_account(user_id=uuid.uuid4(), broker="nope", account_label="m")
 
-    assert result == {"status": "partial", "rows_saved": 0, "accounts_created": 0}
     assert fake_conn.closed is True
 
 
@@ -399,7 +402,7 @@ def test_run_add_transaction_reports_nothing_to_do_when_ref_already_exists(monke
     assert result == {"status": "nothing_to_do", "rows_saved": 0, "transactions_saved": 0}
 
 
-def test_run_add_transaction_reports_partial_and_closes_connection_on_domain_error(monkeypatch):
+def test_run_add_transaction_propagates_domain_error_and_closes_connection(monkeypatch):
     fake_conn = _patch_new_job_common(monkeypatch)
 
     def boom(conn, **kw):
@@ -407,9 +410,9 @@ def test_run_add_transaction_reports_partial_and_closes_connection_on_domain_err
 
     monkeypatch.setattr(jobs.pipeline, "add_manual_transaction", boom)
 
-    result = jobs.run_add_transaction(user_id=uuid.uuid4(), **_TXN_KWARGS)
+    with pytest.raises(AccountNotFound):
+        jobs.run_add_transaction(user_id=uuid.uuid4(), **_TXN_KWARGS)
 
-    assert result == {"status": "partial", "rows_saved": 0, "transactions_saved": 0}
     assert fake_conn.closed is True
 
 
@@ -437,7 +440,7 @@ def test_run_import_transactions_reports_nothing_to_do_on_a_reimport(monkeypatch
     assert result == {"status": "nothing_to_do", "rows_saved": 0, "transactions_saved": 0}
 
 
-def test_run_import_transactions_reports_partial_and_closes_connection_on_domain_error(
+def test_run_import_transactions_propagates_domain_error_and_closes_connection(
     monkeypatch,
 ):
     fake_conn = _patch_new_job_common(monkeypatch)
@@ -447,9 +450,9 @@ def test_run_import_transactions_reports_partial_and_closes_connection_on_domain
 
     monkeypatch.setattr(jobs.pipeline, "import_transactions", boom)
 
-    result = jobs.run_import_transactions(user_id=uuid.uuid4(), **_IMPORT_KWARGS)
+    with pytest.raises(AccountNotFound):
+        jobs.run_import_transactions(user_id=uuid.uuid4(), **_IMPORT_KWARGS)
 
-    assert result == {"status": "partial", "rows_saved": 0, "transactions_saved": 0}
     assert fake_conn.closed is True
 
 
@@ -547,9 +550,9 @@ def test_run_list_unmapped_instruments_loads_mappings_from_the_settings_path(mon
     assert captured["path"] == Path("configs/ticker_mappings.yaml")
 
 
-def test_run_list_unmapped_instruments_reports_partial_on_a_missing_mappings_file(monkeypatch):
-    """A missing/malformed configs/ticker_mappings.yaml is a domain error, not a crash -- every
-    sibling job function degrades to a clean `partial` result the same way."""
+def test_run_list_unmapped_instruments_propagates_error_on_a_missing_mappings_file(monkeypatch):
+    """A missing/malformed configs/ticker_mappings.yaml is a domain error -- jobs.py lets it
+    propagate to the caller (cli.py, or the future HTTP API) rather than swallowing it."""
     fake_conn = _patch_new_job_common(monkeypatch)
 
     def boom(path):
@@ -557,9 +560,9 @@ def test_run_list_unmapped_instruments_reports_partial_on_a_missing_mappings_fil
 
     monkeypatch.setattr(jobs, "load_ticker_mappings", boom)
 
-    result = jobs.run_list_unmapped_instruments(user_id=uuid.uuid4())
+    with pytest.raises(TickerMappingError):
+        jobs.run_list_unmapped_instruments(user_id=uuid.uuid4())
 
-    assert result == {"status": "partial", "rows_saved": 0, "instruments_unmapped": 0}
     assert fake_conn.closed is True
 
 
@@ -601,7 +604,7 @@ def test_run_import_cashflow_reports_nothing_to_do_on_a_reimport(monkeypatch):
     assert result == {"status": "nothing_to_do", "rows_saved": 0, "transactions_saved": 0}
 
 
-def test_run_import_cashflow_reports_partial_on_domain_error(monkeypatch):
+def test_run_import_cashflow_propagates_domain_error_and_closes_connection(monkeypatch):
     fake_conn = _patch_cashflow_job_common(monkeypatch)
 
     def boom(conn, **kw):
@@ -609,9 +612,9 @@ def test_run_import_cashflow_reports_partial_on_domain_error(monkeypatch):
 
     monkeypatch.setattr(jobs.pipeline, "import_cashflow", boom)
 
-    result = jobs.run_import_cashflow(user_id=uuid.uuid4(), **_CASHFLOW_KWARGS)
+    with pytest.raises(AccountNotFound):
+        jobs.run_import_cashflow(user_id=uuid.uuid4(), **_CASHFLOW_KWARGS)
 
-    assert result == {"status": "partial", "rows_saved": 0, "transactions_saved": 0}
     assert fake_conn.closed is True
 
 
@@ -790,7 +793,7 @@ def test_run_rebuild_positions_reports_partial_with_failed_pairs(monkeypatch):
     ]
 
 
-def test_run_rebuild_positions_reports_partial_on_a_domain_error(monkeypatch):
+def test_run_rebuild_positions_propagates_domain_error_and_closes_connection(monkeypatch):
     fake_conn = _patch_new_job_common(monkeypatch)
 
     def boom(conn, **kw):
@@ -801,23 +804,13 @@ def test_run_rebuild_positions_reports_partial_on_a_domain_error(monkeypatch):
     )
     monkeypatch.setattr(jobs.pipeline, "rebuild_positions", boom)
 
-    result = jobs.run_rebuild_positions(user_id=uuid.uuid4(), account_label="nope")
+    with pytest.raises(AccountNotFound):
+        jobs.run_rebuild_positions(user_id=uuid.uuid4(), account_label="nope")
 
-    assert result == {
-        "status": "partial",
-        "rows_saved": 0,
-        "positions_rebuilt": 0,
-        "positions_removed": 0,
-        "instruments_blocked": 0,
-        "positions_with_anomalies": 0,
-        "pairs_failed": 0,
-        "blocked_instruments": [],
-        "failed_pairs": [],
-    }
     assert fake_conn.closed is True
 
 
-def test_run_rebuild_positions_reports_partial_on_a_missing_mappings_file(monkeypatch):
+def test_run_rebuild_positions_propagates_error_on_a_missing_mappings_file(monkeypatch):
     fake_conn = _patch_new_job_common(monkeypatch)
 
     def boom(path):
@@ -825,9 +818,9 @@ def test_run_rebuild_positions_reports_partial_on_a_missing_mappings_file(monkey
 
     monkeypatch.setattr(jobs, "load_ticker_mappings", boom)
 
-    result = jobs.run_rebuild_positions(user_id=uuid.uuid4())
+    with pytest.raises(TickerMappingError):
+        jobs.run_rebuild_positions(user_id=uuid.uuid4())
 
-    assert result["status"] == "partial"
     assert fake_conn.closed is True
 
 
@@ -999,7 +992,7 @@ def test_run_rebuild_returns_reports_partial_with_failed_pairs(monkeypatch):
     ]
 
 
-def test_run_rebuild_returns_reports_partial_on_a_domain_error(monkeypatch):
+def test_run_rebuild_returns_propagates_domain_error_and_closes_connection(monkeypatch):
     fake_conn = _patch_returns_job_common(monkeypatch)
 
     def boom(conn, **kw):
@@ -1007,17 +1000,9 @@ def test_run_rebuild_returns_reports_partial_on_a_domain_error(monkeypatch):
 
     monkeypatch.setattr(jobs.pipeline, "rebuild_returns", boom)
 
-    result = jobs.run_rebuild_returns(user_id=uuid.uuid4(), account_label="nope")
+    with pytest.raises(AccountNotFound):
+        jobs.run_rebuild_returns(user_id=uuid.uuid4(), account_label="nope")
 
-    assert result == {
-        "status": "partial",
-        "rows_saved": 0,
-        "tickers_rebuilt": 0,
-        "tickers_blocked": 0,
-        "pairs_failed": 0,
-        "blocked_tickers": [],
-        "failed_pairs": [],
-    }
     assert fake_conn.closed is True
 
 
@@ -1102,3 +1087,259 @@ def test_run_rebuild_returns_logs_start_before_completion(monkeypatch, caplog):
     start_index = next(i for i, m in enumerate(messages) if "rebuilding returns" in m)
     done_index = next(i for i, m in enumerate(messages) if "done" in m)
     assert start_index < done_index
+
+
+# --- get_transactions ---
+
+
+def test_get_transactions_returns_dicts_and_closes_connection(monkeypatch):
+    fake_conn = _patch_new_job_common(monkeypatch)
+    txn = CanonicalTransaction(
+        account_id=1,
+        broker_transaction_ref="ref-1",
+        transaction_type="BUY",
+        trade_datetime=datetime(2026, 1, 5, tzinfo=UTC),
+        instrument_identifier="IE00B4L5Y983",
+        instrument_identifier_kind="ISIN",
+        quantity=Decimal("10"),
+        price=Decimal("95.00"),
+        native_currency="EUR",
+        native_amount=Decimal("-950.00"),
+        eur_amount=Decimal("-950.0000"),
+        fx_rate=None,
+        fx_rate_source=None,
+        fees_native=None,
+    )
+    monkeypatch.setattr(jobs.pipeline, "list_transactions", lambda conn, **kw: [txn])
+
+    result = jobs.get_transactions(user_id=uuid.uuid4(), account_label="m")
+
+    assert result == [
+        {
+            "account_id": 1,
+            "broker_transaction_ref": "ref-1",
+            "transaction_type": "BUY",
+            "trade_datetime": txn.trade_datetime,
+            "instrument_identifier": "IE00B4L5Y983",
+            "instrument_identifier_kind": "ISIN",
+            "quantity": Decimal("10"),
+            "price": Decimal("95.00"),
+            "native_currency": "EUR",
+            "native_amount": Decimal("-950.00"),
+            "eur_amount": Decimal("-950.0000"),
+            "fx_rate": None,
+            "fx_rate_source": None,
+            "fees_native": None,
+        }
+    ]
+    assert fake_conn.closed is True
+
+
+def test_get_transactions_propagates_account_not_found(monkeypatch):
+    _patch_new_job_common(monkeypatch)
+
+    def boom(conn, **kw):
+        raise AccountNotFound("nope")
+
+    monkeypatch.setattr(jobs.pipeline, "list_transactions", boom)
+
+    with pytest.raises(AccountNotFound):
+        jobs.get_transactions(user_id=uuid.uuid4(), account_label="nope")
+
+
+def test_get_transactions_passes_user_and_account_through(monkeypatch):
+    _patch_new_job_common(monkeypatch)
+    captured = {}
+
+    def fake_list_transactions(conn, **kw):
+        captured.update(kw)
+        return []
+
+    monkeypatch.setattr(jobs.pipeline, "list_transactions", fake_list_transactions)
+    user_id = uuid.uuid4()
+
+    jobs.get_transactions(user_id=user_id, account_label="m")
+
+    assert captured == {"user_id": user_id, "account_label": "m"}
+
+
+# --- get_positions ---
+
+
+def test_get_positions_returns_dicts_and_closes_connection(monkeypatch):
+    fake_conn = _patch_new_job_common(monkeypatch)
+    snapshot = PositionSnapshot(
+        account_id=1,
+        canonical_ticker="IWDA.AS",
+        as_of_date=date(2026, 1, 5),
+        quantity=Decimal("10.000000"),
+        average_cost_native=Decimal("95.000000"),
+        native_currency="EUR",
+        average_cost_eur=Decimal("95.000000"),
+        cost_basis_eur=Decimal("950.0000"),
+    )
+    monkeypatch.setattr(jobs.pipeline, "list_positions", lambda conn, **kw: [snapshot])
+
+    result = jobs.get_positions(user_id=uuid.uuid4(), account_label="m")
+
+    assert result == [
+        {
+            "account_id": 1,
+            "canonical_ticker": "IWDA.AS",
+            "as_of_date": date(2026, 1, 5),
+            "quantity": Decimal("10.000000"),
+            "average_cost_native": Decimal("95.000000"),
+            "native_currency": "EUR",
+            "average_cost_eur": Decimal("95.000000"),
+            "cost_basis_eur": Decimal("950.0000"),
+        }
+    ]
+    assert fake_conn.closed is True
+
+
+def test_get_positions_propagates_account_not_found(monkeypatch):
+    _patch_new_job_common(monkeypatch)
+
+    def boom(conn, **kw):
+        raise AccountNotFound("nope")
+
+    monkeypatch.setattr(jobs.pipeline, "list_positions", boom)
+
+    with pytest.raises(AccountNotFound):
+        jobs.get_positions(user_id=uuid.uuid4(), account_label="nope")
+
+
+# --- get_returns ---
+
+
+def test_get_returns_returns_dicts_and_closes_connection(monkeypatch):
+    fake_conn = _patch_new_job_common(monkeypatch)
+    snapshot = ReturnSnapshot(
+        account_id=1,
+        canonical_ticker="IWDA.AS",
+        price_date=date(2026, 1, 6),
+        quantity=Decimal("10.000000"),
+        market_value_native=Decimal("1000.0000"),
+        market_value_eur=Decimal("1000.0000"),
+        cost_basis_eur=Decimal("950.0000"),
+        unrealized_return_eur=Decimal("50.0000"),
+        unrealized_return_pct=Decimal("0.05263158"),
+        dividends_received_eur=Decimal("0.0000"),
+        total_return_eur=Decimal("50.0000"),
+        total_return_pct=Decimal("0.05263158"),
+    )
+    monkeypatch.setattr(jobs.pipeline, "list_returns", lambda conn, **kw: [snapshot])
+
+    result = jobs.get_returns(user_id=uuid.uuid4(), account_label="m")
+
+    assert result == [
+        {
+            "account_id": 1,
+            "canonical_ticker": "IWDA.AS",
+            "price_date": date(2026, 1, 6),
+            "quantity": Decimal("10.000000"),
+            "market_value_native": Decimal("1000.0000"),
+            "market_value_eur": Decimal("1000.0000"),
+            "cost_basis_eur": Decimal("950.0000"),
+            "unrealized_return_eur": Decimal("50.0000"),
+            "unrealized_return_pct": Decimal("0.05263158"),
+            "dividends_received_eur": Decimal("0.0000"),
+            "total_return_eur": Decimal("50.0000"),
+            "total_return_pct": Decimal("0.05263158"),
+        }
+    ]
+    assert fake_conn.closed is True
+
+
+def test_get_returns_passes_filters_through(monkeypatch):
+    _patch_new_job_common(monkeypatch)
+    captured = {}
+
+    def fake_list_returns(conn, **kw):
+        captured.update(kw)
+        return []
+
+    monkeypatch.setattr(jobs.pipeline, "list_returns", fake_list_returns)
+    user_id = uuid.uuid4()
+
+    jobs.get_returns(
+        user_id=user_id,
+        account_label="m",
+        canonical_ticker="IWDA.AS",
+        start=date(2026, 1, 1),
+        end=date(2026, 1, 31),
+    )
+
+    assert captured == {
+        "user_id": user_id,
+        "account_label": "m",
+        "canonical_ticker": "IWDA.AS",
+        "start": date(2026, 1, 1),
+        "end": date(2026, 1, 31),
+    }
+
+
+def test_get_returns_propagates_account_not_found(monkeypatch):
+    _patch_new_job_common(monkeypatch)
+
+    def boom(conn, **kw):
+        raise AccountNotFound("nope")
+
+    monkeypatch.setattr(jobs.pipeline, "list_returns", boom)
+
+    with pytest.raises(AccountNotFound):
+        jobs.get_returns(user_id=uuid.uuid4(), account_label="nope")
+
+
+# --- get_latest_returns ---
+
+
+def test_get_latest_returns_returns_dicts_and_closes_connection(monkeypatch):
+    fake_conn = _patch_new_job_common(monkeypatch)
+    snapshot = ReturnSnapshot(
+        account_id=1,
+        canonical_ticker="IWDA.AS",
+        price_date=date(2026, 1, 6),
+        quantity=Decimal("10.000000"),
+        market_value_native=Decimal("1000.0000"),
+        market_value_eur=Decimal("1000.0000"),
+        cost_basis_eur=Decimal("950.0000"),
+        unrealized_return_eur=Decimal("50.0000"),
+        unrealized_return_pct=Decimal("0.05263158"),
+        dividends_received_eur=Decimal("0.0000"),
+        total_return_eur=Decimal("50.0000"),
+        total_return_pct=Decimal("0.05263158"),
+    )
+    monkeypatch.setattr(jobs.pipeline, "list_latest_returns", lambda conn, **kw: [snapshot])
+
+    result = jobs.get_latest_returns(user_id=uuid.uuid4(), account_label="m")
+
+    assert result == [
+        {
+            "account_id": 1,
+            "canonical_ticker": "IWDA.AS",
+            "price_date": date(2026, 1, 6),
+            "quantity": Decimal("10.000000"),
+            "market_value_native": Decimal("1000.0000"),
+            "market_value_eur": Decimal("1000.0000"),
+            "cost_basis_eur": Decimal("950.0000"),
+            "unrealized_return_eur": Decimal("50.0000"),
+            "unrealized_return_pct": Decimal("0.05263158"),
+            "dividends_received_eur": Decimal("0.0000"),
+            "total_return_eur": Decimal("50.0000"),
+            "total_return_pct": Decimal("0.05263158"),
+        }
+    ]
+    assert fake_conn.closed is True
+
+
+def test_get_latest_returns_propagates_account_not_found(monkeypatch):
+    _patch_new_job_common(monkeypatch)
+
+    def boom(conn, **kw):
+        raise AccountNotFound("nope")
+
+    monkeypatch.setattr(jobs.pipeline, "list_latest_returns", boom)
+
+    with pytest.raises(AccountNotFound):
+        jobs.get_latest_returns(user_id=uuid.uuid4(), account_label="nope")

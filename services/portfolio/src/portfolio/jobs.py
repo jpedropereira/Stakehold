@@ -1,12 +1,19 @@
 """Runnable units: load settings, open a connection, run one flow, close it, return a result.
 
 The seam every entry point goes through. `cli.py` is argument parsing plus a call into here,
-and a future HTTP route will be the same -- anything that lived in only one of those two would
-be, by construction, untested by the other. See docs/architecture.md's layering section.
+and `api/routes.py` is the same shape -- anything that lived in only one of those two would be,
+by construction, untested by the other. See docs/architecture.md's layering section.
+
+Every job takes an optional `settings: Settings | None = None`, defaulting to a fresh
+`load_settings()` -- `cli.py` never passes one, so its behaviour is unchanged. `api/routes.py`
+passes `create_app()`'s own injected `Settings` instead, so a test app built with a known
+`Settings` (docs/architecture.md's "HTTP API" section) actually reaches the database it names,
+rather than every route but `/health` silently falling back to the environment.
 """
 
 import logging
-from datetime import datetime
+from dataclasses import asdict
+from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 from uuid import UUID
@@ -14,9 +21,8 @@ from uuid import UUID
 from portfolio import pipeline
 from portfolio.accounts.repository import Account
 from portfolio.datastore_client.http_client import HttpDataStoreClient
-from portfolio.errors import PortfolioError
 from portfolio.run_result import build_run_result
-from portfolio.settings import SettingsError, load_settings
+from portfolio.settings import Settings, SettingsError, load_settings
 from portfolio.ticker_mapping.loader import load_ticker_mappings
 from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict
@@ -113,10 +119,12 @@ def _account_to_dict(account: Account) -> dict:
     }
 
 
-def run_add_account(*, user_id: UUID, broker: str, account_label: str) -> dict[str, int | str]:
+def run_add_account(
+    *, user_id: UUID, broker: str, account_label: str, settings: Settings | None = None
+) -> dict[str, int | str]:
     """Create one account. See pipeline.add_account for what `created` means."""
     configure_logging()
-    settings = load_settings()
+    settings = settings or load_settings()
     conn = get_connection(settings.database_url)
     try:
         logger.info(
@@ -125,13 +133,9 @@ def run_add_account(*, user_id: UUID, broker: str, account_label: str) -> dict[s
             broker,
             user_id,
         )
-        try:
-            created = pipeline.add_account(
-                conn, user_id=user_id, broker=broker, account_label=account_label
-            )
-        except PortfolioError as exc:
-            logger.error("account add: failed -- %s", exc)
-            return build_run_result(units_total=1, rows_saved=0, failed=1, accounts_created=0)
+        created = pipeline.add_account(
+            conn, user_id=user_id, broker=broker, account_label=account_label
+        )
     finally:
         conn.close()
 
@@ -141,11 +145,11 @@ def run_add_account(*, user_id: UUID, broker: str, account_label: str) -> dict[s
     )
 
 
-def run_list_accounts(*, user_id: UUID) -> dict[str, int | str]:
+def run_list_accounts(*, user_id: UUID, settings: Settings | None = None) -> dict[str, int | str]:
     """List every account owned by `user_id`. Saves nothing, so rows_saved is always 0 -- an
     empty result is still reported as `nothing_to_do`, not `ok`, per the logging rule."""
     configure_logging()
-    settings = load_settings()
+    settings = settings or load_settings()
     conn = get_connection(settings.database_url)
     try:
         logger.info("account list: listing accounts for user %s.", user_id)
@@ -199,11 +203,12 @@ def run_add_transaction(
     price: Decimal | None = None,
     fx_rate: Decimal | None = None,
     fees_native: Decimal | None = None,
+    settings: Settings | None = None,
 ) -> dict[str, int | str]:
     """Record one manually-entered transaction. See pipeline.add_manual_transaction for what
     `saved` means."""
     configure_logging()
-    settings = load_settings()
+    settings = settings or load_settings()
     conn = get_connection(settings.database_url)
     try:
         logger.info(
@@ -212,26 +217,22 @@ def run_add_transaction(
             account_label,
             user_id,
         )
-        try:
-            saved = pipeline.add_manual_transaction(
-                conn,
-                user_id=user_id,
-                account_label=account_label,
-                broker_transaction_ref=broker_transaction_ref,
-                transaction_type=transaction_type,
-                trade_datetime=trade_datetime,
-                native_amount=native_amount,
-                native_currency=native_currency,
-                instrument_identifier=instrument_identifier,
-                instrument_identifier_kind=instrument_identifier_kind,
-                quantity=quantity,
-                price=price,
-                fx_rate=fx_rate,
-                fees_native=fees_native,
-            )
-        except PortfolioError as exc:
-            logger.error("add-transaction: failed -- %s", exc)
-            return build_run_result(units_total=1, rows_saved=0, failed=1, transactions_saved=0)
+        saved = pipeline.add_manual_transaction(
+            conn,
+            user_id=user_id,
+            account_label=account_label,
+            broker_transaction_ref=broker_transaction_ref,
+            transaction_type=transaction_type,
+            trade_datetime=trade_datetime,
+            native_amount=native_amount,
+            native_currency=native_currency,
+            instrument_identifier=instrument_identifier,
+            instrument_identifier_kind=instrument_identifier_kind,
+            quantity=quantity,
+            price=price,
+            fx_rate=fx_rate,
+            fees_native=fees_native,
+        )
     finally:
         conn.close()
 
@@ -240,12 +241,12 @@ def run_add_transaction(
 
 
 def run_import_transactions(
-    *, user_id: UUID, account_label: str, file_path: Path
+    *, user_id: UUID, account_label: str, file_path: Path, settings: Settings | None = None
 ) -> dict[str, int | str]:
     """Parse and persist one broker export file. See pipeline.import_transactions for what
     `saved` means."""
     configure_logging()
-    settings = load_settings()
+    settings = settings or load_settings()
     conn = get_connection(settings.database_url)
     try:
         logger.info(
@@ -254,16 +255,12 @@ def run_import_transactions(
             account_label,
             user_id,
         )
-        try:
-            saved = pipeline.import_transactions(
-                conn,
-                user_id=user_id,
-                account_label=account_label,
-                file_path=file_path,
-            )
-        except PortfolioError as exc:
-            logger.error("import-transactions: failed -- %s", exc)
-            return build_run_result(units_total=1, rows_saved=0, failed=1, transactions_saved=0)
+        saved = pipeline.import_transactions(
+            conn,
+            user_id=user_id,
+            account_label=account_label,
+            file_path=file_path,
+        )
     finally:
         conn.close()
 
@@ -271,21 +268,19 @@ def run_import_transactions(
     return build_run_result(units_total=saved, rows_saved=saved, failed=0, transactions_saved=saved)
 
 
-def run_list_unmapped_instruments(*, user_id: UUID) -> dict[str, int | str]:
+def run_list_unmapped_instruments(
+    *, user_id: UUID, settings: Settings | None = None
+) -> dict[str, int | str]:
     """Every (kind, identifier, broker) this user's transactions reference that
     configs/ticker_mappings.yaml can't resolve. Saves nothing, so rows_saved is always 0 -- an
     empty result is still reported as `nothing_to_do`, not `ok`, per the logging rule."""
     configure_logging()
-    settings = load_settings()
+    settings = settings or load_settings()
     conn = get_connection(settings.database_url)
     try:
         logger.info("list-unmapped-instruments: checking instruments for user %s.", user_id)
-        try:
-            mappings = load_ticker_mappings(settings.ticker_mappings_path)
-            unmapped = pipeline.list_unmapped_instruments(conn, user_id=user_id, mappings=mappings)
-        except PortfolioError as exc:
-            logger.error("list-unmapped-instruments: failed -- %s", exc)
-            return build_run_result(units_total=1, rows_saved=0, failed=1, instruments_unmapped=0)
+        mappings = load_ticker_mappings(settings.ticker_mappings_path)
+        unmapped = pipeline.list_unmapped_instruments(conn, user_id=user_id, mappings=mappings)
     finally:
         conn.close()
 
@@ -301,7 +296,7 @@ def run_list_unmapped_instruments(*, user_id: UUID) -> dict[str, int | str]:
 
 
 def run_import_cashflow(
-    *, user_id: UUID, account_label: str, file_path: Path
+    *, user_id: UUID, account_label: str, file_path: Path, settings: Settings | None = None
 ) -> dict[str, int | str]:
     """Parse and persist one broker's cash-ledger ("Account") export. See
     pipeline.import_cashflow for what `saved` means.
@@ -312,7 +307,7 @@ def run_import_cashflow(
     internal_api_secret at its own startup rather than unconditionally in load_settings().
     """
     configure_logging()
-    settings = load_settings()
+    settings = settings or load_settings()
     if not settings.datastore_api_url or not settings.internal_api_secret:
         raise SettingsError(
             "DATASTORE_API_URL and INTERNAL_API_SECRET must both be set for import-cashflow"
@@ -329,17 +324,13 @@ def run_import_cashflow(
             account_label,
             user_id,
         )
-        try:
-            saved = pipeline.import_cashflow(
-                conn,
-                user_id=user_id,
-                account_label=account_label,
-                file_path=file_path,
-                datastore_client=datastore_client,
-            )
-        except PortfolioError as exc:
-            logger.error("import-cashflow: failed -- %s", exc)
-            return build_run_result(units_total=1, rows_saved=0, failed=1, transactions_saved=0)
+        saved = pipeline.import_cashflow(
+            conn,
+            user_id=user_id,
+            account_label=account_label,
+            file_path=file_path,
+            datastore_client=datastore_client,
+        )
     finally:
         conn.close()
 
@@ -348,7 +339,7 @@ def run_import_cashflow(
 
 
 def run_rebuild_positions(
-    *, user_id: UUID, account_label: str | None = None
+    *, user_id: UUID, account_label: str | None = None, settings: Settings | None = None
 ) -> dict[str, int | str]:
     """Replay this user's transaction log into position_snapshots. See
     pipeline.rebuild_positions for what each count means.
@@ -359,34 +350,15 @@ def run_rebuild_positions(
     policy) is logged but never affects `status`.
     """
     configure_logging()
-    settings = load_settings()
+    settings = settings or load_settings()
     scope = f"account {account_label!r}" if account_label else "every account"
     conn = get_connection(settings.database_url)
     try:
         logger.info("rebuild-positions: rebuilding positions for user %s (%s).", user_id, scope)
-        try:
-            mappings = load_ticker_mappings(settings.ticker_mappings_path)
-            outcome = pipeline.rebuild_positions(
-                conn, user_id=user_id, mappings=mappings, account_label=account_label
-            )
-        except PortfolioError as exc:
-            logger.error("rebuild-positions: failed -- %s", exc)
-            result = build_run_result(
-                units_total=1,
-                rows_saved=0,
-                failed=1,
-                positions_rebuilt=0,
-                positions_removed=0,
-                instruments_blocked=0,
-                positions_with_anomalies=0,
-                pairs_failed=0,
-            )
-            # Every other return path in this function carries blocked_instruments and
-            # failed_pairs -- cli.py reads both unconditionally, so the error path must supply
-            # them too, not just the named counts build_run_result covers.
-            result["blocked_instruments"] = []
-            result["failed_pairs"] = []
-            return result
+        mappings = load_ticker_mappings(settings.ticker_mappings_path)
+        outcome = pipeline.rebuild_positions(
+            conn, user_id=user_id, mappings=mappings, account_label=account_label
+        )
     finally:
         conn.close()
 
@@ -440,7 +412,9 @@ def run_rebuild_positions(
     return result
 
 
-def run_rebuild_returns(*, user_id: UUID, account_label: str | None = None) -> dict[str, int | str]:
+def run_rebuild_returns(
+    *, user_id: UUID, account_label: str | None = None, settings: Settings | None = None
+) -> dict[str, int | str]:
     """Compute return_snapshots from position_snapshots, data-store's price/FX series, and this
     user's DIVIDEND transactions. See pipeline.rebuild_returns for what each count means.
 
@@ -452,7 +426,7 @@ def run_rebuild_returns(*, user_id: UUID, account_label: str | None = None) -> d
     silent skip" rule -- while every other (account, ticker) still gets rebuilt.
     """
     configure_logging()
-    settings = load_settings()
+    settings = settings or load_settings()
     if not settings.datastore_api_url or not settings.internal_api_secret:
         raise SettingsError(
             "DATASTORE_API_URL and INTERNAL_API_SECRET must both be set for rebuild-returns"
@@ -465,31 +439,14 @@ def run_rebuild_returns(*, user_id: UUID, account_label: str | None = None) -> d
     conn = get_connection(settings.database_url)
     try:
         logger.info("rebuild-returns: rebuilding returns for user %s (%s).", user_id, scope)
-        try:
-            mappings = load_ticker_mappings(settings.ticker_mappings_path)
-            outcome = pipeline.rebuild_returns(
-                conn,
-                user_id=user_id,
-                mappings=mappings,
-                datastore_client=datastore_client,
-                account_label=account_label,
-            )
-        except PortfolioError as exc:
-            logger.error("rebuild-returns: failed -- %s", exc)
-            result = build_run_result(
-                units_total=1,
-                rows_saved=0,
-                failed=1,
-                tickers_rebuilt=0,
-                tickers_blocked=0,
-                pairs_failed=0,
-            )
-            # Every other return path in this function carries blocked_tickers and
-            # failed_pairs -- cli.py reads both unconditionally, so the error path must supply
-            # them too, not just the named counts build_run_result covers.
-            result["blocked_tickers"] = []
-            result["failed_pairs"] = []
-            return result
+        mappings = load_ticker_mappings(settings.ticker_mappings_path)
+        outcome = pipeline.rebuild_returns(
+            conn,
+            user_id=user_id,
+            mappings=mappings,
+            datastore_client=datastore_client,
+            account_label=account_label,
+        )
     finally:
         conn.close()
 
@@ -521,3 +478,106 @@ def run_rebuild_returns(*, user_id: UUID, account_label: str | None = None) -> d
         for account_label, ticker, error in outcome.failed_pairs
     ]
     return result
+
+
+def get_transactions(
+    *, user_id: UUID, account_label: str, settings: Settings | None = None
+) -> list[dict]:
+    """One account's transaction log, oldest first -- for the read API. Named `get_*` rather
+    than `run_*`, and returns data rather than a run result, matching data-store's own read-job
+    convention (jobs.get_price_series): there is nothing to save and no {"status", "rows_saved"}
+    to report. Raises AccountNotFound if account_label doesn't resolve for this user."""
+    configure_logging()
+    settings = settings or load_settings()
+    conn = get_connection(settings.database_url)
+    try:
+        logger.info(
+            "get-transactions: listing transactions for account %r (user %s).",
+            account_label,
+            user_id,
+        )
+        transactions = pipeline.list_transactions(
+            conn, user_id=user_id, account_label=account_label
+        )
+    finally:
+        conn.close()
+
+    logger.info("get-transactions: done, %d transaction(s) found.", len(transactions))
+    return [asdict(txn) for txn in transactions]
+
+
+def get_positions(
+    *, user_id: UUID, account_label: str, settings: Settings | None = None
+) -> list[dict]:
+    """This account's current holdings -- one snapshot per canonical_ticker, its most recent
+    as_of_date. Raises AccountNotFound if account_label doesn't resolve for this user."""
+    configure_logging()
+    settings = settings or load_settings()
+    conn = get_connection(settings.database_url)
+    try:
+        logger.info(
+            "get-positions: listing positions for account %r (user %s).", account_label, user_id
+        )
+        positions = pipeline.list_positions(conn, user_id=user_id, account_label=account_label)
+    finally:
+        conn.close()
+
+    logger.info("get-positions: done, %d position(s) found.", len(positions))
+    return [asdict(position) for position in positions]
+
+
+def get_returns(
+    *,
+    user_id: UUID,
+    account_label: str,
+    canonical_ticker: str | None = None,
+    start: date | None = None,
+    end: date | None = None,
+    settings: Settings | None = None,
+) -> list[dict]:
+    """This account's return history, optionally narrowed to one ticker and/or a date range.
+    Served per ticker -- aggregating across tickers into one portfolio-level series is left to
+    the caller (see pipeline.list_returns). Raises AccountNotFound if account_label doesn't
+    resolve for this user."""
+    configure_logging()
+    settings = settings or load_settings()
+    conn = get_connection(settings.database_url)
+    try:
+        logger.info(
+            "get-returns: listing returns for account %r (user %s).", account_label, user_id
+        )
+        returns = pipeline.list_returns(
+            conn,
+            user_id=user_id,
+            account_label=account_label,
+            canonical_ticker=canonical_ticker,
+            start=start,
+            end=end,
+        )
+    finally:
+        conn.close()
+
+    logger.info("get-returns: done, %d return snapshot(s) found.", len(returns))
+    return [asdict(snapshot) for snapshot in returns]
+
+
+def get_latest_returns(
+    *, user_id: UUID, account_label: str, settings: Settings | None = None
+) -> list[dict]:
+    """This account's most recent return snapshot per ticker -- a "current returns" summary.
+    Raises AccountNotFound if account_label doesn't resolve for this user."""
+    configure_logging()
+    settings = settings or load_settings()
+    conn = get_connection(settings.database_url)
+    try:
+        logger.info(
+            "get-latest-returns: listing latest returns for account %r (user %s).",
+            account_label,
+            user_id,
+        )
+        returns = pipeline.list_latest_returns(conn, user_id=user_id, account_label=account_label)
+    finally:
+        conn.close()
+
+    logger.info("get-latest-returns: done, %d return snapshot(s) found.", len(returns))
+    return [asdict(snapshot) for snapshot in returns]

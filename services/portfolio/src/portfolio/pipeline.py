@@ -32,9 +32,9 @@ from portfolio.errors import (
     InvalidTransaction,
 )
 from portfolio.positions import repository as positions_repository
-from portfolio.positions.calculator import replay
+from portfolio.positions.calculator import PositionSnapshot, replay
 from portfolio.returns import repository as returns_repository
-from portfolio.returns.calculator import DividendEvent, compute_returns
+from portfolio.returns.calculator import DividendEvent, ReturnSnapshot, compute_returns
 from portfolio.ticker_mapping.loader import TickerMappings
 from portfolio.transactions import repository as transactions_repository
 from portfolio.transactions.base import (
@@ -170,6 +170,53 @@ def add_account(conn, *, user_id: UUID, broker: str, account_label: str) -> int:
 
 def list_accounts(conn, *, user_id: UUID) -> list[Account]:
     return accounts_repository.list_by_user(conn, user_id)
+
+
+def list_transactions(conn, *, user_id: UUID, account_label: str) -> list[CanonicalTransaction]:
+    """One account's transaction log, oldest first. Raises AccountNotFound if account_label
+    doesn't resolve for this user -- the isolation chokepoint every account-scoped read goes
+    through."""
+    account = _resolve_account(conn, user_id=user_id, account_label=account_label)
+    return transactions_repository.list_by_account(conn, account.id)
+
+
+def list_positions(conn, *, user_id: UUID, account_label: str) -> list[PositionSnapshot]:
+    """This account's current holdings -- one snapshot per canonical_ticker, its most recent
+    as_of_date. Raises AccountNotFound if account_label doesn't resolve for this user."""
+    account = _resolve_account(conn, user_id=user_id, account_label=account_label)
+    return positions_repository.list_latest_snapshots(conn, account.id)
+
+
+def list_returns(
+    conn,
+    *,
+    user_id: UUID,
+    account_label: str,
+    canonical_ticker: str | None = None,
+    start: date | None = None,
+    end: date | None = None,
+) -> list[ReturnSnapshot]:
+    """This account's return history, optionally narrowed to one ticker and/or a date range --
+    the read a return-over-time chart replays. Aggregating across tickers into one
+    portfolio-level series is deliberately not done here: trading calendars differ per ticker, so
+    summing across them is a real design question left to the UI that first needs it (task 12),
+    not a serialization detail. Raises AccountNotFound if account_label doesn't resolve for this
+    user."""
+    account = _resolve_account(conn, user_id=user_id, account_label=account_label)
+    return returns_repository.list_snapshots(
+        conn,
+        account_id=account.id,
+        canonical_ticker=canonical_ticker,
+        start=start,
+        end=end,
+    )
+
+
+def list_latest_returns(conn, *, user_id: UUID, account_label: str) -> list[ReturnSnapshot]:
+    """This account's most recent return snapshot per ticker -- a "current returns" summary.
+    Raises AccountNotFound if account_label doesn't resolve for this user."""
+    account = _resolve_account(conn, user_id=user_id, account_label=account_label)
+    return returns_repository.list_latest_snapshots(conn, account.id)
 
 
 def add_manual_transaction(

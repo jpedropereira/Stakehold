@@ -35,6 +35,15 @@ _LIST_SNAPSHOTS_SQL = """
     ORDER BY as_of_date
 """
 
+_LIST_LATEST_SNAPSHOTS_SQL = """
+    SELECT DISTINCT ON (canonical_ticker)
+           account_id, canonical_ticker, as_of_date, quantity, average_cost_native,
+           native_currency, average_cost_eur, cost_basis_eur
+    FROM position_snapshots
+    WHERE account_id = %s
+    ORDER BY canonical_ticker, as_of_date DESC
+"""
+
 
 def replace_snapshots(
     conn, *, account_id: int, canonical_ticker: str, snapshots: Sequence[PositionSnapshot]
@@ -86,5 +95,16 @@ def list_snapshots(conn, *, account_id: int, canonical_ticker: str) -> list[Posi
     history, needed by rebuild_returns to know quantity/cost_basis_eur as of each priced day."""
     with conn.cursor() as cur:
         cur.execute(_LIST_SNAPSHOTS_SQL, (account_id, canonical_ticker))
+        rows = cur.fetchall()
+    return [PositionSnapshot(*row) for row in rows]
+
+
+def list_latest_snapshots(conn, account_id: int) -> list[PositionSnapshot]:
+    """The current holding per ticker for this account -- one row per canonical_ticker, its
+    most recent as_of_date. Serves a "my current positions" read without replaying the
+    transaction log; the event-driven grain (docs/schema.md) means the most recent row already
+    is the current holding, closed positions included (quantity 0 rows are not pruned here)."""
+    with conn.cursor() as cur:
+        cur.execute(_LIST_LATEST_SNAPSHOTS_SQL, (account_id,))
         rows = cur.fetchall()
     return [PositionSnapshot(*row) for row in rows]
