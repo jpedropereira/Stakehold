@@ -159,7 +159,7 @@ def test_create_transaction_passes_fields_through(monkeypatch, client):
 def test_import_transactions_streams_the_upload_to_a_temp_path(monkeypatch, client):
     captured = {}
 
-    def fake_run_import_transactions(*, user_id, account_label, file_path):
+    def fake_run_import_transactions(*, user_id, account_label, file_path, settings):
         captured["user_id"] = user_id
         captured["account_label"] = account_label
         captured["file_path"] = file_path
@@ -189,7 +189,7 @@ def test_import_transactions_streams_the_upload_to_a_temp_path(monkeypatch, clie
 def test_import_transactions_deletes_the_temp_file_when_the_job_raises(monkeypatch, client):
     captured = {}
 
-    def boom(*, user_id, account_label, file_path):
+    def boom(*, user_id, account_label, file_path, settings):
         captured["file_path"] = file_path
         raise AccountNotFound("nope")
 
@@ -208,7 +208,7 @@ def test_import_transactions_deletes_the_temp_file_when_the_job_raises(monkeypat
 def test_import_cashflow_streams_the_upload_to_a_temp_path(monkeypatch, client):
     captured = {}
 
-    def fake_run_import_cashflow(*, user_id, account_label, file_path):
+    def fake_run_import_cashflow(*, user_id, account_label, file_path, settings):
         captured["file_contents"] = file_path.read_bytes()
         return {"status": "ok", "rows_saved": 1, "transactions_saved": 1}
 

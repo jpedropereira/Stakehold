@@ -47,7 +47,8 @@ def test_list_accounts_passes_user_id_through(monkeypatch, client):
 
     client.get("/accounts", params={"user_id": str(user_id)})
 
-    assert captured == {"user_id": user_id}
+    assert captured["user_id"] == user_id
+    assert captured["settings"] is not None
 
 
 def test_list_accounts_requires_user_id(client):
@@ -101,7 +102,10 @@ def test_create_account_passes_fields_through(monkeypatch, client):
         "/accounts", json={"user_id": str(user_id), "broker": "acme", "account_label": "main"}
     )
 
-    assert captured == {"user_id": user_id, "broker": "acme", "account_label": "main"}
+    assert captured["user_id"] == user_id
+    assert captured["broker"] == "acme"
+    assert captured["account_label"] == "main"
+    assert captured["settings"] is not None
 
 
 def test_create_account_rejects_a_malformed_body(client):

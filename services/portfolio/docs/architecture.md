@@ -668,6 +668,14 @@ above. Mirrors `auth`'s shape more than `data-store`'s: an injectable `Settings`
 `create_app()` (so tests build an app with a known secret without touching the environment), and
 `X-Internal-Secret` rather than `Authorization: Bearer` — the header `web`'s `HttpAuthClient`
 already sends, so a future `PortfolioClient` in `web` is a copy of that module, not a new shape.
+`app.state.settings` (set once in `create_app()`) is threaded through every route's own
+`Depends(get_settings)` into the matching `jobs.py` call's `settings` keyword, rather than each
+`run_*`/`get_*` re-deriving it via its own `load_settings()` — the same `Settings` instance a test
+built into `create_app()` is therefore what every route, not just `/health`, actually queries
+against. `cli.py` never passes `settings`, so each job's own `load_settings()` fallback keeps the
+CLI's behaviour unchanged.
+`/docs`, `/redoc`, `/openapi.json` are disabled, `data-store`'s reasoning: they mount as plain
+Starlette routes no router-level dependency covers, and this is a service-to-service API with no
 `/docs`, `/redoc`, `/openapi.json` are disabled, `data-store`'s reasoning: they mount as plain
 Starlette routes no router-level dependency covers, and this is a service-to-service API with no
 interactive audience.

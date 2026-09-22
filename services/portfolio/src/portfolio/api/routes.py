@@ -42,8 +42,9 @@ from portfolio.api.models import (
     TransactionsWriteResponse,
     UnmappedInstrumentResponse,
 )
-from portfolio.api.security import require_internal_secret
+from portfolio.api.security import get_settings, require_internal_secret
 from portfolio.run_result import STATUS_OK
+from portfolio.settings import Settings
 from shared.db.connection import get_connection
 from starlette.concurrency import run_in_threadpool
 
@@ -136,15 +137,22 @@ async def _save_upload_to_tempfile(file: UploadFile) -> Path:
 
 
 @router.get("/accounts", response_model=list[AccountResponse])
-def list_accounts(user_id: UUID = Query(...)) -> list[dict]:
-    result = jobs.run_list_accounts(user_id=user_id)
+def list_accounts(
+    user_id: UUID = Query(...), settings: Settings = Depends(get_settings)
+) -> list[dict]:
+    result = jobs.run_list_accounts(user_id=user_id, settings=settings)
     return result["accounts"]
 
 
 @router.post("/accounts", response_model=AccountWriteResponse)
-def create_account(body: AccountCreateRequest, response: Response) -> dict:
+def create_account(
+    body: AccountCreateRequest, response: Response, settings: Settings = Depends(get_settings)
+) -> dict:
     result = jobs.run_add_account(
-        user_id=body.user_id, broker=body.broker, account_label=body.account_label
+        user_id=body.user_id,
+        broker=body.broker,
+        account_label=body.account_label,
+        settings=settings,
     )
     response.status_code = _write_status_code(result)
     return result
@@ -157,8 +165,10 @@ def list_brokers() -> list[str]:
 
 
 @router.get("/instruments/unmapped", response_model=list[UnmappedInstrumentResponse])
-def list_unmapped_instruments(user_id: UUID = Query(...)) -> list[dict]:
-    result = jobs.run_list_unmapped_instruments(user_id=user_id)
+def list_unmapped_instruments(
+    user_id: UUID = Query(...), settings: Settings = Depends(get_settings)
+) -> list[dict]:
+    result = jobs.run_list_unmapped_instruments(user_id=user_id, settings=settings)
     return result["unmapped_instruments"]
 
 
@@ -166,12 +176,18 @@ def list_unmapped_instruments(user_id: UUID = Query(...)) -> list[dict]:
 
 
 @router.get("/transactions", response_model=list[TransactionResponse])
-def list_transactions(user_id: UUID = Query(...), account_label: str = Query(...)) -> list[dict]:
-    return jobs.get_transactions(user_id=user_id, account_label=account_label)
+def list_transactions(
+    user_id: UUID = Query(...),
+    account_label: str = Query(...),
+    settings: Settings = Depends(get_settings),
+) -> list[dict]:
+    return jobs.get_transactions(user_id=user_id, account_label=account_label, settings=settings)
 
 
 @router.post("/transactions", response_model=TransactionsWriteResponse)
-def create_transaction(body: TransactionCreateRequest, response: Response) -> dict:
+def create_transaction(
+    body: TransactionCreateRequest, response: Response, settings: Settings = Depends(get_settings)
+) -> dict:
     result = jobs.run_add_transaction(
         user_id=body.user_id,
         account_label=body.account_label,
@@ -186,6 +202,7 @@ def create_transaction(body: TransactionCreateRequest, response: Response) -> di
         price=body.price,
         fx_rate=body.fx_rate,
         fees_native=body.fees_native,
+        settings=settings,
     )
     response.status_code = _write_status_code(result)
     return result
@@ -197,6 +214,7 @@ async def import_transactions(
     user_id: UUID = Form(...),
     account_label: str = Form(...),
     file: UploadFile = File(...),
+    settings: Settings = Depends(get_settings),
 ) -> dict:
     tmp_path = await _save_upload_to_tempfile(file)
     try:
@@ -205,6 +223,7 @@ async def import_transactions(
             user_id=user_id,
             account_label=account_label,
             file_path=tmp_path,
+            settings=settings,
         )
     finally:
         tmp_path.unlink(missing_ok=True)
@@ -218,6 +237,7 @@ async def import_cashflow(
     user_id: UUID = Form(...),
     account_label: str = Form(...),
     file: UploadFile = File(...),
+    settings: Settings = Depends(get_settings),
 ) -> dict:
     tmp_path = await _save_upload_to_tempfile(file)
     try:
@@ -226,6 +246,7 @@ async def import_cashflow(
             user_id=user_id,
             account_label=account_label,
             file_path=tmp_path,
+            settings=settings,
         )
     finally:
         tmp_path.unlink(missing_ok=True)
@@ -237,13 +258,19 @@ async def import_cashflow(
 
 
 @router.get("/positions", response_model=list[PositionResponse])
-def list_positions(user_id: UUID = Query(...), account_label: str = Query(...)) -> list[dict]:
-    return jobs.get_positions(user_id=user_id, account_label=account_label)
+def list_positions(
+    user_id: UUID = Query(...),
+    account_label: str = Query(...),
+    settings: Settings = Depends(get_settings),
+) -> list[dict]:
+    return jobs.get_positions(user_id=user_id, account_label=account_label, settings=settings)
 
 
 @router.post("/positions/rebuild", response_model=RebuildPositionsResponse)
-def rebuild_positions(body: RebuildRequest) -> dict:
-    return jobs.run_rebuild_positions(user_id=body.user_id, account_label=body.account_label)
+def rebuild_positions(body: RebuildRequest, settings: Settings = Depends(get_settings)) -> dict:
+    return jobs.run_rebuild_positions(
+        user_id=body.user_id, account_label=body.account_label, settings=settings
+    )
 
 
 # --- returns ---
@@ -256,6 +283,7 @@ def list_returns(
     ticker: str | None = Query(default=None),
     start: date | None = Query(default=None),
     end: date | None = Query(default=None),
+    settings: Settings = Depends(get_settings),
 ) -> list[dict]:
     return jobs.get_returns(
         user_id=user_id,
@@ -263,14 +291,21 @@ def list_returns(
         canonical_ticker=ticker,
         start=start,
         end=end,
+        settings=settings,
     )
 
 
 @router.get("/returns/latest", response_model=list[ReturnResponse])
-def list_latest_returns(user_id: UUID = Query(...), account_label: str = Query(...)) -> list[dict]:
-    return jobs.get_latest_returns(user_id=user_id, account_label=account_label)
+def list_latest_returns(
+    user_id: UUID = Query(...),
+    account_label: str = Query(...),
+    settings: Settings = Depends(get_settings),
+) -> list[dict]:
+    return jobs.get_latest_returns(user_id=user_id, account_label=account_label, settings=settings)
 
 
 @router.post("/returns/rebuild", response_model=RebuildReturnsResponse)
-def rebuild_returns(body: RebuildRequest) -> dict:
-    return jobs.run_rebuild_returns(user_id=body.user_id, account_label=body.account_label)
+def rebuild_returns(body: RebuildRequest, settings: Settings = Depends(get_settings)) -> dict:
+    return jobs.run_rebuild_returns(
+        user_id=body.user_id, account_label=body.account_label, settings=settings
+    )

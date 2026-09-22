@@ -45,7 +45,9 @@ def test_list_positions_passes_user_and_account_through(monkeypatch, client):
 
     client.get("/positions", params={"user_id": str(user_id), "account_label": "m"})
 
-    assert captured == {"user_id": user_id, "account_label": "m"}
+    assert captured["user_id"] == user_id
+    assert captured["account_label"] == "m"
+    assert captured["settings"] is not None
 
 
 def test_rebuild_positions_returns_200_even_when_partial(monkeypatch, client):
@@ -100,4 +102,6 @@ def test_rebuild_positions_without_account_label_rebuilds_every_account(monkeypa
 
     client.post("/positions/rebuild", json={"user_id": str(user_id)})
 
-    assert captured == {"user_id": user_id, "account_label": None}
+    assert captured["user_id"] == user_id
+    assert captured["account_label"] is None
+    assert captured["settings"] is not None

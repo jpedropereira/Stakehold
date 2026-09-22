@@ -32,10 +32,14 @@ def _ticker_mappings(monkeypatch, tmp_path):
 
 
 def _settings():
+    # ticker_mappings_path reads the same env var load_settings() would (set per-test by the
+    # autouse _ticker_mappings fixture above) -- now that routes pass this Settings object into
+    # jobs.py rather than each job re-loading its own, a hardcoded default here would silently
+    # stop honouring that override.
     return Settings(
         database_url=os.environ["PORTFOLIO_DATABASE_URL"],
         admin_database_url=os.environ["APP_POSTGRES_ADMIN_DATABASE_URL"],
-        ticker_mappings_path=Path("configs/ticker_mappings.yaml"),
+        ticker_mappings_path=Path(os.environ["PORTFOLIO_TICKER_MAPPINGS_PATH"]),
         datastore_api_url=None,
         internal_api_secret=None,
         api_internal_secret=_SECRET,
