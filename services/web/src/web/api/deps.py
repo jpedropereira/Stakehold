@@ -2,6 +2,7 @@ from fastapi import Depends, Request, Response
 from fastapi.templating import Jinja2Templates
 from web.auth_client.base import AuthClient, AuthUser
 from web.auth_client.errors import AuthClientError
+from web.portfolio_client.base import PortfolioClient
 from web.settings import Settings
 
 
@@ -19,6 +20,10 @@ def get_settings(request: Request) -> Settings:
 
 def get_auth_client(request: Request) -> AuthClient:
     return request.app.state.auth_client
+
+
+def get_portfolio_client(request: Request) -> PortfolioClient:
+    return request.app.state.portfolio_client
 
 
 def get_templates(request: Request) -> Jinja2Templates:

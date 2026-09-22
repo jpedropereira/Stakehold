@@ -5,7 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 from web import settings as settings_module
 from web.api.app import create_app
-from web.api.deps import get_auth_client
+from web.api.deps import get_auth_client, get_portfolio_client
 from web.auth_client.base import AuthResult, AuthUser
 from web.auth_client.errors import (
     AuthUnavailable,
@@ -14,6 +14,17 @@ from web.auth_client.errors import (
     InvalidRequest,
     RateLimited,
     SessionInvalid,
+)
+from web.portfolio_client.base import (
+    Account,
+    AccountWriteResult,
+    TransactionWriteResult,
+)
+from web.portfolio_client.errors import (
+    AccountLabelConflict,
+    AccountNotFound,
+    InvalidPortfolioRequest,
+    PortfolioUnavailable,
 )
 from web.settings import Settings
 
@@ -55,10 +66,75 @@ class FakeAuthClient:
             raise self.logout_error
 
 
+class FakePortfolioClient:
+    def __init__(self):
+        self.list_accounts_result: list[Account] = []
+        self.list_accounts_error: Exception | None = None
+        self.list_brokers_result: list[str] = []
+        self.list_brokers_error: Exception | None = None
+        self.create_account_result: AccountWriteResult | None = None
+        self.create_account_error: Exception | None = None
+        self.add_transaction_result: TransactionWriteResult | None = None
+        self.add_transaction_error: Exception | None = None
+        self.import_transactions_result: TransactionWriteResult | None = None
+        self.import_transactions_error: Exception | None = None
+        self.calls: list[tuple] = []
+
+    async def list_accounts(self, *, user_id):
+        self.calls.append(("list_accounts", user_id))
+        if self.list_accounts_error:
+            raise self.list_accounts_error
+        return self.list_accounts_result
+
+    async def list_brokers(self):
+        self.calls.append(("list_brokers",))
+        if self.list_brokers_error:
+            raise self.list_brokers_error
+        return self.list_brokers_result
+
+    async def create_account(self, *, user_id, broker, account_label):
+        self.calls.append(("create_account", user_id, broker, account_label))
+        if self.create_account_error:
+            raise self.create_account_error
+        return self.create_account_result
+
+    async def add_transaction(
+        self,
+        *,
+        user_id,
+        account_label,
+        broker_transaction_ref,
+        transaction_type,
+        trade_datetime,
+        native_amount,
+        native_currency,
+        instrument_identifier=None,
+        instrument_identifier_kind=None,
+        quantity=None,
+        price=None,
+        fx_rate=None,
+        fees_native=None,
+    ):
+        self.calls.append(
+            ("add_transaction", user_id, account_label, broker_transaction_ref, transaction_type)
+        )
+        if self.add_transaction_error:
+            raise self.add_transaction_error
+        return self.add_transaction_result
+
+    async def import_transactions(self, *, user_id, account_label, filename, content, content_type):
+        self.calls.append(("import_transactions", user_id, account_label, filename))
+        if self.import_transactions_error:
+            raise self.import_transactions_error
+        return self.import_transactions_result
+
+
 def _settings(**overrides) -> Settings:
     kwargs = dict(
         auth_api_url="http://auth.internal",
         internal_secret="test-secret",  # pragma: allowlist secret
+        portfolio_api_url="http://portfolio.internal",
+        portfolio_internal_secret="test-portfolio-secret",  # pragma: allowlist secret
         brand_dir=settings_module._DEFAULT_BRAND_DIR,
         cookie_secure=False,
         api_host="127.0.0.1",
@@ -69,10 +145,11 @@ def _settings(**overrides) -> Settings:
     return Settings(**kwargs)
 
 
-def _build_client(fake_auth_client, **setting_overrides):
+def _build_client(fake_auth_client, fake_portfolio_client, **setting_overrides):
     settings = _settings(**setting_overrides)
     app = create_app(settings)
     app.dependency_overrides[get_auth_client] = lambda: fake_auth_client
+    app.dependency_overrides[get_portfolio_client] = lambda: fake_portfolio_client
     return TestClient(app), settings
 
 
@@ -82,10 +159,35 @@ def fake_auth():
 
 
 @pytest.fixture
-def client(fake_auth):
-    test_client, settings = _build_client(fake_auth)
+def fake_portfolio():
+    return FakePortfolioClient()
+
+
+@pytest.fixture
+def client(fake_auth, fake_portfolio):
+    test_client, settings = _build_client(fake_auth, fake_portfolio)
     with test_client as entered:
-        yield entered, settings, fake_auth
+        yield entered, settings, fake_auth, fake_portfolio
+
+
+def _logged_in(test_client, fake_auth):
+    fake_auth.validate_result = AuthResult(user=_logged_in_user(), set_cookie=SESSION_COOKIE)
+    test_client.cookies.set("stakehold_session", "tok")
+
+
+def _accounts_csrf_token(test_client):
+    response = test_client.get("/accounts")
+    return response.cookies["stakehold_csrf"]
+
+
+def _transactions_new_csrf_token(test_client, account_label):
+    response = test_client.get("/transactions/new", params={"account": account_label})
+    return response.cookies["stakehold_csrf"]
+
+
+def _transactions_import_csrf_token(test_client, account_label):
+    response = test_client.get("/transactions/import", params={"account": account_label})
+    return response.cookies["stakehold_csrf"]
 
 
 def _login_csrf_token(test_client):
@@ -106,7 +208,7 @@ def _logged_in_user():
 
 
 def test_health(client):
-    test_client, _, _ = client
+    test_client, _, _, _ = client
 
     response = test_client.get("/health")
 
@@ -118,7 +220,7 @@ def test_health(client):
 
 
 def test_root_redirects_to_login_when_anonymous(client):
-    test_client, _, _ = client
+    test_client, _, _, _ = client
 
     response = test_client.get("/", follow_redirects=False)
 
@@ -127,7 +229,7 @@ def test_root_redirects_to_login_when_anonymous(client):
 
 
 def test_root_renders_when_logged_in(client):
-    test_client, _, fake_auth = client
+    test_client, _, fake_auth, _ = client
     fake_auth.validate_result = AuthResult(user=_logged_in_user(), set_cookie=SESSION_COOKIE)
     test_client.cookies.set("stakehold_session", "tok")
 
@@ -138,7 +240,7 @@ def test_root_renders_when_logged_in(client):
 
 
 def test_root_proxies_renewed_session_cookie(client):
-    test_client, _, fake_auth = client
+    test_client, _, fake_auth, _ = client
     fake_auth.validate_result = AuthResult(user=_logged_in_user(), set_cookie=SESSION_COOKIE)
     test_client.cookies.set("stakehold_session", "tok")
 
@@ -151,7 +253,7 @@ def test_root_proxies_renewed_session_cookie(client):
 
 
 def test_login_form_renders_with_csrf_cookie(client):
-    test_client, _, _ = client
+    test_client, _, _, _ = client
 
     response = test_client.get("/login")
 
@@ -160,7 +262,7 @@ def test_login_form_renders_with_csrf_cookie(client):
 
 
 def test_login_form_redirects_when_already_logged_in(client):
-    test_client, _, fake_auth = client
+    test_client, _, fake_auth, _ = client
     fake_auth.validate_result = AuthResult(user=_logged_in_user(), set_cookie=SESSION_COOKIE)
     test_client.cookies.set("stakehold_session", "tok")
 
@@ -174,7 +276,7 @@ def test_login_form_redirects_when_already_logged_in(client):
 
 
 def test_login_without_csrf_cookie_is_rejected(client):
-    test_client, _, fake_auth = client
+    test_client, _, fake_auth, _ = client
 
     response = test_client.post(
         "/login", data={"email": "a@example.com", "password": "x", "csrf_token": "anything"}
@@ -185,7 +287,7 @@ def test_login_without_csrf_cookie_is_rejected(client):
 
 
 def test_login_with_wrong_csrf_field_is_rejected(client):
-    test_client, _, fake_auth = client
+    test_client, _, fake_auth, _ = client
     _login_csrf_token(test_client)
 
     response = test_client.post(
@@ -198,7 +300,7 @@ def test_login_with_wrong_csrf_field_is_rejected(client):
 
 
 def test_login_success_redirects_and_proxies_cookie(client):
-    test_client, _, fake_auth = client
+    test_client, _, fake_auth, _ = client
     token = _login_csrf_token(test_client)
     fake_auth.login_result = AuthResult(user=_logged_in_user(), set_cookie=SESSION_COOKIE)
 
@@ -219,7 +321,7 @@ def test_login_success_redirects_and_proxies_cookie(client):
 
 
 def test_login_invalid_credentials(client):
-    test_client, _, fake_auth = client
+    test_client, _, fake_auth, _ = client
     token = _login_csrf_token(test_client)
     fake_auth.login_error = InvalidCredentials("ann@example.com")
 
@@ -237,7 +339,7 @@ def test_login_invalid_credentials(client):
 
 
 def test_login_rate_limited(client):
-    test_client, _, fake_auth = client
+    test_client, _, fake_auth, _ = client
     token = _login_csrf_token(test_client)
     fake_auth.login_error = RateLimited("login")
 
@@ -250,7 +352,7 @@ def test_login_rate_limited(client):
 
 
 def test_login_invalid_request(client):
-    test_client, _, fake_auth = client
+    test_client, _, fake_auth, _ = client
     token = _login_csrf_token(test_client)
     fake_auth.login_error = InvalidRequest("login")
 
@@ -263,7 +365,7 @@ def test_login_invalid_request(client):
 
 
 def test_login_auth_unavailable(client):
-    test_client, _, fake_auth = client
+    test_client, _, fake_auth, _ = client
     token = _login_csrf_token(test_client)
     fake_auth.login_error = AuthUnavailable("boom")
 
@@ -279,7 +381,7 @@ def test_login_unrecognized_auth_client_error_falls_back_to_default_message(clie
     # SessionInvalid is a real AuthClientError subclass, just not one login_submit's error map
     # names -- any AuthClientError the fake (or a future real one) raises that isn't explicitly
     # mapped must still render a response, not crash the request.
-    test_client, _, fake_auth = client
+    test_client, _, fake_auth, _ = client
     token = _login_csrf_token(test_client)
     fake_auth.login_error = SessionInvalid()
 
@@ -292,7 +394,7 @@ def test_login_unrecognized_auth_client_error_falls_back_to_default_message(clie
 
 
 def test_login_htmx_error_returns_partial_only(client):
-    test_client, _, fake_auth = client
+    test_client, _, fake_auth, _ = client
     token = _login_csrf_token(test_client)
     fake_auth.login_error = InvalidCredentials("a@example.com")
 
@@ -308,7 +410,7 @@ def test_login_htmx_error_returns_partial_only(client):
 
 
 def test_login_htmx_success_returns_hx_redirect(client):
-    test_client, _, fake_auth = client
+    test_client, _, fake_auth, _ = client
     token = _login_csrf_token(test_client)
     fake_auth.login_result = AuthResult(user=_logged_in_user(), set_cookie=SESSION_COOKIE)
 
@@ -331,7 +433,7 @@ def test_login_htmx_success_returns_hx_redirect(client):
 
 
 def test_signup_form_renders_with_csrf_cookie(client):
-    test_client, _, _ = client
+    test_client, _, _, _ = client
 
     response = test_client.get("/signup")
 
@@ -340,7 +442,7 @@ def test_signup_form_renders_with_csrf_cookie(client):
 
 
 def test_signup_success_redirects_and_proxies_cookie(client):
-    test_client, _, fake_auth = client
+    test_client, _, fake_auth, _ = client
     token = _signup_csrf_token(test_client)
     fake_auth.signup_result = AuthResult(user=_logged_in_user(), set_cookie=SESSION_COOKIE)
 
@@ -361,7 +463,7 @@ def test_signup_success_redirects_and_proxies_cookie(client):
 
 
 def test_signup_email_already_registered(client):
-    test_client, _, fake_auth = client
+    test_client, _, fake_auth, _ = client
     token = _signup_csrf_token(test_client)
     fake_auth.signup_error = EmailAlreadyRegistered("ann@example.com")
 
@@ -380,7 +482,7 @@ def test_signup_email_already_registered(client):
 
 
 def test_signup_without_csrf_cookie_is_rejected(client):
-    test_client, _, fake_auth = client
+    test_client, _, fake_auth, _ = client
 
     response = test_client.post(
         "/signup",
@@ -400,7 +502,7 @@ def test_signup_without_csrf_cookie_is_rejected(client):
 
 
 def test_logout_clears_cookie_and_redirects(client):
-    test_client, _, fake_auth = client
+    test_client, _, fake_auth, _ = client
     fake_auth.validate_result = AuthResult(user=_logged_in_user(), set_cookie=SESSION_COOKIE)
     test_client.cookies.set("stakehold_session", "tok")
     home_response = test_client.get("/")
@@ -439,7 +541,7 @@ def test_logout_cookie_deletion_is_secure_when_cookie_secure_is_true(fake_auth):
 
 
 def test_logout_without_csrf_is_rejected_without_calling_auth(client):
-    test_client, _, fake_auth = client
+    test_client, _, fake_auth, _ = client
 
     response = test_client.post("/logout", data={"csrf_token": "wrong"}, follow_redirects=False)
 
@@ -449,7 +551,7 @@ def test_logout_without_csrf_is_rejected_without_calling_auth(client):
 
 
 def test_logout_survives_auth_unavailable(client):
-    test_client, _, fake_auth = client
+    test_client, _, fake_auth, _ = client
     fake_auth.validate_result = AuthResult(user=_logged_in_user(), set_cookie=SESSION_COOKIE)
     test_client.cookies.set("stakehold_session", "tok")
     home_response = test_client.get("/")
@@ -461,3 +563,381 @@ def test_logout_survives_auth_unavailable(client):
     assert response.status_code == 303
     assert response.headers["location"] == "/login"
     assert "stakehold_session=" in response.headers.get("set-cookie", "")
+
+
+# --- accounts: GET ---------------------------------------------------------------
+
+
+def test_accounts_page_redirects_to_login_when_anonymous(client):
+    test_client, _, _, _ = client
+
+    response = test_client.get("/accounts", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/login"
+
+
+def test_accounts_page_lists_accounts_and_brokers(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.list_accounts_result = [
+        Account(id=1, account_label="main", broker="acme", created_at="2026-01-01T00:00:00Z")
+    ]
+    fake_portfolio.list_brokers_result = ["acme", "globex"]
+
+    response = test_client.get("/accounts")
+
+    assert response.status_code == 200
+    assert "main" in response.text
+    assert "acme" in response.text
+    assert "stakehold_csrf" in response.cookies
+
+
+def test_accounts_page_renders_even_when_portfolio_is_unavailable(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.list_accounts_error = PortfolioUnavailable("boom")
+    fake_portfolio.list_brokers_error = PortfolioUnavailable("boom")
+
+    response = test_client.get("/accounts")
+
+    assert response.status_code == 200
+
+
+# --- accounts: POST ---------------------------------------------------------------
+
+
+def test_create_account_without_csrf_cookie_is_rejected(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+
+    response = test_client.post(
+        "/accounts", data={"broker": "acme", "account_label": "main", "csrf_token": "anything"}
+    )
+
+    assert response.status_code == 400
+    assert fake_portfolio.calls == []
+
+
+def test_create_account_success_redirects(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    token = _accounts_csrf_token(test_client)
+    fake_portfolio.calls = []  # drop the GET /accounts page's own list_accounts/list_brokers
+    fake_portfolio.create_account_result = AccountWriteResult(
+        status="ok", rows_saved=1, accounts_created=1
+    )
+
+    response = test_client.post(
+        "/accounts",
+        data={"broker": "acme", "account_label": "main", "csrf_token": token},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/accounts"
+    assert fake_portfolio.calls == [("create_account", _logged_in_user().user_id, "acme", "main")]
+
+
+def test_create_account_label_conflict(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    token = _accounts_csrf_token(test_client)
+    fake_portfolio.create_account_error = AccountLabelConflict("conflict")
+
+    response = test_client.post(
+        "/accounts", data={"broker": "acme", "account_label": "main", "csrf_token": token}
+    )
+
+    assert response.status_code == 409
+    assert "already used with a different broker" in response.text
+
+
+def test_create_account_invalid_request_shows_server_message(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    token = _accounts_csrf_token(test_client)
+    fake_portfolio.create_account_error = InvalidPortfolioRequest("broker must not be blank")
+
+    response = test_client.post(
+        "/accounts", data={"broker": "", "account_label": "main", "csrf_token": token}
+    )
+
+    assert response.status_code == 422
+    assert "broker must not be blank" in response.text
+
+
+def test_create_account_portfolio_unavailable(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    token = _accounts_csrf_token(test_client)
+    fake_portfolio.create_account_error = PortfolioUnavailable("boom")
+
+    response = test_client.post(
+        "/accounts", data={"broker": "acme", "account_label": "main", "csrf_token": token}
+    )
+
+    assert response.status_code == 503
+    assert "Can&#39;t reach the portfolio service" in response.text
+
+
+def test_create_account_htmx_success_returns_hx_redirect(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    token = _accounts_csrf_token(test_client)
+    fake_portfolio.create_account_result = AccountWriteResult(
+        status="ok", rows_saved=1, accounts_created=1
+    )
+
+    response = test_client.post(
+        "/accounts",
+        data={"broker": "acme", "account_label": "main", "csrf_token": token},
+        headers={"HX-Request": "true"},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["hx-redirect"] == "/accounts"
+
+
+# --- transactions/new: GET ---------------------------------------------------------------
+
+
+def test_transaction_new_form_redirects_to_login_when_anonymous(client):
+    test_client, _, _, _ = client
+
+    response = test_client.get(
+        "/transactions/new", params={"account": "main"}, follow_redirects=False
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/login"
+
+
+def test_transaction_new_form_requires_account_param(client):
+    test_client, _, fake_auth, _ = client
+    _logged_in(test_client, fake_auth)
+
+    response = test_client.get("/transactions/new")
+
+    assert response.status_code == 422
+
+
+def test_transaction_new_form_renders_with_account_and_csrf(client):
+    test_client, _, fake_auth, _ = client
+    _logged_in(test_client, fake_auth)
+
+    response = test_client.get("/transactions/new", params={"account": "main"})
+
+    assert response.status_code == 200
+    assert "main" in response.text
+    assert "stakehold_csrf" in response.cookies
+
+
+def test_transaction_new_form_shows_confirmation_banner_when_saved(client):
+    test_client, _, fake_auth, _ = client
+    _logged_in(test_client, fake_auth)
+
+    response = test_client.get("/transactions/new", params={"account": "main", "saved": "1"})
+
+    assert response.status_code == 200
+    assert "saved" in response.text.lower()
+
+
+# --- transactions/new: POST ---------------------------------------------------------------
+
+
+def _transaction_form_data(csrf_token: str, account_label: str = "main", **overrides) -> dict:
+    data = {
+        "account_label": account_label,
+        "broker_transaction_ref": "ref-1",
+        "transaction_type": "DEPOSIT",
+        "trade_datetime": "2026-01-05T12:00",
+        "native_amount": "100.00",
+        "native_currency": "EUR",
+        "instrument_identifier": "",
+        "instrument_identifier_kind": "",
+        "quantity": "",
+        "price": "",
+        "fx_rate": "",
+        "fees_native": "",
+        "csrf_token": csrf_token,
+    }
+    data.update(overrides)
+    return data
+
+
+def test_add_transaction_without_csrf_cookie_is_rejected(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+
+    response = test_client.post("/transactions/new", data=_transaction_form_data("anything"))
+
+    assert response.status_code == 400
+    assert fake_portfolio.calls == []
+
+
+def test_add_transaction_success_redirects_with_saved_flag(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    token = _transactions_new_csrf_token(test_client, "main")
+    fake_portfolio.add_transaction_result = TransactionWriteResult(
+        status="ok", rows_saved=1, transactions_saved=1
+    )
+
+    response = test_client.post(
+        "/transactions/new",
+        data=_transaction_form_data(token),
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/transactions/new?account=main&saved=1"
+    assert fake_portfolio.calls == [
+        ("add_transaction", _logged_in_user().user_id, "main", "ref-1", "DEPOSIT")
+    ]
+
+
+def test_add_transaction_invalid_datetime_is_rejected_before_calling_portfolio(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    token = _transactions_new_csrf_token(test_client, "main")
+
+    response = test_client.post(
+        "/transactions/new",
+        data=_transaction_form_data(token, trade_datetime="not-a-date"),
+    )
+
+    assert response.status_code == 400
+    assert fake_portfolio.calls == []
+
+
+def test_add_transaction_account_not_found(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    token = _transactions_new_csrf_token(test_client, "main")
+    fake_portfolio.add_transaction_error = AccountNotFound("missing")
+
+    response = test_client.post("/transactions/new", data=_transaction_form_data(token))
+
+    assert response.status_code == 404
+    assert "doesn&#39;t exist" in response.text
+
+
+def test_add_transaction_invalid_request_shows_server_message(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    token = _transactions_new_csrf_token(test_client, "main")
+    fake_portfolio.add_transaction_error = InvalidPortfolioRequest(
+        "fx_rate is required for non-EUR currency"
+    )
+
+    response = test_client.post("/transactions/new", data=_transaction_form_data(token))
+
+    assert response.status_code == 422
+    assert "fx_rate is required for non-EUR currency" in response.text
+
+
+# --- transactions/import: GET ---------------------------------------------------------------
+
+
+def test_transaction_import_form_requires_account_param(client):
+    test_client, _, fake_auth, _ = client
+    _logged_in(test_client, fake_auth)
+
+    response = test_client.get("/transactions/import")
+
+    assert response.status_code == 422
+
+
+def test_transaction_import_form_renders_with_account_and_csrf(client):
+    test_client, _, fake_auth, _ = client
+    _logged_in(test_client, fake_auth)
+
+    response = test_client.get("/transactions/import", params={"account": "main"})
+
+    assert response.status_code == 200
+    assert "main" in response.text
+    assert "stakehold_csrf" in response.cookies
+
+
+def test_transaction_import_form_shows_confirmation_with_row_count(client):
+    test_client, _, fake_auth, _ = client
+    _logged_in(test_client, fake_auth)
+
+    response = test_client.get("/transactions/import", params={"account": "main", "imported": "3"})
+
+    assert response.status_code == 200
+    assert "3" in response.text
+
+
+# --- transactions/import: POST ---------------------------------------------------------------
+
+
+def test_import_transactions_without_csrf_cookie_is_rejected(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+
+    response = test_client.post(
+        "/transactions/import",
+        data={"account_label": "main", "csrf_token": "anything"},
+        files={"file": ("export.csv", b"a,b\n1,2\n", "text/csv")},
+    )
+
+    assert response.status_code == 400
+    assert fake_portfolio.calls == []
+
+
+def test_import_transactions_success_redirects_with_row_count(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    token = _transactions_import_csrf_token(test_client, "main")
+    fake_portfolio.import_transactions_result = TransactionWriteResult(
+        status="ok", rows_saved=5, transactions_saved=5
+    )
+
+    response = test_client.post(
+        "/transactions/import",
+        data={"account_label": "main", "csrf_token": token},
+        files={"file": ("export.csv", b"a,b\n1,2\n", "text/csv")},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/transactions/import?account=main&imported=5"
+    assert fake_portfolio.calls == [
+        ("import_transactions", _logged_in_user().user_id, "main", "export.csv")
+    ]
+
+
+def test_import_transactions_broker_parser_not_found(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    token = _transactions_import_csrf_token(test_client, "main")
+    fake_portfolio.import_transactions_error = InvalidPortfolioRequest(
+        "no parser registered for broker 'acme'"
+    )
+
+    response = test_client.post(
+        "/transactions/import",
+        data={"account_label": "main", "csrf_token": token},
+        files={"file": ("export.csv", b"a,b\n1,2\n", "text/csv")},
+    )
+
+    assert response.status_code == 422
+    assert "no parser registered" in response.text
+
+
+def test_import_transactions_account_not_found(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    token = _transactions_import_csrf_token(test_client, "main")
+    fake_portfolio.import_transactions_error = AccountNotFound("missing")
+
+    response = test_client.post(
+        "/transactions/import",
+        data={"account_label": "main", "csrf_token": token},
+        files={"file": ("export.csv", b"a,b\n1,2\n", "text/csv")},
+    )
+
+    assert response.status_code == 404
+    assert "doesn&#39;t exist" in response.text

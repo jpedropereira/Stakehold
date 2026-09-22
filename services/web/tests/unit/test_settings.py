@@ -13,6 +13,8 @@ def no_dotenv(monkeypatch):
 def base_env(monkeypatch):
     monkeypatch.setenv("WEB_AUTH_API_URL", "http://localhost:8001")
     monkeypatch.setenv("WEB_INTERNAL_SECRET", "s3cret")
+    monkeypatch.setenv("WEB_PORTFOLIO_API_URL", "http://localhost:8002")
+    monkeypatch.setenv("WEB_PORTFOLIO_INTERNAL_SECRET", "p0rtfolio-s3cret")
 
 
 def test_loads_auth_api_url_from_env():
@@ -38,6 +40,32 @@ def test_missing_internal_secret_raises(monkeypatch):
     monkeypatch.delenv("WEB_INTERNAL_SECRET", raising=False)
 
     with pytest.raises(SettingsError, match="WEB_INTERNAL_SECRET"):
+        load_settings()
+
+
+def test_loads_portfolio_api_url_from_env():
+    result = load_settings()
+
+    assert result.portfolio_api_url == "http://localhost:8002"
+
+
+def test_trailing_slash_is_stripped_from_portfolio_api_url(monkeypatch):
+    monkeypatch.setenv("WEB_PORTFOLIO_API_URL", "http://localhost:8002/")
+
+    assert load_settings().portfolio_api_url == "http://localhost:8002"
+
+
+def test_missing_portfolio_api_url_raises(monkeypatch):
+    monkeypatch.delenv("WEB_PORTFOLIO_API_URL", raising=False)
+
+    with pytest.raises(SettingsError, match="WEB_PORTFOLIO_API_URL"):
+        load_settings()
+
+
+def test_missing_portfolio_internal_secret_raises(monkeypatch):
+    monkeypatch.delenv("WEB_PORTFOLIO_INTERNAL_SECRET", raising=False)
+
+    with pytest.raises(SettingsError, match="WEB_PORTFOLIO_INTERNAL_SECRET"):
         load_settings()
 
 

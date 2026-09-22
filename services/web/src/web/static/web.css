@@ -94,6 +94,7 @@ a {
 }
 
 .primary-button {
+  display: inline-block;
   margin-top: 24px;
   padding: 12px;
   border: none;
@@ -102,6 +103,8 @@ a {
   color: var(--stone);
   font: var(--text-body);
   font-weight: 600;
+  text-decoration: none;
+  text-align: center;
   cursor: pointer;
 }
 
@@ -117,4 +120,100 @@ a {
   color: var(--stone-600);
   margin-top: 20px;
   text-align: center;
+}
+
+.site-nav {
+  display: flex;
+  align-items: center;
+  margin-right: 16px;
+}
+
+.site-nav a {
+  font: var(--text-caption);
+  text-decoration: none;
+}
+
+.mono {
+  font: var(--text-figure);
+}
+
+.entry-card {
+  width: 100%;
+  max-width: 560px;
+  background: var(--parchment-deep);
+  border-radius: var(--radius-card);
+  padding: 32px;
+  margin-bottom: 24px;
+}
+
+.entry-card h1 {
+  font: var(--text-h2);
+  margin: 0 0 16px;
+}
+
+.entry-card form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.entry-card label {
+  font: var(--text-caption);
+  color: var(--stone-600);
+  margin-top: 12px;
+}
+
+.entry-card input,
+.entry-card select {
+  font: var(--text-body);
+  padding: 10px 12px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
+  background: var(--parchment);
+  color: var(--stone);
+}
+
+.entry-subtitle {
+  font: var(--text-caption);
+  color: var(--stone-600);
+  margin: 0 0 16px;
+}
+
+.entry-empty {
+  font: var(--text-caption);
+  color: var(--stone-600);
+}
+
+.confirmation-banner {
+  font: var(--text-caption);
+  font-weight: 600;
+  color: var(--stone);
+  margin: 0 0 16px;
+}
+
+.account-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.account-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.account-row:last-child {
+  border-bottom: none;
+}
+
+.account-label {
+  font-weight: 600;
+}
+
+.account-row a {
+  font: var(--text-caption);
+  margin-left: auto;
 }

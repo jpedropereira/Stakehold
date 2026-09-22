@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Accounts — Stakehold{% endblock %}
+{% block content %}
+<section class="entry-card">
+  <h1>New account</h1>
+  <form hx-post="/accounts" hx-target="#form-errors" hx-swap="innerHTML" method="post" action="/accounts">
+    <div id="form-errors">
+      {% include "partials/_form_errors.html" %}
+    </div>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label for="broker">Broker</label>
+    <input type="text" id="broker" name="broker" list="brokers" required>
+    <datalist id="brokers">
+      {% for broker in brokers|default([]) %}
+      <option value="{{ broker }}">
+      {% endfor %}
+    </datalist>
+    <label for="account_label">Label</label>
+    <input type="text" id="account_label" name="account_label" required>
+    <button type="submit" class="primary-button">Create account</button>
+  </form>
+</section>
+
+<section class="entry-card">
+  <h1>Your accounts</h1>
+  {% if accounts|default([]) %}
+  <ul class="account-list">
+    {% for account in accounts %}
+    <li class="account-row">
+      <span class="account-label">{{ account.account_label }}</span>
+      <span class="account-broker">{{ account.broker }}</span>
+      <a href="/transactions/new?account={{ account.account_label | urlencode }}">Add transaction</a>
+      <a href="/transactions/import?account={{ account.account_label | urlencode }}">Import file</a>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="entry-empty">No accounts yet — create one above.</p>
+  {% endif %}
+</section>
+{% endblock %}

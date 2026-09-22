@@ -45,6 +45,8 @@ def _web_settings() -> Settings:
     return Settings(
         auth_api_url="https://auth.internal",
         internal_secret=os.environ["AUTH_INTERNAL_SECRET"],
+        portfolio_api_url="https://portfolio.internal",
+        portfolio_internal_secret="unused-in-this-suite",  # pragma: allowlist secret
         brand_dir=_BRAND_DIR,
         cookie_secure=True,
         api_host="127.0.0.1",

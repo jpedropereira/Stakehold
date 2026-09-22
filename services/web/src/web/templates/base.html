@@ -15,6 +15,9 @@
       <img src="/brand/logos/logo-stone.svg" alt="Stakehold">
     </a>
     {% if user %}
+      <nav class="site-nav">
+        <a href="/accounts">Portfolio</a>
+      </nav>
       <form action="/logout" method="post" class="logout-form">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <span class="user-name">{{ user.display_name }}</span>
