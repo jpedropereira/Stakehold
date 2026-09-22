@@ -736,7 +736,9 @@ a date one ticker priced and another didn't — not a serialization detail, and 
 - **One connection per request.** `jobs.py`'s `run_*`/`get_*` functions open and close their own
   connection, exactly as they already do for the CLI — `psycopg_pool` (as `auth`'s API already
   uses) is the intended fix if request volume ever makes per-request connection setup a
-  bottleneck.
+  bottleneck. `/health` pays this cost too, independent of any real traffic: Docker's own
+  healthcheck (`docker-compose.yml`, 10s interval) opens and closes a fresh connection every tick
+  for the container's whole lifetime — the same fix would absorb this cost as well.
 - **`GET /transactions` is unpaginated and untyped by date range** — it returns an account's
   entire transaction log every time, the same shape `transactions_repository.list_by_account`
   already had before this task; a large account's history is not yet a concern this API solves.
