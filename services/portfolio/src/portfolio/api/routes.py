@@ -45,6 +45,7 @@ from portfolio.api.models import (
 from portfolio.api.security import require_internal_secret
 from portfolio.run_result import STATUS_OK
 from shared.db.connection import get_connection
+from starlette.concurrency import run_in_threadpool
 
 logger = logging.getLogger(__name__)
 
@@ -199,8 +200,11 @@ async def import_transactions(
 ) -> dict:
     tmp_path = await _save_upload_to_tempfile(file)
     try:
-        result = jobs.run_import_transactions(
-            user_id=user_id, account_label=account_label, file_path=tmp_path
+        result = await run_in_threadpool(
+            jobs.run_import_transactions,
+            user_id=user_id,
+            account_label=account_label,
+            file_path=tmp_path,
         )
     finally:
         tmp_path.unlink(missing_ok=True)
@@ -217,8 +221,11 @@ async def import_cashflow(
 ) -> dict:
     tmp_path = await _save_upload_to_tempfile(file)
     try:
-        result = jobs.run_import_cashflow(
-            user_id=user_id, account_label=account_label, file_path=tmp_path
+        result = await run_in_threadpool(
+            jobs.run_import_cashflow,
+            user_id=user_id,
+            account_label=account_label,
+            file_path=tmp_path,
         )
     finally:
         tmp_path.unlink(missing_ok=True)
