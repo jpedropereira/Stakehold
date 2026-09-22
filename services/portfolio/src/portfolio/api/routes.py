@@ -11,6 +11,7 @@ secret proves a legitimate internal caller, not a specific user.
 import logging
 import os
 import tempfile
+from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 from uuid import UUID
@@ -99,10 +100,13 @@ def health(request: Request, response: Response) -> dict[str, str]:
 
 
 def _write_status_code(result: dict) -> int:
-    """201 for a genuine write, 200 for a safe no-op (nothing_to_do) -- these jobs can no longer
-    return `partial`, since jobs.py lets a domain error propagate instead of catching it (see
-    docs/architecture.md's "HTTP API" section); a domain error reaches this API as an exception,
-    mapped to its own status code by app.py's handlers, not through this dict."""
+    """201 for a genuine write, 200 otherwise. Every write route uses this: for
+    create/add/import, "otherwise" only ever means `nothing_to_do` -- those jobs can no longer
+    return `partial` themselves, since jobs.py lets a domain error propagate instead of catching
+    it (see docs/architecture.md's "HTTP API" section), and a domain error reaches this API as an
+    exception, mapped to its own status code by app.py's handlers, not through this dict. For the
+    two rebuild routes, "otherwise" can also mean a genuine `partial` -- a real half-succeeded
+    run, still reported as 200 with the blocked/failed detail in the body, not as an error."""
     return status.HTTP_201_CREATED if result["status"] == STATUS_OK else status.HTTP_200_OK
 
 
@@ -208,6 +212,32 @@ def create_transaction(
     return result
 
 
+async def _handle_import(
+    job: Callable[..., dict],
+    *,
+    response: Response,
+    user_id: UUID,
+    account_label: str,
+    file: UploadFile,
+    settings: Settings,
+) -> dict:
+    """Shared body for the two file-upload routes below -- identical except which `jobs.py`
+    function does the parsing. `job` runs off the event loop (see `run_in_threadpool`'s use
+    below): both `run_import_transactions`/`run_import_cashflow` do blocking DB and, for
+    cashflow, blocking HTTP I/O, and every other route in this file is a plain `def`, which
+    FastAPI dispatches to a threadpool automatically -- these two need it done explicitly since
+    `await _save_upload_to_tempfile` forces them to be `async def`."""
+    tmp_path = await _save_upload_to_tempfile(file)
+    try:
+        result = await run_in_threadpool(
+            job, user_id=user_id, account_label=account_label, file_path=tmp_path, settings=settings
+        )
+    finally:
+        tmp_path.unlink(missing_ok=True)
+    response.status_code = _write_status_code(result)
+    return result
+
+
 @router.post("/transactions/import", response_model=TransactionsWriteResponse)
 async def import_transactions(
     response: Response,
@@ -216,19 +246,14 @@ async def import_transactions(
     file: UploadFile = File(...),
     settings: Settings = Depends(get_settings),
 ) -> dict:
-    tmp_path = await _save_upload_to_tempfile(file)
-    try:
-        result = await run_in_threadpool(
-            jobs.run_import_transactions,
-            user_id=user_id,
-            account_label=account_label,
-            file_path=tmp_path,
-            settings=settings,
-        )
-    finally:
-        tmp_path.unlink(missing_ok=True)
-    response.status_code = _write_status_code(result)
-    return result
+    return await _handle_import(
+        jobs.run_import_transactions,
+        response=response,
+        user_id=user_id,
+        account_label=account_label,
+        file=file,
+        settings=settings,
+    )
 
 
 @router.post("/cashflows/import", response_model=TransactionsWriteResponse)
@@ -239,19 +264,14 @@ async def import_cashflow(
     file: UploadFile = File(...),
     settings: Settings = Depends(get_settings),
 ) -> dict:
-    tmp_path = await _save_upload_to_tempfile(file)
-    try:
-        result = await run_in_threadpool(
-            jobs.run_import_cashflow,
-            user_id=user_id,
-            account_label=account_label,
-            file_path=tmp_path,
-            settings=settings,
-        )
-    finally:
-        tmp_path.unlink(missing_ok=True)
-    response.status_code = _write_status_code(result)
-    return result
+    return await _handle_import(
+        jobs.run_import_cashflow,
+        response=response,
+        user_id=user_id,
+        account_label=account_label,
+        file=file,
+        settings=settings,
+    )
 
 
 # --- positions ---
@@ -267,10 +287,14 @@ def list_positions(
 
 
 @router.post("/positions/rebuild", response_model=RebuildPositionsResponse)
-def rebuild_positions(body: RebuildRequest, settings: Settings = Depends(get_settings)) -> dict:
-    return jobs.run_rebuild_positions(
+def rebuild_positions(
+    body: RebuildRequest, response: Response, settings: Settings = Depends(get_settings)
+) -> dict:
+    result = jobs.run_rebuild_positions(
         user_id=body.user_id, account_label=body.account_label, settings=settings
     )
+    response.status_code = _write_status_code(result)
+    return result
 
 
 # --- returns ---
@@ -305,7 +329,11 @@ def list_latest_returns(
 
 
 @router.post("/returns/rebuild", response_model=RebuildReturnsResponse)
-def rebuild_returns(body: RebuildRequest, settings: Settings = Depends(get_settings)) -> dict:
-    return jobs.run_rebuild_returns(
+def rebuild_returns(
+    body: RebuildRequest, response: Response, settings: Settings = Depends(get_settings)
+) -> dict:
+    result = jobs.run_rebuild_returns(
         user_id=body.user_id, account_label=body.account_label, settings=settings
     )
+    response.status_code = _write_status_code(result)
+    return result

@@ -294,7 +294,8 @@ def main(argv: list[str] | None = None) -> int:
         # A domain failure (e.g. an unknown account label, an unparseable broker file).
         # jobs.py deliberately lets these propagate rather than swallowing them into a
         # partial result, so every entry point maps them at its own boundary -- this is
-        # cli.py's; the future HTTP API maps the same exceptions to status codes instead.
+        # cli.py's; api/app.py maps the same exceptions to status codes instead (via each
+        # exc's own status_code -- see errors.py).
         print(f"error: {exc}", file=sys.stderr)
         return 1
 

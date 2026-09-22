@@ -136,20 +136,6 @@ def test_account_add_exits_zero_when_nothing_to_do(monkeypatch):
     assert exit_code == 0
 
 
-def test_account_add_exits_nonzero_when_partial(monkeypatch):
-    monkeypatch.setattr(
-        cli.jobs,
-        "run_add_account",
-        lambda **kw: {"status": "partial", "rows_saved": 0, "accounts_created": 0},
-    )
-
-    exit_code = cli.main(
-        ["account", "add", "--user", str(uuid.uuid4()), "--broker", "x", "--label", "m"]
-    )
-
-    assert exit_code == 1
-
-
 def test_account_add_rejects_a_malformed_user_id():
     with pytest.raises(SystemExit):
         cli.main(["account", "add", "--user", "not-a-uuid", "--broker", "acme", "--label", "m"])
@@ -461,16 +447,20 @@ def test_add_transaction_exits_zero_when_nothing_to_do(monkeypatch):
     assert exit_code == 0
 
 
-def test_add_transaction_exits_nonzero_when_partial(monkeypatch):
-    monkeypatch.setattr(
-        cli.jobs,
-        "run_add_transaction",
-        lambda **kw: {"status": "partial", "rows_saved": 0, "transactions_saved": 0},
-    )
+def test_add_transaction_propagates_a_domain_error_and_exits_nonzero(monkeypatch, capsys):
+    """run_add_transaction can no longer return `partial` itself -- jobs.py lets a PortfolioError
+    (e.g. an unknown account label) propagate instead of catching it, so this is what main()'s
+    generic domain-error handling actually has to cover for this command."""
+
+    def boom(**kw):
+        raise cli.PortfolioError("account not found: 'm'")
+
+    monkeypatch.setattr(cli.jobs, "run_add_transaction", boom)
 
     exit_code = cli.main(["add-transaction", "--user", str(uuid.uuid4()), *_BASE_TXN_ARGS[1:]])
 
     assert exit_code == 1
+    assert "account not found: 'm'" in capsys.readouterr().err
 
 
 def test_add_transaction_rejects_a_malformed_datetime():
@@ -587,12 +577,15 @@ def test_import_transactions_exits_zero_when_nothing_to_do(monkeypatch):
     assert exit_code == 0
 
 
-def test_import_transactions_exits_nonzero_when_partial(monkeypatch):
-    monkeypatch.setattr(
-        cli.jobs,
-        "run_import_transactions",
-        lambda **kw: {"status": "partial", "rows_saved": 0, "transactions_saved": 0},
-    )
+def test_import_transactions_propagates_a_domain_error_and_exits_nonzero(monkeypatch, capsys):
+    """run_import_transactions can no longer return `partial` itself -- jobs.py lets a
+    PortfolioError (e.g. an unparseable broker file) propagate instead of catching it, so this
+    is what main()'s generic domain-error handling actually has to cover for this command."""
+
+    def boom(**kw):
+        raise cli.PortfolioError("could not parse acme.csv")
+
+    monkeypatch.setattr(cli.jobs, "run_import_transactions", boom)
 
     exit_code = cli.main(
         [
@@ -607,6 +600,7 @@ def test_import_transactions_exits_nonzero_when_partial(monkeypatch):
     )
 
     assert exit_code == 1
+    assert "could not parse acme.csv" in capsys.readouterr().err
 
 
 def test_import_transactions_requires_all_flags():
@@ -791,12 +785,15 @@ def test_import_cashflow_exits_zero_when_nothing_to_do(monkeypatch):
     assert exit_code == 0
 
 
-def test_import_cashflow_exits_nonzero_when_partial(monkeypatch):
-    monkeypatch.setattr(
-        cli.jobs,
-        "run_import_cashflow",
-        lambda **kw: {"status": "partial", "rows_saved": 0, "transactions_saved": 0},
-    )
+def test_import_cashflow_propagates_a_domain_error_and_exits_nonzero(monkeypatch, capsys):
+    """run_import_cashflow can no longer return `partial` itself -- jobs.py lets a PortfolioError
+    (e.g. data-store unreachable) propagate instead of catching it, so this is what main()'s
+    generic domain-error handling actually has to cover for this command."""
+
+    def boom(**kw):
+        raise cli.PortfolioError("data-store unreachable")
+
+    monkeypatch.setattr(cli.jobs, "run_import_cashflow", boom)
 
     exit_code = cli.main(
         [
@@ -811,6 +808,7 @@ def test_import_cashflow_exits_nonzero_when_partial(monkeypatch):
     )
 
     assert exit_code == 1
+    assert "data-store unreachable" in capsys.readouterr().err
 
 
 def test_import_cashflow_requires_all_flags():

@@ -100,8 +100,9 @@ def test_rebuild_positions_without_account_label_rebuilds_every_account(monkeypa
     monkeypatch.setattr(jobs, "run_rebuild_positions", fake_run_rebuild_positions)
     user_id = uuid.uuid4()
 
-    client.post("/positions/rebuild", json={"user_id": str(user_id)})
+    response = client.post("/positions/rebuild", json={"user_id": str(user_id)})
 
+    assert response.status_code == 201
     assert captured["user_id"] == user_id
     assert captured["account_label"] is None
     assert captured["settings"] is not None

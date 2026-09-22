@@ -15,43 +15,21 @@ alongside psycopg_pool as the intended fix if request volume ever makes it a bot
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from portfolio.api.routes import health_router, router
-from portfolio.errors import (
-    AccountLabelConflict,
-    AccountNotFound,
-    BrokerFileError,
-    BrokerParserNotFound,
-    BrokerPluginError,
-    DataStoreApiError,
-    InvalidBroker,
-    InvalidTransaction,
-    PortfolioError,
-    TickerMappingError,
-)
+from portfolio.errors import PortfolioError
 from portfolio.settings import Settings, SettingsError, load_settings
 from shared.logging_config import configure_logging
 
-# Ordered narrowest-first only for readability -- Starlette's ExceptionMiddleware resolves a
-# raised exception's own type before ever consulting its MRO, so registration order here has no
-# effect on which handler an exception actually reaches; it always gets its exact match if one
-# is registered.
-_STATUS_BY_ERROR: tuple[tuple[type[PortfolioError], int], ...] = (
-    (AccountNotFound, 404),
-    (AccountLabelConflict, 409),
-    (InvalidBroker, 422),
-    (InvalidTransaction, 422),
-    (BrokerFileError, 422),
-    (BrokerParserNotFound, 422),
-    (TickerMappingError, 500),
-    (BrokerPluginError, 500),
-    (DataStoreApiError, 502),
-)
+
+async def _handle_portfolio_error(_request: Request, exc: PortfolioError) -> JSONResponse:
+    # One handler for the whole hierarchy: Starlette resolves the raised exception's own type
+    # via its MRO to find a registered handler, so every PortfolioError subclass reaches this
+    # one -- its own status_code (errors.py) picks the response, rather than a second table here
+    # a new subclass could be added without ever touching.
+    return JSONResponse(status_code=exc.status_code, content={"detail": str(exc)})
 
 
-def _handler_for(status_code: int):
-    async def handler(_request: Request, exc: Exception) -> JSONResponse:
-        return JSONResponse(status_code=status_code, content={"detail": str(exc)})
-
-    return handler
+async def _handle_settings_error(_request: Request, exc: SettingsError) -> JSONResponse:
+    return JSONResponse(status_code=500, content={"detail": str(exc)})
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -69,13 +47,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(health_router)
     app.include_router(router)
 
-    for exc_type, status_code in _STATUS_BY_ERROR:
-        app.add_exception_handler(exc_type, _handler_for(status_code))
-    # Catches any PortfolioError subclass not named above -- fails closed as a 500 rather than
-    # an unhandled exception reaching the caller as a raw traceback.
-    app.add_exception_handler(PortfolioError, _handler_for(500))
+    app.add_exception_handler(PortfolioError, _handle_portfolio_error)
     # A job's own load_settings() raising mid-request (e.g. DATASTORE_API_URL missing for
     # import-cashflow/rebuild-returns) -- a misconfigured deployment, not a caller mistake.
-    app.add_exception_handler(SettingsError, _handler_for(500))
+    app.add_exception_handler(SettingsError, _handle_settings_error)
 
     return app

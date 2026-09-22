@@ -150,7 +150,7 @@ def test_add_transaction_then_rebuild_positions_then_read_them_back(client):
         headers=_headers(),
     )
 
-    assert rebuild_response.status_code == 200
+    assert rebuild_response.status_code == 201
     assert rebuild_response.json()["status"] == "ok"
     assert positions_response.status_code == 200
     positions = positions_response.json()

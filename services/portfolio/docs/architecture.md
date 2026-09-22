@@ -710,9 +710,10 @@ endpoints (`POST /positions/rebuild`, `POST /returns/rebuild`) can still report 
 via `pipeline.rebuild_positions`/`rebuild_returns`'s own per-pair `blocked`/`failed_pairs`
 handling (unchanged by this task) — a real half-succeeded run, returned as **200**, with the
 blocked/failed detail in the body, not an error status, since the caller needs that list to know
-which instruments to map. Every other write endpoint (`POST /accounts`, `POST /transactions`, the
-two import routes) can now only return `ok` (201) or `nothing_to_do` (200) — a domain error on
-those flows reaches the API as an exception instead, per the table above.
+which instruments to map. Every write endpoint, rebuild routes included, goes through the same
+`routes._write_status_code`: `ok` is **201**, anything else (`nothing_to_do`, or a rebuild's own
+`partial`) is **200** — a domain error on any of them reaches the API as an exception instead, per
+the table above.
 
 **Broker-file imports take a multipart `UploadFile`.** `import-transactions`/`import-cashflow`
 both take a local filesystem `Path` in `jobs.py` — unchanged by this task, since the CLI still

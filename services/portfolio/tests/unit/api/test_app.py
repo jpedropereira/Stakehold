@@ -5,18 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 from portfolio import jobs
 from portfolio.api.app import create_app
-from portfolio.errors import (
-    AccountLabelConflict,
-    AccountNotFound,
-    BrokerFileError,
-    BrokerParserNotFound,
-    BrokerPluginError,
-    DataStoreApiError,
-    InvalidBroker,
-    InvalidTransaction,
-    PortfolioError,
-    TickerMappingError,
-)
+from portfolio.errors import PortfolioError
 from portfolio.settings import Settings, SettingsError
 
 
@@ -80,21 +69,11 @@ def test_health_is_reachable_without_the_internal_secret(monkeypatch):
     assert response.json() == {"status": "ok"}
 
 
-@pytest.mark.parametrize(
-    "exc_type,status_code",
-    [
-        (AccountNotFound, 404),
-        (AccountLabelConflict, 409),
-        (InvalidBroker, 422),
-        (InvalidTransaction, 422),
-        (BrokerFileError, 422),
-        (BrokerParserNotFound, 422),
-        (TickerMappingError, 500),
-        (BrokerPluginError, 500),
-        (DataStoreApiError, 502),
-    ],
-)
-def test_each_portfolio_error_subclass_maps_to_its_own_status(monkeypatch, exc_type, status_code):
+@pytest.mark.parametrize("exc_type", PortfolioError.__subclasses__(), ids=lambda cls: cls.__name__)
+def test_each_portfolio_error_subclass_maps_to_its_own_status(monkeypatch, exc_type):
+    """Reads the expected status straight off `exc_type.status_code` (errors.py) rather than a
+    second hardcoded table here -- a new PortfolioError subclass is automatically covered by
+    this test the moment it's added to errors.py, with no second place to remember to update."""
     app = create_app(_settings())
     client = TestClient(app)
 
@@ -109,7 +88,7 @@ def test_each_portfolio_error_subclass_maps_to_its_own_status(monkeypatch, exc_t
         headers={"X-Internal-Secret": "s3cret"},  # pragma: allowlist secret
     )
 
-    assert response.status_code == status_code
+    assert response.status_code == exc_type.status_code
     assert response.json() == {"detail": "boom"}
 
 

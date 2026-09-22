@@ -1,14 +1,23 @@
 """Domain-level errors raised by pipeline.py and the pure validators it calls.
 
-One shared parent so jobs.py can catch every domain failure with a single `except PortfolioError`
-and turn it into a `partial` run_result, the same way auth's service.py exceptions are all mapped
-to HTTP by one set of handlers. Repositories never raise these -- they let the driver's own
-exceptions (e.g. psycopg.errors.UniqueViolation) propagate, same as auth.
+One shared parent so cli.py and the HTTP API can each handle every domain failure through a
+single `except PortfolioError`/exception handler, the same way auth's service.py exceptions are
+all mapped to HTTP by one set of handlers -- jobs.py itself no longer catches PortfolioError; see
+its own module docstring. Repositories never raise these -- they let the driver's own exceptions
+(e.g. psycopg.errors.UniqueViolation) propagate, same as auth.
+
+Every subclass sets its own `status_code`, read by api/app.py's single exception handler -- it
+lives here, next to the error it classifies, rather than in a separate table in app.py, so a new
+subclass can't be added without a status code sitting right next to it to fill in. Unset, it's
+500 ("fails closed" -- api/app.py's own docs), matching cli.py's generic one-line-and-exit-1
+handling for anything it doesn't special-case.
 """
 
 
 class PortfolioError(Exception):
     """Base class for every domain-level failure in this service."""
+
+    status_code: int = 500
 
 
 class BrokerParserNotFound(PortfolioError):
@@ -19,6 +28,8 @@ class BrokerParserNotFound(PortfolioError):
     and account creation must work with zero broker plugins installed (see InvalidBroker below
     for the one check it does perform)."""
 
+    status_code = 422
+
 
 class BrokerPluginError(PortfolioError):
     """A broker-parser or cashflow-parser plugin's entry-point registration is malformed -- two
@@ -28,11 +39,15 @@ class BrokerPluginError(PortfolioError):
     either internally consistent or the whole registry build fails loudly, never silently picks
     one of two conflicting registrations."""
 
+    status_code = 500
+
 
 class InvalidBroker(PortfolioError):
     """`account add --broker` was blank/whitespace-only, or longer than accounts.broker's column
     can hold. The only validation account creation performs on `broker` -- it's a free-text
     label, not checked against a fixed set of names."""
+
+    status_code = 422
 
 
 class AccountNotFound(PortfolioError):
@@ -43,6 +58,8 @@ class AccountNotFound(PortfolioError):
     is what makes the isolation chokepoint structural rather than a convention.
     """
 
+    status_code = 404
+
 
 class AccountLabelConflict(PortfolioError):
     """`account add` re-used a label already taken by this user, under a different broker.
@@ -51,9 +68,13 @@ class AccountLabelConflict(PortfolioError):
     broker is not, and must not be swallowed silently.
     """
 
+    status_code = 409
+
 
 class InvalidTransaction(PortfolioError):
     """A CanonicalTransaction failed transactions/base.py's validation rules."""
+
+    status_code = 422
 
 
 class BrokerFileError(PortfolioError):
@@ -61,12 +82,17 @@ class BrokerFileError(PortfolioError):
     type, or a row missing data its own type requires. Raised by broker_import/ parsers; never
     silently skipped, per docs/architecture.md's "unrecognized type is a parse error" rule."""
 
+    status_code = 422
+
 
 class TickerMappingError(PortfolioError):
     """configs/ticker_mappings.yaml is missing, malformed, or fails validation."""
 
+    status_code = 500
+
 
 class DataStoreApiError(PortfolioError):
     """A call to data-store's read API (datastore_client) failed -- an error response, an
-    unreachable host, or a malformed one. Kept in the single PortfolioError hierarchy so
-    jobs.py's one `except PortfolioError` still catches it, same as every other domain error."""
+    unreachable host, or a malformed one."""
+
+    status_code = 502

@@ -113,3 +113,25 @@ def test_rebuild_returns_returns_200_even_when_partial(monkeypatch, client):
 
     assert response.status_code == 200
     assert response.json()["status"] == "partial"
+
+
+def test_rebuild_returns_returns_201_when_ok(monkeypatch, client):
+    monkeypatch.setattr(
+        jobs,
+        "run_rebuild_returns",
+        lambda **kw: {
+            "status": "ok",
+            "rows_saved": 3,
+            "tickers_rebuilt": 1,
+            "tickers_blocked": 0,
+            "pairs_failed": 0,
+            "blocked_tickers": [],
+            "failed_pairs": [],
+        },
+    )
+
+    response = client.post(
+        "/returns/rebuild", json={"user_id": str(uuid.uuid4()), "account_label": "m"}
+    )
+
+    assert response.status_code == 201
