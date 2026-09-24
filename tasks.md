@@ -29,13 +29,13 @@ one-time snapshot.
 | 9 | [Portfolio HTTP API](#9-portfolio-http-api) | 5, 6, 7, 8 | done |
 | 10 | [Web foundation & auth pages](#10-web-foundation--auth-pages) | 2 | done |
 | 11 | [Portfolio entry UI](#11-portfolio-entry-ui) | 10, 9 | done |
-| 12 | [Portfolio view UI](#12-portfolio-view-ui) | 11 | ready |
-| 13 | [End-to-end integration & smoke test](#13-end-to-end-integration--smoke-test) | 12 | blocked |
+| 12 | [Portfolio view UI](#12-portfolio-view-ui) | 11 | done |
+| 13 | [End-to-end integration & smoke test](#13-end-to-end-integration--smoke-test) | 12 | ready |
 | 14 | [Broker cash-ledger import](#14-broker-cash-ledger-import) | 6 | done |
 | 15 | [Extract broker-parser plugins to a private repo](#15-extract-broker-parser-plugins-to-a-private-repo) | 6, 14 | done |
 
-One task is `ready` today: **12** (portfolio view UI), unblocked now that its dependency — 11
-(portfolio entry UI) — is `done`.
+One task is `ready` today: **13** (end-to-end integration & smoke test), unblocked now that its
+dependency — 12 (portfolio view UI) — is `done`.
 
 ## Tasks
 
@@ -421,12 +421,69 @@ registered parser surfaces `BrokerParserNotFound`'s message end-to-end (the happ
 covered here — parsing a real export is `portfolio`'s own tested territory, and this repo's dev venv
 has no broker plugin installed per task 15).
 
-### 12. Portfolio view UI
+### 12. Portfolio view UI — done
 
-Views of the portfolio by account and by value/returns: position listing per account, return-over-
-time chart (a lightweight JS charting library, per `web/docs/architecture.md` — not yet named,
-needs picking as part of this task), calling task 9's positions/returns endpoints. Gains/losses
-rendered with `--forest`/`--oxblood` per the brand charter, numbers in `--font-mono`.
+New `GET /portfolio?account=<label>` in `services/web/src/web/api/routes.py`: a per-account view
+(`portfolio`'s own endpoints are all `account_label`-scoped, no cross-account aggregation exists,
+so a cross-account rollup is out of scope here) listing current positions and a return-over-time
+chart, read-only — it never triggers `rebuild-positions`/`rebuild-returns`, which stay CLI-only.
+`portfolio_client/{base,http_client,errors}.py` (task 11) extended with `list_positions`/
+`list_returns` (`Position`/`Return` dataclasses, field-for-field mirrors of `portfolio`'s
+`PositionResponse`/`ReturnResponse`), parsing the wire's string-encoded `Decimal`/date fields; no
+new error types needed. **Chart.js** chosen as the charting library (`web/docs/architecture.md`
+had left this open), vendored into `static/vendor/chart.min.js` — the same no-CDN precedent htmx
+already set, keeping `script-src 'self'`'s CSP untouched.
+
+**The core new design problem, flagged by `portfolio/docs/architecture.md` as deferred here**:
+`GET /returns` is per-ticker, not portfolio-aggregated, since different tickers can sit on
+different trading calendars. New pure module `services/web/src/web/portfolio_view.py`
+(`aggregate_portfolio_returns`) solves it: build the sorted union of every `price_date` across
+every ticker, walk each ticker's series forward in lockstep with that union (forward-filling a
+ticker's last-known row onto a date it lacks one of its own, contributing nothing to a date before
+its first-ever row), sum the EUR figures across contributing tickers per date, and **recompute**
+`total_return_pct` as `sum(total_return_eur)/sum(cost_basis_eur)` rather than averaging the
+per-ticker percentages (which don't sum to a portfolio percentage). A companion
+`filter_open_positions` drops `quantity == 0` rows from the positions table (`portfolio`'s
+`list_latest_snapshots` intentionally doesn't prune closed positions) but keeps a negative
+quantity visible — a replay anomaly `positions/calculator.py` warns about but still computes, not
+a modeled short position, and worth surfacing rather than hiding.
+
+**A CSP wrinkle, resolved without weakening the CSP**: canvas-based Chart.js can't read
+`var(--forest)` the way SVG can, but hardcoding a hex value would violate the brand rule and (for
+`.html`) its mechanical hex-scan test; `web`'s CSP (`script-src 'self'`, no `unsafe-inline`, no
+nonce) also rules out an inline `<script>` with real logic — this codebase had never had one.
+Resolved by embedding the chart's numeric data as a non-executable `<script
+type="application/json">` data island in the new `templates/portfolio.html`, with the actual logic
+(`getComputedStyle(...)` reading `--forest`/`--oxblood`/`--hairline` at runtime, the `Chart`
+instantiation) in a same-origin `static/portfolio_chart.js`, loaded exactly like vendored htmx — no
+CSP change anywhere. New `tests/unit/test_templates.py::test_templates_have_no_inline_executable_script`
+makes that invariant mechanical. The chart uses a `category` x-axis rather than Chart.js's `time`
+scale, avoiding a second vendored date-adapter dependency at the cost of a calendar gap rendering
+as an equal-width step rather than a proportionally wider one — an accepted v1 simplification.
+
+`GET /portfolio` treats `AccountNotFound` (from either the positions or returns call) as fatal — a
+distinct 404 — rather than folding it into the generic degrade-to-inline-error path task 11's
+`_list_accounts_and_brokers` established, since a bad `account_label` has nothing partial to show
+either way; any other `PortfolioClientError` on either call degrades that half of the page
+independently, mirroring that same established pattern. An account with no positions and/or no
+return history yet renders as an ordinary empty state, never an error — `web` has no way to tell
+"never rebuilt" from "rebuilt into zero rows" and doesn't need to. One new link on
+`accounts.html` ("View portfolio") reaches the new page per account.
+
+Tests: `tests/unit/test_portfolio_view.py` (new — the aggregation function's edge cases: empty
+input, staggered trading calendars, forward-fill after a ticker's first row but never before it, a
+fully-closed ticker's zeroed row forward-filling correctly, `total_return_pct` recomputed from
+summed amounts rather than averaged, `None` when summed cost basis is 0, out-of-order input);
+`tests/unit/test_portfolio_client.py` (the two new methods: happy path, `AccountNotFound`,
+malformed body); `tests/unit/test_routes.py` (`FakePortfolioClient` extended, the new route's
+login-required/happy-path/closed-position-filtering/empty-state/404/degrade-on-partial-failure
+cases, the new accounts-page link); `tests/unit/test_templates.py` (the new no-inline-script
+check). Integration: `tests/integration/test_portfolio_flow.py` gained an empty-state-before-any-
+rebuild case, an unknown-account-404 case, and a positions-populated case (seeded through the real
+web→portfolio round trip, `portfolio.jobs.run_rebuild_positions` called directly — needs no live
+`data-store`, unlike returns rebuild); a returns-populated case is explicitly out of scope there,
+noted in the file's own docstring, since `rebuild-returns` needs a live `data-store` this test
+harness doesn't have.
 
 ### 13. End-to-end integration & smoke test
 

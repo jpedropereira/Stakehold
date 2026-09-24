@@ -217,3 +217,42 @@ a {
   font: var(--text-caption);
   margin-left: auto;
 }
+
+.account-row a + a {
+  margin-left: 12px;
+}
+
+.gain {
+  color: var(--forest);
+}
+
+.loss {
+  color: var(--oxblood);
+}
+
+.positions-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.positions-table th,
+.positions-table td {
+  text-align: left;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.positions-table th {
+  font: var(--text-caption);
+  color: var(--stone-600);
+  font-weight: 600;
+}
+
+.returns-summary {
+  font: var(--text-body);
+  margin: 0 0 16px;
+}
+
+.chart-wrap {
+  max-width: 720px;
+}

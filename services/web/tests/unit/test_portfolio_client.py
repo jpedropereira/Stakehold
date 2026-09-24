@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 
 import httpx
@@ -187,6 +187,132 @@ async def test_import_transactions_422_broker_parser_not_found():
             content=b"x",
             content_type="text/csv",
         )
+
+
+async def test_list_positions_sends_expected_query_params_and_parses_fields():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["params"] = dict(request.url.params)
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "account_id": 1,
+                    "canonical_ticker": "AAPL",
+                    "as_of_date": "2026-01-05",
+                    "quantity": "10.5",
+                    "average_cost_native": "150.25",
+                    "native_currency": "USD",
+                    "average_cost_eur": "140.10",
+                    "cost_basis_eur": "1471.05",
+                }
+            ],
+        )
+
+    client = _client(handler)
+    positions = await client.list_positions(user_id=USER_ID, account_label="main")
+
+    assert captured["params"] == {"user_id": USER_ID, "account_label": "main"}
+    assert len(positions) == 1
+    position = positions[0]
+    assert position.account_id == 1
+    assert position.canonical_ticker == "AAPL"
+    assert position.as_of_date == date(2026, 1, 5)
+    assert position.quantity == Decimal("10.5")
+    assert position.average_cost_native == Decimal("150.25")
+    assert position.native_currency == "USD"
+    assert position.average_cost_eur == Decimal("140.10")
+    assert position.cost_basis_eur == Decimal("1471.05")
+
+
+async def test_list_positions_account_not_found_raises():
+    client = _client(lambda request: httpx.Response(404, json={"detail": "account not found"}))
+
+    with pytest.raises(AccountNotFound):
+        await client.list_positions(user_id=USER_ID, account_label="missing")
+
+
+async def test_list_positions_malformed_body_raises_portfolio_unavailable():
+    client = _client(
+        lambda request: httpx.Response(
+            200,
+            json=[
+                {
+                    "account_id": 1,
+                    "canonical_ticker": "AAPL",
+                    "as_of_date": "not-a-date",
+                    "quantity": "10",
+                    "average_cost_native": "1",
+                    "native_currency": "USD",
+                    "average_cost_eur": "1",
+                    "cost_basis_eur": "1",
+                }
+            ],
+        )
+    )
+
+    with pytest.raises(PortfolioUnavailable):
+        await client.list_positions(user_id=USER_ID, account_label="main")
+
+
+async def test_list_returns_sends_expected_query_params_and_parses_fields():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["params"] = dict(request.url.params)
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "account_id": 1,
+                    "canonical_ticker": "AAPL",
+                    "price_date": "2026-01-05",
+                    "quantity": "10",
+                    "market_value_native": "1500",
+                    "market_value_eur": "1400",
+                    "cost_basis_eur": "1300",
+                    "unrealized_return_eur": "100",
+                    "unrealized_return_pct": None,
+                    "dividends_received_eur": "5",
+                    "total_return_eur": "105",
+                    "total_return_pct": None,
+                }
+            ],
+        )
+
+    client = _client(handler)
+    returns = await client.list_returns(user_id=USER_ID, account_label="main")
+
+    assert captured["params"] == {"user_id": USER_ID, "account_label": "main"}
+    assert len(returns) == 1
+    row = returns[0]
+    assert row.account_id == 1
+    assert row.canonical_ticker == "AAPL"
+    assert row.price_date == date(2026, 1, 5)
+    assert row.quantity == Decimal("10")
+    assert row.market_value_native == Decimal("1500")
+    assert row.market_value_eur == Decimal("1400")
+    assert row.cost_basis_eur == Decimal("1300")
+    assert row.unrealized_return_eur == Decimal("100")
+    assert row.unrealized_return_pct is None
+    assert row.dividends_received_eur == Decimal("5")
+    assert row.total_return_eur == Decimal("105")
+    assert row.total_return_pct is None
+
+
+async def test_list_returns_account_not_found_raises():
+    client = _client(lambda request: httpx.Response(404, json={"detail": "account not found"}))
+
+    with pytest.raises(AccountNotFound):
+        await client.list_returns(user_id=USER_ID, account_label="missing")
+
+
+async def test_list_returns_malformed_body_raises_portfolio_unavailable():
+    client = _client(lambda request: httpx.Response(200, json=[{"account_id": 1}]))
+
+    with pytest.raises(PortfolioUnavailable):
+        await client.list_returns(user_id=USER_ID, account_label="main")
 
 
 async def test_unexpected_status_raises_portfolio_unavailable():

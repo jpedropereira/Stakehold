@@ -14,14 +14,17 @@ task 15), so only the reliably-reproducible BrokerParserNotFound path is exercis
 """
 
 import os
+import uuid
 from pathlib import Path
 
 import httpx
 import psycopg
 import pytest
+import yaml
 from fastapi.testclient import TestClient
 from portfolio import cli as portfolio_cli
 from portfolio.api.app import create_app as create_portfolio_app
+from portfolio.jobs import run_rebuild_positions
 from portfolio.settings import Settings as PortfolioSettings
 from web.api.app import create_app as create_web_app
 from web.api.deps import get_portfolio_client, optional_user, require_user
@@ -33,6 +36,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.anyio]
 
 _PORTFOLIO_SECRET = "integration-test-portfolio-secret"  # pragma: allowlist secret
 _BRAND_DIR = Path(__file__).resolve().parents[4] / "brand"
+_ISIN = "IE00B4L5Y983"
 _USER = AuthUser(
     user_id="11111111-1111-1111-1111-111111111111", email="ann@example.com", display_name="Ann"
 )
@@ -54,11 +58,14 @@ def _clean_portfolio_tables():
     yield
 
 
-def _portfolio_settings() -> PortfolioSettings:
+def _portfolio_settings(*, ticker_mappings_path: Path | None = None) -> PortfolioSettings:
     return PortfolioSettings(
         database_url=os.environ["PORTFOLIO_DATABASE_URL"],
         admin_database_url=os.environ["APP_POSTGRES_ADMIN_DATABASE_URL"],
-        ticker_mappings_path=Path("configs/ticker_mappings.yaml"),  # unused by these flows
+        # Unused by most flows here -- only rebuild-positions needs a real mapping, and that test
+        # passes its own throwaway path (the committed configs/ticker_mappings.yaml is real,
+        # gitignored broker data per task 15 and doesn't exist in a dev checkout).
+        ticker_mappings_path=ticker_mappings_path or Path("configs/ticker_mappings.yaml"),
         datastore_api_url=None,
         internal_api_secret=None,
         api_internal_secret=_PORTFOLIO_SECRET,
@@ -81,11 +88,12 @@ def _web_settings() -> WebSettings:
     )
 
 
-@pytest.fixture
-async def web_client():
+async def _make_web_client(*, ticker_mappings_path: Path | None = None):
     settings = _web_settings()
     web_app = create_web_app(settings)
-    portfolio_app = create_portfolio_app(_portfolio_settings())
+    portfolio_app = create_portfolio_app(
+        _portfolio_settings(ticker_mappings_path=ticker_mappings_path)
+    )
 
     # https base_url: WebSettings.cookie_secure=True marks the CSRF cookie Secure, and httpx's
     # cookie jar won't store/resend a Secure cookie over plain http -- same reasoning as
@@ -100,6 +108,25 @@ async def web_client():
 
         with TestClient(web_app, base_url="https://testserver") as test_client:
             yield test_client
+
+
+@pytest.fixture
+async def web_client():
+    async for test_client in _make_web_client():
+        yield test_client
+
+
+@pytest.fixture
+async def web_client_with_ticker_mapping(tmp_path):
+    """Same wiring as web_client, plus a throwaway ticker mapping so
+    test_portfolio_page_lists_position_after_rebuild_positions' BUY transaction resolves to a
+    canonical_ticker -- the same override test_rebuild_positions.py's own integration suite uses,
+    since the committed configs/ticker_mappings.yaml is real, gitignored broker data (task 15)
+    that doesn't exist in a dev checkout."""
+    path = tmp_path / "ticker_mappings.yaml"
+    path.write_text(yaml.dump({"isin": {_ISIN: "IWDA.AS"}}))
+    async for test_client in _make_web_client(ticker_mappings_path=path):
+        yield test_client
 
 
 def _csrf_token(client, path, **params) -> str:
@@ -196,3 +223,70 @@ async def test_import_with_no_registered_parser_surfaces_broker_parser_not_found
 
     assert response.status_code == 422
     assert "no parser registered" in response.text.lower()
+
+
+# --- portfolio view: GET /portfolio -------------------------------------------
+
+
+async def test_portfolio_page_shows_empty_state_before_any_rebuild(web_client):
+    _create_account(web_client)
+
+    response = web_client.get("/portfolio", params={"account": "main"})
+
+    assert response.status_code == 200
+    assert "No positions yet" in response.text
+    assert "No return history yet" in response.text
+    assert "Can&#39;t reach the portfolio service" not in response.text
+
+
+async def test_portfolio_page_for_unknown_account_is_404(web_client):
+    response = web_client.get("/portfolio", params={"account": "ghost"})
+
+    assert response.status_code == 404
+    assert "doesn't exist" in response.text
+
+
+async def test_portfolio_page_lists_position_after_rebuild_positions(
+    web_client_with_ticker_mapping, tmp_path
+):
+    """rebuild-returns needs a live data-store (unavailable in this dev environment, see the
+    module docstring), so this only exercises the positions half of the view -- the returns
+    section still shows its own empty state, which is itself worth asserting: a portfolio with
+    positions but no computed returns yet must not look like a service failure.
+
+    tmp_path is requested here too so it resolves to the same directory
+    web_client_with_ticker_mapping already wrote the throwaway ticker-mappings file into --
+    pytest caches a function-scoped fixture once per test, shared across every fixture/test that
+    asks for it.
+    """
+    web_client = web_client_with_ticker_mapping
+    _create_account(web_client)
+
+    token = _csrf_token(web_client, "/transactions/new", account="main")
+    buy_response = web_client.post(
+        "/transactions/new",
+        data=_transaction_form(
+            token,
+            broker_transaction_ref="buy-1",
+            transaction_type="BUY",
+            instrument_identifier=_ISIN,
+            instrument_identifier_kind="ISIN",
+            quantity="10",
+            price="95.00",
+            native_amount="-950.00",
+        ),
+        follow_redirects=False,
+    )
+    assert buy_response.status_code == 303
+
+    run_rebuild_positions(
+        user_id=uuid.UUID(_USER.user_id),
+        account_label="main",
+        settings=_portfolio_settings(ticker_mappings_path=tmp_path / "ticker_mappings.yaml"),
+    )
+
+    response = web_client.get("/portfolio", params={"account": "main"})
+
+    assert response.status_code == 200
+    assert "IWDA.AS" in response.text
+    assert "No return history yet" in response.text
