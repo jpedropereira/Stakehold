@@ -12,9 +12,9 @@ def no_dotenv(monkeypatch):
 @pytest.fixture(autouse=True)
 def base_env(monkeypatch):
     monkeypatch.setenv("WEB_AUTH_API_URL", "http://localhost:8001")
-    monkeypatch.setenv("WEB_INTERNAL_SECRET", "s3cret")
+    monkeypatch.setenv("WEB_INTERNAL_SECRET", "test-secret")
     monkeypatch.setenv("WEB_PORTFOLIO_API_URL", "http://localhost:8002")
-    monkeypatch.setenv("WEB_PORTFOLIO_INTERNAL_SECRET", "p0rtfolio-s3cret")
+    monkeypatch.setenv("WEB_PORTFOLIO_INTERNAL_SECRET", "test-portfolio-secret")
 
 
 def test_loads_auth_api_url_from_env():
