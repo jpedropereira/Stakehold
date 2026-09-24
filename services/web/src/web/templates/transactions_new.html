@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Add transaction — Stakehold{% endblock %}
+{% block content %}
+<section class="entry-card">
+  <h1>Add transaction</h1>
+  <p class="entry-subtitle">Account: {{ account_label }}</p>
+  {% if saved %}<p class="confirmation-banner">Transaction saved.</p>{% endif %}
+  <form hx-post="/transactions/new" hx-target="#form-errors" hx-swap="innerHTML" method="post" action="/transactions/new">
+    <div id="form-errors">
+      {% include "partials/_form_errors.html" %}
+    </div>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="account_label" value="{{ account_label }}">
+
+    <label for="broker_transaction_ref">Reference</label>
+    <input type="text" id="broker_transaction_ref" name="broker_transaction_ref" required>
+
+    <label for="transaction_type">Type</label>
+    <select id="transaction_type" name="transaction_type" required>
+      {% for t in transaction_types %}
+      <option value="{{ t }}">{{ t }}</option>
+      {% endfor %}
+    </select>
+
+    <label for="trade_datetime">Date &amp; time (UTC)</label>
+    <input type="datetime-local" id="trade_datetime" name="trade_datetime" required>
+
+    <label for="native_amount">Amount</label>
+    <input type="text" inputmode="decimal" id="native_amount" name="native_amount" required>
+
+    <label for="native_currency">Currency</label>
+    <input type="text" id="native_currency" name="native_currency" maxlength="3" required>
+
+    <label for="instrument_identifier">Instrument identifier</label>
+    <input type="text" id="instrument_identifier" name="instrument_identifier">
+
+    <label for="instrument_identifier_kind">Identifier kind</label>
+    <select id="instrument_identifier_kind" name="instrument_identifier_kind">
+      <option value=""></option>
+      {% for kind in identifier_kinds %}
+      <option value="{{ kind }}">{{ kind }}</option>
+      {% endfor %}
+    </select>
+
+    <label for="quantity">Quantity</label>
+    <input type="text" inputmode="decimal" id="quantity" name="quantity">
+
+    <label for="price">Price</label>
+    <input type="text" inputmode="decimal" id="price" name="price">
+
+    <label for="fx_rate">FX rate (native units per 1 EUR)</label>
+    <input type="text" inputmode="decimal" id="fx_rate" name="fx_rate">
+
+    <label for="fees_native">Fees</label>
+    <input type="text" inputmode="decimal" id="fees_native" name="fees_native">
+
+    <button type="submit" class="primary-button">Save transaction</button>
+  </form>
+</section>
+{% endblock %}

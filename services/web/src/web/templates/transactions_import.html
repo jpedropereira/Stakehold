@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Import broker file — Stakehold{% endblock %}
+{% block content %}
+<section class="entry-card">
+  <h1>Import broker file</h1>
+  <p class="entry-subtitle">Account: {{ account_label }}</p>
+  {% if imported is not none %}
+  <p class="confirmation-banner">Imported <span class="mono">{{ imported }}</span> transaction(s).</p>
+  {% endif %}
+  <form hx-post="/transactions/import" hx-target="#form-errors" hx-swap="innerHTML" hx-encoding="multipart/form-data"
+        method="post" action="/transactions/import" enctype="multipart/form-data">
+    <div id="form-errors">
+      {% include "partials/_form_errors.html" %}
+    </div>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="account_label" value="{{ account_label }}">
+    <label for="file">Export file</label>
+    <input type="file" id="file" name="file" required>
+    <button type="submit" class="primary-button">Upload</button>
+  </form>
+</section>
+{% endblock %}

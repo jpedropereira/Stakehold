@@ -28,14 +28,14 @@ one-time snapshot.
 | 8 | [Returns](#8-returns) | 7, 3 | done |
 | 9 | [Portfolio HTTP API](#9-portfolio-http-api) | 5, 6, 7, 8 | done |
 | 10 | [Web foundation & auth pages](#10-web-foundation--auth-pages) | 2 | done |
-| 11 | [Portfolio entry UI](#11-portfolio-entry-ui) | 10, 9 | ready |
-| 12 | [Portfolio view UI](#12-portfolio-view-ui) | 11 | blocked |
+| 11 | [Portfolio entry UI](#11-portfolio-entry-ui) | 10, 9 | done |
+| 12 | [Portfolio view UI](#12-portfolio-view-ui) | 11 | ready |
 | 13 | [End-to-end integration & smoke test](#13-end-to-end-integration--smoke-test) | 12 | blocked |
 | 14 | [Broker cash-ledger import](#14-broker-cash-ledger-import) | 6 | done |
 | 15 | [Extract broker-parser plugins to a private repo](#15-extract-broker-parser-plugins-to-a-private-repo) | 6, 14 | done |
 
-One task is `ready` today: **11** (portfolio entry UI), unblocked now that both its
-dependencies — 10 and 9 (portfolio HTTP API) — are `done`. **12** stays `blocked` on 11.
+One task is `ready` today: **12** (portfolio view UI), unblocked now that its dependency — 11
+(portfolio entry UI) — is `done`.
 
 ## Tasks
 
@@ -373,10 +373,53 @@ colors) and an integration test (`tests/integration/test_auth_flow.py`: a real s
 logout round trip through both services' actual code, `auth`'s ASGI app reached via a
 `TestClient`-as-`httpx.Client` rather than a second container) under `services/web/tests/`.
 
-### 11. Portfolio entry UI
+### 11. Portfolio entry UI — done
 
-Pages/forms calling task 9's portfolio API: create an account, manually enter a transaction,
-upload a broker export file. htmx partial updates for form submission feedback.
+New `src/web/portfolio_client/{base,http_client,errors}.py` — a copy of `auth_client`'s shape
+(Protocol + `httpx`-backed implementation + one error hierarchy), per `web/docs/architecture.md`'s
+own anticipation at task 9. `HttpPortfolioClient` dispatches on HTTP status code alone (every
+`portfolio` domain error already has a distinct status code, unlike `auth`'s collapsed-401 cases),
+and normalizes `portfolio`'s two 422 body shapes — a plain `{"detail": "<message>"}` and FastAPI's
+own Pydantic-validation array — into one display string. Five new routes in `api/routes.py`: a
+`GET`/`POST /accounts` hub (list + create-account form, broker field a text input with a
+`<datalist>` seeded from `GET /brokers`), and two standalone forms reached via per-account links —
+`/transactions/new?account=<label>` (manual entry) and `/transactions/import?account=<label>`
+(broker-file upload, size-capped at 20MB client-side to match `portfolio`'s own cap before the
+bytes are forwarded). `account_label` travels as a query param or hidden form field everywhere in
+`web`, never a path segment, mirroring `portfolio`'s own API rule. A successful manual-transaction
+add or import redirects back to the *same* form (`?saved=1` / `&imported=<rows_saved>`) rather than
+to the hub, so entering several transactions for one account doesn't require re-navigating each
+time. `InvalidPortfolioRequest`'s message is shown to the user verbatim (not mapped to canned copy
+the way `auth_client`'s errors are) — there's no user-enumeration concern on a validation error like
+there is on a login failure. New templates `accounts.html`/`transactions_new.html`/
+`transactions_import.html`, extending `base.html` and reusing `partials/_form_errors.html`, plus a
+"Portfolio" nav link and an updated `home.html` CTA. New settings `WEB_PORTFOLIO_API_URL`/
+`WEB_PORTFOLIO_INTERNAL_SECRET` (a second, independently-rotatable secret from `WEB_INTERNAL_SECRET`,
+mirroring `portfolio`'s own two-secret split); `app.py`'s lifespan now opens two `httpx.AsyncClient`s,
+one per upstream service.
+
+**One FastAPI/Starlette quirk found and worked around, not a design choice**: a required
+`Form(...)` field treats a submitted empty string as *missing* rather than present-but-blank in the
+pinned framework versions, which would 422 with a raw JSON body before a route's own CSRF check or
+`portfolio`'s own blank-field validation ever ran. Every new route's string `Form` fields use
+`Form(default="")` instead; `login_submit`/`signup_submit` (task 10) predate this finding and are
+unchanged — see `docs/architecture.md`'s "Key decisions" for the revisit trigger.
+
+Tests: `tests/unit/test_portfolio_client.py` (mirrors `test_auth_client.py`: one test per
+status-code branch, both 422 body shapes, a connection error, a malformed 2xx body, the multipart
+upload's request shape); `tests/unit/test_routes.py` gained a `FakePortfolioClient` (same
+hand-written style as `FakeAuthClient`) and per-route coverage (CSRF rejection, success +
+redirect/query-params, each mapped error, an unmapped-error default, one htmx variant);
+`tests/unit/test_settings.py` gained the two new required-var cases. Integration:
+`tests/integration/test_portfolio_flow.py`, a real `portfolio.api.app.create_app()` reached via
+`httpx.ASGITransport` against `portfolio`'s own live Postgres — deliberately scoped to web↔portfolio
+only (`require_user`/`optional_user` overridden to a fixed user rather than standing up a third live
+service for a session round trip `test_auth_flow.py` already covers): create-account →
+`/accounts` lists it; add-transaction → re-submitting the same `broker_transaction_ref` doesn't
+duplicate the row; an unknown account surfaces 404; a broker file uploaded against a broker with no
+registered parser surfaces `BrokerParserNotFound`'s message end-to-end (the happy-path upload isn't
+covered here — parsing a real export is `portfolio`'s own tested territory, and this repo's dev venv
+has no broker plugin installed per task 15).
 
 ### 12. Portfolio view UI
 
