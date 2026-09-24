@@ -1,6 +1,8 @@
 """Route-level tests using a fake AuthClient (no live auth service), the same fake-dependency
 approach auth's own tests/unit/test_api.py uses for its repositories."""
 
+from datetime import datetime, timezone
+
 import pytest
 from fastapi.testclient import TestClient
 from web import settings as settings_module
@@ -76,6 +78,7 @@ class FakePortfolioClient:
         self.create_account_error: Exception | None = None
         self.add_transaction_result: TransactionWriteResult | None = None
         self.add_transaction_error: Exception | None = None
+        self.last_add_transaction: dict | None = None
         self.import_transactions_result: TransactionWriteResult | None = None
         self.import_transactions_error: Exception | None = None
         self.calls: list[tuple] = []
@@ -117,6 +120,14 @@ class FakePortfolioClient:
     ):
         self.calls.append(
             ("add_transaction", user_id, account_label, broker_transaction_ref, transaction_type)
+        )
+        self.last_add_transaction = dict(
+            trade_datetime=trade_datetime,
+            native_amount=native_amount,
+            quantity=quantity,
+            price=price,
+            fx_rate=fx_rate,
+            fees_native=fees_native,
         )
         if self.add_transaction_error:
             raise self.add_transaction_error
@@ -602,6 +613,9 @@ def test_accounts_page_renders_even_when_portfolio_is_unavailable(client):
     response = test_client.get("/accounts")
 
     assert response.status_code == 200
+    # A portfolio outage must not look identical to "you have no accounts" -- the visitor needs
+    # to be able to tell data failed to load from having genuinely zero accounts.
+    assert "Can&#39;t reach the portfolio service" in response.text
 
 
 # --- accounts: POST ---------------------------------------------------------------
@@ -616,7 +630,9 @@ def test_create_account_without_csrf_cookie_is_rejected(client):
     )
 
     assert response.status_code == 400
-    assert fake_portfolio.calls == []
+    # The error re-render still needs the account/broker lists (read-only), but the CSRF failure
+    # must still block the write.
+    assert ("create_account", "u1", "acme", "main") not in fake_portfolio.calls
 
 
 def test_create_account_success_redirects(client):
@@ -643,6 +659,9 @@ def test_create_account_label_conflict(client):
     test_client, _, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)
     token = _accounts_csrf_token(test_client)
+    fake_portfolio.list_accounts_result = [
+        Account(id=1, account_label="existing", broker="acme", created_at="2026-01-01T00:00:00Z")
+    ]
     fake_portfolio.create_account_error = AccountLabelConflict("conflict")
 
     response = test_client.post(
@@ -651,6 +670,11 @@ def test_create_account_label_conflict(client):
 
     assert response.status_code == 409
     assert "already used with a different broker" in response.text
+    # The error re-render must not silently drop the visitor's existing accounts or the
+    # logged-in nav/logout chrome, even though this is a full-page (non-htmx) response.
+    assert "existing" in response.text
+    assert "site-nav" in response.text
+    assert "logout-form" in response.text
 
 
 def test_create_account_invalid_request_shows_server_message(client):
@@ -811,6 +835,41 @@ def test_add_transaction_invalid_datetime_is_rejected_before_calling_portfolio(c
     assert fake_portfolio.calls == []
 
 
+def test_add_transaction_converts_non_utc_offset_to_utc(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    token = _transactions_new_csrf_token(test_client, "main")
+    fake_portfolio.add_transaction_result = TransactionWriteResult(
+        status="ok", rows_saved=1, transactions_saved=1
+    )
+
+    response = test_client.post(
+        "/transactions/new",
+        data=_transaction_form_data(token, trade_datetime="2026-01-05T23:30:00+05:00"),
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    # A +05:00 offset must be converted to UTC (18:30), not have its offset silently discarded.
+    assert fake_portfolio.last_add_transaction["trade_datetime"] == datetime(
+        2026, 1, 5, 18, 30, tzinfo=timezone.utc
+    )
+
+
+def test_add_transaction_rejects_non_finite_amount(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    token = _transactions_new_csrf_token(test_client, "main")
+
+    response = test_client.post(
+        "/transactions/new",
+        data=_transaction_form_data(token, native_amount="NaN"),
+    )
+
+    assert response.status_code == 400
+    assert fake_portfolio.calls == []
+
+
 def test_add_transaction_account_not_found(client):
     test_client, _, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)
@@ -821,6 +880,9 @@ def test_add_transaction_account_not_found(client):
 
     assert response.status_code == 404
     assert "doesn&#39;t exist" in response.text
+    # A full-page error re-render must not silently log the user out of the nav/logout chrome.
+    assert "site-nav" in response.text
+    assert "logout-form" in response.text
 
 
 def test_add_transaction_invalid_request_shows_server_message(client):
@@ -941,3 +1003,6 @@ def test_import_transactions_account_not_found(client):
 
     assert response.status_code == 404
     assert "doesn&#39;t exist" in response.text
+    # A full-page error re-render must not silently log the user out of the nav/logout chrome.
+    assert "site-nav" in response.text
+    assert "logout-form" in response.text

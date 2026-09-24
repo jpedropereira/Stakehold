@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
@@ -118,7 +119,7 @@ def _redirect(request: Request, response: Response, url: str) -> Response:
     return _finish(response, htmx_or_redirect(request, url))
 
 
-def _render_form_error(
+async def _render_form_error(
     request: Request,
     response: Response,
     settings: Settings,
@@ -126,14 +127,21 @@ def _render_form_error(
     template_name: str,
     message: str,
     status_code: int,
+    *,
+    extra_context_loader=None,
     **extra_context,
 ) -> Response:
     """Re-renders a submitted form with an error, as an htmx partial swap or a full page.
 
     `extra_context` carries whatever a form beyond login/signup needs to redisplay correctly on
     the full-page path -- e.g. the transaction/import forms' `account_label`, which the hidden
-    field must keep echoing after an error or a resubmit would silently target the wrong account.
-    The htmx partial swap never needs it: it only ever re-renders `_form_errors.html`.
+    field must keep echoing after an error or a resubmit would silently target the wrong account,
+    or `user`, which every full-page template needs for base.html's nav/logout block. The htmx
+    partial swap never needs either: it only ever re-renders `_form_errors.html`.
+
+    `extra_context_loader`, if given, is an async callable returning additional context -- used
+    instead of `extra_context` for anything that costs an I/O call (e.g. re-fetching accounts/
+    brokers) so that cost is paid only on this, the actual error-render path, never on success.
     """
     if is_htmx(request):
         return _render(
@@ -145,17 +153,20 @@ def _render_form_error(
             status_code=status_code,
         )
     token = ensure_csrf_cookie(request, response, cookie_secure=settings.cookie_secure)
+    context = {"csrf_token": token, "error": message, **extra_context}
+    if extra_context_loader is not None:
+        context.update(await extra_context_loader())
     return _render(
         request,
         response,
         templates,
         template_name,
-        {"csrf_token": token, "error": message, **extra_context},
+        context,
         status_code=status_code,
     )
 
 
-def _check_csrf(
+async def _check_csrf(
     request: Request,
     response: Response,
     settings: Settings,
@@ -163,6 +174,8 @@ def _check_csrf(
     template_name: str,
     action_name: str,
     csrf_token: str,
+    *,
+    extra_context_loader=None,
     **extra_context,
 ) -> Response | None:
     """Returns an error Response if the CSRF check fails, otherwise None."""
@@ -170,7 +183,7 @@ def _check_csrf(
         verify_csrf(request, form_token=csrf_token, cookie_secure=settings.cookie_secure)
     except CsrfInvalid:
         logger.warning("%s: CSRF check failed.", action_name)
-        return _render_form_error(
+        return await _render_form_error(
             request,
             response,
             settings,
@@ -178,6 +191,7 @@ def _check_csrf(
             template_name,
             "Something went wrong with that submission. Refresh the page and try again.",
             status.HTTP_400_BAD_REQUEST,
+            extra_context_loader=extra_context_loader,
             **extra_context,
         )
     return None
@@ -207,7 +221,7 @@ async def _submit_auth_form(
         message, status_code = error_messages.get(type(exc), _DEFAULT_AUTH_ERROR)
         if type(exc) not in error_messages:
             logger.exception("%s: auth service unavailable.", action_name)
-        return _render_form_error(
+        return await _render_form_error(
             request, response, settings, templates, template_name, message, status_code
         )
 
@@ -232,6 +246,7 @@ async def _submit_portfolio_form(
     call,
     error_messages: dict[type[PortfolioClientError], tuple[str, int]],
     on_success,
+    extra_context_loader=None,
     **extra_context,
 ) -> Response:
     """Runs a portfolio_client call and renders the appropriate outcome.
@@ -244,7 +259,7 @@ async def _submit_portfolio_form(
     try:
         result = await call()
     except InvalidPortfolioRequest as exc:
-        return _render_form_error(
+        return await _render_form_error(
             request,
             response,
             settings,
@@ -252,13 +267,14 @@ async def _submit_portfolio_form(
             template_name,
             str(exc),
             status.HTTP_422_UNPROCESSABLE_CONTENT,
+            extra_context_loader=extra_context_loader,
             **extra_context,
         )
     except PortfolioClientError as exc:
         message, status_code = error_messages.get(type(exc), _DEFAULT_PORTFOLIO_ERROR)
         if type(exc) not in error_messages:
             logger.exception("%s: portfolio service unavailable.", action_name)
-        return _render_form_error(
+        return await _render_form_error(
             request,
             response,
             settings,
@@ -266,6 +282,7 @@ async def _submit_portfolio_form(
             template_name,
             message,
             status_code,
+            extra_context_loader=extra_context_loader,
             **extra_context,
         )
     return on_success(result)
@@ -325,7 +342,7 @@ async def login_submit(
     templates=Depends(get_templates),
     auth_client: AuthClient = Depends(get_auth_client),
 ):
-    csrf_error = _check_csrf(
+    csrf_error = await _check_csrf(
         request, response, settings, templates, "login.html", "login", csrf_token
     )
     if csrf_error is not None:
@@ -386,7 +403,7 @@ async def signup_submit(
     templates=Depends(get_templates),
     auth_client: AuthClient = Depends(get_auth_client),
 ):
-    csrf_error = _check_csrf(
+    csrf_error = await _check_csrf(
         request, response, settings, templates, "signup.html", "signup", csrf_token
     )
     if csrf_error is not None:
@@ -452,6 +469,35 @@ _ACCOUNT_ERRORS: dict[type[PortfolioClientError], tuple[str, int]] = {
     ),
 }
 
+_PORTFOLIO_LIST_ERROR = "Can't reach the portfolio service right now — the list may be incomplete."
+
+
+async def _list_accounts_and_brokers(
+    portfolio_client: PortfolioClient, user_id: str
+) -> tuple[list, list, str | None]:
+    """Fetches the accounts/brokers lists accounts.html needs, concurrently and tolerating
+    either call failing independently, so a portfolio outage degrades to an inline notice with
+    empty lists rather than a 500 or (worse) a silent, indistinguishable-from-empty page."""
+    accounts_result, brokers_result = await asyncio.gather(
+        portfolio_client.list_accounts(user_id=user_id),
+        portfolio_client.list_brokers(),
+        return_exceptions=True,
+    )
+    error = None
+    if isinstance(accounts_result, PortfolioClientError):
+        logger.exception(
+            "portfolio service unavailable listing accounts.", exc_info=accounts_result
+        )
+        accounts_result, error = [], _PORTFOLIO_LIST_ERROR
+    elif isinstance(accounts_result, BaseException):
+        raise accounts_result
+    if isinstance(brokers_result, PortfolioClientError):
+        logger.exception("portfolio service unavailable listing brokers.", exc_info=brokers_result)
+        brokers_result, error = [], _PORTFOLIO_LIST_ERROR
+    elif isinstance(brokers_result, BaseException):
+        raise brokers_result
+    return accounts_result, brokers_result, error
+
 
 @router.get("/accounts")
 async def accounts_page(
@@ -463,16 +509,7 @@ async def accounts_page(
     portfolio_client: PortfolioClient = Depends(get_portfolio_client),
 ):
     csrf_token = ensure_csrf_cookie(request, response, cookie_secure=settings.cookie_secure)
-    try:
-        accounts = await portfolio_client.list_accounts(user_id=user.user_id)
-    except PortfolioClientError:
-        logger.exception("accounts_page: portfolio service unavailable listing accounts.")
-        accounts = []
-    try:
-        brokers = await portfolio_client.list_brokers()
-    except PortfolioClientError:
-        logger.exception("accounts_page: portfolio service unavailable listing brokers.")
-        brokers = []
+    accounts, brokers, list_error = await _list_accounts_and_brokers(portfolio_client, user.user_id)
     return _render(
         request,
         response,
@@ -483,7 +520,7 @@ async def accounts_page(
             "csrf_token": csrf_token,
             "accounts": accounts,
             "brokers": brokers,
-            "error": None,
+            "error": list_error,
         },
     )
 
@@ -505,8 +542,26 @@ async def accounts_submit(
     user: AuthUser = Depends(require_user),
     portfolio_client: PortfolioClient = Depends(get_portfolio_client),
 ):
-    csrf_error = _check_csrf(
-        request, response, settings, templates, "accounts.html", "create_account", csrf_token
+    async def load_error_context() -> dict:
+        # Any full-page error re-render of accounts.html below -- CSRF failure, a form/portfolio
+        # error -- needs the visitor's existing accounts/brokers, the same as the GET route, or
+        # the page falsely claims the account list is empty. Loaded lazily (only when an error is
+        # actually being rendered), so the success path never pays for a fetch it throws away.
+        accounts, brokers, _list_error = await _list_accounts_and_brokers(
+            portfolio_client, user.user_id
+        )
+        return {"accounts": accounts, "brokers": brokers}
+
+    csrf_error = await _check_csrf(
+        request,
+        response,
+        settings,
+        templates,
+        "accounts.html",
+        "create_account",
+        csrf_token,
+        user=user,
+        extra_context_loader=load_error_context,
     )
     if csrf_error is not None:
         return csrf_error
@@ -523,6 +578,8 @@ async def accounts_submit(
         ),
         error_messages=_ACCOUNT_ERRORS,
         on_success=lambda _result: _redirect(request, response, "/accounts"),
+        user=user,
+        extra_context_loader=load_error_context,
     )
 
 
@@ -583,7 +640,14 @@ def _parse_transaction_form(
     handing off.
     """
     try:
-        parsed_datetime = datetime.fromisoformat(trade_datetime).replace(tzinfo=timezone.utc)
+        parsed_datetime = datetime.fromisoformat(trade_datetime)
+        # The shipped form always submits a naive value (an HTML datetime-local input has no
+        # timezone), so a missing tzinfo is assumed UTC. A caller that does send an offset (e.g.
+        # a non-browser client) is converted rather than having its offset silently discarded.
+        if parsed_datetime.tzinfo is None:
+            parsed_datetime = parsed_datetime.replace(tzinfo=timezone.utc)
+        else:
+            parsed_datetime = parsed_datetime.astimezone(timezone.utc)
         parsed_amount = Decimal(native_amount)
         parsed_quantity = Decimal(quantity) if quantity else None
         parsed_price = Decimal(price) if price else None
@@ -591,6 +655,11 @@ def _parse_transaction_form(
         parsed_fees = Decimal(fees_native) if fees_native else None
     except ValueError, InvalidOperation:
         return None
+    for value in (parsed_amount, parsed_quantity, parsed_price, parsed_fx_rate, parsed_fees):
+        # Decimal(...) parses "NaN"/"Infinity"/"-Infinity" as valid, non-raising values -- reject
+        # them here rather than forwarding a non-finite amount into a financial transaction.
+        if value is not None and not value.is_finite():
+            return None
     return {
         "trade_datetime": parsed_datetime,
         "native_amount": parsed_amount,
@@ -614,20 +683,20 @@ async def transaction_new_submit(
     trade_datetime: str = Form(default=""),
     native_amount: str = Form(default=""),
     native_currency: str = Form(default=""),
-    instrument_identifier: str = Form(""),
-    instrument_identifier_kind: str = Form(""),
-    quantity: str = Form(""),
-    price: str = Form(""),
-    fx_rate: str = Form(""),
-    fees_native: str = Form(""),
+    instrument_identifier: str = Form(default=""),
+    instrument_identifier_kind: str = Form(default=""),
+    quantity: str = Form(default=""),
+    price: str = Form(default=""),
+    fx_rate: str = Form(default=""),
+    fees_native: str = Form(default=""),
     csrf_token: str = Form(default=""),
     settings: Settings = Depends(get_settings),
     templates=Depends(get_templates),
     user: AuthUser = Depends(require_user),
     portfolio_client: PortfolioClient = Depends(get_portfolio_client),
 ):
-    form_context = _transaction_new_context(account_label, saved=False)
-    csrf_error = _check_csrf(
+    form_context = {"user": user, **_transaction_new_context(account_label, saved=False)}
+    csrf_error = await _check_csrf(
         request,
         response,
         settings,
@@ -649,7 +718,7 @@ async def transaction_new_submit(
         fees_native=fees_native,
     )
     if parsed is None:
-        return _render_form_error(
+        return await _render_form_error(
             request,
             response,
             settings,
@@ -727,8 +796,8 @@ async def transaction_import_submit(
     user: AuthUser = Depends(require_user),
     portfolio_client: PortfolioClient = Depends(get_portfolio_client),
 ):
-    form_context = {"account_label": account_label, "imported": None}
-    csrf_error = _check_csrf(
+    form_context = {"user": user, "account_label": account_label, "imported": None}
+    csrf_error = await _check_csrf(
         request,
         response,
         settings,
@@ -743,7 +812,7 @@ async def transaction_import_submit(
 
     content = await file.read(_MAX_UPLOAD_BYTES + 1)
     if len(content) > _MAX_UPLOAD_BYTES:
-        return _render_form_error(
+        return await _render_form_error(
             request,
             response,
             settings,
