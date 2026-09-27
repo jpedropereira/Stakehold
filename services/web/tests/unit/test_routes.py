@@ -1085,6 +1085,44 @@ def test_portfolio_page_requires_login(client):
     assert response.headers["location"] == "/login"
 
 
+def test_portfolio_page_sets_csrf_cookie_and_supports_logout(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.list_positions_result = []
+    fake_portfolio.list_returns_result = []
+
+    response = test_client.get("/portfolio", params={"account": "main"})
+
+    assert response.status_code == 200
+    assert "site-nav" in response.text
+    assert "logout-form" in response.text
+    csrf_token = response.cookies["stakehold_csrf"]
+    assert f'value="{csrf_token}"' in response.text
+
+    logout_response = test_client.post(
+        "/logout", data={"csrf_token": csrf_token}, follow_redirects=False
+    )
+
+    assert logout_response.status_code == 303
+    assert logout_response.headers["location"] == "/login"
+    logout_call = next(call for call in fake_auth.calls if call[0] == "logout")
+    assert logout_call is not None
+
+
+def test_portfolio_page_account_not_found_sets_csrf_cookie(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.list_positions_error = AccountNotFound("missing")
+    fake_portfolio.list_returns_result = []
+
+    response = test_client.get("/portfolio", params={"account": "missing"})
+
+    assert response.status_code == 404
+    assert "logout-form" in response.text
+    csrf_token = response.cookies["stakehold_csrf"]
+    assert f'value="{csrf_token}"' in response.text
+
+
 def test_portfolio_page_renders_positions_and_returns(client):
     test_client, _, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)

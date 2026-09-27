@@ -895,10 +895,12 @@ async def portfolio_page(
     request: Request,
     response: Response,
     account: str = Query(..., min_length=1),
+    settings: Settings = Depends(get_settings),
     templates=Depends(get_templates),
     user: AuthUser = Depends(require_user),
     portfolio_client: PortfolioClient = Depends(get_portfolio_client),
 ):
+    csrf_token = ensure_csrf_cookie(request, response, cookie_secure=settings.cookie_secure)
     try:
         positions, returns, error = await _load_portfolio_view(
             portfolio_client, user.user_id, account
@@ -911,6 +913,7 @@ async def portfolio_page(
             "portfolio.html",
             {
                 "user": user,
+                "csrf_token": csrf_token,
                 "account_label": account,
                 "not_found": True,
                 "positions": [],
@@ -934,6 +937,7 @@ async def portfolio_page(
         "portfolio.html",
         {
             "user": user,
+            "csrf_token": csrf_token,
             "account_label": account,
             "not_found": False,
             "positions": open_positions,
