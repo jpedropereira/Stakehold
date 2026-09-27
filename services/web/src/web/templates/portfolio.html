@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Portfolio — {{ account_label }} — Stakehold{% endblock %}
+{% block content %}
+{% if not_found %}
+<section class="entry-card">
+  <h1>{{ account_label }}</h1>
+  <p class="entry-empty">That account doesn't exist.</p>
+</section>
+{% else %}
+{% if error %}
+<p class="confirmation-banner">{{ error }}</p>
+{% endif %}
+
+<section class="entry-card">
+  <h1>{{ account_label }} — positions</h1>
+  {% if positions %}
+  <table class="positions-table">
+    <thead>
+      <tr>
+        <th>Ticker</th>
+        <th>Quantity</th>
+        <th>Avg cost (EUR)</th>
+        <th>Cost basis (EUR)</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for position in positions %}
+      <tr>
+        <td>{{ position.canonical_ticker }}</td>
+        <td><span class="mono">{{ position.quantity }}</span></td>
+        <td><span class="mono">{{ position.average_cost_eur }}</span></td>
+        <td><span class="mono">{{ position.cost_basis_eur }}</span></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="entry-empty">No positions yet — add a transaction, then run rebuild-positions.</p>
+  {% endif %}
+</section>
+
+<section class="entry-card">
+  <h1>Returns over time</h1>
+  {% if return_points %}
+  {% set latest = return_points[-1] %}
+  <p class="returns-summary">
+    Total return:
+    <span class="mono {{ 'gain' if latest.total_return_eur >= 0 else 'loss' }}">{{ latest.total_return_eur }} EUR</span>
+    {% if latest.total_return_pct is not none %}
+    (<span class="mono {{ 'gain' if latest.total_return_pct >= 0 else 'loss' }}">{{ (latest.total_return_pct * 100) | round(2) }}%</span>)
+    {% endif %}
+  </p>
+  <div class="chart-wrap">
+    <canvas id="returns-chart" role="img" aria-label="Portfolio total return over time"></canvas>
+  </div>
+  <script id="returns-chart-data" type="application/json">{{ chart_payload | tojson }}</script>
+  <script src="/static/vendor/chart.min.js" defer></script>
+  <script src="/static/portfolio_chart.js" defer></script>
+  {% else %}
+  <p class="entry-empty">No return history yet — run rebuild-returns to compute it.</p>
+  {% endif %}
+</section>
+{% endif %}
+{% endblock %}

@@ -1,7 +1,8 @@
 """Route-level tests using a fake AuthClient (no live auth service), the same fake-dependency
 approach auth's own tests/unit/test_api.py uses for its repositories."""
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
@@ -20,6 +21,8 @@ from web.auth_client.errors import (
 from web.portfolio_client.base import (
     Account,
     AccountWriteResult,
+    Position,
+    Return,
     TransactionWriteResult,
 )
 from web.portfolio_client.errors import (
@@ -81,6 +84,10 @@ class FakePortfolioClient:
         self.last_add_transaction: dict | None = None
         self.import_transactions_result: TransactionWriteResult | None = None
         self.import_transactions_error: Exception | None = None
+        self.list_positions_result: list = []
+        self.list_positions_error: Exception | None = None
+        self.list_returns_result: list = []
+        self.list_returns_error: Exception | None = None
         self.calls: list[tuple] = []
 
     async def list_accounts(self, *, user_id):
@@ -138,6 +145,18 @@ class FakePortfolioClient:
         if self.import_transactions_error:
             raise self.import_transactions_error
         return self.import_transactions_result
+
+    async def list_positions(self, *, user_id, account_label):
+        self.calls.append(("list_positions", user_id, account_label))
+        if self.list_positions_error:
+            raise self.list_positions_error
+        return self.list_positions_result
+
+    async def list_returns(self, *, user_id, account_label):
+        self.calls.append(("list_returns", user_id, account_label))
+        if self.list_returns_error:
+            raise self.list_returns_error
+        return self.list_returns_result
 
 
 def _settings(**overrides) -> Settings:
@@ -1006,3 +1025,187 @@ def test_import_transactions_account_not_found(client):
     # A full-page error re-render must not silently log the user out of the nav/logout chrome.
     assert "site-nav" in response.text
     assert "logout-form" in response.text
+
+
+# --- accounts: per-account "View portfolio" link -----------------------------
+
+
+def test_accounts_page_links_to_portfolio_view(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.list_accounts_result = [
+        Account(id=1, account_label="main", broker="acme", created_at="2026-01-01T00:00:00Z")
+    ]
+
+    response = test_client.get("/accounts")
+
+    assert response.status_code == 200
+    assert '/portfolio?account=main">View portfolio</a>' in response.text
+
+
+# --- portfolio view: GET /portfolio -------------------------------------------
+
+
+def _position(*, ticker="AAPL", quantity="10") -> Position:
+    return Position(
+        account_id=1,
+        canonical_ticker=ticker,
+        as_of_date=date(2026, 1, 5),
+        quantity=Decimal(quantity),
+        average_cost_native=Decimal("150"),
+        native_currency="EUR",
+        average_cost_eur=Decimal("150"),
+        cost_basis_eur=Decimal(quantity) * Decimal("150"),
+    )
+
+
+def _return_row(*, ticker="AAPL", price_date=date(2026, 1, 5)) -> Return:
+    return Return(
+        account_id=1,
+        canonical_ticker=ticker,
+        price_date=price_date,
+        quantity=Decimal("10"),
+        market_value_native=Decimal("1600"),
+        market_value_eur=Decimal("1600"),
+        cost_basis_eur=Decimal("1500"),
+        unrealized_return_eur=Decimal("100"),
+        unrealized_return_pct=Decimal("0.06666667"),
+        dividends_received_eur=Decimal("0"),
+        total_return_eur=Decimal("100"),
+        total_return_pct=Decimal("0.06666667"),
+    )
+
+
+def test_portfolio_page_requires_login(client):
+    test_client, _, _, _ = client
+
+    response = test_client.get("/portfolio", params={"account": "main"}, follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/login"
+
+
+def test_portfolio_page_sets_csrf_cookie_and_supports_logout(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.list_positions_result = []
+    fake_portfolio.list_returns_result = []
+
+    response = test_client.get("/portfolio", params={"account": "main"})
+
+    assert response.status_code == 200
+    assert "site-nav" in response.text
+    assert "logout-form" in response.text
+    csrf_token = response.cookies["stakehold_csrf"]
+    assert f'value="{csrf_token}"' in response.text
+
+    logout_response = test_client.post(
+        "/logout", data={"csrf_token": csrf_token}, follow_redirects=False
+    )
+
+    assert logout_response.status_code == 303
+    assert logout_response.headers["location"] == "/login"
+    logout_call = next(call for call in fake_auth.calls if call[0] == "logout")
+    assert logout_call is not None
+
+
+def test_portfolio_page_account_not_found_sets_csrf_cookie(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.list_positions_error = AccountNotFound("missing")
+    fake_portfolio.list_returns_result = []
+
+    response = test_client.get("/portfolio", params={"account": "missing"})
+
+    assert response.status_code == 404
+    assert "logout-form" in response.text
+    csrf_token = response.cookies["stakehold_csrf"]
+    assert f'value="{csrf_token}"' in response.text
+
+
+def test_portfolio_page_renders_positions_and_returns(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.list_positions_result = [_position()]
+    fake_portfolio.list_returns_result = [_return_row()]
+
+    response = test_client.get("/portfolio", params={"account": "main"})
+
+    assert response.status_code == 200
+    assert "AAPL" in response.text
+    assert 'id="returns-chart"' in response.text
+    assert 'id="returns-chart-data"' in response.text
+    assert "100" in response.text  # the total return figure
+    assert fake_portfolio.calls == [
+        ("list_positions", _logged_in_user().user_id, "main"),
+        ("list_returns", _logged_in_user().user_id, "main"),
+    ]
+
+
+def test_portfolio_page_filters_closed_positions(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.list_positions_result = [
+        _position(ticker="AAPL", quantity="10"),
+        _position(ticker="MSFT", quantity="0"),
+    ]
+    fake_portfolio.list_returns_result = []
+
+    response = test_client.get("/portfolio", params={"account": "main"})
+
+    assert response.status_code == 200
+    assert "AAPL" in response.text
+    assert "MSFT" not in response.text
+
+
+def test_portfolio_page_renders_empty_state_when_no_positions_or_returns(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.list_positions_result = []
+    fake_portfolio.list_returns_result = []
+
+    response = test_client.get("/portfolio", params={"account": "main"})
+
+    assert response.status_code == 200
+    assert "No positions yet" in response.text
+    assert "No return history yet" in response.text
+    assert "Can&#39;t reach the portfolio service" not in response.text
+
+
+def test_portfolio_page_account_not_found_renders_404(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.list_positions_error = AccountNotFound("missing")
+    fake_portfolio.list_returns_result = []
+
+    response = test_client.get("/portfolio", params={"account": "missing"})
+
+    assert response.status_code == 404
+    assert "doesn't exist" in response.text
+
+
+def test_portfolio_page_degrades_when_positions_unavailable(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.list_positions_error = PortfolioUnavailable("boom")
+    fake_portfolio.list_returns_result = [_return_row()]
+
+    response = test_client.get("/portfolio", params={"account": "main"})
+
+    assert response.status_code == 200
+    assert "Can&#39;t reach the portfolio service" in response.text
+    assert 'id="returns-chart"' in response.text
+
+
+def test_portfolio_page_degrades_when_returns_unavailable(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.list_positions_result = [_position()]
+    fake_portfolio.list_returns_error = PortfolioUnavailable("boom")
+
+    response = test_client.get("/portfolio", params={"account": "main"})
+
+    assert response.status_code == 200
+    assert "Can&#39;t reach the portfolio service" in response.text
+    assert "AAPL" in response.text
+    assert "No return history yet" in response.text

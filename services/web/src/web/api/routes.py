@@ -34,13 +34,14 @@ from web.auth_client.errors import (
     InvalidRequest,
     RateLimited,
 )
-from web.portfolio_client.base import PortfolioClient
+from web.portfolio_client.base import PortfolioClient, Position, Return
 from web.portfolio_client.errors import (
     AccountLabelConflict,
     AccountNotFound,
     InvalidPortfolioRequest,
     PortfolioClientError,
 )
+from web.portfolio_view import aggregate_portfolio_returns, filter_open_positions
 from web.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -847,4 +848,101 @@ async def transaction_import_submit(
             f"/transactions/import?account={quote(account_label)}&imported={result.rows_saved}",
         ),
         **form_context,
+    )
+
+
+# --- portfolio view: positions and returns -----------------------------------
+
+_PORTFOLIO_VIEW_ERROR = (
+    "Can't reach the portfolio service right now — this section may be incomplete."
+)
+
+
+async def _load_portfolio_view(
+    portfolio_client: PortfolioClient, user_id: str, account_label: str
+) -> tuple[list[Position], list[Return], str | None]:
+    """Fetches this account's positions and returns concurrently, tolerating either call failing
+    independently -- except AccountNotFound, which is re-raised rather than degraded: a bad
+    account_label has nothing partial to show for either call, so the caller renders a distinct
+    404 instead of the generic "service unavailable" banner."""
+    positions_result, returns_result = await asyncio.gather(
+        portfolio_client.list_positions(user_id=user_id, account_label=account_label),
+        portfolio_client.list_returns(user_id=user_id, account_label=account_label),
+        return_exceptions=True,
+    )
+    for result in (positions_result, returns_result):
+        if isinstance(result, AccountNotFound):
+            raise result
+
+    error = None
+    if isinstance(positions_result, PortfolioClientError):
+        logger.exception(
+            "portfolio service unavailable listing positions.", exc_info=positions_result
+        )
+        positions_result, error = [], _PORTFOLIO_VIEW_ERROR
+    elif isinstance(positions_result, BaseException):
+        raise positions_result
+    if isinstance(returns_result, PortfolioClientError):
+        logger.exception("portfolio service unavailable listing returns.", exc_info=returns_result)
+        returns_result, error = [], _PORTFOLIO_VIEW_ERROR
+    elif isinstance(returns_result, BaseException):
+        raise returns_result
+    return positions_result, returns_result, error
+
+
+@router.get("/portfolio")
+async def portfolio_page(
+    request: Request,
+    response: Response,
+    account: str = Query(..., min_length=1),
+    settings: Settings = Depends(get_settings),
+    templates=Depends(get_templates),
+    user: AuthUser = Depends(require_user),
+    portfolio_client: PortfolioClient = Depends(get_portfolio_client),
+):
+    csrf_token = ensure_csrf_cookie(request, response, cookie_secure=settings.cookie_secure)
+    try:
+        positions, returns, error = await _load_portfolio_view(
+            portfolio_client, user.user_id, account
+        )
+    except AccountNotFound:
+        return _render(
+            request,
+            response,
+            templates,
+            "portfolio.html",
+            {
+                "user": user,
+                "csrf_token": csrf_token,
+                "account_label": account,
+                "not_found": True,
+                "positions": [],
+                "return_points": [],
+                "chart_payload": [],
+                "error": None,
+            },
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+
+    open_positions = filter_open_positions(positions)
+    return_points = aggregate_portfolio_returns(returns)
+    chart_payload = [
+        {"date": point.price_date.isoformat(), "total_return_eur": float(point.total_return_eur)}
+        for point in return_points
+    ]
+    return _render(
+        request,
+        response,
+        templates,
+        "portfolio.html",
+        {
+            "user": user,
+            "csrf_token": csrf_token,
+            "account_label": account,
+            "not_found": False,
+            "positions": open_positions,
+            "return_points": return_points,
+            "chart_payload": chart_payload,
+            "error": error,
+        },
     )

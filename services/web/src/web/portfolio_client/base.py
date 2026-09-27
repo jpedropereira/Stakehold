@@ -9,7 +9,7 @@ session; user_id is sent explicitly as trusted input (see portfolio/docs/archite
 """
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Protocol
 
@@ -20,6 +20,34 @@ class Account:
     account_label: str
     broker: str
     created_at: str
+
+
+@dataclass(frozen=True)
+class Position:
+    account_id: int
+    canonical_ticker: str
+    as_of_date: date
+    quantity: Decimal
+    average_cost_native: Decimal
+    native_currency: str
+    average_cost_eur: Decimal
+    cost_basis_eur: Decimal
+
+
+@dataclass(frozen=True)
+class Return:
+    account_id: int
+    canonical_ticker: str
+    price_date: date
+    quantity: Decimal
+    market_value_native: Decimal
+    market_value_eur: Decimal
+    cost_basis_eur: Decimal
+    unrealized_return_eur: Decimal
+    unrealized_return_pct: Decimal | None
+    dividends_received_eur: Decimal
+    total_return_eur: Decimal
+    total_return_pct: Decimal | None
 
 
 @dataclass(frozen=True)
@@ -72,3 +100,7 @@ class PortfolioClient(Protocol):
         content: bytes,
         content_type: str,
     ) -> TransactionWriteResult: ...
+
+    async def list_positions(self, *, user_id: str, account_label: str) -> list[Position]: ...
+
+    async def list_returns(self, *, user_id: str, account_label: str) -> list[Return]: ...

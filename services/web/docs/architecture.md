@@ -1,6 +1,7 @@
 # web architecture
 
-**Status: foundation, auth pages (task 10), and portfolio entry UI (task 11) implemented.**
+**Status: foundation, auth pages (task 10), portfolio entry UI (task 11), and portfolio view UI
+(task 12) implemented.**
 
 ## Responsibility
 
@@ -29,8 +30,8 @@ calls [`portfolio`](../../portfolio/docs/architecture.md), `data-store`, and
   for now -- its own per-request work is a handful of local Postgres queries, not an outbound
   call to another service, so the same argument doesn't carry over; see
   `auth/docs/architecture.md`, "Stack".)
-- A lightweight JS charting library for returns/allocation views is still future work — task 12,
-  not this one.
+- **Chart.js** (task 12), vendored into `static/vendor/chart.min.js` — the same htmx precedent:
+  no CDN `<script src>`, so no `script-src` CSP exception is needed (see "Key decisions" below).
 
 ## Key decisions
 
@@ -134,6 +135,51 @@ calls [`portfolio`](../../portfolio/docs/architecture.md), `data-store`, and
   `signup_submit` (task 10) predate this finding and still use `Form(...)`; revisit if a blank
   email/password field is ever reported reaching the visitor as a raw JSON 422 instead of the
   intended form-error page.
+- **Portfolio-level return aggregation is `web`'s own problem, solved in a new pure module
+  (`portfolio_view.py`, task 12), not pushed onto `portfolio`.** `portfolio`'s `GET /returns` is
+  per-ticker (`portfolio/docs/architecture.md`'s "Returns are served per ticker" note) — different
+  tickers can have different trading-day calendars, so summing across them isn't a serialization
+  detail. `aggregate_portfolio_returns` builds the sorted union of every `price_date` across every
+  ticker in one account's `/returns` response, then walks each ticker's own series forward in
+  lockstep with that union: a ticker missing its own row on a union date has its last-known row
+  forward-filled (not priced that day ≠ worth zero that day), while a date *before* a ticker's
+  first-ever row gets no contribution from it at all (not held/priced yet ≠ priced at zero). Per
+  date, `market_value_eur`/`cost_basis_eur`/`dividends_received_eur`/`total_return_eur` are summed
+  across contributing tickers, and `total_return_pct` is **recomputed** as
+  `sum(total_return_eur)/sum(cost_basis_eur)` — never averaged from the per-ticker percentages,
+  since those don't sum to a portfolio percentage. A companion `filter_open_positions` drops
+  `quantity == 0` rows from `GET /positions`'s response (which intentionally doesn't prune closed
+  positions) for the "current holdings" table, but keeps a negative quantity visible — that's a
+  replay anomaly `positions/calculator.py` warns about but still computes, not a modeled short
+  position, and hiding it would hide the thing a user most needs to notice.
+- **Chart.js is vendored (`static/vendor/chart.min.js`), and the chart reads its colors from
+  brand tokens at runtime rather than from a hardcoded hex value.** `script-src 'self'` (no CDN
+  exception, no `unsafe-inline`, no nonce) rules out both a CDN `<script src>` and an inline
+  `<script>` block with real logic — this codebase has never had one, and adding the first here
+  would either be silently blocked by the browser or force a CSP weakening this task's own
+  no-CDN framing argues against. The chart's numeric data is embedded via a non-executable
+  `<script type="application/json">` data island in `portfolio.html` (inspected as data, not run
+  as script — needs no `script-src` permission to be read); the logic (`getComputedStyle(...)
+  .getPropertyValue('--forest')` etc., and the `Chart` instantiation) lives in a same-origin
+  `static/portfolio_chart.js`, loaded exactly like vendored htmx. `test_templates.py`'s new
+  `test_templates_have_no_inline_executable_script` makes the "no inline `<script>` with logic"
+  invariant mechanical rather than only reviewed by eye. The chart uses a `category` x-axis, not
+  Chart.js's `time` scale, to avoid vendoring a second date-adapter dependency just to plot daily
+  points — a calendar gap renders as an equal-width step rather than a proportionally wider one,
+  an accepted v1 simplification.
+- **`GET /portfolio` is per-account, read-only, and never triggers a rebuild.** Every `portfolio`
+  positions/returns endpoint is `account_label`-scoped with no cross-account aggregation endpoint,
+  so the view is one page per account (linked from `accounts.html`); a cross-account "whole
+  portfolio" rollup is future work. The route only displays whatever `position_snapshots`/
+  `return_snapshots` rows already exist — `rebuild-positions`/`rebuild-returns` stay CLI-only. An
+  `AccountNotFound` from either the positions or returns call is treated as fatal (a distinct 404,
+  "that account doesn't exist") rather than folded into the generic degrade-to-inline-error path
+  `_list_accounts_and_brokers` (task 11) established, since a bad `account_label` has nothing
+  partial to show either way; any other `PortfolioClientError` on either call degrades that half
+  of the page independently, mirroring `_list_accounts_and_brokers` exactly. An account with no
+  positions and/or no return history yet (nobody has run the CLI rebuild) renders as an ordinary
+  empty state, not an error — `web` has no way to distinguish "never rebuilt" from "rebuilt into
+  zero rows" and doesn't need to.
 
 ## Endpoint surface
 
@@ -150,6 +196,7 @@ calls [`portfolio`](../../portfolio/docs/architecture.md), `data-store`, and
 | `POST /transactions/new` | CSRF-checked, calls `portfolio`'s `POST /transactions`, redirects to `/transactions/new?account=<label>&saved=1` on success |
 | `GET /transactions/import` | `require_user`; required `account` query param; renders the upload form, with a confirmation banner (row count) if `?imported=<n>` |
 | `POST /transactions/import` | CSRF-checked, multipart; size-capped at 20MB (matching `portfolio`'s own cap) before the bytes are forwarded; calls `portfolio`'s `POST /transactions/import`, redirects to `/transactions/import?account=<label>&imported=<rows_saved>` on success |
+| `GET /portfolio` | `require_user`; required `account` query param; fetches `portfolio`'s `GET /positions`/`GET /returns` concurrently, aggregates the per-ticker return series into one portfolio-level series (`portfolio_view.aggregate_portfolio_returns`), and renders a positions table plus a Chart.js return-over-time chart. `AccountNotFound` on either call renders a 404; any other failure degrades that half of the page independently, mirroring `GET /accounts`'s own pattern. No writes, no rebuild trigger. |
 
 Every POST error (wrong credentials, a duplicate email, a tripped throttle, `auth`/`portfolio`
 being unreachable, a CSRF mismatch, or a `portfolio` validation failure) re-renders the form with
@@ -169,9 +216,17 @@ exists to close; no equivalent concern applies to the portfolio routes; see "Key
   uses, extracted there after both carried a byte-for-byte copy.
 - `auth_client/{base,http_client,errors}.py` — the `AuthClient` Protocol, its real
   implementation, and one error hierarchy (`AuthClientError`) routes catch with a single `except`.
-- `portfolio_client/{base,http_client,errors}.py` (task 11) — the `PortfolioClient` Protocol, its
-  real implementation, and one error hierarchy (`PortfolioClientError`); see "Key decisions" for
-  how and why it departs from `auth_client`'s shape in a couple of places.
+- `portfolio_client/{base,http_client,errors}.py` (task 11, extended task 12) — the
+  `PortfolioClient` Protocol, its real implementation, and one error hierarchy
+  (`PortfolioClientError`); see "Key decisions" for how and why it departs from `auth_client`'s
+  shape in a couple of places. Task 12 added `list_positions`/`list_returns` (plus `Position`/
+  `Return` dataclasses) to the same trio rather than inventing new files — no new error types were
+  needed, since `AccountNotFound`/`PortfolioUnavailable` already cover every failure mode these
+  two reads can produce.
+- `portfolio_view.py` (task 12) — pure, I/O-free reshaping of what `routes.py` fetches for
+  `GET /portfolio`: `filter_open_positions` and `aggregate_portfolio_returns` (see "Key
+  decisions"). No FastAPI/httpx dependency, tested in isolation, mirroring how `portfolio`'s own
+  `returns/calculator.py` is a pure function.
 - `api/{app,deps,routes,csrf,security_headers,htmx}.py` — app assembly and lifespan (opens/closes
   two shared `httpx.AsyncClient`s, one per upstream service), FastAPI dependencies (`require_user`,
   `optional_user`, `client_ip`, `get_auth_client`/`get_portfolio_client`, and friends), the route
@@ -202,10 +257,16 @@ instead of one deliberate one.
 - **`auth`** — login, logout, signup, and per-request session validation calls, server-to-server,
   carrying `WEB_INTERNAL_SECRET` as `X-Internal-Secret` and the browser's address as
   `X-Forwarded-For` on signup/login.
-- **`portfolio`** (task 11) — account creation, manual transaction entry, and broker-file import,
-  server-to-server, carrying `WEB_PORTFOLIO_INTERNAL_SECRET` as `X-Internal-Secret`. Positions and
-  returns reads/rebuilds aren't called yet — that's task 12's work.
-- **`data-store`** — market data reads, once a UI view needs them (task 12).
+- **`portfolio`** (tasks 11–12) — account creation, manual transaction entry, broker-file import,
+  and (task 12) reading positions/returns, server-to-server, carrying
+  `WEB_PORTFOLIO_INTERNAL_SECRET` as `X-Internal-Secret`. Rebuild triggers (`rebuild-positions`/
+  `rebuild-returns`) still aren't called from `web` — those stay CLI-only; see task 12's "Key
+  decisions" entry.
+- **`data-store`** — turns out not to be needed directly. This line previously anticipated task 12
+  calling `data-store` for market-data reads; in practice `portfolio`'s own `/positions`/`/returns`
+  already return EUR-converted figures (computed against `data-store` on `portfolio`'s side, at
+  rebuild time), so the view built here has no reason to call `data-store` itself. Revisit only if
+  a future view needs data `portfolio` doesn't already expose (e.g. a raw intraday price).
 
 All calls are server-to-server; the user's session identity is forwarded as needed, never exposed
 to browser JS.
@@ -221,8 +282,11 @@ to browser JS.
   today. Once a real reverse proxy sits in front of `web`, the correct fix is uvicorn's
   `--proxy-headers` plus a `forwarded_allow_ips` allowlist — not trusting an inbound
   `X-Forwarded-For` unconditionally, which would let any external caller spoof it.
-- Exact API contract with `data-store` — its HTTP API exists (task 3), but `web` doesn't call it
-  yet; that's task 12's work. `portfolio`'s contract (task 9) is now implemented against, task 11.
+- Whether a future view will need data `portfolio` doesn't already expose, at which point `web`
+  would need its own `data-store` client — not needed by task 12 (see "Talks to" above).
+- **Cross-account portfolio rollup**: `GET /portfolio` is per-account only, matching every
+  `portfolio` endpoint's own scope. A "total across every account" view would need a new
+  `portfolio` endpoint (no such aggregation exists there today) before `web` could build one.
 - **Service-to-service trust**: resolved for now via network isolation plus a shared internal
   secret — see [`auth`'s architecture doc](../../auth/docs/architecture.md#key-decisions). The
   stronger fix (signed identity assertions from `auth`) is deliberately deferred; see that doc's
@@ -234,3 +298,7 @@ surface" and `auth/docs/architecture.md`'s own "Endpoint surface").
 
 Closed by task 11: the exact `portfolio` API contract (see "Endpoint surface" above and
 `portfolio/docs/architecture.md`'s own "HTTP API" section).
+
+Closed by task 12: the charting library choice (Chart.js, vendored); the portfolio-level return
+aggregation design (`portfolio_view.aggregate_portfolio_returns`); confirmed no direct `data-store`
+call is needed for this view.

@@ -1,10 +1,12 @@
-from datetime import datetime
-from decimal import Decimal
+from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
 
 import httpx
 from web.portfolio_client.base import (
     Account,
     AccountWriteResult,
+    Position,
+    Return,
     TransactionWriteResult,
 )
 from web.portfolio_client.errors import (
@@ -80,6 +82,46 @@ def _transaction_write_result(body: dict) -> TransactionWriteResult:
 
 def _decimal_str(value: Decimal | None) -> str | None:
     return None if value is None else str(value)
+
+
+def _opt_decimal(value) -> Decimal | None:
+    return None if value is None else Decimal(value)
+
+
+def _position(item: dict) -> Position:
+    try:
+        return Position(
+            account_id=item["account_id"],
+            canonical_ticker=item["canonical_ticker"],
+            as_of_date=date.fromisoformat(item["as_of_date"]),
+            quantity=Decimal(item["quantity"]),
+            average_cost_native=Decimal(item["average_cost_native"]),
+            native_currency=item["native_currency"],
+            average_cost_eur=Decimal(item["average_cost_eur"]),
+            cost_basis_eur=Decimal(item["cost_basis_eur"]),
+        )
+    except (KeyError, TypeError, ValueError, InvalidOperation) as exc:
+        raise PortfolioUnavailable(f"malformed portfolio response: {exc}") from exc
+
+
+def _return(item: dict) -> Return:
+    try:
+        return Return(
+            account_id=item["account_id"],
+            canonical_ticker=item["canonical_ticker"],
+            price_date=date.fromisoformat(item["price_date"]),
+            quantity=Decimal(item["quantity"]),
+            market_value_native=Decimal(item["market_value_native"]),
+            market_value_eur=Decimal(item["market_value_eur"]),
+            cost_basis_eur=Decimal(item["cost_basis_eur"]),
+            unrealized_return_eur=Decimal(item["unrealized_return_eur"]),
+            unrealized_return_pct=_opt_decimal(item["unrealized_return_pct"]),
+            dividends_received_eur=Decimal(item["dividends_received_eur"]),
+            total_return_eur=Decimal(item["total_return_eur"]),
+            total_return_pct=_opt_decimal(item["total_return_pct"]),
+        )
+    except (KeyError, TypeError, ValueError, InvalidOperation) as exc:
+        raise PortfolioUnavailable(f"malformed portfolio response: {exc}") from exc
 
 
 class HttpPortfolioClient:
@@ -192,3 +234,19 @@ class HttpPortfolioClient:
         if response.status_code not in (200, 201):
             _raise_for_status(response)
         return _transaction_write_result(_json_body(response))
+
+    async def list_positions(self, *, user_id: str, account_label: str) -> list[Position]:
+        response = await self._request(
+            "GET", "/positions", params={"user_id": user_id, "account_label": account_label}
+        )
+        if response.status_code != 200:
+            _raise_for_status(response)
+        return [_position(item) for item in _json_body(response)]
+
+    async def list_returns(self, *, user_id: str, account_label: str) -> list[Return]:
+        response = await self._request(
+            "GET", "/returns", params={"user_id": user_id, "account_label": account_label}
+        )
+        if response.status_code != 200:
+            _raise_for_status(response)
+        return [_return(item) for item in _json_body(response)]
