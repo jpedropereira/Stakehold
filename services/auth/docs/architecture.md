@@ -66,7 +66,11 @@ references a user only by the UUID `auth` issues at signup, as a trusted plain c
   call additionally carries a shared secret (an env-var-configured bearer token) that the receiving
   service checks before processing the request. This proves "a legitimate internal caller," not
   cryptographically that a specific `user_id` came from `auth` — an accepted gap at this stage, see
-  the signed-assertion upgrade path under "Open questions."
+  the signed-assertion upgrade path under "Open questions." As of task 13, that "private network" is
+  a concrete, ordinary Docker bridge (`stakehold-net`, external, joined via each service's own
+  `docker-compose.stakehold-net.yml` overlay) with no inter-container firewalling among the four app
+  containers on it — the shared secret, not network segmentation, is what actually separates a
+  legitimate caller from any other container reachable on it.
 
 ## Endpoint surface
 
@@ -161,9 +165,12 @@ Consequences worth knowing:
 ## Deployment
 
 `auth-postgres` is a dedicated Postgres 17 container (`services/auth/docker-compose.yml`), separate
-from `data-store-postgres` and the future `app-postgres` — see
+from `data-store-postgres` and `app-postgres` — see
 [`portfolio`'s deployment section](../../portfolio/docs/architecture.md#deployment) for the
-three-instances-not-two reasoning. Connection config is `AUTH_DATABASE_URL` (`settings.py`),
+three-instances-not-two reasoning. `auth-postgres` itself stays reachable only within `auth`'s own
+compose project; only `auth-api` additionally joins the cross-service network (see "Service-to-
+service trust" under "Key decisions" above). Connection config is `AUTH_DATABASE_URL`
+(`settings.py`),
 deliberately not the bare `DATABASE_URL` `data-store` already owns — the two services' integration
 suites can run in the same pytest process, where a shared env var name would mean whichever
 service's `.env` loads first silently wins for both. `auth db init` (`cli.py` → `jobs.py`) applies
@@ -193,7 +200,7 @@ outright with `error from sender: ... permission denied`.
 ## Talks to
 
 - **`web`** calls `auth` server-to-server for login, logout, signup, and session validation, over
-  the private internal network and carrying the shared internal secret (see "Key decisions").
+  `stakehold-net` (task 13) and carrying the shared internal secret (see "Key decisions").
 - **`portfolio`** references auth-issued UUIDs as a trusted plain column but does not call `auth`
   directly — it has no local `users` table to keep in sync.
 

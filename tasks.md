@@ -30,12 +30,11 @@ one-time snapshot.
 | 10 | [Web foundation & auth pages](#10-web-foundation--auth-pages) | 2 | done |
 | 11 | [Portfolio entry UI](#11-portfolio-entry-ui) | 10, 9 | done |
 | 12 | [Portfolio view UI](#12-portfolio-view-ui) | 11 | done |
-| 13 | [End-to-end integration & smoke test](#13-end-to-end-integration--smoke-test) | 12 | ready |
+| 13 | [End-to-end integration & smoke test](#13-end-to-end-integration--smoke-test) | 12 | done |
 | 14 | [Broker cash-ledger import](#14-broker-cash-ledger-import) | 6 | done |
 | 15 | [Extract broker-parser plugins to a private repo](#15-extract-broker-parser-plugins-to-a-private-repo) | 6, 14 | done |
 
-One task is `ready` today: **13** (end-to-end integration & smoke test), unblocked now that its
-dependency — 12 (portfolio view UI) — is `done`.
+No task is `ready` today — every dependency chain resolves to `done`.
 
 ## Tasks
 
@@ -485,12 +484,72 @@ web→portfolio round trip, `portfolio.jobs.run_rebuild_positions` called direct
 noted in the file's own docstring, since `rebuild-returns` needs a live `data-store` this test
 harness doesn't have.
 
-### 13. End-to-end integration & smoke test
+### 13. End-to-end integration & smoke test — done
 
-Full deployment wiring: all four services, three Postgres instances (`auth-postgres`,
-`app-postgres`, `data-store-postgres`), shared internal secrets between services. Manual smoke
-test of the whole flow: register → login → add account → enter/import transactions → rebuild
-positions/returns → view in the web UI.
+Each service kept its own independent `docker-compose.yml`, joined by a new external Docker
+network, `stakehold-net`, created once per machine (`docker network create stakehold-net`) and
+attached only via a new opt-in overlay per service, `docker-compose.stakehold-net.yml`, passed
+alongside the base file with a second `-f`. A single merged root compose file (via `include:`)
+was tried first and rejected: `auth`, `portfolio` and `data-store`'s compose files all name their
+API service `api` — merging all four into one Compose project silently collapses three services
+into one, since Compose merges by service key, not by file (verified empirically before
+committing to the design). The overlay approach keeps every service's own compose file
+byte-for-byte usable standalone exactly as before. Each overlay joins only the service actually
+called cross-stack (`api`/`web`, never `postgres`/`db-init`/`pgadmin`/the Airflow containers) and
+overrides the caller-side settings that need an in-network address instead of
+`localhost:<published-port>` — `WEB_AUTH_API_URL`/`WEB_PORTFOLIO_API_URL` (web's overlay) and
+`DATASTORE_API_URL` (portfolio's overlay, pointed at `data-store-api`'s *container* port `8000`,
+not its host-published `8082`). `app-postgres`'s compose file stays inside `services/portfolio/`
+— task 13 put every service's *API* on the shared network but added no second database tenant, so
+the "second tenant to justify the move" condition `docs/architecture.md` had flagged still hasn't
+arrived; that passage is rewritten as a considered no rather than left stale. New root
+`docs/smoke-test.md` (the full bring-up/verify/manual-flow/teardown sequence) plus a short
+"Running the full stack" section in `README.md` pointing at it. `.env.example` in `auth`,
+`portfolio`, `data-store` gained the missing reciprocal comment naming each shared secret's
+counterpart var+file (`web`'s already had them); `data-store/.env.example` also had a small
+inaccuracy fixed in passing — its `INTERNAL_API_SECRET` comment claimed `web` was a caller
+alongside `portfolio`, but `web` never calls `data-store` directly. `docs/architecture.md` updated
+in all four services per the architecture rule: `web`'s and `auth`'s deployment sections describe
+the actual mechanism instead of pointing at "task 13" as future work; `auth`'s "service-to-service
+trust" note now states plainly that `stakehold-net` is an ordinary bridge with no inter-container
+firewalling — the shared secret, not network segmentation, is what actually separates a
+legitimate caller; `data-store`'s deployment diagram drops the stale `"(future)"` label on
+`portfolio` as a caller.
+
+**The actual smoke test surfaced two real, pre-existing problems that per-service testing had no
+way to catch** — arguably the whole point of this task existing separately from each service's
+own suite:
+
+1. **All four services' locally-built Docker images were stale relative to current source** —
+   `portfolio`'s by up to 18 days (missing everything from task 9 onward, judging by `git log` on
+   `services/portfolio/src`), `web`'s missing tasks 11 and 12 entirely (`/accounts`,
+   `/transactions/*`, `/portfolio` all 404'd until rebuilt). Nothing rebuilds these images
+   automatically; `docker compose up -d` happily reuses whatever was last built. Rebuilt all four
+   (`docker compose ... build`) before the smoke test could mean anything.
+2. **`auth-postgres`'s persisted role password had drifted from `services/auth/.env`.** Attaching
+   `auth-api` to `stakehold-net` forced Compose to recreate `auth-postgres` (likely a `postgres:17`
+   base-image update — `portfolio`'s and `data-store`'s postgres containers didn't need
+   recreating), which reused the existing data directory untouched (no data lost) but exposed that
+   the role's real password no longer matched `.env`'s current value — the previous containers had
+   simply been running for 7 hours on a cached value from before whatever edit caused the drift.
+   Fixed by resetting the role's password to `.env`'s current value from inside the container
+   (`ALTER ROLE ... WITH PASSWORD`, value never printed), per the user's direction — not something
+   fixed unilaterally, since it's a live-credential change.
+
+A local `services/portfolio/configs/ticker_mappings.yaml` (gitignored, not committed — see
+`ticker_mappings.yaml.example`) was created to give the smoke test a real, mapped instrument to
+rebuild against (one ISIN → `CAT`, a ticker `data-store` already had computed returns for);
+without it every transaction would be reported `blocked` as unmapped, which is correct behavior
+but wouldn't exercise the returns/positions rendering path.
+
+**Verified end to end** against the real, networked stack: signed up, logged in, created an
+account, entered a manual `BUY` transaction, ran `rebuild-positions` and `rebuild-returns` via
+`docker compose exec` (the latter calling `data-store` over `stakehold-net`, confirming the
+`portfolio`↔`data-store` `INTERNAL_API_SECRET` pair already matched in the existing `.env` files),
+and confirmed `GET /portfolio?account=...` rendered the position and an 11-point return series.
+Broker-file import wasn't separately exercised — manual entry and broker import share the same
+`add_transaction`/import pipeline downstream of the form, and task 6's own tests already cover the
+parser path with no plugin installed in this dev environment (task 15).
 
 ### 14. Broker cash-ledger import — done
 

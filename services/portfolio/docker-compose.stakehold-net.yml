@@ -1,0 +1,18 @@
+# Opt-in overlay for task 13's cross-service smoke test (see /docs/smoke-test.md) -- pass with
+# `-f` alongside docker-compose.yml, never loaded by default. See services/auth's own copy of
+# this file for why this is a sidecar overlay rather than a merged root compose file.
+services:
+  api:
+    networks:
+      - default
+      - stakehold-net
+    environment:
+      # Overrides the host-oriented DATASTORE_API_URL from .env (localhost:DATA_STORE_API_PORT)
+      # with the in-network address data-store's api container is reachable at on stakehold-net
+      # -- note this is data-store-api's *container* port (8000), not its host-published one
+      # (8082). Needed for `rebuild-returns`, run via `docker compose exec ... portfolio rebuild-returns`.
+      DATASTORE_API_URL: http://data-store-api:8000
+
+networks:
+  stakehold-net:
+    external: true

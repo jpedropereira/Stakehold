@@ -63,3 +63,11 @@ It runs the exact same `.pre-commit-config.yaml` hook chain via
 locally. The integration step gets its Postgres from a service container, which
 is what keeps those tests from being "only run by whoever remembered to start
 the database".
+
+## Running the full stack
+
+Each service still comes up independently via its own `services/<service>/docker-compose.yml`.
+To run all four together, wired onto a shared Docker network with in-network service discovery,
+see [`docs/smoke-test.md`](docs/smoke-test.md) — it covers the one-time `docker network create`
+prerequisite, how to populate each service's `.env` with matching shared secrets (your own step;
+nothing automates it), and the full register → login → add account → rebuild → view walk-through.
