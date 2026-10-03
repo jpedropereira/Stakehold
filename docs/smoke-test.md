@@ -61,6 +61,12 @@ values across the two sides:
 
 ## Bringing the stack up
 
+`./scripts/stack.sh up` runs the four `docker compose ... up -d` commands below in order, then
+polls the host-published health checks until all four respond (or times out after ~30s). It's a
+thin wrapper — doesn't merge or replace any service's compose file — so the manual sequence below
+still works exactly the same and is what to fall back on when something needs diagnosing step by
+step.
+
 Run the four `docker compose ... up -d` commands under "How the services find each other" above,
 then verify:
 
@@ -107,14 +113,16 @@ note in `tasks.md`). Run it from inside the `portfolio-api` container:
 
 ```bash
 # Look up the signed-up user's id -- there is no lookup-by-email CLI command anywhere.
-docker compose -f services/auth/docker-compose.yml exec auth-postgres \
+# Export AUTH_POSTGRES_USER/AUTH_POSTGRES_DB from services/auth/.env into this shell first --
+# `exec` runs in the container but the $-expansion below happens in your host shell.
+docker compose -f services/auth/docker-compose.yml exec postgres \
   psql -U "$AUTH_POSTGRES_USER" -d "$AUTH_POSTGRES_DB" \
   -c "SELECT id FROM users WHERE email = '<the signup email>';"
 
 docker compose -f services/portfolio/docker-compose.yml exec api \
-  portfolio rebuild-positions --user <uuid>
+  uv run --frozen portfolio rebuild-positions --user <uuid>
 docker compose -f services/portfolio/docker-compose.yml exec api \
-  portfolio rebuild-returns   --user <uuid>
+  uv run --frozen portfolio rebuild-returns   --user <uuid>
 ```
 
 4. Back in the browser: `/portfolio?account=<label>` (via the "View portfolio" link on

@@ -67,7 +67,19 @@ the database".
 ## Running the full stack
 
 Each service still comes up independently via its own `services/<service>/docker-compose.yml`.
-To run all four together, wired onto a shared Docker network with in-network service discovery,
-see [`docs/smoke-test.md`](docs/smoke-test.md) — it covers the one-time `docker network create`
-prerequisite, how to populate each service's `.env` with matching shared secrets (your own step;
-nothing automates it), and the full register → login → add account → rebuild → view walk-through.
+To run all four together, wired onto a shared Docker network with in-network service discovery:
+
+```bash
+./scripts/stack.sh up      # create the network if missing, start all four, wait for /health
+./scripts/stack.sh ps      # status of every service's containers
+./scripts/stack.sh health  # one-shot check of all four /health endpoints
+./scripts/stack.sh down    # stop all four, in reverse order
+```
+
+`up` still expects each service's real `.env` to already exist with matching shared secrets
+across services — that's your own step, nothing automates it (see below). Pass extra args
+through to `up`, e.g. `./scripts/stack.sh up --build` to rebuild images first.
+
+See [`docs/smoke-test.md`](docs/smoke-test.md) for what the script wraps, the one-time
+`docker network create` prerequisite, how to populate each service's `.env` with matching
+shared secrets, and the full register → login → add account → rebuild → view walk-through.
