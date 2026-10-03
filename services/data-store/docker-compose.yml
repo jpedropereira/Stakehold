@@ -45,6 +45,10 @@ services:
     image: postgres:17
     container_name: data-store-postgres
     restart: unless-stopped
+    # log_statement=mod: logs every INSERT/UPDATE/DELETE/TRUNCATE (who, when, what), including a
+    # direct psql connection bypassing the app entirely -- there was previously no way to
+    # reconstruct what happened to a row after the fact. See docs/architecture.md.
+    command: ["postgres", "-c", "log_statement=mod"]
     env_file:
       - .env
     environment:

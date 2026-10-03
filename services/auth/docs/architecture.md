@@ -172,6 +172,15 @@ helpers and log setup underneath both are the *same* code, not just the same pat
 services depend on [`services/shared`](../../shared/docs/architecture.md) rather than each keeping
 its own copy.
 
+**`auth-postgres` runs with `log_statement=mod`** (`docker-compose.yml`'s `command:`), logging
+every `INSERT`/`UPDATE`/`DELETE`/`TRUNCATE` to the container's own log — including a direct `psql`
+connection that bypasses `auth`'s own code entirely. Added after an incident where a `users` row
+(and its cascaded `sessions` row) vanished with no application code path capable of deleting
+either, and no way to reconstruct what happened after the fact. This is container-log-level
+forensics, not a durable audit table — logs still rotate with Docker's log driver if not shipped
+somewhere durable; a real `audit_log` table with triggers was considered and deferred, since it's
+a schema change needing its own sign-off per `data-schema.md`.
+
 Two further containers share that one image (`services/auth/Dockerfile`), built from the repo
 root the same way `data-store`'s `Dockerfile.airflow` is, since `uv sync` needs every workspace
 member's source present even though the image only runs `auth`'s own entry points:
