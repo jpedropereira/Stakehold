@@ -514,8 +514,9 @@ identity — not column-level DDL, which needs its own sign-off pass.
 | Account listing | `account list --user <id>` | `GET /accounts` | manual, on demand | `accounts`, scoped by `user_id` | — (read-only report) |
 | Broker-plugin discovery | `broker list` | `GET /brokers` | manual, on demand | `BROKER_PARSERS` (in-memory) | — (read-only report) |
 | Ticker linking | — (hand-edit the YAML file) | — | manual, as unmapped instruments surface | — | `configs/ticker_mappings.yaml` (edited directly, not through the service) |
+| Ticker list | — (CLI has none) | `GET /instruments/tickers` | on demand | `data-store`'s `GET /tickers` (`datastore_client.list_tickers`), passed through so `web` only ever talks to `portfolio` | — (read-only report) |
 | List unmapped instruments | `list-unmapped-instruments --user <id>` | `GET /instruments/unmapped` | manual, on demand | `transactions` joined to `accounts` (scoped by `user_id`, and to pick up each instrument's owning broker), `configs/ticker_mappings.yaml` | — (read-only report) |
-| Manual transaction entry | `add-transaction --user <id> --account <label> --ref <key> --type <type> --datetime <iso8601> --amount <decimal> --currency <ISO4217> [--instrument <id> --instrument-kind ISIN\|SYMBOL] [--quantity <d>] [--price <d>] [--fx-rate <d>] [--fees <d>]` | `POST /transactions` | ad hoc | `accounts`, scoped by `user_id` | `transactions` (idempotent on `(account_id, broker_transaction_ref)`, keyed by the mandatory `--ref`) |
+| Manual transaction entry | `add-transaction --user <id> --account <label> --ref <key> --type <type> --datetime <iso8601> --amount <decimal> --currency <ISO4217> [--instrument <id> --instrument-kind ISIN\|SYMBOL\|TICKER] [--quantity <d>] [--price <d>] [--fx-rate <d>] [--fees <d>]` | `POST /transactions` | ad hoc | `accounts`, scoped by `user_id` | `transactions` (idempotent on `(account_id, broker_transaction_ref)`, keyed by the mandatory `--ref`) |
 | Broker file import | `import-transactions --user <id> --file <path> --account <label>` | `POST /transactions/import` (multipart) | manual, on demand | export file, `accounts` scoped by `user_id` | `transactions` (idempotent on `(account_id, broker_transaction_ref)`) |
 | Cash-ledger import | `import-cashflow --user <id> --file <path> --account <label>` | `POST /cashflows/import` (multipart) | manual, on demand | export file, `accounts` scoped by `user_id`, data-store's FX read API (`datastore_client`) for non-EUR rows | `transactions` (idempotent on `(account_id, broker_transaction_ref)`) |
 | Transaction listing | — (CLI has none) | `GET /transactions` | on demand | `transactions`, scoped through the resolved account | — (read-only report) |
@@ -684,6 +685,50 @@ with `InvalidTransaction` rather than looking one up. `datastore_client.get_fx_r
 `add-transaction` to it wasn't part of what task 14 was asked to do — left as an explicit, easy
 follow-up rather than done as a drive-by.
 
+**Manual entry stores a `data-store` ticker, not an ISIN or symbol.** The web form offers
+`data-store`'s own ticker list (`GET /instruments/tickers`) and always submits
+`instrument_identifier_kind = 'TICKER'`. `pipeline.add_manual_transaction` asks `data-store`
+whether the ticker exists (`get_ticker_info`) before writing anything, and raises `UnknownTicker`
+(422) if not. `TickerMappings.resolve` returns a `TICKER` identifier as-is, so positions,
+returns and the unmapped-instruments report all handle it without a mapping.
+
+*Why:* ticker mappings exist to translate what a broker export reports into the ticker
+`data-store` prices. For a transaction the user types in, there's nothing to translate: they're
+choosing the instrument, so they can choose it in `data-store`'s own terms. Asking them for an
+identifier plus a kind, and then a separate mapping, was two extra steps, one of them a
+hand-edited config file. It also let a typo through unnoticed: a manually entered `IWDA.AM`
+(`data-store` only has `IWDA.AS`) was saved, then blocked at every rebuild with nothing in the UI
+saying why. The check at save time is what makes skipping the mapping safe: a `TICKER` row is
+only ever written once `data-store` has confirmed it.
+
+*Rejected:* looking the ticker up from an ISIN automatically (for example through a Yahoo
+search). That's the inference the ticker-mapping design rules out; a wrong match would attach the
+wrong price series to a position without anyone noticing.
+
+**A manual BUY/SELL's amount is derived, not typed.** `--amount` (and the form's Amount field) is
+optional for a BUY or SELL: `pipeline.add_manual_transaction` computes it as
+`-(quantity * price) - fees`, rounded half-up to four places. One formula covers both, since
+quantity is already signed: a BUY comes out negative (cash out, including fees), a SELL positive
+(cash in, net of fees). Every other type has no quantity or price to derive from, so its amount
+is still required.
+
+*Why:* cost basis comes from `native_amount` (task 7's decision above), and for a trade the user
+types in, that figure is just their own arithmetic on numbers they already entered. Asking for it
+separately invited a mismatch nothing caught: a manual BUY of 5 × 128.65 was saved with an amount
+of `10`, which would have priced the position at €2 a share. A typed amount is still accepted,
+since a broker's confirmation can differ from price × quantity + fees by a rounding cent and its
+figure is the one to keep, but only within €0.01 of the derived value; anything further is
+rejected with the expected figure in the message. That tolerance also enforces the sign, which
+the positions calculator itself doesn't check (it takes the absolute value).
+
+*Scope:* manual entry only. A broker import keeps the broker's own figure untouched, including
+transaction taxes and bundled fees a manual entry would put in `--fees`.
+
+**Consequence: a `TICKER` entry needs `data-store`.** `add-transaction` with a `TICKER` requires
+`DATASTORE_API_URL`/`INTERNAL_API_SECRET`, as `import-cashflow` does, and fails with `SettingsError`
+without them. Manual entry of an ISIN or symbol (still possible from the CLI) needs no
+`data-store` at all.
+
 ### Cash-ledger imports needing a live FX lookup
 
 Some brokers' trade export carries no EUR-equivalent at all for any row — unlike a format where a
@@ -752,7 +797,7 @@ handlers, `auth`'s pattern of app-level handlers rather than per-route `try`/`ex
 |---|---|---|
 | `AccountNotFound` | 404 | `--account`/`account_label` didn't resolve for this user — the isolation chokepoint |
 | `AccountLabelConflict` | 409 | a label re-used under a different broker |
-| `InvalidBroker`, `InvalidTransaction`, `BrokerFileError`, `BrokerParserNotFound` | 422 | a caller-supplied value failed validation or parsing |
+| `InvalidBroker`, `InvalidTransaction`, `BrokerFileError`, `BrokerParserNotFound`, `UnknownTicker` | 422 | a caller-supplied value failed validation or parsing |
 | `TickerMappingError`, `BrokerPluginError` | 500 | a server-side configuration/plugin problem, not a caller mistake |
 | `DataStoreApiError` | 502 | the upstream `data-store` call failed |
 | any other `PortfolioError`, `SettingsError` | 500 | fails closed rather than leaking a raw traceback |

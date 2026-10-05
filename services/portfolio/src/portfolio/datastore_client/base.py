@@ -54,6 +54,11 @@ class DataStoreClient(Protocol):
         """
         ...
 
+    def list_tickers(self) -> list[str]:
+        """Every ticker data-store has ingested, sorted -- the set manual entry offers to pick
+        from."""
+        ...
+
     def get_ticker_info(self, ticker: str) -> TickerInfo:
         """Whether data-store has ever ingested ticker at all, and whether calculate-returns has
         run for it. Never raises for an unknown ticker -- exists=False is itself the answer, not

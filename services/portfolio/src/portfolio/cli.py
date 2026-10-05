@@ -9,7 +9,7 @@ from portfolio import jobs
 from portfolio.errors import PortfolioError
 from portfolio.run_result import STATUS_NOTHING_TO_DO, STATUS_OK
 from portfolio.settings import SettingsError
-from portfolio.transactions.base import TRANSACTION_TYPES
+from portfolio.transactions.base import IDENTIFIER_KINDS, TRANSACTION_TYPES
 
 _SUCCESS_STATUSES = {STATUS_OK, STATUS_NOTHING_TO_DO}
 
@@ -207,10 +207,14 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="datetime",
         help="ISO 8601 with a UTC offset, e.g. 2026-03-01T10:00:00+00:00",
     )
-    txn_parser.add_argument("--amount", required=True, type=_decimal, help="Signed native amount")
+    txn_parser.add_argument(
+        "--amount",
+        type=_decimal,
+        help="Signed native amount. Optional for BUY/SELL: derived as -(quantity * price) - fees",
+    )
     txn_parser.add_argument("--currency", required=True, help="ISO 4217, e.g. EUR")
     txn_parser.add_argument("--instrument", help="ISIN or symbol -- omit for cash-only rows")
-    txn_parser.add_argument("--instrument-kind", dest="instrument_kind", choices=("ISIN", "SYMBOL"))
+    txn_parser.add_argument("--instrument-kind", dest="instrument_kind", choices=IDENTIFIER_KINDS)
     txn_parser.add_argument("--quantity", type=_decimal, help="Signed: positive buy, negative sell")
     txn_parser.add_argument("--price", type=_decimal, help="Per unit, native currency")
     txn_parser.add_argument(

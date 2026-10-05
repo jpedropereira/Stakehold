@@ -167,6 +167,12 @@ class HttpPortfolioClient:
             _raise_for_status(response)
         return _json_body(response)
 
+    async def list_tickers(self) -> list[str]:
+        response = await self._request("GET", "/instruments/tickers")
+        if response.status_code != 200:
+            _raise_for_status(response)
+        return _json_body(response)
+
     async def create_account(
         self, *, user_id: str, broker: str, account_label: str
     ) -> AccountWriteResult:
@@ -187,7 +193,7 @@ class HttpPortfolioClient:
         broker_transaction_ref: str,
         transaction_type: str,
         trade_datetime: datetime,
-        native_amount: Decimal,
+        native_amount: Decimal | None,
         native_currency: str,
         instrument_identifier: str | None = None,
         instrument_identifier_kind: str | None = None,
@@ -202,7 +208,7 @@ class HttpPortfolioClient:
             "broker_transaction_ref": broker_transaction_ref,
             "transaction_type": transaction_type,
             "trade_datetime": trade_datetime.isoformat(),
-            "native_amount": str(native_amount),
+            "native_amount": _decimal_str(native_amount),
             "native_currency": native_currency,
             "instrument_identifier": instrument_identifier,
             "instrument_identifier_kind": instrument_identifier_kind,

@@ -242,3 +242,41 @@ def test_import_cashflow_streams_the_upload_to_a_temp_path(monkeypatch, client):
 
     assert response.status_code == 201
     assert captured["file_contents"] == b"cash,flow\n"
+
+
+def test_list_tickers_returns_the_jobs_list(monkeypatch, client):
+    monkeypatch.setattr(jobs, "get_tickers", lambda **kw: ["AAPL", "IWDA.AS"])
+
+    response = client.get("/instruments/tickers")
+
+    assert response.status_code == 200
+    assert response.json() == ["AAPL", "IWDA.AS"]
+
+
+def test_create_transaction_accepts_a_buy_without_an_amount(monkeypatch, client):
+    captured = {}
+
+    def fake_add(**kw):
+        captured.update(kw)
+        return {"status": "ok", "rows_saved": 1, "transactions_saved": 1, "positions_rebuild": "ok"}
+
+    monkeypatch.setattr(jobs, "run_add_transaction", fake_add)
+
+    response = client.post(
+        "/transactions",
+        json={
+            "user_id": str(uuid.uuid4()),
+            "account_label": "m",
+            "broker_transaction_ref": "ref-1",
+            "transaction_type": "BUY",
+            "trade_datetime": "2026-01-05T00:00:00+00:00",
+            "native_currency": "EUR",
+            "instrument_identifier": "IWDA.AS",
+            "instrument_identifier_kind": "TICKER",
+            "quantity": "5",
+            "price": "128.65",
+        },
+    )
+
+    assert response.status_code == 201
+    assert captured["native_amount"] is None

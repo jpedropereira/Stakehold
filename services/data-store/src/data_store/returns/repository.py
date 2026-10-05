@@ -102,6 +102,45 @@ def ticker_exists(conn, ticker: str, source: str) -> bool:
         return cur.fetchall()[0][0]
 
 
+def list_tickers(conn, source: str) -> list[str]:
+    """Every ticker with any ingested row for `source` in raw_market_data, sorted -- the same
+    "ingested universe" ticker_exists answers for one ticker, so the two never disagree about
+    what exists.
+
+    A recursive CTE ("loose index scan") rather than SELECT DISTINCT: Postgres 17 has no skip
+    scan, so DISTINCT would read every one of the table's ~9M rows to find ~1.3k tickers. Each
+    step here is one probe of the (ticker, price_date, source) primary key for the next ticker
+    up. `source` is checked per ticker with EXISTS rather than inside the probe: inside, a
+    ticker with no row for `source` would make the probe walk all of that ticker's dates.
+    Measured on the dev database: ~25 ms, versus ~315 ms with `source` inside the probe.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            WITH RECURSIVE t AS (
+                (SELECT ticker FROM raw_market_data ORDER BY ticker LIMIT 1)
+                UNION ALL
+                SELECT (
+                    SELECT r.ticker FROM raw_market_data r
+                    WHERE r.ticker > t.ticker
+                    ORDER BY r.ticker
+                    LIMIT 1
+                )
+                FROM t
+                WHERE t.ticker IS NOT NULL
+            )
+            SELECT ticker FROM t
+            WHERE ticker IS NOT NULL
+              AND EXISTS (
+                  SELECT 1 FROM raw_market_data r WHERE r.ticker = t.ticker AND r.source = %s
+              )
+            ORDER BY ticker
+            """,
+            (source,),
+        )
+        return [row[0] for row in cur.fetchall()]
+
+
 def get_returns_date_range(conn, ticker: str, source: str) -> tuple:
     """(earliest, latest) price_date in market_returns for (ticker, source), or (None, None) if
     returns haven't been computed for it yet -- an aggregate over zero rows still returns one

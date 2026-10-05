@@ -24,8 +24,11 @@ class TickerMappings:
 
         ISIN mappings are global (broker is accepted but ignored); SYMBOL mappings are scoped
         per broker, since a bare symbol is not globally unambiguous. See docs/architecture.md's
-        TickerLink key-scoping note.
+        TickerLink key-scoping note. A TICKER identifier already is the canonical ticker -- it
+        was checked against data-store when it was entered -- so it resolves to itself.
         """
+        if kind == "TICKER":
+            return identifier
         if kind == "ISIN":
             return self.isin.get(identifier)
         if kind == "SYMBOL":

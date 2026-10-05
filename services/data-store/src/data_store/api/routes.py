@@ -7,7 +7,7 @@ import logging
 from datetime import date
 
 from data_store import jobs
-from data_store.api.models import FxSeries, PriceSeries, TickerInfo
+from data_store.api.models import FxSeries, PriceSeries, TickerInfo, TickerList
 from data_store.api.security import require_internal_secret
 from data_store.read_flows import CurrencyNotTracked, TickerNotFound
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
@@ -60,6 +60,16 @@ def get_fx(
         return jobs.get_fx_series(base=base, quote=quote, source=source, start=start, end=end)
     except CurrencyNotTracked as e:
         raise HTTPException(404, f"currency not tracked: {e}")
+
+
+@router.get("/tickers", response_model=TickerList)
+def list_tickers(source: str = Query("yfinance")) -> dict:
+    """Every ingested ticker for `source`. Unpaginated on purpose: ~1.3k tickers is ~10 KB, and
+    the one caller (portfolio, for its manual-entry picker) needs the whole set at once."""
+    logger.info("ticker list: source=%s", source)
+    result = jobs.get_ticker_list(source=source)
+    logger.info("ticker list: %d ticker(s) for source=%s", len(result["tickers"]), source)
+    return result
 
 
 @router.get("/tickers/{ticker}", response_model=TickerInfo)

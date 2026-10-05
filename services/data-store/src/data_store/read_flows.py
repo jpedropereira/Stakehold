@@ -68,6 +68,12 @@ def ticker_info(conn, ticker: str, source: str) -> dict:
     }
 
 
+def ticker_list(conn, source: str) -> dict:
+    """Every ingested ticker for `source` -- what a client offers as the set of instruments it
+    can price. Empty, not an error, when nothing has been ingested for `source`."""
+    return {"tickers": returns_repository.list_tickers(conn, source)}
+
+
 def fx_rate_series(
     conn,
     currencies_config: CurrenciesConfig,

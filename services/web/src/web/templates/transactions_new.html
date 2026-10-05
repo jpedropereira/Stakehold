@@ -25,22 +25,20 @@
     <label for="trade_datetime">Date &amp; time (UTC)</label>
     <input type="datetime-local" id="trade_datetime" name="trade_datetime" required>
 
-    <label for="native_amount">Amount</label>
-    <input type="text" inputmode="decimal" id="native_amount" name="native_amount" required>
+    <label for="native_amount">Amount (leave blank for buys and sells: calculated as price × quantity + fees)</label>
+    <input type="text" inputmode="decimal" id="native_amount" name="native_amount">
 
     <label for="native_currency">Currency</label>
     <input type="text" id="native_currency" name="native_currency" maxlength="3" required>
 
-    <label for="instrument_identifier">Instrument identifier</label>
-    <input type="text" id="instrument_identifier" name="instrument_identifier">
-
-    <label for="instrument_identifier_kind">Identifier kind</label>
-    <select id="instrument_identifier_kind" name="instrument_identifier_kind">
-      <option value=""></option>
-      {% for kind in identifier_kinds %}
-      <option value="{{ kind }}">{{ kind }}</option>
+    <label for="instrument_identifier">Instrument (ticker)</label>
+    <input type="text" id="instrument_identifier" name="instrument_identifier" list="ticker-options" autocomplete="off" class="mono">
+    <datalist id="ticker-options">
+      {% for ticker in tickers %}
+      <option value="{{ ticker }}">
       {% endfor %}
-    </select>
+    </datalist>
+    {% if tickers_notice %}<p class="entry-empty">{{ tickers_notice }}</p>{% endif %}
 
     <label for="quantity">Quantity</label>
     <input type="text" inputmode="decimal" id="quantity" name="quantity">

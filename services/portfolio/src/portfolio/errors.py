@@ -91,6 +91,14 @@ class TickerMappingError(PortfolioError):
     status_code = 500
 
 
+class UnknownTicker(PortfolioError):
+    """A TICKER-kind instrument data-store has never ingested -- a typo, or an instrument
+    Stakehold doesn't price. Its message is shown to the user as-is (web displays 422 detail
+    verbatim), so it's written for them, not for a log."""
+
+    status_code = 422
+
+
 class DataStoreApiError(PortfolioError):
     """A call to data-store's read API (datastore_client) failed -- an error response, an
     unreachable host, or a malformed one."""

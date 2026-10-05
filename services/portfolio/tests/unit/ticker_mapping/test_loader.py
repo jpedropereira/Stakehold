@@ -52,6 +52,14 @@ def test_symbol_mapping_is_scoped_per_broker(tmp_path):
     assert mappings.resolve("SYMBOL", "IWDA", broker="acme") is None
 
 
+def test_a_ticker_identifier_resolves_to_itself_without_any_mapping(tmp_path):
+    path = _write(tmp_path, "isin: {}\n")
+
+    mappings = load_ticker_mappings(path)
+
+    assert mappings.resolve("TICKER", "IWDA.AS", broker="acme") == "IWDA.AS"
+
+
 def test_resolve_returns_none_for_an_unmapped_isin(tmp_path):
     path = _write(tmp_path, "isin:\n  IE00B4L5Y983: IWDA.AS\n")
 

@@ -9,6 +9,7 @@ from data_store.read_flows import (
     fx_rate_series,
     price_series,
     ticker_info,
+    ticker_list,
 )
 
 
@@ -20,6 +21,9 @@ class FakeReturnsRepo:
 
     def ticker_exists(self, conn, ticker, source):
         return self._exists
+
+    def list_tickers(self, conn, source):
+        return ["AAPL", "IWDA.AS"] if source == "yfinance" else []
 
     def get_returns_date_range(self, conn, ticker, source):
         return self._date_range
@@ -422,3 +426,22 @@ def test_fx_rate_series_inverse_rates_carry_the_stored_columns_scale(monkeypatch
     )
 
     assert str(result["points"][0]["rate"]) == "0.33333333"
+
+
+# --- ticker_list ---------------------------------------------------------------------------
+
+
+def test_ticker_list_wraps_the_repositorys_tickers(monkeypatch):
+    import data_store.read_flows as read_flows
+
+    monkeypatch.setattr(read_flows, "returns_repository", FakeReturnsRepo())
+
+    assert ticker_list(None, "yfinance") == {"tickers": ["AAPL", "IWDA.AS"]}
+
+
+def test_ticker_list_is_empty_for_a_source_with_nothing_ingested(monkeypatch):
+    import data_store.read_flows as read_flows
+
+    monkeypatch.setattr(read_flows, "returns_repository", FakeReturnsRepo())
+
+    assert ticker_list(None, "other") == {"tickers": []}

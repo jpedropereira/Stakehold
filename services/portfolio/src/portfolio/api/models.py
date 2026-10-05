@@ -40,8 +40,10 @@ class TransactionCreateRequest(BaseModel):
     broker_transaction_ref: str
     transaction_type: str
     trade_datetime: datetime
-    native_amount: Decimal
     native_currency: str
+    # Optional for a BUY/SELL, which derives it from price * quantity + fees -- see
+    # pipeline.add_manual_transaction. Required (by the pipeline) for every other type.
+    native_amount: Decimal | None = None
     instrument_identifier: str | None = None
     instrument_identifier_kind: str | None = None
     quantity: Decimal | None = None

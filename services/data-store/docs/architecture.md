@@ -395,6 +395,7 @@ over HTTP rather than opening a database connection of their own — the cross-s
 |---|---|---|
 | `GET /prices/{ticker}` | `market_returns` | Not `raw_market_data` — schema.md calls `market_returns` "the table a portfolio or chart should read"; serving raw OHLCV would push return computation onto every consumer. |
 | `GET /fx/{base}/{quote}` | `fx_rates` | See below — the endpoint derives pairs `fx_rates` never stores directly. |
+| `GET /tickers` | `raw_market_data` | Every ingested ticker for `source`, sorted and unpaginated (~1.3k tickers, ~10 KB). Built for `portfolio`'s manual-entry picker, which needs the whole set at once. Uses the same "ingested universe" definition as `GET /tickers/{ticker}`'s `exists` (`returns/repository.py`'s `list_tickers` sits next to `ticker_exists`), so a ticker in the list always reports `exists: true`. The query is a recursive-CTE loose index scan over the primary key: Postgres 17 has no skip scan, and a plain `SELECT DISTINCT` would read all ~9M rows to find the ~1.3k tickers. Measured at ~25 ms on the dev database. |
 | `GET /tickers/{ticker}` | `raw_market_data` + `market_returns` | Existence and whether returns have been computed are reported separately — a ticker can be ingested before `calculate-returns` has run for it. |
 
 **`source` is an explicit, defaulted query parameter, not hardcoded.** `source` is part of the

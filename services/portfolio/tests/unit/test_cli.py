@@ -1190,3 +1190,21 @@ def test_serve_dispatches_to_uvicorn_with_settings(monkeypatch):
 
     assert cli.main(["serve"]) == 0
     assert captured == {"app": fake_app, "host": "127.0.0.1", "port": 9002}
+
+
+def test_add_transaction_amount_is_optional(monkeypatch):
+    """A BUY/SELL's amount is derived from price * quantity + fees when omitted -- see
+    pipeline.add_manual_transaction."""
+    captured = {}
+
+    def fake_run_add_transaction(**kw):
+        captured.update(kw)
+        return {"status": "ok", "rows_saved": 1, "transactions_saved": 1}
+
+    monkeypatch.setattr(cli.jobs, "run_add_transaction", fake_run_add_transaction)
+    args = [a for a in _BASE_TXN_ARGS if a not in ("--amount", "-955.00")]
+
+    exit_code = cli.main([args[0], "--user", str(uuid.uuid4()), *args[1:]])
+
+    assert exit_code == 0
+    assert captured["native_amount"] is None

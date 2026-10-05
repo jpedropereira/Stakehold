@@ -143,6 +143,31 @@ class HttpDataStoreClient:
                 f"data-store returned a malformed fx-rate point for {base}/{quote}: {exc}"
             ) from exc
 
+    def list_tickers(self) -> list[str]:
+        try:
+            response = requests.get(
+                f"{self._base_url}/tickers", headers=self._headers, timeout=_REQUEST_TIMEOUT
+            )
+        except requests.RequestException as exc:
+            raise DataStoreApiError(f"request to data-store failed: {exc}") from exc
+
+        try:
+            response.raise_for_status()
+        except requests.HTTPError as exc:
+            raise DataStoreApiError(
+                f"data-store returned {response.status_code} for tickers: {exc}"
+            ) from exc
+
+        try:
+            tickers = response.json()["tickers"]
+            if not isinstance(tickers, list) or not all(isinstance(t, str) for t in tickers):
+                raise TypeError("tickers is not a list of strings")
+            return tickers
+        except (ValueError, KeyError, TypeError) as exc:
+            raise DataStoreApiError(
+                f"data-store returned a malformed response for tickers: {exc}"
+            ) from exc
+
     def get_ticker_info(self, ticker: str) -> TickerInfo:
         try:
             response = requests.get(

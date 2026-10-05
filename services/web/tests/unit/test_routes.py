@@ -77,6 +77,11 @@ class FakePortfolioClient:
         self.list_accounts_error: Exception | None = None
         self.list_brokers_result: list[str] = []
         self.list_brokers_error: Exception | None = None
+        self.list_tickers_result: list[str] = []
+        self.list_tickers_error: Exception | None = None
+        # Logged apart from `calls`: the manual-entry form fetches tickers on every render, and
+        # tests asserting `calls` are about the write, not the picker.
+        self.list_tickers_calls = 0
         self.create_account_result: AccountWriteResult | None = None
         self.create_account_error: Exception | None = None
         self.add_transaction_result: TransactionWriteResult | None = None
@@ -101,6 +106,12 @@ class FakePortfolioClient:
         if self.list_brokers_error:
             raise self.list_brokers_error
         return self.list_brokers_result
+
+    async def list_tickers(self):
+        self.list_tickers_calls += 1
+        if self.list_tickers_error:
+            raise self.list_tickers_error
+        return self.list_tickers_result
 
     async def create_account(self, *, user_id, broker, account_label):
         self.calls.append(("create_account", user_id, broker, account_label))
@@ -135,6 +146,8 @@ class FakePortfolioClient:
             price=price,
             fx_rate=fx_rate,
             fees_native=fees_native,
+            instrument_identifier=instrument_identifier,
+            instrument_identifier_kind=instrument_identifier_kind,
         )
         if self.add_transaction_error:
             raise self.add_transaction_error
@@ -811,6 +824,31 @@ def test_transaction_new_form_shows_confirmation_banner_when_saved(client):
     assert "saved" in response.text.lower()
 
 
+def test_transaction_new_form_offers_data_stores_tickers(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.list_tickers_result = ["AAPL", "IWDA.AS"]
+
+    response = test_client.get("/transactions/new", params={"account": "main"})
+
+    assert response.status_code == 200
+    assert 'list="ticker-options"' in response.text
+    assert '<option value="IWDA.AS">' in response.text
+    assert 'name="instrument_identifier_kind"' not in response.text
+
+
+def test_transaction_new_form_still_renders_when_the_ticker_list_is_unavailable(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.list_tickers_error = PortfolioUnavailable("down")
+
+    response = test_client.get("/transactions/new", params={"account": "main"})
+
+    assert response.status_code == 200
+    assert 'name="instrument_identifier"' in response.text
+    assert "ticker list couldn&#39;t be loaded" in response.text
+
+
 # --- transactions/new: POST ---------------------------------------------------------------
 
 
@@ -823,7 +861,6 @@ def _transaction_form_data(csrf_token: str, account_label: str = "main", **overr
         "native_amount": "100.00",
         "native_currency": "EUR",
         "instrument_identifier": "",
-        "instrument_identifier_kind": "",
         "quantity": "",
         "price": "",
         "fx_rate": "",
@@ -863,6 +900,100 @@ def test_add_transaction_success_redirects_with_saved_flag(client):
     assert fake_portfolio.calls == [
         ("add_transaction", _logged_in_user().user_id, "main", "ref-1", "DEPOSIT")
     ]
+
+
+def test_add_transaction_sends_an_instrument_as_a_ticker(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    token = _transactions_new_csrf_token(test_client, "main")
+    fake_portfolio.add_transaction_result = TransactionWriteResult(
+        status="ok", rows_saved=1, transactions_saved=1
+    )
+
+    test_client.post(
+        "/transactions/new",
+        data=_transaction_form_data(
+            token,
+            transaction_type="BUY",
+            instrument_identifier=" IWDA.AS ",
+            quantity="5",
+            price="128.65",
+        ),
+        follow_redirects=False,
+    )
+
+    assert fake_portfolio.last_add_transaction["instrument_identifier"] == "IWDA.AS"
+    assert fake_portfolio.last_add_transaction["instrument_identifier_kind"] == "TICKER"
+
+
+def test_add_transaction_without_an_instrument_sends_no_kind(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    token = _transactions_new_csrf_token(test_client, "main")
+    fake_portfolio.add_transaction_result = TransactionWriteResult(
+        status="ok", rows_saved=1, transactions_saved=1
+    )
+
+    test_client.post(
+        "/transactions/new", data=_transaction_form_data(token), follow_redirects=False
+    )
+
+    assert fake_portfolio.last_add_transaction["instrument_identifier"] is None
+    assert fake_portfolio.last_add_transaction["instrument_identifier_kind"] is None
+
+
+def test_add_transaction_leaves_a_blank_amount_for_portfolio_to_derive(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    token = _transactions_new_csrf_token(test_client, "main")
+    fake_portfolio.add_transaction_result = TransactionWriteResult(
+        status="ok", rows_saved=1, transactions_saved=1
+    )
+
+    response = test_client.post(
+        "/transactions/new",
+        data=_transaction_form_data(
+            token,
+            transaction_type="BUY",
+            instrument_identifier="IWDA.AS",
+            native_amount="",
+            quantity="5",
+            price="128.65",
+        ),
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert fake_portfolio.last_add_transaction["native_amount"] is None
+
+
+def test_transaction_new_form_explains_that_a_trades_amount_is_calculated(client):
+    test_client, _, fake_auth, _ = client
+    _logged_in(test_client, fake_auth)
+
+    response = test_client.get("/transactions/new", params={"account": "main"})
+
+    assert "leave blank for buys and sells" in response.text
+    assert 'name="native_amount" required' not in response.text
+
+
+def test_add_transaction_error_rerender_keeps_the_ticker_list(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    token = _transactions_new_csrf_token(test_client, "main")
+    fake_portfolio.list_tickers_result = ["IWDA.AS"]
+    fake_portfolio.add_transaction_error = InvalidPortfolioRequest(
+        "IWDA.AM isn't in Stakehold's market data -- pick a ticker from the list."
+    )
+
+    response = test_client.post(
+        "/transactions/new",
+        data=_transaction_form_data(token, instrument_identifier="IWDA.AM"),
+    )
+
+    assert response.status_code == 422
+    assert "isn&#39;t in Stakehold&#39;s market data" in response.text
+    assert '<option value="IWDA.AS">' in response.text
 
 
 def test_add_transaction_invalid_datetime_is_rejected_before_calling_portfolio(client):

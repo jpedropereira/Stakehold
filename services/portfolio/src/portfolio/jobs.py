@@ -193,6 +193,19 @@ def run_list_available_brokers() -> dict[str, int | str]:
     return result
 
 
+def _require_datastore_client(settings: Settings, *, command: str) -> HttpDataStoreClient:
+    """A data-store client for a command that can't run without one, or SettingsError naming
+    the command. Checked per command rather than in settings.py, since most commands -- and
+    manual entry of anything but a TICKER -- never touch data-store."""
+    if not settings.datastore_api_url or not settings.internal_api_secret:
+        raise SettingsError(
+            f"DATASTORE_API_URL and INTERNAL_API_SECRET must both be set for {command}"
+        )
+    return HttpDataStoreClient(
+        base_url=settings.datastore_api_url, internal_api_secret=settings.internal_api_secret
+    )
+
+
 # What a write job reports under `positions_rebuild` when it didn't run one, or when one raised.
 # Every other value is the rebuild run's own `status` (ok / partial / nothing_to_do).
 POSITIONS_REBUILD_SKIPPED = "skipped"
@@ -248,7 +261,7 @@ def run_add_transaction(
     broker_transaction_ref: str,
     transaction_type: str,
     trade_datetime: datetime,
-    native_amount: Decimal,
+    native_amount: Decimal | None,
     native_currency: str,
     instrument_identifier: str | None = None,
     instrument_identifier_kind: str | None = None,
@@ -259,9 +272,18 @@ def run_add_transaction(
     settings: Settings | None = None,
 ) -> dict[str, int | str]:
     """Record one manually-entered transaction. See pipeline.add_manual_transaction for what
-    `saved` means."""
+    `saved` means.
+
+    A TICKER-kind instrument needs data-store to confirm it exists, so only then is a client
+    built -- and SettingsError raised if data-store isn't configured. Any other kind keeps
+    working with no data-store at all."""
     configure_logging()
     settings = settings or load_settings()
+    datastore_client = (
+        _require_datastore_client(settings, command="add-transaction with a TICKER instrument")
+        if instrument_identifier_kind == "TICKER"
+        else None
+    )
     conn = get_connection(settings.database_url)
     try:
         logger.info(
@@ -285,6 +307,7 @@ def run_add_transaction(
             price=price,
             fx_rate=fx_rate,
             fees_native=fees_native,
+            datastore_client=datastore_client,
         )
     finally:
         conn.close()
@@ -549,6 +572,18 @@ def run_rebuild_returns(
         for account_label, ticker, error in outcome.failed_pairs
     ]
     return result
+
+
+def get_tickers(*, settings: Settings | None = None) -> list[str]:
+    """Every ticker data-store prices, for manual entry's picker. A read job like the other
+    `get_*` here: returns data, not a run result."""
+    configure_logging()
+    settings = settings or load_settings()
+    datastore_client = _require_datastore_client(settings, command="the ticker list")
+    logger.info("get-tickers: listing data-store's tickers.")
+    tickers = pipeline.list_tickers(datastore_client=datastore_client)
+    logger.info("get-tickers: done, %d ticker(s) found.", len(tickers))
+    return tickers
 
 
 def get_transactions(

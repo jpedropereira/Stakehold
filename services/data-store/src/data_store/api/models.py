@@ -51,6 +51,10 @@ class FxSeries(BaseModel):
     points: list[FxPoint]
 
 
+class TickerList(BaseModel):
+    tickers: list[str]
+
+
 class TickerInfo(BaseModel):
     ticker: str
     exists: bool

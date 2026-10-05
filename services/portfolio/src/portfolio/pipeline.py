@@ -11,7 +11,7 @@ service.py's repository modules.
 import logging
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from uuid import UUID
 
@@ -30,6 +30,7 @@ from portfolio.errors import (
     BrokerPluginError,
     InvalidBroker,
     InvalidTransaction,
+    UnknownTicker,
 )
 from portfolio.positions import repository as positions_repository
 from portfolio.positions.calculator import PositionSnapshot, replay
@@ -219,6 +220,55 @@ def list_latest_returns(conn, *, user_id: UUID, account_label: str) -> list[Retu
     return returns_repository.list_latest_snapshots(conn, account.id)
 
 
+# How far a typed BUY/SELL amount may differ from price * quantity + fees and still be kept:
+# enough for a broker's own figure that rounds differently by a cent, too little for a typo
+# (a manually entered BUY once carried an amount of 10 for a 643.25 trade).
+_TRADE_AMOUNT_TOLERANCE = Decimal("0.01")
+
+
+def _trade_amount(*, quantity: Decimal, price: Decimal, fees_native: Decimal | None) -> Decimal:
+    """The cash a BUY/SELL moves, signed from the account's side: -(quantity * price) - fees.
+    One formula for both, since quantity is already signed: a BUY (quantity > 0) comes out
+    negative, cash out including fees; a SELL (quantity < 0) positive, cash in net of fees.
+    Rounded half-up to native_amount's own four places, as to_eur rounds eur_amount."""
+    amount = -(quantity * price) - (fees_native or Decimal("0"))
+    return amount.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+
+
+def _manual_amount(
+    *,
+    transaction_type: str,
+    native_amount: Decimal | None,
+    quantity: Decimal | None,
+    price: Decimal | None,
+    fees_native: Decimal | None,
+) -> Decimal:
+    """The native_amount a manual entry is saved with. Only BUY/SELL have a quantity and price
+    to derive it from; every other type is a cash event whose amount is the only figure there
+    is, so it must be given. Manual entry only: a broker import keeps the broker's own figure,
+    which this never second-guesses."""
+    if transaction_type not in ("BUY", "SELL"):
+        if native_amount is None:
+            raise InvalidTransaction(f"{transaction_type} requires an amount")
+        return native_amount
+
+    if quantity is None or price is None:
+        if native_amount is None:
+            raise InvalidTransaction(f"{transaction_type} requires a quantity and a price")
+        # validate() reports the missing quantity/price itself.
+        return native_amount
+
+    derived = _trade_amount(quantity=quantity, price=price, fees_native=fees_native)
+    if native_amount is None:
+        return derived
+    if not native_amount.is_finite() or abs(native_amount - derived) > _TRADE_AMOUNT_TOLERANCE:
+        raise InvalidTransaction(
+            f"amount {native_amount} doesn't match this {transaction_type}: price x quantity "
+            f"+ fees comes to {derived:.2f}. Leave the amount blank to have it calculated."
+        )
+    return native_amount
+
+
 def add_manual_transaction(
     conn,
     *,
@@ -227,7 +277,7 @@ def add_manual_transaction(
     broker_transaction_ref: str,
     transaction_type: str,
     trade_datetime: datetime,
-    native_amount: Decimal,
+    native_amount: Decimal | None,
     native_currency: str,
     instrument_identifier: str | None = None,
     instrument_identifier_kind: str | None = None,
@@ -235,14 +285,38 @@ def add_manual_transaction(
     price: Decimal | None = None,
     fx_rate: Decimal | None = None,
     fees_native: Decimal | None = None,
+    datastore_client: DataStoreClient | None = None,
 ) -> int:
     """Record one manually-entered transaction. Returns 1 if written, 0 if
     (account, broker_transaction_ref) already existed -- manual entry's own idempotency, since
     --ref is mandatory on the CLI. Raises AccountNotFound if account_label doesn't resolve for
     this user (the isolation chokepoint in action) or InvalidTransaction if the entry fails
     transactions/base.py's rules -- including a missing --fx-rate for a non-EUR currency.
+
+    A TICKER-kind instrument is checked against data-store before anything is written, raising
+    UnknownTicker if data-store has never ingested it. That check is the whole reason a TICKER
+    row can skip ticker mappings at rebuild time, so `datastore_client` is required for one.
+
+    A BUY/SELL's `native_amount` is derived when omitted -- see _trade_amount. A typed one is
+    kept only if it agrees with the derived figure to within _TRADE_AMOUNT_TOLERANCE.
     """
+    native_amount = _manual_amount(
+        transaction_type=transaction_type,
+        native_amount=native_amount,
+        quantity=quantity,
+        price=price,
+        fees_native=fees_native,
+    )
     account = _resolve_account(conn, user_id=user_id, account_label=account_label)
+
+    if instrument_identifier_kind == "TICKER":
+        if datastore_client is None:
+            raise ValueError("a TICKER instrument needs a datastore_client to check it against")
+        if not datastore_client.get_ticker_info(instrument_identifier).exists:
+            raise UnknownTicker(
+                f"{instrument_identifier} isn't in Stakehold's market data -- "
+                "pick a ticker from the list."
+            )
 
     if native_currency == "EUR":
         if fx_rate is not None:
@@ -273,6 +347,11 @@ def add_manual_transaction(
 
     with transaction(conn):
         return transactions_repository.insert_transactions(conn, [txn])
+
+
+def list_tickers(*, datastore_client: DataStoreClient) -> list[str]:
+    """Every ticker data-store prices -- what manual entry offers to pick from."""
+    return datastore_client.list_tickers()
 
 
 def import_transactions(conn, *, user_id: UUID, account_label: str, file_path: Path) -> int:
@@ -606,7 +685,7 @@ def rebuild_returns(
                 # A cash-only DIVIDEND row (validate() allows both instrument fields to be
                 # None) has no instrument to resolve -- treated the same as an unresolvable
                 # one, not passed to mappings.resolve, which raises TickerMappingError for any
-                # kind other than "ISIN"/"SYMBOL" rather than returning None for it.
+                # kind other than "ISIN"/"SYMBOL"/"TICKER" rather than returning None for it.
                 continue
             ticker = mappings.resolve(
                 txn.instrument_identifier_kind, txn.instrument_identifier, broker=account.broker
