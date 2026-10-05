@@ -133,3 +133,54 @@ def test_run_purge_expired_sessions_reports_nothing_to_do_when_none_deleted(monk
     result = jobs.run_purge_expired_sessions()
 
     assert result == {"status": "nothing_to_do", "rows_saved": 0}
+
+
+def _patch_set_admin_common(monkeypatch, found):
+    fake_conn = _FakeCloseOnlyConnection()
+    calls = []
+    monkeypatch.setattr(
+        jobs, "load_settings", lambda: type("S", (), {"database_url": "postgresql://x"})()
+    )
+    monkeypatch.setattr(jobs, "get_connection", lambda url: fake_conn)
+
+    def fake_set_admin(conn, *, email, is_admin):
+        calls.append((email, is_admin))
+        return found
+
+    monkeypatch.setattr(jobs.service, "set_admin", fake_set_admin)
+    return fake_conn, calls
+
+
+def test_run_set_admin_reports_ok_and_closes_connection(monkeypatch, caplog):
+    caplog.set_level(logging.INFO)
+    fake_conn, calls = _patch_set_admin_common(monkeypatch, found=True)
+
+    result = jobs.run_set_admin(email="ann@example.com", is_admin=True)
+
+    assert result == {"status": "ok", "rows_saved": 1}
+    assert calls == [("ann@example.com", True)]
+    assert fake_conn.closed is True
+    assert "granting admin" in caplog.text
+    assert "done" in caplog.text
+
+
+def test_run_set_admin_reports_user_not_found_for_an_unknown_email(monkeypatch, caplog):
+    caplog.set_level(logging.INFO)
+    fake_conn, _ = _patch_set_admin_common(monkeypatch, found=False)
+
+    result = jobs.run_set_admin(email="nobody@example.com", is_admin=False)
+
+    assert result == {"status": "user_not_found", "rows_saved": 0}
+    assert fake_conn.closed is True
+    assert "revoking admin" in caplog.text
+    assert "no user" in caplog.text
+
+
+def test_run_set_admin_keeps_the_email_out_of_the_logs(monkeypatch, caplog):
+    # Same rule as signup/login's own log lines: no PII in the service log.
+    caplog.set_level(logging.INFO)
+    _patch_set_admin_common(monkeypatch, found=True)
+
+    jobs.run_set_admin(email="ann@example.com", is_admin=True)
+
+    assert "ann@example.com" not in caplog.text

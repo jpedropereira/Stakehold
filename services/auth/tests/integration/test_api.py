@@ -171,3 +171,21 @@ def test_signup_leaves_no_user_behind_when_creating_the_session_fails(client, mo
     with _connect() as conn, conn.cursor() as cur:
         cur.execute("SELECT COUNT(*) FROM users WHERE email = %s", ("atomic@example.com",))
         assert cur.fetchone()[0] == 0
+
+
+def test_set_admin_cli_is_reported_by_validate_and_revoke_applies_on_the_next_request(client):
+    secret = _internal_secret()
+    signup_response = _signup(client, "admin@example.com")
+    assert signup_response.json()["is_admin"] is False
+
+    assert cli.main(["user", "set-admin", "--email", "Admin@Example.com"]) == 0
+    granted = client.post("/sessions/validate", headers={"X-Internal-Secret": secret})
+    assert granted.json()["is_admin"] is True
+
+    assert cli.main(["user", "set-admin", "--email", "admin@example.com", "--revoke"]) == 0
+    revoked = client.post("/sessions/validate", headers={"X-Internal-Secret": secret})
+    assert revoked.json()["is_admin"] is False
+
+
+def test_set_admin_cli_exits_nonzero_for_an_unknown_email():
+    assert cli.main(["user", "set-admin", "--email", "nobody@example.com"]) == 1

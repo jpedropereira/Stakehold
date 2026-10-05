@@ -83,14 +83,28 @@ def test_renew_and_fetch_returns_none_when_no_matching_row():
 def test_renew_and_fetch_returns_the_session_user():
     user_id = uuid.uuid4()
     new_expires_at = NOW + timedelta(days=14)
-    conn = FakeConnection(fetch_result=(user_id, "person@example.com", "Person", new_expires_at))
+    conn = FakeConnection(
+        fetch_result=(user_id, "person@example.com", "Person", True, new_expires_at)
+    )
 
     result = renew_and_fetch(conn, token_hash=b"\x01" * 32, now=NOW, new_expires_at=new_expires_at)
 
     assert result.user_id == user_id
     assert result.email == "person@example.com"
     assert result.display_name == "Person"
+    assert result.is_admin is True
     assert result.expires_at == new_expires_at
+
+
+def test_renew_and_fetch_reads_is_admin_from_users_on_every_call():
+    # Read fresh from users, never cached on the session row -- so revoking admin takes effect
+    # on the very next validation, not once the session expires.
+    conn = FakeConnection(fetch_result=None)
+
+    renew_and_fetch(conn, token_hash=b"\x01" * 32, now=NOW, new_expires_at=NOW + timedelta(days=14))
+
+    sql, _ = conn._cursor.executed[0]
+    assert "users.is_admin" in sql
 
 
 def test_renew_and_fetch_query_clamps_to_absolute_expiry():

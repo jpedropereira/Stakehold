@@ -18,6 +18,7 @@
     {% if user %}
       <nav class="site-nav">
         <a href="/accounts">Portfolio</a>
+        {% if user.is_admin %}<a href="/admin">Admin</a>{% endif %}
       </nav>
       <form action="/logout" method="post" class="logout-form">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">

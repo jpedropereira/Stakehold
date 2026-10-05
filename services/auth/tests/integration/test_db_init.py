@@ -126,3 +126,25 @@ def test_token_hash_uniqueness_enforced():
                     (uuid.uuid4(), token_hash, user_id),
                 )
             conn.commit()
+
+
+def test_db_init_adds_is_admin_to_a_users_table_created_before_it_existed():
+    # The column arrived after users shipped: an existing database only gets it through the
+    # ALTER in schema.sql, and its existing rows must come out as non-admins.
+    user_id = uuid.uuid4()
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute("ALTER TABLE users DROP COLUMN is_admin")
+            cur.execute(
+                "INSERT INTO users (id, email, display_name, password_hash) "
+                "VALUES (%s, 'old@example.com', 'Old', 'hash')",
+                (user_id,),
+            )
+        conn.commit()
+
+    assert cli.main(["db", "init"]) == 0
+
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT is_admin FROM users WHERE id = %s", (user_id,))
+            assert cur.fetchone() == (False,)

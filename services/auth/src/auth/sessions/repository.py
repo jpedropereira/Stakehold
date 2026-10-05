@@ -8,6 +8,7 @@ class SessionUser:
     user_id: UUID
     email: str
     display_name: str
+    is_admin: bool
     expires_at: datetime
 
 
@@ -39,6 +40,9 @@ def renew_and_fetch(
 
     Clamping to absolute_expires_at here (not just at login) is what keeps a continuously-renewed
     session from ever living past its absolute cap -- see schema.md.
+
+    is_admin is read from users on every call rather than cached anywhere, so revoking admin
+    takes effect on the caller's very next request.
     """
     with conn.cursor() as cur:
         cur.execute(
@@ -52,7 +56,7 @@ def renew_and_fetch(
                   AND %(now)s < absolute_expires_at
                 RETURNING user_id, expires_at
             )
-            SELECT users.id, users.email, users.display_name, renewed.expires_at
+            SELECT users.id, users.email, users.display_name, users.is_admin, renewed.expires_at
             FROM renewed
             JOIN users ON users.id = renewed.user_id
             """,

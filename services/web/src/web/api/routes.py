@@ -23,6 +23,7 @@ from web.api.deps import (
     get_settings,
     get_templates,
     optional_user,
+    require_admin,
     require_user,
 )
 from web.api.htmx import htmx_or_redirect, is_htmx
@@ -308,6 +309,20 @@ async def home(
     csrf_token = ensure_csrf_cookie(request, response, cookie_secure=settings.cookie_secure)
     return _render(
         request, response, templates, "home.html", {"user": user, "csrf_token": csrf_token}
+    )
+
+
+@router.get("/admin")
+async def admin_page(
+    request: Request,
+    response: Response,
+    settings: Settings = Depends(get_settings),
+    templates=Depends(get_templates),
+    user: AuthUser = Depends(require_admin),
+):
+    csrf_token = ensure_csrf_cookie(request, response, cookie_secure=settings.cookie_secure)
+    return _render(
+        request, response, templates, "admin.html", {"user": user, "csrf_token": csrf_token}
     )
 
 

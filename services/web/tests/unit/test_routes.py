@@ -247,6 +247,15 @@ def _logged_in_user():
     return AuthUser(user_id="u1", email="ann@example.com", display_name="Ann")
 
 
+def _admin_user():
+    return AuthUser(user_id="u9", email="ada@example.com", display_name="Ada", is_admin=True)
+
+
+def _logged_in_as_admin(test_client, fake_auth):
+    fake_auth.validate_result = AuthResult(user=_admin_user(), set_cookie=SESSION_COOKIE)
+    test_client.cookies.set("stakehold_session", "tok")
+
+
 # --- health -----------------------------------------------------------------
 
 
@@ -290,6 +299,69 @@ def test_root_proxies_renewed_session_cookie(client):
     response = test_client.get("/")
 
     assert "stakehold_session" in response.headers.get("set-cookie", "")
+
+
+# --- admin --------------------------------------------------------------------
+
+
+def test_admin_nav_link_is_hidden_from_a_regular_user(client):
+    test_client, _, fake_auth, _ = client
+    _logged_in(test_client, fake_auth)
+
+    response = test_client.get("/")
+
+    assert 'href="/admin"' not in response.text
+
+
+def test_admin_nav_link_is_shown_to_an_admin(client):
+    test_client, _, fake_auth, _ = client
+    _logged_in_as_admin(test_client, fake_auth)
+
+    response = test_client.get("/")
+
+    assert 'href="/admin"' in response.text
+
+
+def test_admin_page_renders_for_an_admin(client):
+    test_client, _, fake_auth, _ = client
+    _logged_in_as_admin(test_client, fake_auth)
+
+    response = test_client.get("/admin")
+
+    assert response.status_code == 200
+    assert "<h1>Admin</h1>" in response.text
+
+
+def test_admin_page_is_forbidden_to_a_regular_user(client):
+    test_client, _, fake_auth, _ = client
+    _logged_in(test_client, fake_auth)
+
+    response = test_client.get("/admin", follow_redirects=False)
+
+    assert response.status_code == 403
+    assert "<h1>Admin</h1>" not in response.text
+    assert "You don't have access to this page." in response.text
+
+
+def test_admin_page_redirects_an_anonymous_visitor_to_login(client):
+    test_client, _, _, _ = client
+
+    response = test_client.get("/admin", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/login"
+
+
+def test_admin_page_redirects_to_login_when_auth_cannot_confirm_the_session(client):
+    # Auth down is treated as logged out (deps._resolve_user), so the gate can't fail open.
+    test_client, _, fake_auth, _ = client
+    fake_auth.validate_error = AuthUnavailable("down")
+    test_client.cookies.set("stakehold_session", "tok")
+
+    response = test_client.get("/admin", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/login"
 
 
 # --- login: GET ---------------------------------------------------------------

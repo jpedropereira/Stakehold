@@ -18,6 +18,19 @@ def _sessions_purge_expired(_args: argparse.Namespace) -> int:
     return 0 if result["status"] in _SUCCESS_STATUSES else 1
 
 
+def _user_set_admin(args: argparse.Namespace) -> int:
+    is_admin = not args.revoke
+    result = jobs.run_set_admin(email=args.email, is_admin=is_admin)
+    if result["status"] == jobs.STATUS_USER_NOT_FOUND:
+        print(f"no user with email {args.email}")
+        return 1
+    if is_admin:
+        print(f"admin granted to {args.email}")
+    else:
+        print(f"admin revoked from {args.email}")
+    return 0 if result["status"] in _SUCCESS_STATUSES else 1
+
+
 def _serve(_args: argparse.Namespace) -> int:
     # Imported lazily so `auth db init`/`auth sessions purge-expired` don't pay for importing
     # FastAPI/uvicorn on every invocation -- only `auth serve` needs them.
@@ -45,6 +58,15 @@ def _build_parser() -> argparse.ArgumentParser:
         "purge-expired", help="Delete expired/absolutely-expired sessions"
     )
     purge_parser.set_defaults(handler=_sessions_purge_expired)
+
+    user_parser = subparsers.add_parser("user", help="User administration commands")
+    user_subparsers = user_parser.add_subparsers(dest="user_command", required=True)
+    set_admin_parser = user_subparsers.add_parser(
+        "set-admin", help="Grant (or with --revoke, revoke) the admin role for one user"
+    )
+    set_admin_parser.add_argument("--email", required=True)
+    set_admin_parser.add_argument("--revoke", action="store_true")
+    set_admin_parser.set_defaults(handler=_user_set_admin)
 
     serve_parser = subparsers.add_parser("serve", help="Run the HTTP API")
     serve_parser.set_defaults(handler=_serve)
