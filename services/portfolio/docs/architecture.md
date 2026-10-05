@@ -873,8 +873,14 @@ principle stops at the credential boundary; `auth` is the one deliberate carve-o
 instance is meant to be shared, because portfolio is its only tenant today and every other service
 here keeps its own containers next to its own code. Naming it `app-postgres` rather than
 `portfolio-postgres` is the part that matters: the container is not portfolio's to own, only
-portfolio's to start. Moving it somewhere neutral belongs to the end-to-end deployment task, once
-there is a second tenant to justify the move — noted here rather than left as a silent oddity.
+portfolio's to start.
+
+**Considered and left as-is at task 13 (end-to-end integration)**: that task put every service's
+*API* on one shared network (`stakehold-net`) but added no second database tenant — nothing beyond
+`portfolio` opens a connection to `app-postgres`, so the trigger for moving this container's
+ownership out of `services/portfolio/` still hasn't arrived. Revisit only if a second service ever
+needs a direct `app-postgres` connection, not merely another service that talks to `portfolio` over
+HTTP.
 
 Inside that one instance the **database is named for the instance (`app`) and the role for the
 service (`portfolio`)**. A second service on `app-postgres` gets its own role in the same database

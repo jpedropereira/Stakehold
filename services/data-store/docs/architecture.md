@@ -536,7 +536,7 @@ flowchart TB
         APPDB[("postgres<br/><i>the data</i>")]
         PGA["pgadmin"]
     end
-    CALLER(["portfolio / web<br/>(future)"])
+    CALLER(["portfolio"])
 
     AFAPI & SCHED & DAGP & TRIG --> AFDB
     SCHED -->|"@task.external_python:<br/>jobs.run_* in /opt/stakehold/.venv"| APPDB
@@ -558,6 +558,13 @@ needs none of Airflow's own image (no Playwright browser, no Airflow package at 
 workspace's dependencies via `uv sync` and `uvicorn`). Like the Airflow containers, it reaches
 `postgres` by the compose network's service name, not `localhost:${POSTGRES_PORT}` — `DATABASE_URL`
 is overridden in `docker-compose.yml` the same way `x-airflow-common`'s is.
+
+**`api` also joins `stakehold-net`** (task 13's cross-service network, see `docs/smoke-test.md`),
+opted into via `services/data-store/docker-compose.stakehold-net.yml` rather than baked into this
+file directly — `portfolio` reaches it there as `http://data-store-api:8000` for `rebuild-returns`.
+`web` never calls `data-store` directly (see `web/docs/architecture.md`'s "Talks to" section), so
+only `portfolio`'s benefit justifies this. The Airflow containers and `pgadmin` stay off that
+network — nothing cross-service talks to either.
 
 **Two interpreters, on purpose.** Airflow's own is Python 3.13; this workspace requires 3.14 and
 pulls in pandas, yfinance and Playwright. `@task.external_python` runs the task body in

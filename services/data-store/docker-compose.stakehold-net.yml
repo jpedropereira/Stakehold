@@ -1,0 +1,15 @@
+# Opt-in overlay for task 13's cross-service smoke test (see /docs/smoke-test.md) -- pass with
+# `-f` alongside docker-compose.yml, never loaded by default. See services/auth's own copy of
+# this file for why this is a sidecar overlay rather than a merged root compose file.
+#
+# Only api joins stakehold-net, for portfolio's benefit (rebuild-returns) -- web never calls
+# data-store directly, and nothing outside this compose file talks to postgres/pgadmin/Airflow.
+services:
+  api:
+    networks:
+      - default
+      - stakehold-net
+
+networks:
+  stakehold-net:
+    external: true

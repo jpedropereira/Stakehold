@@ -1,0 +1,19 @@
+# Opt-in overlay for task 13's cross-service smoke test (see /docs/smoke-test.md) -- pass with
+# `-f` alongside docker-compose.yml, never loaded by default. Kept separate from the base file so
+# `docker compose -f services/auth/docker-compose.yml up` (no other flags) keeps working exactly
+# as it did before task 13, with no new prerequisite.
+#
+# A single merged root compose file (via `include:`) was tried and rejected: auth, portfolio and
+# data-store's docker-compose.yml files all name their API service `api` (container_name differs,
+# the service key doesn't) -- merging them into one project silently collapses three services into
+# one. Keeping each service its own separate Compose project, joined only by a shared external
+# network, avoids that collision entirely.
+services:
+  api:
+    networks:
+      - default
+      - stakehold-net
+
+networks:
+  stakehold-net:
+    external: true

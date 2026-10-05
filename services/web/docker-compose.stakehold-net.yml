@@ -1,0 +1,19 @@
+# Opt-in overlay for task 13's cross-service smoke test (see /docs/smoke-test.md) -- pass with
+# `-f` alongside docker-compose.yml, never loaded by default. See services/auth's own copy of
+# this file for why this is a sidecar overlay rather than a merged root compose file.
+services:
+  web:
+    networks:
+      - default
+      - stakehold-net
+    environment:
+      # Overrides the host-oriented WEB_AUTH_API_URL/WEB_PORTFOLIO_API_URL from .env
+      # (localhost:8001/8002, meant for a bare `uv run web serve` or for pointing at another
+      # service's standalone stack) with the in-network addresses auth-api/portfolio-api are
+      # reachable at on stakehold-net.
+      WEB_AUTH_API_URL: http://auth-api:8001
+      WEB_PORTFOLIO_API_URL: http://portfolio-api:8002
+
+networks:
+  stakehold-net:
+    external: true

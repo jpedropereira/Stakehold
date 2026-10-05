@@ -245,12 +245,20 @@ root `pyproject.toml` depends on every service. It additionally `COPY`s `brand/`
 `WEB_BRAND_DIR` to that baked-in path — brand assets are a build-time snapshot here, same as
 application code, not mounted live.
 
-`services/web/docker-compose.yml` currently starts `web` alone. It deliberately does **not** join
-`auth` or `portfolio` onto a shared network with in-network URLs yet — `WEB_AUTH_API_URL`/
-`WEB_PORTFOLIO_API_URL` in `.env` must each point at wherever that service's own compose stack
-already publishes its API. Wiring all four services onto one network with in-network addresses is
-task 13's job; doing it here piecemeal would leave two half-finished topologies to reconcile later
-instead of one deliberate one.
+`services/web/docker-compose.yml` on its own still starts `web` alone, pointed at whatever
+`WEB_AUTH_API_URL`/`WEB_PORTFOLIO_API_URL` in `.env` say (by default, `localhost:8001`/`:8002` —
+wherever `auth`'s/`portfolio`'s own standalone compose stacks publish their APIs). Task 13 added an
+opt-in overlay, `services/web/docker-compose.stakehold-net.yml`, passed alongside the base file
+with a second `-f`: it joins `web` onto `stakehold-net` (an externally-created Docker bridge
+network — `docker network create stakehold-net`, once per machine) and overrides
+`WEB_AUTH_API_URL`/`WEB_PORTFOLIO_API_URL` to `auth-api`'s/`portfolio-api`'s in-network addresses.
+`auth` and `portfolio` gained matching overlay files of their own, joining their own `api`
+containers (not `postgres`/`db-init`) to the same network. A single merged root compose file (via
+`include:`) was tried and rejected: `auth`, `portfolio` and `data-store`'s compose files all name
+their API service `api` — merging them into one project silently collapses three services into
+one, since Compose merges by service key, not by file. The per-service overlay keeps every
+service's own compose file byte-for-byte usable standalone, with no new prerequisite beyond the
+one-time network creation. See `docs/smoke-test.md` for the full bring-up sequence.
 
 ## Talks to
 
@@ -292,8 +300,8 @@ to browser JS.
   stronger fix (signed identity assertions from `auth`) is deliberately deferred; see that doc's
   "Open questions" for the trigger to revisit it.
 
-Closed by task 10: deployment shape for `web`'s own container (see "Deployment" above, though the
-multi-service network topology is still task 13's); the exact `auth` API contract (see "Endpoint
+Closed by task 10: deployment shape for `web`'s own container (see "Deployment" above). Closed by
+task 13: the multi-service network topology. The exact `auth` API contract (see "Endpoint
 surface" and `auth/docs/architecture.md`'s own "Endpoint surface").
 
 Closed by task 11: the exact `portfolio` API contract (see "Endpoint surface" above and
