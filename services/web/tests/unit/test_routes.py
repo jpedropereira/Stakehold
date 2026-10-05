@@ -437,6 +437,31 @@ def test_login_htmx_error_returns_partial_only(client):
     assert response.status_code == 401
     assert "That email and password don&#39;t match." in response.text
     assert "<html" not in response.text
+    assert response.headers["X-Form-Error"] == "true"
+
+
+def test_login_htmx_unmapped_exception_has_no_form_error_header(fake_auth, fake_portfolio):
+    # htmx-error-swap.js forces every response carrying X-Form-Error into the form, bypassing
+    # htmx's normal error handling -- this header must stay off anything _render_form_error
+    # didn't build, or an unmapped crash (not just a mapped AuthClientError) would get silently
+    # rendered into the form instead of surfacing as an htmx error. raise_server_exceptions=False
+    # makes the TestClient behave like a real browser against an unhandled exception.
+    settings = _settings()
+    app = create_app(settings)
+    app.dependency_overrides[get_auth_client] = lambda: fake_auth
+    app.dependency_overrides[get_portfolio_client] = lambda: fake_portfolio
+    with TestClient(app, raise_server_exceptions=False) as entered:
+        token = _login_csrf_token(entered)
+        fake_auth.login_error = RuntimeError("boom")
+
+        response = entered.post(
+            "/login",
+            data={"email": "a@example.com", "password": "x", "csrf_token": token},
+            headers={"HX-Request": "true"},
+        )
+
+    assert response.status_code == 500
+    assert "X-Form-Error" not in response.headers
 
 
 def test_login_htmx_success_returns_hx_redirect(client):
