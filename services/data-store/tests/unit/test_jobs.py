@@ -1053,6 +1053,19 @@ def test_get_ticker_info_calls_ticker_info_and_closes_the_connection(monkeypatch
     assert closed == [True]
 
 
+def test_get_ticker_list_calls_ticker_list_and_closes_the_connection(monkeypatch, fake_settings):
+    closed = []
+
+    monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn(closed))
+    monkeypatch.setattr(jobs, "ticker_list", lambda conn, source: {"tickers": [source]})
+
+    result = jobs.get_ticker_list(source="yfinance")
+
+    assert result == {"tickers": ["yfinance"]}
+    assert closed == [True]
+
+
 def test_get_fx_series_loads_currencies_config_and_closes_the_connection(
     monkeypatch, fake_settings
 ):

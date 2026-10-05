@@ -711,6 +711,108 @@ def test_run_import_cashflow_builds_the_http_client_from_settings(monkeypatch):
     }
 
 
+# --- run_add_transaction: TICKER rows are checked against data-store ---
+
+_TICKER_TXN_KWARGS = dict(
+    _TXN_KWARGS,
+    transaction_type="BUY",
+    instrument_identifier="IWDA.AS",
+    instrument_identifier_kind="TICKER",
+    quantity=Decimal("5"),
+    price=Decimal("100"),
+)
+
+
+def _patch_datastore_settings(
+    monkeypatch, *, url="http://datastore:8000", secret="secret"  # pragma: allowlist secret
+):
+    monkeypatch.setattr(
+        jobs,
+        "load_settings",
+        lambda: _fake_settings(datastore_api_url=url, internal_api_secret=secret),
+    )
+
+
+def test_run_add_transaction_checks_a_ticker_with_a_client_built_from_settings(monkeypatch):
+    _patch_write_job_common(monkeypatch)
+    _patch_datastore_settings(monkeypatch)
+    built = {}
+    passed = {}
+
+    class FakeHttpDataStoreClient:
+        def __init__(self, base_url, internal_api_secret):
+            built.update(base_url=base_url, internal_api_secret=internal_api_secret)
+
+    def fake_add(conn, **kw):
+        passed.update(kw)
+        return 1
+
+    monkeypatch.setattr(jobs, "HttpDataStoreClient", FakeHttpDataStoreClient)
+    monkeypatch.setattr(jobs.pipeline, "add_manual_transaction", fake_add)
+
+    jobs.run_add_transaction(user_id=uuid.uuid4(), **_TICKER_TXN_KWARGS)
+
+    assert built == {
+        "base_url": "http://datastore:8000",
+        "internal_api_secret": "secret",  # pragma: allowlist secret
+    }
+    assert isinstance(passed["datastore_client"], FakeHttpDataStoreClient)
+
+
+@pytest.mark.parametrize(
+    "url, secret", [(None, "secret"), ("http://datastore:8000", None)], ids=["no-url", "no-secret"]
+)
+def test_run_add_transaction_requires_data_store_settings_for_a_ticker(monkeypatch, url, secret):
+    _patch_write_job_common(monkeypatch)
+    _patch_datastore_settings(monkeypatch, url=url, secret=secret)
+    monkeypatch.setattr(jobs.pipeline, "add_manual_transaction", lambda conn, **kw: 1)
+
+    with pytest.raises(SettingsError):
+        jobs.run_add_transaction(user_id=uuid.uuid4(), **_TICKER_TXN_KWARGS)
+
+
+def test_run_add_transaction_needs_no_data_store_for_a_non_ticker_row(monkeypatch):
+    """An ISIN/SYMBOL row is resolved through mappings at rebuild time, not checked here -- so
+    manual entry of one keeps working on a deployment with no data-store configured."""
+    _patch_write_job_common(monkeypatch)
+    passed = {}
+
+    def fake_add(conn, **kw):
+        passed.update(kw)
+        return 1
+
+    monkeypatch.setattr(jobs.pipeline, "add_manual_transaction", fake_add)
+
+    jobs.run_add_transaction(user_id=uuid.uuid4(), **_TXN_KWARGS)
+
+    assert passed["datastore_client"] is None
+
+
+# --- get_tickers ---
+
+
+def test_get_tickers_lists_data_stores_tickers(monkeypatch):
+    _patch_datastore_settings(monkeypatch)
+
+    class FakeHttpDataStoreClient:
+        def __init__(self, base_url, internal_api_secret):
+            pass
+
+    monkeypatch.setattr(jobs, "HttpDataStoreClient", FakeHttpDataStoreClient)
+    monkeypatch.setattr(
+        jobs.pipeline, "list_tickers", lambda *, datastore_client: ["AAPL", "IWDA.AS"]
+    )
+
+    assert jobs.get_tickers() == ["AAPL", "IWDA.AS"]
+
+
+def test_get_tickers_requires_data_store_settings(monkeypatch):
+    _patch_datastore_settings(monkeypatch, url=None)
+
+    with pytest.raises(SettingsError):
+        jobs.get_tickers()
+
+
 # --- positions rebuild following a transaction write ---
 
 # Each write job, the pipeline function it wraps, and the kwargs it's called with. Parametrized

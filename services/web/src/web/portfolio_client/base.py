@@ -69,6 +69,8 @@ class PortfolioClient(Protocol):
 
     async def list_brokers(self) -> list[str]: ...
 
+    async def list_tickers(self) -> list[str]: ...
+
     async def create_account(
         self, *, user_id: str, broker: str, account_label: str
     ) -> AccountWriteResult: ...
@@ -81,7 +83,7 @@ class PortfolioClient(Protocol):
         broker_transaction_ref: str,
         transaction_type: str,
         trade_datetime: datetime,
-        native_amount: Decimal,
+        native_amount: Decimal | None,
         native_currency: str,
         instrument_identifier: str | None = None,
         instrument_identifier_kind: str | None = None,

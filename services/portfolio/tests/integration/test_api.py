@@ -221,3 +221,133 @@ def test_an_unmapped_instrument_still_saves_the_transaction_and_reports_a_partia
     assert add_response.json()["status"] == "ok"
     assert add_response.json()["positions_rebuild"] == "partial"
     assert len(transactions_response.json()) == 1
+
+
+class _FakeDataStoreClient:
+    """Stands in for data-store, which this suite doesn't run: knows exactly one ticker."""
+
+    def __init__(self, base_url, internal_api_secret):
+        pass
+
+    def get_ticker_info(self, ticker):
+        from portfolio.datastore_client.base import TickerInfo
+
+        known = ticker == "IWDA.AS"
+        return TickerInfo(exists=known, has_returns=known)
+
+
+@pytest.fixture
+def ticker_client(monkeypatch):
+    """A client whose Settings point at a (fake) data-store, which TICKER entry requires."""
+    from dataclasses import replace
+
+    from portfolio import jobs
+
+    monkeypatch.setattr(jobs, "HttpDataStoreClient", _FakeDataStoreClient)
+    settings = replace(
+        _settings(),
+        datastore_api_url="http://datastore:8000",
+        internal_api_secret="unused",  # pragma: allowlist secret
+    )
+    return TestClient(create_app(settings))
+
+
+def _add_ticker_buy(client, user_id, *, ticker):
+    return client.post(
+        "/transactions",
+        json={
+            "user_id": str(user_id),
+            "account_label": "main",
+            "broker_transaction_ref": "ref-1",
+            "transaction_type": "BUY",
+            "trade_datetime": "2026-01-05T10:00:00+00:00",
+            "native_amount": "-643.25",
+            "native_currency": "EUR",
+            "instrument_identifier": ticker,
+            "instrument_identifier_kind": "TICKER",
+            "quantity": "5",
+            "price": "128.65",
+        },
+        headers=_headers(),
+    )
+
+
+def test_a_ticker_transaction_becomes_a_position_with_no_ticker_mapping(
+    ticker_client, _ticker_mappings
+):
+    # An empty mapping file: the position can only come from the TICKER identifier itself.
+    _ticker_mappings.write_text(yaml.dump({"isin": {}}))
+    user_id = uuid.uuid4()
+    ticker_client.post(
+        "/accounts",
+        json={"user_id": str(user_id), "broker": "Degiro", "account_label": "main"},
+        headers=_headers(),
+    )
+
+    add_response = _add_ticker_buy(ticker_client, user_id, ticker="IWDA.AS")
+    positions = ticker_client.get(
+        "/positions",
+        params={"user_id": str(user_id), "account_label": "main"},
+        headers=_headers(),
+    ).json()
+
+    assert add_response.status_code == 201
+    assert add_response.json()["positions_rebuild"] == "ok"
+    assert [(p["canonical_ticker"], p["quantity"]) for p in positions] == [("IWDA.AS", "5.000000")]
+
+
+def test_a_ticker_data_store_does_not_know_is_rejected_and_not_saved(ticker_client):
+    user_id = uuid.uuid4()
+    ticker_client.post(
+        "/accounts",
+        json={"user_id": str(user_id), "broker": "Degiro", "account_label": "main"},
+        headers=_headers(),
+    )
+
+    add_response = _add_ticker_buy(ticker_client, user_id, ticker="IWDA.AM")
+    transactions = ticker_client.get(
+        "/transactions",
+        params={"user_id": str(user_id), "account_label": "main"},
+        headers=_headers(),
+    ).json()
+
+    assert add_response.status_code == 422
+    assert "IWDA.AM" in add_response.json()["detail"]
+    assert transactions == []
+
+
+def test_a_buy_entered_without_an_amount_is_saved_with_the_derived_one(ticker_client):
+    user_id = uuid.uuid4()
+    ticker_client.post(
+        "/accounts",
+        json={"user_id": str(user_id), "broker": "Degiro", "account_label": "main"},
+        headers=_headers(),
+    )
+
+    add_response = ticker_client.post(
+        "/transactions",
+        json={
+            "user_id": str(user_id),
+            "account_label": "main",
+            "broker_transaction_ref": "ref-1",
+            "transaction_type": "BUY",
+            "trade_datetime": "2026-01-05T10:00:00+00:00",
+            "native_currency": "EUR",
+            "instrument_identifier": "IWDA.AS",
+            "instrument_identifier_kind": "TICKER",
+            "quantity": "5",
+            "price": "128.65",
+            "fees_native": "2.00",
+        },
+        headers=_headers(),
+    )
+    (txn,) = ticker_client.get(
+        "/transactions",
+        params={"user_id": str(user_id), "account_label": "main"},
+        headers=_headers(),
+    ).json()
+
+    assert add_response.status_code == 201
+    # -(5 * 128.65) - 2.00
+    assert txn["native_amount"] == "-645.2500"
+    assert txn["eur_amount"] == "-645.2500"

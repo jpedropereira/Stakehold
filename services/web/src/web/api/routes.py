@@ -49,13 +49,15 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 health_router = APIRouter()
 
-# Mirrors portfolio/transactions/base.py's TRANSACTION_TYPES/IDENTIFIER_KINDS -- not imported
+# Mirrors portfolio/transactions/base.py's TRANSACTION_TYPES -- not imported
 # directly, since web talks to portfolio only over HTTP (it has no Python dependency on the
 # portfolio package). Kept here as the one place this contract is duplicated, the same way
 # _SESSION_COOKIE_NAME below documents auth's cookie name as part of the HTTP contract rather
 # than a shared import.
 _TRANSACTION_TYPES = ("BUY", "SELL", "DEPOSIT", "WITHDRAWAL", "DIVIDEND", "FX", "FEE", "ADJUSTMENT")
-_IDENTIFIER_KINDS = ("ISIN", "SYMBOL")
+# Manual entry only ever submits a data-store ticker picked from the list, never an ISIN/SYMBOL
+# -- those need a ticker mapping, which is for broker imports. See portfolio/docs/schema.md.
+_MANUAL_IDENTIFIER_KIND = "TICKER"
 
 # Matches portfolio's own cap (portfolio/api/routes.py's _MAX_UPLOAD_BYTES) -- read here, before
 # the bytes are ever forwarded, so an oversized upload doesn't sit fully buffered in web's memory
@@ -597,11 +599,31 @@ _TRANSACTION_ERRORS: dict[type[PortfolioClientError], tuple[str, int]] = {
 }
 
 
-def _transaction_new_context(account_label: str, *, saved: bool) -> dict:
+_TICKERS_UNAVAILABLE = (
+    "The ticker list couldn't be loaded right now — type the ticker exactly as Stakehold lists it."
+)
+
+
+async def _load_tickers(portfolio_client: PortfolioClient) -> tuple[list[str], str | None]:
+    """The tickers the manual-entry picker offers, or an empty list plus a notice when portfolio
+    (or data-store behind it) can't be reached. The form stays usable either way: the picker is
+    a convenience, and portfolio still checks whatever is typed when the transaction is saved."""
+    try:
+        return await portfolio_client.list_tickers(), None
+    except PortfolioClientError as exc:
+        logger.exception("portfolio service unavailable listing tickers.", exc_info=exc)
+        return [], _TICKERS_UNAVAILABLE
+
+
+async def _transaction_new_context(
+    portfolio_client: PortfolioClient, account_label: str, *, saved: bool
+) -> dict:
+    tickers, tickers_notice = await _load_tickers(portfolio_client)
     return {
         "account_label": account_label,
         "transaction_types": _TRANSACTION_TYPES,
-        "identifier_kinds": _IDENTIFIER_KINDS,
+        "tickers": tickers,
+        "tickers_notice": tickers_notice,
         "saved": saved,
     }
 
@@ -614,6 +636,7 @@ async def transaction_new_form(
     settings: Settings = Depends(get_settings),
     templates=Depends(get_templates),
     user: AuthUser = Depends(require_user),
+    portfolio_client: PortfolioClient = Depends(get_portfolio_client),
 ):
     csrf_token = ensure_csrf_cookie(request, response, cookie_secure=settings.cookie_secure)
     saved = request.query_params.get("saved") == "1"
@@ -626,7 +649,7 @@ async def transaction_new_form(
             "user": user,
             "csrf_token": csrf_token,
             "error": None,
-            **_transaction_new_context(account, saved=saved),
+            **await _transaction_new_context(portfolio_client, account, saved=saved),
         },
     )
 
@@ -655,7 +678,9 @@ def _parse_transaction_form(
             parsed_datetime = parsed_datetime.replace(tzinfo=timezone.utc)
         else:
             parsed_datetime = parsed_datetime.astimezone(timezone.utc)
-        parsed_amount = Decimal(native_amount)
+        # Blank is allowed: portfolio derives a BUY/SELL's amount and reports a missing one
+        # for any other type itself.
+        parsed_amount = Decimal(native_amount) if native_amount else None
         parsed_quantity = Decimal(quantity) if quantity else None
         parsed_price = Decimal(price) if price else None
         parsed_fx_rate = Decimal(fx_rate) if fx_rate else None
@@ -691,7 +716,6 @@ async def transaction_new_submit(
     native_amount: str = Form(default=""),
     native_currency: str = Form(default=""),
     instrument_identifier: str = Form(default=""),
-    instrument_identifier_kind: str = Form(default=""),
     quantity: str = Form(default=""),
     price: str = Form(default=""),
     fx_rate: str = Form(default=""),
@@ -702,7 +726,10 @@ async def transaction_new_submit(
     user: AuthUser = Depends(require_user),
     portfolio_client: PortfolioClient = Depends(get_portfolio_client),
 ):
-    form_context = {"user": user, **_transaction_new_context(account_label, saved=False)}
+    form_context = {
+        "user": user,
+        **await _transaction_new_context(portfolio_client, account_label, saved=False),
+    }
     csrf_error = await _check_csrf(
         request,
         response,
@@ -749,8 +776,10 @@ async def transaction_new_submit(
             broker_transaction_ref=broker_transaction_ref,
             transaction_type=transaction_type,
             native_currency=native_currency,
-            instrument_identifier=instrument_identifier or None,
-            instrument_identifier_kind=instrument_identifier_kind or None,
+            instrument_identifier=instrument_identifier.strip() or None,
+            instrument_identifier_kind=(
+                _MANUAL_IDENTIFIER_KIND if instrument_identifier.strip() else None
+            ),
             **parsed,
         ),
         error_messages=_TRANSACTION_ERRORS,

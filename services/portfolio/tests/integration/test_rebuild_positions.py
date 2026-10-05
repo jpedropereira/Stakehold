@@ -38,7 +38,16 @@ def _add_account(user_id, *, label, broker="acme"):
     assert exit_code == 0
 
 
-def _add_buy(user_id, *, account_label, ref, currency="EUR", amount="-950.00", identifier=_ISIN):
+def _add_buy(
+    user_id,
+    *,
+    account_label,
+    ref,
+    currency="EUR",
+    amount="-950.00",
+    price="95.00",
+    identifier=_ISIN,
+):
     exit_code = cli.main(
         [
             "add-transaction",
@@ -59,7 +68,7 @@ def _add_buy(user_id, *, account_label, ref, currency="EUR", amount="-950.00", i
             "--quantity",
             "10",
             "--price",
-            "95.00",
+            price,
             "--amount",
             amount,
             "--currency",
@@ -114,7 +123,7 @@ def test_rebuilding_twice_replaces_rather_than_duplicates(pg_connect):
     _add_buy(user_id, account_label="m", ref="t1")
     _rebuild(user_id)
 
-    _add_buy(user_id, account_label="m", ref="t2", amount="-1050.00")
+    _add_buy(user_id, account_label="m", ref="t2", amount="-1050.00", price="105.00")
     exit_code = _rebuild(user_id)
 
     with pg_connect() as conn, conn.cursor() as cur:

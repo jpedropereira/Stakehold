@@ -60,6 +60,28 @@ async def test_list_brokers_returns_plain_list():
     assert brokers == ["acme", "globex"]
 
 
+async def test_list_tickers_returns_plain_list_from_the_tickers_endpoint():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["path"] = request.url.path
+        return httpx.Response(200, json=["AAPL", "IWDA.AS"])
+
+    client = _client(handler)
+
+    tickers = await client.list_tickers()
+
+    assert tickers == ["AAPL", "IWDA.AS"]
+    assert captured["path"] == "/instruments/tickers"
+
+
+async def test_list_tickers_raises_unavailable_on_a_server_error():
+    client = _client(lambda request: httpx.Response(502, json={"detail": "data-store down"}))
+
+    with pytest.raises(PortfolioUnavailable):
+        await client.list_tickers()
+
+
 async def test_create_account_sends_expected_body():
     captured = {}
 
@@ -353,3 +375,27 @@ async def test_success_with_non_json_body_raises_portfolio_unavailable():
 
     with pytest.raises(PortfolioUnavailable):
         await client.list_brokers()
+
+
+async def test_add_transaction_sends_a_missing_amount_as_null():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = request.read()
+        return httpx.Response(201, json={"status": "ok", "rows_saved": 1, "transactions_saved": 1})
+
+    client = _client(handler)
+    await client.add_transaction(
+        user_id=USER_ID,
+        account_label="main",
+        broker_transaction_ref="ref-1",
+        transaction_type="BUY",
+        trade_datetime=datetime(2026, 1, 5, tzinfo=timezone.utc),
+        native_amount=None,
+        native_currency="EUR",
+        quantity=Decimal("5"),
+        price=Decimal("128.65"),
+    )
+
+    body = captured["body"].decode()
+    assert '"native_amount":null' in body or '"native_amount": null' in body

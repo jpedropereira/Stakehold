@@ -38,7 +38,7 @@ from data_store.pipeline import (
     ingest_market_data,
     ingest_regimes,
 )
-from data_store.read_flows import fx_rate_series, price_series, ticker_info
+from data_store.read_flows import fx_rate_series, price_series, ticker_info, ticker_list
 from data_store.run_result import build_run_result
 from data_store.settings import SettingsError, load_settings
 from shared.db.connection import apply_schema, get_connection
@@ -287,6 +287,17 @@ def get_ticker_info(*, ticker: str, source: str) -> dict:
     conn = get_connection(settings.database_url)
     try:
         return ticker_info(conn, ticker, source)
+    finally:
+        conn.close()
+
+
+def get_ticker_list(*, source: str) -> dict:
+    """Every ingested ticker for `source`, for the read API."""
+    configure_logging()
+    settings = load_settings()
+    conn = get_connection(settings.database_url)
+    try:
+        return ticker_list(conn, source)
     finally:
         conn.close()
 

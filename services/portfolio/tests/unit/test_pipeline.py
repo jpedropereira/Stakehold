@@ -22,6 +22,7 @@ from portfolio.errors import (
     BrokerPluginError,
     InvalidBroker,
     InvalidTransaction,
+    UnknownTicker,
 )
 from portfolio.positions.calculator import PositionSnapshot
 from portfolio.returns.calculator import ReturnSnapshot
@@ -406,6 +407,7 @@ def test_add_manual_transaction_derives_eur_amount_from_a_manual_fx_rate(repos, 
         instrument_identifier="AAPL",
         instrument_identifier_kind="SYMBOL",
         native_currency="USD",
+        price=Decimal("100"),
         native_amount=Decimal("-1000.00"),
         fx_rate=Decimal("1.0850"),
     )
@@ -499,9 +501,205 @@ def test_add_manual_transaction_passes_through_optional_fields(repos, conn):
     user_id = uuid.uuid4()
     pipeline.add_account(conn, user_id=user_id, broker="acme", account_label="m")
 
-    _add_txn(conn, user_id, "m", fees_native=Decimal("1.50"))
+    _add_txn(conn, user_id, "m", fees_native=Decimal("1.50"), native_amount=Decimal("-956.50"))
 
     assert transactions_repo.saved[0].fees_native == Decimal("1.50")
+
+
+# --- add_manual_transaction: the amount of a BUY/SELL is derived ---
+
+
+def _account(conn, broker="acme"):
+    user_id = uuid.uuid4()
+    pipeline.add_account(conn, user_id=user_id, broker=broker, account_label="m")
+    return user_id
+
+
+def test_a_buy_without_an_amount_derives_it_as_cash_out_including_fees(repos, conn):
+    _, transactions_repo, _ = repos
+    user_id = _account(conn)
+
+    _add_txn(conn, user_id, "m", native_amount=None, fees_native=Decimal("1.50"))
+
+    # -(10 * 95.50) - 1.50
+    assert transactions_repo.saved[0].native_amount == Decimal("-956.5000")
+    assert transactions_repo.saved[0].eur_amount == Decimal("-956.5000")
+
+
+def test_a_sell_without_an_amount_derives_it_as_cash_in_net_of_fees(repos, conn):
+    _, transactions_repo, _ = repos
+    user_id = _account(conn)
+
+    _add_txn(
+        conn,
+        user_id,
+        "m",
+        transaction_type="SELL",
+        quantity=Decimal("-10"),
+        price=Decimal("100"),
+        fees_native=Decimal("2"),
+        native_amount=None,
+    )
+
+    # 10 * 100 - 2
+    assert transactions_repo.saved[0].native_amount == Decimal("998.0000")
+
+
+def test_a_derived_amount_is_converted_to_eur_with_the_manual_rate(repos, conn):
+    _, transactions_repo, _ = repos
+    user_id = _account(conn)
+
+    _add_txn(
+        conn,
+        user_id,
+        "m",
+        native_currency="USD",
+        fx_rate=Decimal("1.25"),
+        quantity=Decimal("10"),
+        price=Decimal("100"),
+        native_amount=None,
+    )
+
+    assert transactions_repo.saved[0].native_amount == Decimal("-1000.0000")
+    assert transactions_repo.saved[0].eur_amount == Decimal("-800.0000")
+
+
+def test_a_derived_amount_is_rounded_half_up_to_four_places(repos, conn):
+    _, transactions_repo, _ = repos
+    user_id = _account(conn)
+
+    _add_txn(
+        conn, user_id, "m", quantity=Decimal("1"), price=Decimal("0.00005"), native_amount=None
+    )
+
+    assert transactions_repo.saved[0].native_amount == Decimal("-0.0001")
+
+
+def test_a_typed_amount_within_a_cent_of_the_derived_one_is_kept_as_typed(repos, conn):
+    """The broker's own figure can differ from price * quantity + fees by a rounding cent --
+    that figure is the one to keep."""
+    _, transactions_repo, _ = repos
+    user_id = _account(conn)
+
+    _add_txn(conn, user_id, "m", native_amount=Decimal("-954.99"))
+
+    assert transactions_repo.saved[0].native_amount == Decimal("-954.99")
+
+
+@pytest.mark.parametrize(
+    "typed",
+    [Decimal("10"), Decimal("955.00"), Decimal("-955.02")],
+    ids=["typo", "wrong-sign", "two-cents-off"],
+)
+def test_a_typed_amount_that_disagrees_with_the_trade_is_rejected(repos, conn, typed):
+    _, transactions_repo, _ = repos
+    user_id = _account(conn)
+    commits_before = conn.commits
+
+    with pytest.raises(InvalidTransaction, match="-955.00"):
+        _add_txn(conn, user_id, "m", native_amount=typed)
+
+    assert transactions_repo.saved == []
+    assert conn.commits == commits_before
+
+
+def test_a_cash_transaction_still_requires_an_amount(repos, conn):
+    user_id = _account(conn)
+
+    with pytest.raises(InvalidTransaction, match="DEPOSIT requires an amount"):
+        _add_txn(
+            conn,
+            user_id,
+            "m",
+            transaction_type="DEPOSIT",
+            instrument_identifier=None,
+            instrument_identifier_kind=None,
+            quantity=None,
+            price=None,
+            native_amount=None,
+        )
+
+
+def test_a_buy_missing_its_price_and_amount_names_what_is_missing(repos, conn):
+    user_id = _account(conn)
+
+    with pytest.raises(InvalidTransaction, match="BUY requires a quantity and a price"):
+        _add_txn(conn, user_id, "m", price=None, native_amount=None)
+
+
+def test_add_manual_transaction_saves_a_ticker_data_store_knows(repos, conn):
+    _, transactions_repo, _ = repos
+    user_id = uuid.uuid4()
+    pipeline.add_account(conn, user_id=user_id, broker="acme", account_label="m")
+    client = FakeDataStoreClient()
+
+    saved = _add_txn(
+        conn,
+        user_id,
+        "m",
+        instrument_identifier="IWDA.AS",
+        instrument_identifier_kind="TICKER",
+        datastore_client=client,
+    )
+
+    assert saved == 1
+    assert client.ticker_info_calls == ["IWDA.AS"]
+    assert transactions_repo.saved[0].instrument_identifier_kind == "TICKER"
+
+
+def test_add_manual_transaction_rejects_a_ticker_data_store_does_not_know(repos, conn):
+    _, transactions_repo, _ = repos
+    user_id = uuid.uuid4()
+    pipeline.add_account(conn, user_id=user_id, broker="acme", account_label="m")
+    commits_before = conn.commits
+    client = FakeDataStoreClient(
+        ticker_info={"IWDA.AM": TickerInfo(exists=False, has_returns=False)}
+    )
+
+    with pytest.raises(UnknownTicker, match="IWDA.AM"):
+        _add_txn(
+            conn,
+            user_id,
+            "m",
+            instrument_identifier="IWDA.AM",
+            instrument_identifier_kind="TICKER",
+            datastore_client=client,
+        )
+
+    assert transactions_repo.saved == []
+    assert conn.commits == commits_before
+
+
+def test_add_manual_transaction_requires_a_data_store_client_for_a_ticker(repos, conn):
+    """A TICKER row is only trustworthy once data-store has confirmed it -- saving one
+    unchecked is exactly how a typo like IWDA.AM got in, so a missing client is a caller bug."""
+    user_id = uuid.uuid4()
+    pipeline.add_account(conn, user_id=user_id, broker="acme", account_label="m")
+
+    with pytest.raises(ValueError, match="datastore_client"):
+        _add_txn(
+            conn,
+            user_id,
+            "m",
+            instrument_identifier="IWDA.AS",
+            instrument_identifier_kind="TICKER",
+        )
+
+
+def test_add_manual_transaction_does_not_check_an_isin_against_data_store(repos, conn):
+    user_id = uuid.uuid4()
+    pipeline.add_account(conn, user_id=user_id, broker="acme", account_label="m")
+    client = FakeDataStoreClient()
+
+    _add_txn(conn, user_id, "m", datastore_client=client)
+
+    assert client.ticker_info_calls == []
+
+
+def test_list_tickers_returns_the_data_store_list():
+    client = FakeDataStoreClient(tickers=["AAPL", "IWDA.AS"])
+
+    assert pipeline.list_tickers(datastore_client=client) == ["AAPL", "IWDA.AS"]
 
 
 # --- import_transactions ---
@@ -709,6 +907,7 @@ class FakeDataStoreClient:
         ticker_info=None,
         price_series_errors=None,
         ticker_info_errors=None,
+        tickers=None,
     ):
         self._rates = rates or {}
         self._price_series = price_series or {}
@@ -716,6 +915,7 @@ class FakeDataStoreClient:
         self._ticker_info = ticker_info or {}
         self._price_series_errors = price_series_errors or {}
         self._ticker_info_errors = ticker_info_errors or {}
+        self._tickers = tickers or []
         self.calls = []
         self.price_series_calls = []
         self.fx_rate_series_calls = []
@@ -740,6 +940,9 @@ class FakeDataStoreClient:
         if ticker in self._ticker_info_errors:
             raise self._ticker_info_errors[ticker]
         return self._ticker_info.get(ticker, TickerInfo(exists=True, has_returns=True))
+
+    def list_tickers(self):
+        return list(self._tickers)
 
 
 class FakeReturnsRepo:

@@ -106,6 +106,11 @@ def test_validate_accepts_a_sell_with_negative_quantity():
     validate(_txn(transaction_type="SELL", quantity=Decimal("-10")))
 
 
+def test_validate_accepts_a_ticker_identifier():
+    """TICKER: the identifier already is a data-store ticker, picked at manual entry."""
+    validate(_txn(instrument_identifier="IWDA.AS", instrument_identifier_kind="TICKER"))
+
+
 # --- validate: rejections ---
 
 

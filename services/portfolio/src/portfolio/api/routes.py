@@ -176,6 +176,12 @@ def list_unmapped_instruments(
     return result["unmapped_instruments"]
 
 
+@router.get("/instruments/tickers", response_model=list[str])
+def list_tickers(settings: Settings = Depends(get_settings)) -> list[str]:
+    """data-store's ticker list, passed through so web only ever talks to portfolio."""
+    return jobs.get_tickers(settings=settings)
+
+
 # --- transactions ---
 
 
