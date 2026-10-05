@@ -115,6 +115,45 @@ class UnmappedInstrumentResponse(BaseModel):
     broker: str
 
 
+class UnmappedInstrumentAnyBrokerResponse(BaseModel):
+    """The admin's cross-user view: an ISIN carries no broker, since one mapping covers them all."""
+
+    kind: str
+    identifier: str
+    broker: str | None
+
+
+class TickerMappingSetRequest(BaseModel):
+    # Plain strings: pipeline.set_ticker_mapping owns every rule (kind, broker-vs-kind,
+    # lengths), so its message reaches the admin rather than a Pydantic one.
+    identifier_kind: str
+    identifier: str
+    broker: str | None = None
+    canonical_ticker: str
+    updated_by: UUID
+
+
+class TickerMappingResponse(BaseModel):
+    id: int
+    identifier_kind: str
+    identifier: str
+    broker: str | None
+    canonical_ticker: str
+    updated_by: UUID
+    created_at: datetime
+    updated_at: datetime
+
+
+class TickerMappingWriteResponse(BaseModel):
+    status: str
+    rows_saved: int
+    # How the follow-on positions rebuilds went, beside `status` rather than folded into it --
+    # see jobs._mapping_write_result.
+    accounts_rebuilt: int
+    rebuilds_failed: int
+    mapping: TickerMappingResponse
+
+
 class FailedPairResponse(BaseModel):
     account_label: str
     ticker: str

@@ -64,6 +64,31 @@ class TransactionWriteResult:
     transactions_saved: int
 
 
+@dataclass(frozen=True)
+class TickerMapping:
+    id: int
+    identifier_kind: str
+    identifier: str
+    broker: str | None
+    canonical_ticker: str
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
+class UnmappedInstrument:
+    kind: str
+    identifier: str
+    # None for an ISIN: one ISIN mapping covers every broker, so the admin list doesn't split it.
+    broker: str | None
+
+
+@dataclass(frozen=True)
+class TickerMappingWriteResult:
+    mapping: TickerMapping
+    accounts_rebuilt: int
+    rebuilds_failed: int
+
+
 class PortfolioClient(Protocol):
     async def list_accounts(self, *, user_id: str) -> list[Account]: ...
 
@@ -106,3 +131,21 @@ class PortfolioClient(Protocol):
     async def list_positions(self, *, user_id: str, account_label: str) -> list[Position]: ...
 
     async def list_returns(self, *, user_id: str, account_label: str) -> list[Return]: ...
+
+    async def list_ticker_mappings(self) -> list[TickerMapping]: ...
+
+    async def list_all_unmapped_instruments(self) -> list[UnmappedInstrument]: ...
+
+    async def set_ticker_mapping(
+        self,
+        *,
+        identifier_kind: str,
+        identifier: str,
+        broker: str | None,
+        canonical_ticker: str,
+        updated_by: str,
+    ) -> TickerMappingWriteResult: ...
+
+    async def delete_ticker_mapping(
+        self, *, mapping_id: int, updated_by: str
+    ) -> TickerMappingWriteResult: ...

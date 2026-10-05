@@ -86,9 +86,24 @@ class BrokerFileError(PortfolioError):
 
 
 class TickerMappingError(PortfolioError):
-    """configs/ticker_mappings.yaml is missing, malformed, or fails validation."""
+    """A stored instrument carries an identifier kind no mapping knows how to resolve -- bad data
+    in the ledger, not a caller mistake."""
 
     status_code = 500
+
+
+class InvalidTickerMapping(PortfolioError):
+    """A ticker mapping an admin tried to save breaks a rule: a kind other than ISIN/SYMBOL, an
+    ISIN with a broker, a SYMBOL without one, a blank or over-long value. Shown to the admin
+    as-is."""
+
+    status_code = 422
+
+
+class TickerMappingNotFound(PortfolioError):
+    """No ticker mapping has that id -- already deleted, most likely."""
+
+    status_code = 404
 
 
 class UnknownTicker(PortfolioError):

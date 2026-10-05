@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -24,7 +22,6 @@ def client():
     app.state.settings = Settings(
         database_url="postgresql://unused/unused",  # pragma: allowlist secret
         admin_database_url="postgresql://unused/unused",  # pragma: allowlist secret
-        ticker_mappings_path=Path("configs/ticker_mappings.yaml"),
         datastore_api_url=None,
         internal_api_secret=None,
         api_internal_secret="unused",  # pragma: allowlist secret

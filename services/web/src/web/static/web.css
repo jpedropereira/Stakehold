@@ -256,3 +256,23 @@ a {
 .chart-wrap {
   max-width: 720px;
 }
+
+.entry-card-wide {
+  max-width: 880px;
+}
+
+/* Tables on the admin page are wider than a phone; scroll them, not the page. */
+.table-scroll {
+  overflow-x: auto;
+}
+
+.entry-card form.inline-form {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.entry-card form.inline-form input {
+  padding: 6px 8px;
+  max-width: 140px;
+}

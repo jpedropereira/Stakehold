@@ -7,13 +7,17 @@ from web.portfolio_client.base import (
     AccountWriteResult,
     Position,
     Return,
+    TickerMapping,
+    TickerMappingWriteResult,
     TransactionWriteResult,
+    UnmappedInstrument,
 )
 from web.portfolio_client.errors import (
     AccountLabelConflict,
     AccountNotFound,
     InvalidPortfolioRequest,
     PortfolioUnavailable,
+    TickerMappingNotFound,
 )
 
 
@@ -121,6 +125,31 @@ def _return(item: dict) -> Return:
             total_return_pct=_opt_decimal(item["total_return_pct"]),
         )
     except (KeyError, TypeError, ValueError, InvalidOperation) as exc:
+        raise PortfolioUnavailable(f"malformed portfolio response: {exc}") from exc
+
+
+def _ticker_mapping(item: dict) -> TickerMapping:
+    try:
+        return TickerMapping(
+            id=item["id"],
+            identifier_kind=item["identifier_kind"],
+            identifier=item["identifier"],
+            broker=item["broker"],
+            canonical_ticker=item["canonical_ticker"],
+            updated_at=datetime.fromisoformat(item["updated_at"]),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise PortfolioUnavailable(f"malformed portfolio response: {exc}") from exc
+
+
+def _ticker_mapping_write_result(body: dict) -> TickerMappingWriteResult:
+    try:
+        return TickerMappingWriteResult(
+            mapping=_ticker_mapping(body["mapping"]),
+            accounts_rebuilt=body["accounts_rebuilt"],
+            rebuilds_failed=body["rebuilds_failed"],
+        )
+    except (KeyError, TypeError) as exc:
         raise PortfolioUnavailable(f"malformed portfolio response: {exc}") from exc
 
 
@@ -256,3 +285,59 @@ class HttpPortfolioClient:
         if response.status_code != 200:
             _raise_for_status(response)
         return [_return(item) for item in _json_body(response)]
+
+    async def list_ticker_mappings(self) -> list[TickerMapping]:
+        response = await self._request("GET", "/ticker-mappings")
+        if response.status_code != 200:
+            _raise_for_status(response)
+        return [_ticker_mapping(item) for item in _json_body(response)]
+
+    async def list_all_unmapped_instruments(self) -> list[UnmappedInstrument]:
+        response = await self._request("GET", "/instruments/unmapped/all")
+        if response.status_code != 200:
+            _raise_for_status(response)
+        try:
+            return [
+                UnmappedInstrument(
+                    kind=item["kind"], identifier=item["identifier"], broker=item["broker"]
+                )
+                for item in _json_body(response)
+            ]
+        except (KeyError, TypeError) as exc:
+            raise PortfolioUnavailable(f"malformed portfolio response: {exc}") from exc
+
+    async def set_ticker_mapping(
+        self,
+        *,
+        identifier_kind: str,
+        identifier: str,
+        broker: str | None,
+        canonical_ticker: str,
+        updated_by: str,
+    ) -> TickerMappingWriteResult:
+        response = await self._request(
+            "PUT",
+            "/ticker-mappings",
+            json={
+                "identifier_kind": identifier_kind,
+                "identifier": identifier,
+                "broker": broker,
+                "canonical_ticker": canonical_ticker,
+                "updated_by": updated_by,
+            },
+        )
+        if response.status_code != 200:
+            _raise_for_status(response)
+        return _ticker_mapping_write_result(_json_body(response))
+
+    async def delete_ticker_mapping(
+        self, *, mapping_id: int, updated_by: str
+    ) -> TickerMappingWriteResult:
+        response = await self._request(
+            "DELETE", f"/ticker-mappings/{mapping_id}", params={"updated_by": updated_by}
+        )
+        if response.status_code == 404:
+            raise TickerMappingNotFound(_error_detail(response))
+        if response.status_code != 200:
+            _raise_for_status(response)
+        return _ticker_mapping_write_result(_json_body(response))

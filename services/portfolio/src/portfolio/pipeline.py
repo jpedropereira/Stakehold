@@ -29,14 +29,18 @@ from portfolio.errors import (
     BrokerParserNotFound,
     BrokerPluginError,
     InvalidBroker,
+    InvalidTickerMapping,
     InvalidTransaction,
+    TickerMappingNotFound,
     UnknownTicker,
 )
 from portfolio.positions import repository as positions_repository
 from portfolio.positions.calculator import PositionSnapshot, replay
 from portfolio.returns import repository as returns_repository
 from portfolio.returns.calculator import DividendEvent, ReturnSnapshot, compute_returns
-from portfolio.ticker_mapping.loader import TickerMappings
+from portfolio.ticker_mapping import repository as ticker_mapping_repository
+from portfolio.ticker_mapping.base import MAPPED_KINDS, TickerMappings
+from portfolio.ticker_mapping.repository import TickerMappingRow
 from portfolio.transactions import repository as transactions_repository
 from portfolio.transactions.base import (
     FX_RATE_SOURCE_MANUAL,
@@ -388,14 +392,131 @@ def list_unmapped_instruments(
 ) -> list[tuple[str, str, str]]:
     """Every (kind, identifier, broker) this user's transactions reference that `mappings` can't
     resolve to a canonical_ticker -- see docs/architecture.md's "unmapped instrument blocks its
-    own rebuild, loudly" rule. Read-only; diffed in application code since the mapping is a YAML
-    file, not a database table (docs/schema.md)."""
+    own rebuild, loudly" rule. Read-only; diffed through TickerMappings.resolve, the same check a
+    rebuild applies."""
     instruments = transactions_repository.list_distinct_instruments(conn, user_id)
     return [
         (kind, identifier, broker)
         for kind, identifier, broker in instruments
         if mappings.resolve(kind, identifier, broker=broker) is None
     ]
+
+
+def list_all_unmapped_instruments(
+    conn, *, mappings: TickerMappings
+) -> list[tuple[str, str, str | None]]:
+    """list_unmapped_instruments across every user, for the admin page. An ISIN is listed once
+    with broker None, whichever brokers report it, since one ISIN mapping covers them all."""
+    unmapped = set()
+    for kind, identifier, broker in transactions_repository.list_distinct_instruments_all(conn):
+        if mappings.resolve(kind, identifier, broker=broker) is not None:
+            continue
+        unmapped.add((kind, identifier, None if kind == "ISIN" else broker))
+    return sorted(unmapped, key=lambda row: (row[0], row[1], row[2] or ""))
+
+
+# --- ticker mappings (admin) ---
+
+# Column widths in db/schema.sql's ticker_mappings -- checked here so an over-long value is the
+# admin's 422, not a database error.
+_MAPPING_MAX_LENGTHS = {"identifier": 50, "broker": 50, "canonical_ticker": 20}
+
+
+def _mapping_field(name: str, value: str | None, *, label: str) -> str | None:
+    value = (value or "").strip() or None
+    if value is not None and len(value) > _MAPPING_MAX_LENGTHS[name]:
+        raise InvalidTickerMapping(
+            f"The {label} is too long -- at most {_MAPPING_MAX_LENGTHS[name]} characters."
+        )
+    return value
+
+
+def load_ticker_mappings(conn) -> TickerMappings:
+    """Every saved mapping, as the lookup a rebuild resolves instruments through."""
+    return ticker_mapping_repository.load_all(conn)
+
+
+def list_ticker_mappings(conn) -> list[TickerMappingRow]:
+    return ticker_mapping_repository.list_all(conn)
+
+
+def set_ticker_mapping(
+    conn,
+    *,
+    identifier_kind: str,
+    identifier: str,
+    broker: str | None,
+    canonical_ticker: str,
+    updated_by: UUID,
+    datastore_client: DataStoreClient,
+) -> TickerMappingRow:
+    """Map one broker-reported instrument to a data-store ticker, or re-point its existing
+    mapping. Global: the mapping applies to every user's transactions.
+
+    Raises InvalidTickerMapping for a value that breaks the ISIN/SYMBOL rules (db/schema.sql's
+    CHECK, enforced here first so the admin gets a sentence, not a constraint name), and
+    UnknownTicker for a ticker data-store has never ingested -- the same check manual TICKER
+    entry makes. Nothing is written in either case.
+
+    Rebuilding the positions it affects is the caller's job (jobs.run_set_ticker_mapping), after
+    this commits -- the same split as a transaction write.
+    """
+    if identifier_kind not in MAPPED_KINDS:
+        raise InvalidTickerMapping(
+            f"A mapping is for an ISIN or SYMBOL instrument, not {identifier_kind!r}."
+        )
+    identifier = _mapping_field("identifier", identifier, label="identifier")
+    broker = _mapping_field("broker", broker, label="broker")
+    canonical_ticker = _mapping_field("canonical_ticker", canonical_ticker, label="ticker")
+    if identifier is None:
+        raise InvalidTickerMapping("Enter the identifier the broker reports.")
+    if canonical_ticker is None:
+        raise InvalidTickerMapping("Pick the ticker to map it to.")
+    if identifier_kind == "ISIN" and broker is not None:
+        raise InvalidTickerMapping(
+            "An ISIN mapping applies to every broker -- leave the broker blank."
+        )
+    if identifier_kind == "SYMBOL" and broker is None:
+        raise InvalidTickerMapping(
+            "A SYMBOL mapping needs a broker -- the same symbol can mean different instruments "
+            "at different brokers."
+        )
+    if not datastore_client.get_ticker_info(canonical_ticker).exists:
+        raise UnknownTicker(
+            f"{canonical_ticker} isn't in Stakehold's market data -- pick a ticker from the list."
+        )
+
+    with transaction(conn):
+        return ticker_mapping_repository.upsert(
+            conn,
+            identifier_kind=identifier_kind,
+            identifier=identifier,
+            broker=broker,
+            canonical_ticker=canonical_ticker,
+            updated_by=updated_by,
+        )
+
+
+def delete_ticker_mapping(conn, *, mapping_id: int) -> TickerMappingRow:
+    """Remove one mapping, returning it. Raises TickerMappingNotFound if it's already gone.
+
+    The instrument goes back to being unmapped: its next rebuild blocks it, and -- per "blocked
+    means don't touch" -- leaves the snapshots the old mapping produced in place. See
+    docs/architecture.md's known limitations."""
+    with transaction(conn):
+        deleted = ticker_mapping_repository.delete(conn, mapping_id)
+    if deleted is None:
+        raise TickerMappingNotFound(f"No ticker mapping with id {mapping_id}.")
+    return deleted
+
+
+def list_accounts_using_instrument(
+    conn, *, identifier_kind: str, identifier: str, broker: str | None
+) -> list[tuple[UUID, str]]:
+    """(user_id, account_label) of every account a mapping for this instrument affects."""
+    return transactions_repository.list_accounts_using_instrument(
+        conn, identifier_kind=identifier_kind, identifier=identifier, broker=broker
+    )
 
 
 def import_cashflow(
@@ -488,8 +609,8 @@ def rebuild_positions(
     that broker (e.g. SYMBOL), that ticker's snapshot is built only from the mapped rows -- it is
     silently a partial view, not the blocked-and-untouched outcome the paragraph above describes,
     because the code has no way to know the two identifiers name the same instrument until
-    configs/ticker_mappings.yaml says so for both. The fix lives in that YAML file (map every
-    identifier kind a broker actually emits for an instrument), not in this function.
+    the ticker mappings say so for both. The fix lives in the mappings (map every identifier kind
+    a broker actually emits for an instrument), not in this function.
 
     Each (account, ticker) pair's delete-then-insert is wrapped in its own transaction here,
     rather than inside positions/repository.py, so that pair's replacement is atomic without

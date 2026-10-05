@@ -8,7 +8,7 @@ from portfolio import cli
 
 pytestmark = pytest.mark.integration
 
-_TABLES = ("accounts", "position_snapshots", "return_snapshots", "transactions")
+_TABLES = ("accounts", "position_snapshots", "return_snapshots", "ticker_mappings", "transactions")
 
 
 def _insert_account(cur, *, user_id, label="acme-main", broker="acme"):

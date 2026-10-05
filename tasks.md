@@ -34,7 +34,7 @@ one-time snapshot.
 | 14 | [Broker cash-ledger import](#14-broker-cash-ledger-import) | 6 | done |
 | 15 | [Extract broker-parser plugins to a private repo](#15-extract-broker-parser-plugins-to-a-private-repo) | 6, 14 | done |
 | 16 | [Admin role](#16-admin-role) | 2, 10 | done |
-| 17 | [Ticker mappings in the database, managed by admins](#17-ticker-mappings-in-the-database-managed-by-admins) | 16, 9 | ready |
+| 17 | [Ticker mappings in the database, managed by admins](#17-ticker-mappings-in-the-database-managed-by-admins) | 16, 9 | done |
 
 No task is `ready` today — every dependency chain resolves to `done`.
 
@@ -679,10 +679,22 @@ ISIN or symbol into a data-store ticker (task 17). This task adds the role that 
   `require_admin` dependency that 403s a logged-in non-admin, an `/admin` page (empty until
   task 17), and an "Admin" nav link shown only to admins.
 
-### 17. Ticker mappings in the database, managed by admins — ready
+### 17. Ticker mappings in the database, managed by admins — done
 
 Moves `configs/ticker_mappings.yaml` (hand-edited, baked into the portfolio image at build time,
 so every fix needs a rebuild) into a global `portfolio.ticker_mappings` table (schema signed off),
 managed from an admin-only page under `/admin`. Saving or deleting a mapping rebuilds positions
 for every account whose transactions use that identifier. The YAML file and
 `PORTFOLIO_TICKER_MAPPINGS_PATH` are retired.
+
+- **portfolio**: new `ticker_mappings` table (two partial unique indexes and a kind/broker CHECK;
+  schema signed off), `ticker_mapping/repository.py`, and `TickerMappings` moved to
+  `ticker_mapping/base.py`. Every rebuild and the unmapped report load mappings from the table.
+  New `PUT/GET /ticker-mappings`, `DELETE /ticker-mappings/{id}`, `GET /instruments/unmapped/all`,
+  and matching CLI commands (`ticker-mapping list|set|delete`, `list-unmapped-instruments --all`).
+  Saving or deleting a mapping rebuilds positions for every affected account, across users.
+- **web**: `/admin/mappings` — the unmapped instruments with an inline map form, the existing
+  mappings with delete, and an add/re-point form, all behind `require_admin` and CSRF.
+- **Retired**: `configs/ticker_mappings.yaml.example`, `PORTFOLIO_TICKER_MAPPINGS_PATH`, and
+  portfolio's `pyyaml` dependency. Existing mappings aren't imported: they're re-entered on the
+  admin page, which lists what's waiting.

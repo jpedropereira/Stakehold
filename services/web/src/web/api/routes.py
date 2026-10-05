@@ -41,6 +41,7 @@ from web.portfolio_client.errors import (
     AccountNotFound,
     InvalidPortfolioRequest,
     PortfolioClientError,
+    TickerMappingNotFound,
 )
 from web.portfolio_view import aggregate_portfolio_returns, filter_open_positions
 from web.settings import Settings
@@ -323,6 +324,220 @@ async def admin_page(
     csrf_token = ensure_csrf_cookie(request, response, cookie_secure=settings.cookie_secure)
     return _render(
         request, response, templates, "admin.html", {"user": user, "csrf_token": csrf_token}
+    )
+
+
+# --- admin: ticker mappings ------------------------------------------------------
+
+_MAPPING_ERRORS: dict[type[PortfolioClientError], tuple[str, int]] = {
+    TickerMappingNotFound: ("That mapping was already deleted.", status.HTTP_404_NOT_FOUND),
+}
+
+
+def _query_count(request: Request, name: str) -> int:
+    raw = request.query_params.get(name, "")
+    return int(raw) if raw.isdigit() else 0
+
+
+def _mapping_outcome(request: Request) -> str | None:
+    """The banner after a redirect back from a save or delete, read from its query string."""
+    if request.query_params.get("saved") == "1":
+        done = "Mapping saved."
+    elif request.query_params.get("deleted") == "1":
+        done = "Mapping deleted."
+    else:
+        return None
+    outcome = f"{done} Positions rebuilt for {_query_count(request, 'rebuilt')} account(s)."
+    failed = _query_count(request, "failed")
+    if failed:
+        outcome += (
+            f" {failed} rebuild(s) failed — the mapping is saved; rebuild those accounts' "
+            "positions to retry."
+        )
+    return outcome
+
+
+async def _mappings_context(portfolio_client: PortfolioClient) -> dict:
+    """Everything admin_mappings.html shows, fetched concurrently. Each list degrades on its own
+    to empty plus a notice, the _list_accounts_and_brokers pattern, so an outage never looks
+    like "no mappings" or "nothing to map"."""
+    mappings, unmapped = await asyncio.gather(
+        portfolio_client.list_ticker_mappings(),
+        portfolio_client.list_all_unmapped_instruments(),
+        return_exceptions=True,
+    )
+    list_error = None
+    if isinstance(mappings, PortfolioClientError):
+        logger.exception(
+            "portfolio service unavailable listing ticker mappings.", exc_info=mappings
+        )
+        mappings, list_error = None, _PORTFOLIO_LIST_ERROR
+    elif isinstance(mappings, BaseException):
+        raise mappings
+    if isinstance(unmapped, PortfolioClientError):
+        logger.exception(
+            "portfolio service unavailable listing unmapped instruments.", exc_info=unmapped
+        )
+        unmapped, list_error = None, _PORTFOLIO_LIST_ERROR
+    elif isinstance(unmapped, BaseException):
+        raise unmapped
+    tickers, tickers_notice = await _load_tickers(portfolio_client)
+    return {
+        # None (not []) when the list couldn't be loaded, so the template can tell "empty" from
+        # "unknown" and say only the true one.
+        "mappings": mappings,
+        "unmapped": unmapped,
+        "list_error": list_error,
+        "tickers": tickers,
+        "tickers_notice": tickers_notice,
+    }
+
+
+@router.get("/admin/mappings")
+async def admin_mappings_page(
+    request: Request,
+    response: Response,
+    settings: Settings = Depends(get_settings),
+    templates=Depends(get_templates),
+    user: AuthUser = Depends(require_admin),
+    portfolio_client: PortfolioClient = Depends(get_portfolio_client),
+):
+    csrf_token = ensure_csrf_cookie(request, response, cookie_secure=settings.cookie_secure)
+    return _render(
+        request,
+        response,
+        templates,
+        "admin_mappings.html",
+        {
+            "user": user,
+            "csrf_token": csrf_token,
+            "error": None,
+            "outcome": _mapping_outcome(request),
+            **await _mappings_context(portfolio_client),
+        },
+    )
+
+
+def _redirect_after_mapping_change(request: Request, response: Response, action: str, result):
+    return _redirect(
+        request,
+        response,
+        f"/admin/mappings?{action}=1&rebuilt={result.accounts_rebuilt}"
+        f"&failed={result.rebuilds_failed}",
+    )
+
+
+async def _submit_mapping_change(
+    request: Request,
+    response: Response,
+    settings: Settings,
+    templates,
+    *,
+    user: AuthUser,
+    portfolio_client: PortfolioClient,
+    csrf_token: str,
+    action_name: str,
+    call,
+    redirect_action: str,
+) -> Response:
+    """The CSRF check, call and outcome both mapping forms share. An error re-renders the whole
+    page, lists and all, with portfolio's own message (or _MAPPING_ERRORS')."""
+
+    async def load_page_context() -> dict:
+        return {"outcome": None, **await _mappings_context(portfolio_client)}
+
+    csrf_error = await _check_csrf(
+        request,
+        response,
+        settings,
+        templates,
+        "admin_mappings.html",
+        action_name,
+        csrf_token,
+        user=user,
+        extra_context_loader=load_page_context,
+    )
+    if csrf_error is not None:
+        return csrf_error
+    return await _submit_portfolio_form(
+        request,
+        response,
+        settings,
+        templates,
+        template_name="admin_mappings.html",
+        action_name=action_name,
+        call=call,
+        error_messages=_MAPPING_ERRORS,
+        on_success=lambda result: _redirect_after_mapping_change(
+            request, response, redirect_action, result
+        ),
+        user=user,
+        extra_context_loader=load_page_context,
+    )
+
+
+@router.post("/admin/mappings")
+async def admin_mappings_set(
+    request: Request,
+    response: Response,
+    # default="", not Form(...) -- see accounts_submit.
+    identifier_kind: str = Form(default=""),
+    identifier: str = Form(default=""),
+    broker: str = Form(default=""),
+    canonical_ticker: str = Form(default=""),
+    csrf_token: str = Form(default=""),
+    settings: Settings = Depends(get_settings),
+    templates=Depends(get_templates),
+    user: AuthUser = Depends(require_admin),
+    portfolio_client: PortfolioClient = Depends(get_portfolio_client),
+):
+    return await _submit_mapping_change(
+        request,
+        response,
+        settings,
+        templates,
+        user=user,
+        portfolio_client=portfolio_client,
+        csrf_token=csrf_token,
+        action_name="set_ticker_mapping",
+        # A blank broker is "no broker" -- what an ISIN mapping needs. portfolio enforces which
+        # kind needs one, so its message is the one the admin sees.
+        call=lambda: portfolio_client.set_ticker_mapping(
+            identifier_kind=identifier_kind,
+            identifier=identifier,
+            broker=broker.strip() or None,
+            canonical_ticker=canonical_ticker,
+            updated_by=user.user_id,
+        ),
+        redirect_action="saved",
+    )
+
+
+@router.post("/admin/mappings/{mapping_id}/delete")
+async def admin_mappings_delete(
+    request: Request,
+    response: Response,
+    mapping_id: int,
+    csrf_token: str = Form(default=""),
+    settings: Settings = Depends(get_settings),
+    templates=Depends(get_templates),
+    user: AuthUser = Depends(require_admin),
+    portfolio_client: PortfolioClient = Depends(get_portfolio_client),
+):
+    # POST, not DELETE: a plain HTML form can only send GET or POST, and the page has no script.
+    return await _submit_mapping_change(
+        request,
+        response,
+        settings,
+        templates,
+        user=user,
+        portfolio_client=portfolio_client,
+        csrf_token=csrf_token,
+        action_name="delete_ticker_mapping",
+        call=lambda: portfolio_client.delete_ticker_mapping(
+            mapping_id=mapping_id, updated_by=user.user_id
+        ),
+        redirect_action="deleted",
     )
 
 

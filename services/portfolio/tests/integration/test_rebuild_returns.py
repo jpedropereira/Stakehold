@@ -16,7 +16,6 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
-import yaml
 from portfolio import cli, jobs
 from portfolio.datastore_client.base import PricePoint, TickerInfo
 
@@ -45,15 +44,8 @@ class StubDataStoreClient:
 
 
 @pytest.fixture(autouse=True)
-def _ticker_mappings(monkeypatch, tmp_path):
-    """The default configs/ticker_mappings.yaml is real, gitignored broker data (task 15) and
-    doesn't exist in a dev checkout -- point PORTFOLIO_TICKER_MAPPINGS_PATH at a throwaway file
-    with just what this test needs, the same absolute-path override settings.py already supports.
-    """
-    path = tmp_path / "ticker_mappings.yaml"
-    path.write_text(yaml.dump({"isin": {_ISIN: "IWDA.AS"}}))
-    monkeypatch.setenv("PORTFOLIO_TICKER_MAPPINGS_PATH", str(path))
-    return path
+def _ticker_mappings(seed_mapping):
+    seed_mapping("ISIN", _ISIN, "IWDA.AS")
 
 
 @pytest.fixture(autouse=True)

@@ -199,7 +199,10 @@ calls [`portfolio`](../../portfolio/docs/architecture.md), `data-store`, and
 | Route | Behaviour |
 |---|---|
 | `GET /` | `require_user` dependency: logged in → the placeholder home page; no valid session → redirected to `/login` (an `AuthRequired` exception mapped to a 303 by an app-level handler) |
-| `GET /admin` | `require_admin` dependency: an admin → the admin page (empty for now; ticker mappings land here next), linked from the nav only for admins; a logged-in non-admin → a 403 page (`AdminRequired`, mapped by an app-level handler); no valid session → redirected to `/login`, like every `require_user` route |
+| `GET /admin` | `require_admin` dependency: an admin → the admin page (a link to ticker mappings), linked from the nav only for admins; a logged-in non-admin → a 403 page (`AdminRequired`, mapped by an app-level handler); no valid session → redirected to `/login`, like every `require_user` route |
+| `GET /admin/mappings` | `require_admin`; fetches `portfolio`'s `GET /ticker-mappings`, `GET /instruments/unmapped/all` and `GET /instruments/tickers`, and renders three things: the instruments still waiting for a mapping (each with an inline "map to ticker" form), the existing mappings (each with a delete button), and a form to add or re-point one. Each list degrades on its own to a notice rather than an empty table, so an outage never reads as "nothing to map". After a save or delete, the redirect's query string (`saved`/`deleted`, `rebuilt`, `failed`) drives a one-line outcome banner |
+| `POST /admin/mappings` | `require_admin`, CSRF-checked; calls `portfolio`'s `PUT /ticker-mappings` with the admin's own `user_id` as `updated_by` (a blank broker is sent as `null`, which an ISIN needs; portfolio enforces which kind needs one and its 422 message is shown as-is). Redirects to `/admin/mappings?saved=1&rebuilt=<n>&failed=<m>` |
+| `POST /admin/mappings/{id}/delete` | `require_admin`, CSRF-checked; calls `DELETE /ticker-mappings/{id}`. POST rather than DELETE because a plain HTML form can't send DELETE and the page has no script. An already-deleted mapping (portfolio's 404, mapped to `TickerMappingNotFound` on this route only) re-renders with "That mapping was already deleted." |
 | `GET /login`, `GET /signup` | `optional_user` dependency: already logged in → redirected to `/`; otherwise renders the form with a fresh or existing CSRF cookie |
 | `POST /login`, `POST /signup` | CSRF-checked, calls `auth`, proxies the `Set-Cookie` `auth` returned, then redirects to `/` — a 303 for a plain form post, or an `HX-Redirect` response header for an `hx-post` (htmx's own XHR follows a 303 by swapping the *content* of the request's own response into the target element, which would drop a full HTML document into a form's error slot; `HX-Redirect` instead triggers a real browser navigation) |
 | `POST /logout` | CSRF-checked, calls `auth` (best-effort — a failure is logged, not surfaced, since the user's intent to log out should not depend on `auth` being reachable), clears the session cookie locally, redirects to `/login` |
@@ -230,13 +233,16 @@ exists to close; no equivalent concern applies to the portfolio routes; see "Key
   uses, extracted there after both carried a byte-for-byte copy.
 - `auth_client/{base,http_client,errors}.py` — the `AuthClient` Protocol, its real
   implementation, and one error hierarchy (`AuthClientError`) routes catch with a single `except`.
-- `portfolio_client/{base,http_client,errors}.py` (task 11, extended task 12) — the
+- `portfolio_client/{base,http_client,errors}.py` (task 11, extended tasks 12 and 17) — the
   `PortfolioClient` Protocol, its real implementation, and one error hierarchy
   (`PortfolioClientError`); see "Key decisions" for how and why it departs from `auth_client`'s
   shape in a couple of places. Task 12 added `list_positions`/`list_returns` (plus `Position`/
   `Return` dataclasses) to the same trio rather than inventing new files — no new error types were
   needed, since `AccountNotFound`/`PortfolioUnavailable` already cover every failure mode these
-  two reads can produce.
+  two reads can produce. Task 17 added the ticker-mapping calls (`TickerMapping`,
+  `UnmappedInstrument`, `TickerMappingWriteResult`) and one error, `TickerMappingNotFound`: a 404
+  from the mapping delete means the mapping is gone, not an account, so it can't reuse
+  `AccountNotFound`.
 - `portfolio_view.py` (task 12) — pure, I/O-free reshaping of what `routes.py` fetches for
   `GET /portfolio`: `filter_open_positions` and `aggregate_portfolio_returns` (see "Key
   decisions"). No FastAPI/httpx dependency, tested in isolation, mirroring how `portfolio`'s own
