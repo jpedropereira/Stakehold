@@ -193,6 +193,54 @@ def run_list_available_brokers() -> dict[str, int | str]:
     return result
 
 
+# What a write job reports under `positions_rebuild` when it didn't run one, or when one raised.
+# Every other value is the rebuild run's own `status` (ok / partial / nothing_to_do).
+POSITIONS_REBUILD_SKIPPED = "skipped"
+POSITIONS_REBUILD_FAILED = "failed"
+
+
+def _rebuild_positions_after_write(
+    *, saved: int, user_id: UUID, account_label: str, settings: Settings
+) -> str:
+    """Rebuild one account's positions right after a write to its transaction log committed, so
+    `position_snapshots` (all GET /positions ever reads) never silently lags the log it derives
+    from. Returns the value each write job reports as `positions_rebuild`.
+
+    Skipped when the write saved nothing: the log is unchanged, so the snapshots are too.
+
+    Runs only after the write's own connection is closed and its transaction committed, so a
+    rebuild failure can't roll the write back -- and is therefore caught, logged with its
+    traceback, and reported as `failed` rather than propagated. Propagating would turn a durably
+    saved transaction into an error response, and a caller retrying on that would be acting on
+    a false signal. Deliberately reported alongside the write's own `status`, never folded into
+    it: an unmapped instrument blocking its own ticker is a fact about the rebuild, not about
+    whether the transaction was saved. See docs/architecture.md's "Positions follow every
+    transaction write".
+    """
+    if not saved:
+        logger.info(
+            "positions rebuild skipped for account %r (user %s): no transactions were saved.",
+            account_label,
+            user_id,
+        )
+        return POSITIONS_REBUILD_SKIPPED
+    try:
+        result = run_rebuild_positions(
+            user_id=user_id, account_label=account_label, settings=settings
+        )
+    except Exception:
+        logger.exception(
+            "positions rebuild after write failed for account %r (user %s) -- the transactions "
+            "are saved; run `portfolio rebuild-positions --user %s --account %s` to retry.",
+            account_label,
+            user_id,
+            user_id,
+            account_label,
+        )
+        return POSITIONS_REBUILD_FAILED
+    return result["status"]
+
+
 def run_add_transaction(
     *,
     user_id: UUID,
@@ -242,7 +290,13 @@ def run_add_transaction(
         conn.close()
 
     logger.info("add-transaction: done, %d transaction(s) saved.", saved)
-    return build_run_result(units_total=saved, rows_saved=saved, failed=0, transactions_saved=saved)
+    result = build_run_result(
+        units_total=saved, rows_saved=saved, failed=0, transactions_saved=saved
+    )
+    result["positions_rebuild"] = _rebuild_positions_after_write(
+        saved=saved, user_id=user_id, account_label=account_label, settings=settings
+    )
+    return result
 
 
 def run_import_transactions(
@@ -270,7 +324,13 @@ def run_import_transactions(
         conn.close()
 
     logger.info("import-transactions: done, %d transaction(s) saved.", saved)
-    return build_run_result(units_total=saved, rows_saved=saved, failed=0, transactions_saved=saved)
+    result = build_run_result(
+        units_total=saved, rows_saved=saved, failed=0, transactions_saved=saved
+    )
+    result["positions_rebuild"] = _rebuild_positions_after_write(
+        saved=saved, user_id=user_id, account_label=account_label, settings=settings
+    )
+    return result
 
 
 def run_list_unmapped_instruments(
@@ -340,7 +400,13 @@ def run_import_cashflow(
         conn.close()
 
     logger.info("import-cashflow: done, %d transaction(s) saved.", saved)
-    return build_run_result(units_total=saved, rows_saved=saved, failed=0, transactions_saved=saved)
+    result = build_run_result(
+        units_total=saved, rows_saved=saved, failed=0, transactions_saved=saved
+    )
+    result["positions_rebuild"] = _rebuild_positions_after_write(
+        saved=saved, user_id=user_id, account_label=account_label, settings=settings
+    )
+    return result
 
 
 def run_rebuild_positions(

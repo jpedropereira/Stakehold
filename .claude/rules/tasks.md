@@ -21,6 +21,18 @@ Update `tasks.md` in the same change, not as a follow-up, whenever:
 - A task is abandoned or superseded — mark it explicitly, with a short note on why, rather than
   deleting it silently, so the history of the plan stays legible.
 
+## Bug Fixes Don't Belong Here
+
+`tasks.md` tracks planned roadmap work, not defects. A bug fix gets no row and no subsection, and
+it doesn't count as "new work surfacing a task", even when the fix is substantial or crosses
+services. The same goes for a fix that contradicts something an already-`done` task's notes say:
+leave those notes alone. Record the reasoning behind the fix where it already belongs: the
+service's `docs/architecture.md` (if the fix is architectural), `docs/schema.md`, and the commit
+or PR description.
+
+If fixing a bug shows that genuinely new roadmap work is needed (a capability that was never
+planned, not a correction to one that was), that follow-up is a task and goes in here as usual.
+
 ## How to Update
 
 - Update the status table and the task's own subsection together — the table is the at-a-glance

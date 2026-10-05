@@ -134,6 +134,10 @@ class TransactionsWriteResponse(BaseModel):
     status: str
     rows_saved: int
     transactions_saved: int
+    # The follow-on positions rebuild's own status (ok / partial / nothing_to_do), or `skipped`
+    # / `failed` -- kept apart from `status`, which describes only the write. See
+    # jobs._rebuild_positions_after_write.
+    positions_rebuild: str
 
 
 class RebuildPositionsResponse(BaseModel):

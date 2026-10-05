@@ -519,7 +519,7 @@ identity — not column-level DDL, which needs its own sign-off pass.
 | Broker file import | `import-transactions --user <id> --file <path> --account <label>` | `POST /transactions/import` (multipart) | manual, on demand | export file, `accounts` scoped by `user_id` | `transactions` (idempotent on `(account_id, broker_transaction_ref)`) |
 | Cash-ledger import | `import-cashflow --user <id> --file <path> --account <label>` | `POST /cashflows/import` (multipart) | manual, on demand | export file, `accounts` scoped by `user_id`, data-store's FX read API (`datastore_client`) for non-EUR rows | `transactions` (idempotent on `(account_id, broker_transaction_ref)`) |
 | Transaction listing | — (CLI has none) | `GET /transactions` | on demand | `transactions`, scoped through the resolved account | — (read-only report) |
-| Positions rebuild | `rebuild-positions --user <id> [--account <label>]` | `POST /positions/rebuild` | after transactions change | `transactions`, `configs/ticker_mappings.yaml` | `position_snapshots` |
+| Positions rebuild | `rebuild-positions --user <id> [--account <label>]` | `POST /positions/rebuild` | automatically after every transaction write that saves rows (see "Positions follow every transaction write"); manually after a ticker-mapping change | `transactions`, `configs/ticker_mappings.yaml` | `position_snapshots` |
 | Position listing | — (CLI has none) | `GET /positions` | on demand | `position_snapshots`, latest row per ticker | — (read-only report) |
 | Returns rebuild | `rebuild-returns --user <id> [--account <label>]` | `POST /returns/rebuild` | after positions rebuild or new prices land | `position_snapshots`, `transactions` (`DIVIDEND` rows), `configs/ticker_mappings.yaml`, `data-store` read API | `return_snapshots` |
 | Return listing | — (CLI has none) | `GET /returns`, `GET /returns/latest` | on demand | `return_snapshots`, optionally filtered by ticker/date range | — (read-only report) |
@@ -606,6 +606,58 @@ that account currently has **zero** blocked instruments. A blocked instrument's 
 `canonical_ticker` — from before its mapping was removed — is indistinguishable from a genuinely
 stale one at rebuild time, and "blocked means don't touch, not delete" means the ambiguous case
 must never delete. An account with any blocked instrument simply skips pruning for that run.
+
+### Positions follow every transaction write
+
+`run_add_transaction`, `run_import_transactions` and `run_import_cashflow` each end by calling
+`run_rebuild_positions` for the one account they just wrote to (`jobs._rebuild_positions_after_write`),
+and report its outcome as `positions_rebuild` alongside their own `status`.
+
+**Why:** `GET /positions` reads only `position_snapshots`, and before this nothing but an explicit
+`rebuild-positions` ever wrote it — so a transaction entered through the web UI was durably saved,
+reported as saved, and then simply absent from the portfolio view, with the only remedy a CLI
+command a web user has no access to. That looked exactly like data loss. A positions rebuild is
+cheap enough to run inline: it's one account, needs no price data (see above), and is a full,
+idempotent replacement, so running it on every write can never leave a stale or duplicated row.
+
+**Where, and why there:** in `jobs.py`, not in `web` and not in `pipeline.py`. Every entry point —
+CLI, HTTP API, and through it `web` — reaches a write via these three jobs, so putting it here
+covers all of them with one call site, and a future write path that goes through a job gets it
+for free. `pipeline.py` was rejected because each pipeline flow is one unit of work over one
+connection with one transaction contract; composing two of them is orchestration, which is
+`jobs.py`'s job. Having `web` call `POST /positions/rebuild` after each write was rejected because
+it would fix only the web UI and leave the CLI and any other API caller with the same gap.
+
+**Skipped when the write saved nothing** (`positions_rebuild: skipped`): an idempotent resubmit
+leaves the transaction log unchanged, so the snapshots derived from it are unchanged too.
+
+**Failure isolation:** the rebuild opens its own connection only after the write's connection has
+closed and its transaction committed, so nothing the rebuild does can roll a saved transaction
+back. A rebuild that *raises* (a malformed `ticker_mappings.yaml`, a dropped connection) is
+therefore caught, logged with its traceback, and reported as `positions_rebuild: failed` rather
+than propagated — propagating would turn a durably saved write into an error response and invite
+the caller to act on a false signal. This is the one place a write job catches a non-domain
+exception, and it's deliberately limited to the follow-on step, never the write itself.
+
+**The write's own `status` never reflects the rebuild.** An unmapped instrument blocks its own
+ticker's rebuild (`positions_rebuild: partial`), but the transaction was still saved, and
+`status`/HTTP 201 must keep meaning exactly that.
+
+**Known limitations:**
+
+- **Returns aren't rebuilt automatically.** `rebuild-returns` depends on a live `data-store` over
+  HTTP, which would put a cross-service network call (and its failure modes) on the write path —
+  a different trade-off, deliberately not taken here. The returns chart still needs
+  `rebuild-returns` run from the CLI.
+- **`web` doesn't surface `positions_rebuild` yet.** A `partial` or `failed` rebuild is visible in
+  the API response and the portfolio service's logs, but the web form still just says
+  "Transaction saved." — an unmapped instrument therefore still shows up in the UI only as a
+  missing position.
+- **Accounts whose transactions predate this change** have no snapshots until their next write or
+  a manual `rebuild-positions`; nothing backfills them.
+- **The rebuild is synchronous**, so a write's response time now includes it. Fine for one account
+  at today's volumes; a large broker import into a long-lived account is where to look first if
+  that stops being true.
 
 ### Manual transaction entry
 

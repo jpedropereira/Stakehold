@@ -48,7 +48,12 @@ def test_create_transaction_returns_201_when_saved(monkeypatch, client):
     monkeypatch.setattr(
         jobs,
         "run_add_transaction",
-        lambda **kw: {"status": "ok", "rows_saved": 1, "transactions_saved": 1},
+        lambda **kw: {
+            "status": "ok",
+            "rows_saved": 1,
+            "transactions_saved": 1,
+            "positions_rebuild": "ok",
+        },
     )
 
     response = client.post(
@@ -65,14 +70,24 @@ def test_create_transaction_returns_201_when_saved(monkeypatch, client):
     )
 
     assert response.status_code == 201
-    assert response.json() == {"status": "ok", "rows_saved": 1, "transactions_saved": 1}
+    assert response.json() == {
+        "status": "ok",
+        "rows_saved": 1,
+        "transactions_saved": 1,
+        "positions_rebuild": "ok",
+    }
 
 
 def test_create_transaction_returns_200_when_nothing_to_do(monkeypatch, client):
     monkeypatch.setattr(
         jobs,
         "run_add_transaction",
-        lambda **kw: {"status": "nothing_to_do", "rows_saved": 0, "transactions_saved": 0},
+        lambda **kw: {
+            "status": "nothing_to_do",
+            "rows_saved": 0,
+            "transactions_saved": 0,
+            "positions_rebuild": "skipped",
+        },
     )
 
     response = client.post(
@@ -130,7 +145,7 @@ def test_create_transaction_passes_fields_through(monkeypatch, client):
 
     def fake_run_add_transaction(**kw):
         captured.update(kw)
-        return {"status": "ok", "rows_saved": 1, "transactions_saved": 1}
+        return {"status": "ok", "rows_saved": 1, "transactions_saved": 1, "positions_rebuild": "ok"}
 
     monkeypatch.setattr(jobs, "run_add_transaction", fake_run_add_transaction)
     user_id = uuid.uuid4()
@@ -165,7 +180,7 @@ def test_import_transactions_streams_the_upload_to_a_temp_path(monkeypatch, clie
         captured["file_path"] = file_path
         captured["file_exists_during_call"] = file_path.exists()
         captured["file_contents"] = file_path.read_bytes()
-        return {"status": "ok", "rows_saved": 3, "transactions_saved": 3}
+        return {"status": "ok", "rows_saved": 3, "transactions_saved": 3, "positions_rebuild": "ok"}
 
     monkeypatch.setattr(jobs, "run_import_transactions", fake_run_import_transactions)
     user_id = uuid.uuid4()
@@ -177,7 +192,12 @@ def test_import_transactions_streams_the_upload_to_a_temp_path(monkeypatch, clie
     )
 
     assert response.status_code == 201
-    assert response.json() == {"status": "ok", "rows_saved": 3, "transactions_saved": 3}
+    assert response.json() == {
+        "status": "ok",
+        "rows_saved": 3,
+        "transactions_saved": 3,
+        "positions_rebuild": "ok",
+    }
     assert captured["user_id"] == user_id
     assert captured["account_label"] == "m"
     assert captured["file_exists_during_call"] is True
@@ -210,7 +230,7 @@ def test_import_cashflow_streams_the_upload_to_a_temp_path(monkeypatch, client):
 
     def fake_run_import_cashflow(*, user_id, account_label, file_path, settings):
         captured["file_contents"] = file_path.read_bytes()
-        return {"status": "ok", "rows_saved": 1, "transactions_saved": 1}
+        return {"status": "ok", "rows_saved": 1, "transactions_saved": 1, "positions_rebuild": "ok"}
 
     monkeypatch.setattr(jobs, "run_import_cashflow", fake_run_import_cashflow)
 
