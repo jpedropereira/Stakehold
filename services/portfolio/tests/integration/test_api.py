@@ -6,10 +6,8 @@ shared secret really gates every route but /health.
 
 import os
 import uuid
-from pathlib import Path
 
 import pytest
-import yaml
 from fastapi.testclient import TestClient
 from portfolio.api.app import create_app
 from portfolio.settings import Settings
@@ -21,25 +19,14 @@ _ISIN = "IE00B4L5Y983"
 
 
 @pytest.fixture(autouse=True)
-def _ticker_mappings(monkeypatch, tmp_path):
-    """The default configs/ticker_mappings.yaml is real, gitignored broker data (task 15) and
-    doesn't exist in a dev checkout -- same override tests/integration/test_rebuild_positions.py
-    uses."""
-    path = tmp_path / "ticker_mappings.yaml"
-    path.write_text(yaml.dump({"isin": {_ISIN: "IWDA.AS"}}))
-    monkeypatch.setenv("PORTFOLIO_TICKER_MAPPINGS_PATH", str(path))
-    return path
+def _ticker_mappings(seed_mapping):
+    seed_mapping("ISIN", _ISIN, "IWDA.AS")
 
 
 def _settings():
-    # ticker_mappings_path reads the same env var load_settings() would (set per-test by the
-    # autouse _ticker_mappings fixture above) -- now that routes pass this Settings object into
-    # jobs.py rather than each job re-loading its own, a hardcoded default here would silently
-    # stop honouring that override.
     return Settings(
         database_url=os.environ["PORTFOLIO_DATABASE_URL"],
         admin_database_url=os.environ["APP_POSTGRES_ADMIN_DATABASE_URL"],
-        ticker_mappings_path=Path(os.environ["PORTFOLIO_TICKER_MAPPINGS_PATH"]),
         datastore_api_url=None,
         internal_api_secret=None,
         api_internal_secret=_SECRET,
@@ -159,19 +146,19 @@ def test_add_transaction_then_rebuild_positions_then_read_them_back(client):
     assert positions[0]["quantity"] == "10.000000"
 
 
-def _add_buy(client, user_id, *, ref, identifier):
+def _add_buy(client, user_id, *, ref, identifier, kind="ISIN", account_label="main"):
     return client.post(
         "/transactions",
         json={
             "user_id": str(user_id),
-            "account_label": "main",
+            "account_label": account_label,
             "broker_transaction_ref": ref,
             "transaction_type": "BUY",
             "trade_datetime": "2026-01-05T10:00:00+00:00",
             "native_amount": "-950.00",
             "native_currency": "EUR",
             "instrument_identifier": identifier,
-            "instrument_identifier_kind": "ISIN",
+            "instrument_identifier_kind": kind,
             "quantity": "10",
             "price": "95.00",
         },
@@ -272,11 +259,10 @@ def _add_ticker_buy(client, user_id, *, ticker):
     )
 
 
-def test_a_ticker_transaction_becomes_a_position_with_no_ticker_mapping(
-    ticker_client, _ticker_mappings
-):
-    # An empty mapping file: the position can only come from the TICKER identifier itself.
-    _ticker_mappings.write_text(yaml.dump({"isin": {}}))
+def test_a_ticker_transaction_becomes_a_position_with_no_ticker_mapping(ticker_client, pg_connect):
+    # No mappings at all: the position can only come from the TICKER identifier itself.
+    with pg_connect() as conn, conn.cursor() as cur:
+        cur.execute("DELETE FROM ticker_mappings")
     user_id = uuid.uuid4()
     ticker_client.post(
         "/accounts",
@@ -351,3 +337,151 @@ def test_a_buy_entered_without_an_amount_is_saved_with_the_derived_one(ticker_cl
     # -(5 * 128.65) - 2.00
     assert txn["native_amount"] == "-645.2500"
     assert txn["eur_amount"] == "-645.2500"
+
+
+# --- ticker mappings (admin) ---
+
+_ADMIN = "00000000-0000-7000-8000-000000000009"
+_UNMAPPED_ISIN = "XX0000000000"
+
+
+def _account_with_buy(client, *, broker, kind="ISIN", identifier=_UNMAPPED_ISIN):
+    user_id = uuid.uuid4()
+    client.post(
+        "/accounts",
+        json={"user_id": str(user_id), "broker": broker, "account_label": "main"},
+        headers=_headers(),
+    )
+    response = _add_buy(client, user_id, ref="ref-1", identifier=identifier, kind=kind)
+    assert response.json()["positions_rebuild"] == "partial"
+    return user_id
+
+
+def _put_mapping(client, *, kind="ISIN", identifier=_UNMAPPED_ISIN, broker=None, ticker="IWDA.AS"):
+    return client.put(
+        "/ticker-mappings",
+        json={
+            "identifier_kind": kind,
+            "identifier": identifier,
+            "broker": broker,
+            "canonical_ticker": ticker,
+            "updated_by": _ADMIN,
+        },
+        headers=_headers(),
+    )
+
+
+def _clear_seeded_mappings(pg_connect):
+    """For tests that read back every mapping: the module's autouse fixture seeds one."""
+    with pg_connect() as conn, conn.cursor() as cur:
+        cur.execute("DELETE FROM ticker_mappings")
+
+
+def _position_tickers(client, user_id):
+    positions = client.get(
+        "/positions",
+        params={"user_id": str(user_id), "account_label": "main"},
+        headers=_headers(),
+    ).json()
+    return [p["canonical_ticker"] for p in positions]
+
+
+def test_setting_a_mapping_rebuilds_every_affected_account_across_users(ticker_client):
+    ann = _account_with_buy(ticker_client, broker="acme")
+    bea = _account_with_buy(ticker_client, broker="globex")
+    unmapped = ticker_client.get("/instruments/unmapped/all", headers=_headers()).json()
+
+    response = _put_mapping(ticker_client)
+
+    # One row for the ISIN, whichever brokers report it: an ISIN mapping covers them all.
+    assert unmapped == [{"kind": "ISIN", "identifier": _UNMAPPED_ISIN, "broker": None}]
+    assert response.status_code == 200
+    assert response.json()["accounts_rebuilt"] == 2
+    assert response.json()["rebuilds_failed"] == 0
+    assert _position_tickers(ticker_client, ann) == ["IWDA.AS"]
+    assert _position_tickers(ticker_client, bea) == ["IWDA.AS"]
+    assert ticker_client.get("/instruments/unmapped/all", headers=_headers()).json() == []
+
+
+def test_a_symbol_mapping_only_applies_at_its_own_broker(ticker_client):
+    at_acme = _account_with_buy(ticker_client, broker="acme", kind="SYMBOL", identifier="IWDA")
+    at_globex = _account_with_buy(ticker_client, broker="globex", kind="SYMBOL", identifier="IWDA")
+
+    response = _put_mapping(ticker_client, kind="SYMBOL", identifier="IWDA", broker="globex")
+
+    assert response.json()["accounts_rebuilt"] == 1
+    assert _position_tickers(ticker_client, at_globex) == ["IWDA.AS"]
+    assert _position_tickers(ticker_client, at_acme) == []
+
+
+def test_setting_a_mapping_again_repoints_it_in_place(ticker_client, pg_connect):
+    _clear_seeded_mappings(pg_connect)
+    first = _put_mapping(ticker_client).json()["mapping"]
+
+    second = _put_mapping(ticker_client, identifier=_UNMAPPED_ISIN).json()["mapping"]
+    mappings = ticker_client.get("/ticker-mappings", headers=_headers()).json()
+
+    assert second["id"] == first["id"]
+    assert [m["id"] for m in mappings] == [first["id"]]
+    assert mappings[0]["updated_by"] == _ADMIN
+
+
+def test_a_mapping_to_a_ticker_data_store_does_not_know_is_rejected(ticker_client, pg_connect):
+    _clear_seeded_mappings(pg_connect)
+    response = _put_mapping(ticker_client, ticker="IWDA.AM")
+
+    assert response.status_code == 422
+    assert "IWDA.AM" in response.json()["detail"]
+    assert ticker_client.get("/ticker-mappings", headers=_headers()).json() == []
+
+
+def test_an_isin_mapping_with_a_broker_is_rejected(ticker_client):
+    response = _put_mapping(ticker_client, broker="acme")
+
+    assert response.status_code == 422
+
+
+def test_deleting_a_mapping_removes_it_and_a_second_delete_is_404(ticker_client, pg_connect):
+    _clear_seeded_mappings(pg_connect)
+    mapping_id = _put_mapping(ticker_client).json()["mapping"]["id"]
+
+    deleted = ticker_client.delete(
+        f"/ticker-mappings/{mapping_id}", params={"updated_by": _ADMIN}, headers=_headers()
+    )
+    again = ticker_client.delete(
+        f"/ticker-mappings/{mapping_id}", params={"updated_by": _ADMIN}, headers=_headers()
+    )
+
+    assert deleted.status_code == 200
+    assert deleted.json()["mapping"]["id"] == mapping_id
+    assert ticker_client.get("/ticker-mappings", headers=_headers()).json() == []
+    assert again.status_code == 404
+
+
+def test_the_table_rejects_an_isin_row_with_a_broker_and_a_duplicate_isin(pg_connect):
+    import psycopg
+
+    insert = (
+        "INSERT INTO ticker_mappings "
+        "(identifier_kind, identifier, broker, canonical_ticker, updated_by) "
+        "VALUES (%s, %s, %s, 'IWDA.AS', %s)"
+    )
+    with pytest.raises(psycopg.errors.CheckViolation):
+        with pg_connect() as conn, conn.cursor() as cur:
+            cur.execute(insert, ("ISIN", "XX1", "acme", _ADMIN))
+    with pytest.raises(psycopg.errors.CheckViolation):
+        with pg_connect() as conn, conn.cursor() as cur:
+            cur.execute(insert, ("SYMBOL", "IWDA", None, _ADMIN))
+    with pytest.raises(psycopg.errors.UniqueViolation):
+        with pg_connect() as conn, conn.cursor() as cur:
+            cur.execute(insert, ("ISIN", "XX2", None, _ADMIN))
+            cur.execute(insert, ("ISIN", "XX2", None, _ADMIN))
+
+
+def test_the_same_symbol_can_be_mapped_separately_per_broker(ticker_client, pg_connect):
+    _clear_seeded_mappings(pg_connect)
+    acme = _put_mapping(ticker_client, kind="SYMBOL", identifier="IWDA", broker="acme")
+    globex = _put_mapping(ticker_client, kind="SYMBOL", identifier="IWDA", broker="globex")
+
+    assert acme.json()["mapping"]["id"] != globex.json()["mapping"]["id"]
+    assert len(ticker_client.get("/ticker-mappings", headers=_headers()).json()) == 2

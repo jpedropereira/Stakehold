@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block title %}Ticker mappings — Stakehold{% endblock %}
+{% block content %}
+<section class="entry-card entry-card-wide">
+  <h1>Ticker mappings</h1>
+  <p class="entry-subtitle">Broker exports name an instrument by ISIN or symbol. A mapping says which Stakehold ticker that is, for every user. Saving one rebuilds the positions it affects.</p>
+  {% if outcome %}<p class="confirmation-banner">{{ outcome }}</p>{% endif %}
+  {% include "partials/_form_errors.html" %}
+  {% if list_error %}<p class="form-error">{{ list_error }}</p>{% endif %}
+  {% if tickers_notice %}<p class="entry-empty">{{ tickers_notice }}</p>{% endif %}
+  <datalist id="ticker-options">
+    {% for ticker in tickers %}
+    <option value="{{ ticker }}">
+    {% endfor %}
+  </datalist>
+</section>
+
+<section class="entry-card entry-card-wide">
+  <h1>Waiting for a mapping</h1>
+  {% if unmapped is none %}
+  {% elif unmapped %}
+  <p class="entry-subtitle">These instruments block positions until they're mapped.</p>
+  <div class="table-scroll">
+    <table class="positions-table">
+      <thead>
+        <tr><th>Kind</th><th>Identifier</th><th>Broker</th><th>Ticker</th></tr>
+      </thead>
+      <tbody>
+        {% for instrument in unmapped %}
+        <tr>
+          <td>{{ instrument.kind }}</td>
+          <td class="mono">{{ instrument.identifier }}</td>
+          <td>{{ instrument.broker or "Any" }}</td>
+          <td>
+            <form method="post" action="/admin/mappings" class="inline-form">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <input type="hidden" name="identifier_kind" value="{{ instrument.kind }}">
+              <input type="hidden" name="identifier" value="{{ instrument.identifier }}">
+              <input type="hidden" name="broker" value="{{ instrument.broker or '' }}">
+              <input type="text" name="canonical_ticker" list="ticker-options" autocomplete="off" class="mono" aria-label="Ticker for {{ instrument.identifier }}" required>
+              <button type="submit" class="link-button">Map</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="entry-empty">Every instrument is mapped.</p>
+  {% endif %}
+</section>
+
+<section class="entry-card entry-card-wide">
+  <h1>Mappings</h1>
+  {% if mappings is none %}
+  {% elif mappings %}
+  <div class="table-scroll">
+    <table class="positions-table">
+      <thead>
+        <tr><th>Kind</th><th>Identifier</th><th>Broker</th><th>Ticker</th><th>Updated</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for mapping in mappings %}
+        <tr>
+          <td>{{ mapping.identifier_kind }}</td>
+          <td class="mono">{{ mapping.identifier }}</td>
+          <td>{{ mapping.broker or "Any" }}</td>
+          <td class="mono">{{ mapping.canonical_ticker }}</td>
+          <td class="mono">{{ mapping.updated_at.strftime("%Y-%m-%d") }}</td>
+          <td>
+            <form method="post" action="/admin/mappings/{{ mapping.id }}/delete" class="inline-form">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button type="submit" class="link-button">Delete</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="entry-empty">No mappings yet.</p>
+  {% endif %}
+</section>
+
+<section class="entry-card">
+  <h1>Add or change a mapping</h1>
+  <p class="entry-subtitle">Saving a mapping for an instrument that already has one points it at the new ticker.</p>
+  <form method="post" action="/admin/mappings">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label for="identifier_kind">Kind</label>
+    <select id="identifier_kind" name="identifier_kind" required>
+      <option value="ISIN">ISIN (applies at every broker)</option>
+      <option value="SYMBOL">SYMBOL (applies at one broker)</option>
+    </select>
+    <label for="identifier">Identifier</label>
+    <input type="text" id="identifier" name="identifier" class="mono" required>
+    <label for="broker">Broker (SYMBOL only)</label>
+    <input type="text" id="broker" name="broker">
+    <label for="canonical_ticker">Ticker</label>
+    <input type="text" id="canonical_ticker" name="canonical_ticker" list="ticker-options" autocomplete="off" class="mono" required>
+    <button type="submit" class="primary-button">Save mapping</button>
+  </form>
+</section>
+{% endblock %}

@@ -50,21 +50,17 @@ def _clean_portfolio_tables():
     with _connect() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "TRUNCATE return_snapshots, position_snapshots, transactions, accounts CASCADE"
+                "TRUNCATE return_snapshots, position_snapshots, transactions, accounts, "
+                "ticker_mappings CASCADE"
             )
         conn.commit()
     yield
 
 
-def _portfolio_settings(
-    *, with_data_store: bool = False, ticker_mappings_path: Path | None = None
-) -> PortfolioSettings:
+def _portfolio_settings(*, with_data_store: bool = False) -> PortfolioSettings:
     return PortfolioSettings(
         database_url=os.environ["PORTFOLIO_DATABASE_URL"],
         admin_database_url=os.environ["APP_POSTGRES_ADMIN_DATABASE_URL"],
-        # Only the position test's rebuild reads this, and it gets an empty file: its TICKER
-        # resolves to itself, so no mapping is needed -- the file just has to exist.
-        ticker_mappings_path=ticker_mappings_path or Path("configs/ticker_mappings.yaml"),
         # Only the data-store-backed fixture below sets these -- and its HttpDataStoreClient is
         # replaced by _FakeDataStoreClient, so nothing is ever sent to this URL.
         datastore_api_url="https://datastore.internal" if with_data_store else None,
@@ -91,16 +87,10 @@ def _web_settings() -> WebSettings:
     )
 
 
-async def _make_web_client(
-    *, with_data_store: bool = False, ticker_mappings_path: Path | None = None
-):
+async def _make_web_client(*, with_data_store: bool = False, user: AuthUser = _USER):
     settings = _web_settings()
     web_app = create_web_app(settings)
-    portfolio_app = create_portfolio_app(
-        _portfolio_settings(
-            with_data_store=with_data_store, ticker_mappings_path=ticker_mappings_path
-        )
-    )
+    portfolio_app = create_portfolio_app(_portfolio_settings(with_data_store=with_data_store))
 
     # https base_url: WebSettings.cookie_secure=True marks the CSRF cookie Secure, and httpx's
     # cookie jar won't store/resend a Secure cookie over plain http -- same reasoning as
@@ -110,8 +100,8 @@ async def _make_web_client(
     ) as portfolio_test_client:
         real_portfolio_client = HttpPortfolioClient(portfolio_test_client, _PORTFOLIO_SECRET)
         web_app.dependency_overrides[get_portfolio_client] = lambda: real_portfolio_client
-        web_app.dependency_overrides[require_user] = lambda: _USER
-        web_app.dependency_overrides[optional_user] = lambda: _USER
+        web_app.dependency_overrides[require_user] = lambda: user
+        web_app.dependency_overrides[optional_user] = lambda: user
 
         with TestClient(web_app, base_url="https://testserver") as test_client:
             yield test_client
@@ -139,16 +129,29 @@ class _FakeDataStoreClient:
 
 
 @pytest.fixture
-async def web_client_with_data_store(monkeypatch, tmp_path):
+async def web_client_with_data_store(monkeypatch):
     """Same wiring as web_client, with portfolio configured for a data-store that
     _FakeDataStoreClient answers for -- manual TICKER entry and the ticker picker both need
     one."""
     monkeypatch.setattr(portfolio_jobs, "HttpDataStoreClient", _FakeDataStoreClient)
-    empty_mappings = tmp_path / "ticker_mappings.yaml"
-    empty_mappings.write_text("isin: {}\n")
-    async for test_client in _make_web_client(
-        with_data_store=True, ticker_mappings_path=empty_mappings
-    ):
+    async for test_client in _make_web_client(with_data_store=True):
+        yield test_client
+
+
+_ADMIN = AuthUser(
+    user_id="99999999-9999-7999-8999-999999999999",
+    email="ada@example.com",
+    display_name="Ada",
+    is_admin=True,
+)
+
+
+@pytest.fixture
+async def admin_web_client(monkeypatch):
+    """web_client_with_data_store, logged in as an admin -- the mapping page checks a ticker
+    against data-store when it's saved."""
+    monkeypatch.setattr(portfolio_jobs, "HttpDataStoreClient", _FakeDataStoreClient)
+    async for test_client in _make_web_client(with_data_store=True, user=_ADMIN):
         yield test_client
 
 
@@ -299,3 +302,58 @@ async def test_a_ticker_picked_in_the_form_shows_up_as_a_position(web_client_wit
     assert response.status_code == 200
     assert "IWDA.AS" in response.text
     assert "No return history yet" in response.text
+
+
+async def test_an_admin_maps_an_imported_isin_and_the_users_position_appears(admin_web_client):
+    # Ann's account holds an ISIN-reported BUY -- what a broker import produces -- that nothing
+    # maps yet. Entered through portfolio's CLI because web's own form only sends TICKERs.
+    portfolio_cli.main(
+        ["account", "add", "--user", _USER.user_id, "--broker", "acme", "--label", "main"]
+    )
+    portfolio_cli.main(
+        [
+            "add-transaction",
+            "--user",
+            _USER.user_id,
+            "--account",
+            "main",
+            "--ref",
+            "imported-1",
+            "--type",
+            "BUY",
+            "--datetime",
+            "2026-01-05T10:00:00+00:00",
+            "--currency",
+            "EUR",
+            "--instrument",
+            "IE00B4L5Y983",
+            "--instrument-kind",
+            "ISIN",
+            "--quantity",
+            "10",
+            "--price",
+            "95.00",
+        ]
+    )
+    page = admin_web_client.get("/admin/mappings")
+    assert "IE00B4L5Y983" in page.text
+
+    response = admin_web_client.post(
+        "/admin/mappings",
+        data={
+            "identifier_kind": "ISIN",
+            "identifier": "IE00B4L5Y983",
+            "broker": "",
+            "canonical_ticker": "IWDA.AS",
+            "csrf_token": _csrf_token(admin_web_client, "/admin/mappings"),
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/admin/mappings?saved=1&rebuilt=1&failed=0"
+    after = admin_web_client.get("/admin/mappings")
+    assert "Every instrument is mapped." in after.text
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute("SELECT canonical_ticker FROM position_snapshots")
+        assert [row[0] for row in cur.fetchall()] == ["IWDA.AS"]

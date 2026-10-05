@@ -23,7 +23,7 @@ from portfolio.accounts.repository import Account
 from portfolio.datastore_client.http_client import HttpDataStoreClient
 from portfolio.run_result import build_run_result
 from portfolio.settings import Settings, SettingsError, load_settings
-from portfolio.ticker_mapping.loader import load_ticker_mappings
+from portfolio.ticker_mapping.repository import TickerMappingRow
 from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict
 from shared.db.connection import apply_schema, get_connection, transaction
@@ -33,7 +33,13 @@ logger = logging.getLogger(__name__)
 
 SCHEMA_PATH = Path(__file__).resolve().parent / "db" / "schema.sql"
 
-_TARGET_TABLES = ("accounts", "transactions", "position_snapshots", "return_snapshots")
+_TARGET_TABLES = (
+    "accounts",
+    "transactions",
+    "position_snapshots",
+    "return_snapshots",
+    "ticker_mappings",
+)
 
 
 def _existing_tables(conn, schema: str) -> set[str]:
@@ -237,16 +243,29 @@ def _rebuild_positions_after_write(
             user_id,
         )
         return POSITIONS_REBUILD_SKIPPED
+    return _rebuild_positions_isolated(
+        user_id=user_id, account_label=account_label, settings=settings, saved_what="transactions"
+    )
+
+
+def _rebuild_positions_isolated(
+    *, user_id: UUID, account_label: str, settings: Settings, saved_what: str
+) -> str:
+    """One account's positions rebuild, run after some other write has already committed: a
+    failure is logged with its traceback and reported as `failed`, never raised, since raising
+    would make the committed write look like it failed. `saved_what` names that write in the
+    log line."""
     try:
         result = run_rebuild_positions(
             user_id=user_id, account_label=account_label, settings=settings
         )
     except Exception:
         logger.exception(
-            "positions rebuild after write failed for account %r (user %s) -- the transactions "
+            "positions rebuild after write failed for account %r (user %s) -- the %s "
             "are saved; run `portfolio rebuild-positions --user %s --account %s` to retry.",
             account_label,
             user_id,
+            saved_what,
             user_id,
             account_label,
         )
@@ -359,15 +378,15 @@ def run_import_transactions(
 def run_list_unmapped_instruments(
     *, user_id: UUID, settings: Settings | None = None
 ) -> dict[str, int | str]:
-    """Every (kind, identifier, broker) this user's transactions reference that
-    configs/ticker_mappings.yaml can't resolve. Saves nothing, so rows_saved is always 0 -- an
+    """Every (kind, identifier, broker) this user's transactions reference that no saved ticker
+    mapping resolves. Saves nothing, so rows_saved is always 0 -- an
     empty result is still reported as `nothing_to_do`, not `ok`, per the logging rule."""
     configure_logging()
     settings = settings or load_settings()
     conn = get_connection(settings.database_url)
     try:
         logger.info("list-unmapped-instruments: checking instruments for user %s.", user_id)
-        mappings = load_ticker_mappings(settings.ticker_mappings_path)
+        mappings = pipeline.load_ticker_mappings(conn)
         unmapped = pipeline.list_unmapped_instruments(conn, user_id=user_id, mappings=mappings)
     finally:
         conn.close()
@@ -449,7 +468,7 @@ def run_rebuild_positions(
     conn = get_connection(settings.database_url)
     try:
         logger.info("rebuild-positions: rebuilding positions for user %s (%s).", user_id, scope)
-        mappings = load_ticker_mappings(settings.ticker_mappings_path)
+        mappings = pipeline.load_ticker_mappings(conn)
         outcome = pipeline.rebuild_positions(
             conn, user_id=user_id, mappings=mappings, account_label=account_label
         )
@@ -533,7 +552,7 @@ def run_rebuild_returns(
     conn = get_connection(settings.database_url)
     try:
         logger.info("rebuild-returns: rebuilding returns for user %s (%s).", user_id, scope)
-        mappings = load_ticker_mappings(settings.ticker_mappings_path)
+        mappings = pipeline.load_ticker_mappings(conn)
         outcome = pipeline.rebuild_returns(
             conn,
             user_id=user_id,
@@ -570,6 +589,170 @@ def run_rebuild_returns(
     result["failed_pairs"] = [
         {"account_label": account_label, "ticker": ticker, "error": error}
         for account_label, ticker, error in outcome.failed_pairs
+    ]
+    return result
+
+
+def _mapping_to_dict(row: TickerMappingRow) -> dict:
+    return {
+        "id": row.id,
+        "identifier_kind": row.identifier_kind,
+        "identifier": row.identifier,
+        "broker": row.broker,
+        "canonical_ticker": row.canonical_ticker,
+        "updated_by": str(row.updated_by),
+        "created_at": row.created_at.isoformat(),
+        "updated_at": row.updated_at.isoformat(),
+    }
+
+
+def _describe_mapping(row: TickerMappingRow) -> str:
+    broker = f" (broker {row.broker})" if row.broker else ""
+    return f"{row.identifier_kind} {row.identifier}{broker} -> {row.canonical_ticker}"
+
+
+def _rebuild_accounts_for_mapping(
+    accounts: list[tuple[UUID, str]], *, settings: Settings, command: str
+) -> dict[str, int]:
+    """Rebuild the positions of every account a mapping change affects -- across users, since
+    a mapping is global. Each rebuild is isolated: one failing doesn't stop the rest, and none
+    of them can undo the mapping change, which has already committed."""
+    logger.info("%s: rebuilding positions for %d account(s).", command, len(accounts))
+    failed = 0
+    for user_id, account_label in accounts:
+        status = _rebuild_positions_isolated(
+            user_id=user_id, account_label=account_label, settings=settings, saved_what="mapping"
+        )
+        if status == POSITIONS_REBUILD_FAILED:
+            failed += 1
+    return {"accounts_rebuilt": len(accounts) - failed, "rebuilds_failed": failed}
+
+
+def _mapping_write_result(row: TickerMappingRow, rebuilds: dict[str, int]) -> dict:
+    # Like a transaction write, `status` describes the mapping change alone; how the follow-on
+    # rebuilds went is reported beside it, never folded in.
+    result = build_run_result(units_total=1, rows_saved=1, failed=0, **rebuilds)
+    result["mapping"] = _mapping_to_dict(row)
+    return result
+
+
+def run_set_ticker_mapping(
+    *,
+    identifier_kind: str,
+    identifier: str,
+    broker: str | None,
+    canonical_ticker: str,
+    updated_by: UUID,
+    settings: Settings | None = None,
+) -> dict:
+    """Save (or re-point) one global ticker mapping, then rebuild the positions of every account
+    whose transactions it covers. See pipeline.set_ticker_mapping. Needs data-store, to check
+    the ticker exists."""
+    configure_logging()
+    settings = settings or load_settings()
+    datastore_client = _require_datastore_client(settings, command="ticker-mapping set")
+    conn = get_connection(settings.database_url)
+    try:
+        logger.info(
+            "ticker-mapping set: mapping %s %s%s to %s (by user %s).",
+            identifier_kind,
+            identifier,
+            f" at broker {broker}" if broker else "",
+            canonical_ticker,
+            updated_by,
+        )
+        row = pipeline.set_ticker_mapping(
+            conn,
+            identifier_kind=identifier_kind,
+            identifier=identifier,
+            broker=broker,
+            canonical_ticker=canonical_ticker,
+            updated_by=updated_by,
+            datastore_client=datastore_client,
+        )
+        accounts = pipeline.list_accounts_using_instrument(
+            conn, identifier_kind=row.identifier_kind, identifier=row.identifier, broker=row.broker
+        )
+    finally:
+        conn.close()
+
+    logger.info("ticker-mapping set: saved %s.", _describe_mapping(row))
+    rebuilds = _rebuild_accounts_for_mapping(
+        accounts, settings=settings, command="ticker-mapping set"
+    )
+    logger.info(
+        "ticker-mapping set: done, %d account(s) rebuilt, %d failed.",
+        rebuilds["accounts_rebuilt"],
+        rebuilds["rebuilds_failed"],
+    )
+    return _mapping_write_result(row, rebuilds)
+
+
+def run_delete_ticker_mapping(
+    *, mapping_id: int, updated_by: UUID, settings: Settings | None = None
+) -> dict:
+    """Delete one ticker mapping, then rebuild the accounts it covered. `updated_by` is only
+    logged: the row it would be recorded on is the one being deleted. See
+    pipeline.delete_ticker_mapping for what happens to positions the mapping produced."""
+    configure_logging()
+    settings = settings or load_settings()
+    conn = get_connection(settings.database_url)
+    try:
+        logger.info(
+            "ticker-mapping delete: deleting mapping %d (by user %s).", mapping_id, updated_by
+        )
+        row = pipeline.delete_ticker_mapping(conn, mapping_id=mapping_id)
+        accounts = pipeline.list_accounts_using_instrument(
+            conn, identifier_kind=row.identifier_kind, identifier=row.identifier, broker=row.broker
+        )
+    finally:
+        conn.close()
+
+    logger.info("ticker-mapping delete: deleted %s.", _describe_mapping(row))
+    rebuilds = _rebuild_accounts_for_mapping(
+        accounts, settings=settings, command="ticker-mapping delete"
+    )
+    logger.info(
+        "ticker-mapping delete: done, %d account(s) rebuilt, %d failed.",
+        rebuilds["accounts_rebuilt"],
+        rebuilds["rebuilds_failed"],
+    )
+    return _mapping_write_result(row, rebuilds)
+
+
+def get_ticker_mappings(*, settings: Settings | None = None) -> list[dict]:
+    """Every ticker mapping, for the admin page and `ticker-mapping list`."""
+    configure_logging()
+    settings = settings or load_settings()
+    conn = get_connection(settings.database_url)
+    try:
+        logger.info("ticker-mapping list: listing every mapping.")
+        rows = pipeline.list_ticker_mappings(conn)
+    finally:
+        conn.close()
+    logger.info("ticker-mapping list: done, %d mapping(s).", len(rows))
+    return [_mapping_to_dict(row) for row in rows]
+
+
+def run_list_all_unmapped_instruments(*, settings: Settings | None = None) -> dict:
+    """run_list_unmapped_instruments across every user -- what an admin has left to map."""
+    configure_logging()
+    settings = settings or load_settings()
+    conn = get_connection(settings.database_url)
+    try:
+        logger.info("list-unmapped-instruments: checking instruments across every user.")
+        mappings = pipeline.load_ticker_mappings(conn)
+        unmapped = pipeline.list_all_unmapped_instruments(conn, mappings=mappings)
+    finally:
+        conn.close()
+
+    logger.info("list-unmapped-instruments: done, %d unmapped instrument(s) found.", len(unmapped))
+    result = build_run_result(
+        units_total=len(unmapped), rows_saved=0, failed=0, instruments_unmapped=len(unmapped)
+    )
+    result["unmapped_instruments"] = [
+        {"kind": kind, "identifier": identifier, "broker": broker}
+        for kind, identifier, broker in unmapped
     ]
     return result
 

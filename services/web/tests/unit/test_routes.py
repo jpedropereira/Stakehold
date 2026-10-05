@@ -23,13 +23,17 @@ from web.portfolio_client.base import (
     AccountWriteResult,
     Position,
     Return,
+    TickerMapping,
+    TickerMappingWriteResult,
     TransactionWriteResult,
+    UnmappedInstrument,
 )
 from web.portfolio_client.errors import (
     AccountLabelConflict,
     AccountNotFound,
     InvalidPortfolioRequest,
     PortfolioUnavailable,
+    TickerMappingNotFound,
 )
 from web.settings import Settings
 
@@ -93,6 +97,14 @@ class FakePortfolioClient:
         self.list_positions_error: Exception | None = None
         self.list_returns_result: list = []
         self.list_returns_error: Exception | None = None
+        self.list_ticker_mappings_result: list = []
+        self.list_ticker_mappings_error: Exception | None = None
+        self.list_unmapped_all_result: list = []
+        self.list_unmapped_all_error: Exception | None = None
+        self.set_ticker_mapping_result = None
+        self.set_ticker_mapping_error: Exception | None = None
+        self.delete_ticker_mapping_result = None
+        self.delete_ticker_mapping_error: Exception | None = None
         self.calls: list[tuple] = []
 
     async def list_accounts(self, *, user_id):
@@ -170,6 +182,41 @@ class FakePortfolioClient:
         if self.list_returns_error:
             raise self.list_returns_error
         return self.list_returns_result
+
+    async def list_ticker_mappings(self):
+        self.calls.append(("list_ticker_mappings",))
+        if self.list_ticker_mappings_error:
+            raise self.list_ticker_mappings_error
+        return self.list_ticker_mappings_result
+
+    async def list_all_unmapped_instruments(self):
+        self.calls.append(("list_all_unmapped_instruments",))
+        if self.list_unmapped_all_error:
+            raise self.list_unmapped_all_error
+        return self.list_unmapped_all_result
+
+    async def set_ticker_mapping(
+        self, *, identifier_kind, identifier, broker, canonical_ticker, updated_by
+    ):
+        self.calls.append(
+            (
+                "set_ticker_mapping",
+                identifier_kind,
+                identifier,
+                broker,
+                canonical_ticker,
+                updated_by,
+            )
+        )
+        if self.set_ticker_mapping_error:
+            raise self.set_ticker_mapping_error
+        return self.set_ticker_mapping_result
+
+    async def delete_ticker_mapping(self, *, mapping_id, updated_by):
+        self.calls.append(("delete_ticker_mapping", mapping_id, updated_by))
+        if self.delete_ticker_mapping_error:
+            raise self.delete_ticker_mapping_error
+        return self.delete_ticker_mapping_result
 
 
 def _settings(**overrides) -> Settings:
@@ -330,6 +377,7 @@ def test_admin_page_renders_for_an_admin(client):
 
     assert response.status_code == 200
     assert "<h1>Admin</h1>" in response.text
+    assert 'href="/admin/mappings"' in response.text
 
 
 def test_admin_page_is_forbidden_to_a_regular_user(client):
@@ -362,6 +410,214 @@ def test_admin_page_redirects_to_login_when_auth_cannot_confirm_the_session(clie
 
     assert response.status_code == 303
     assert response.headers["location"] == "/login"
+
+
+# --- admin: ticker mappings ------------------------------------------------------
+
+_MAPPING = TickerMapping(
+    id=7,
+    identifier_kind="SYMBOL",
+    identifier="IWDA",
+    broker="globex",
+    canonical_ticker="IWDA.AS",
+    updated_at=datetime(2026, 10, 6, 9, 30, tzinfo=timezone.utc),
+)
+
+
+def _mapping_write(accounts_rebuilt=2, rebuilds_failed=0):
+    return TickerMappingWriteResult(
+        mapping=_MAPPING, accounts_rebuilt=accounts_rebuilt, rebuilds_failed=rebuilds_failed
+    )
+
+
+def _mappings_csrf_token(test_client):
+    return test_client.get("/admin/mappings").cookies["stakehold_csrf"]
+
+
+def _set_mapping_form(csrf_token, **overrides):
+    form = {
+        "identifier_kind": "SYMBOL",
+        "identifier": "IWDA",
+        "broker": "globex",
+        "canonical_ticker": "IWDA.AS",
+        "csrf_token": csrf_token,
+    }
+    form.update(overrides)
+    return form
+
+
+def test_mappings_page_lists_mappings_unmapped_instruments_and_the_ticker_picker(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in_as_admin(test_client, fake_auth)
+    fake_portfolio.list_ticker_mappings_result = [_MAPPING]
+    fake_portfolio.list_unmapped_all_result = [
+        UnmappedInstrument(kind="ISIN", identifier="IE00B4L5Y983", broker=None)
+    ]
+    fake_portfolio.list_tickers_result = ["IWDA.AS", "SGLD.L"]
+
+    response = test_client.get("/admin/mappings")
+
+    assert response.status_code == 200
+    assert "IWDA.AS" in response.text
+    assert "globex" in response.text
+    assert "IE00B4L5Y983" in response.text
+    assert '<option value="SGLD.L">' in response.text
+    assert 'action="/admin/mappings/7/delete"' in response.text
+
+
+def test_mappings_page_says_so_when_nothing_is_left_to_map(client):
+    test_client, _, fake_auth, _ = client
+    _logged_in_as_admin(test_client, fake_auth)
+
+    response = test_client.get("/admin/mappings")
+
+    assert "Every instrument is mapped." in response.text
+    assert "No mappings yet." in response.text
+
+
+def test_mappings_page_is_forbidden_to_a_regular_user(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+
+    response = test_client.get("/admin/mappings")
+
+    assert response.status_code == 403
+    assert fake_portfolio.calls == []
+
+
+def test_mappings_page_degrades_when_portfolio_is_unavailable(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in_as_admin(test_client, fake_auth)
+    fake_portfolio.list_ticker_mappings_error = PortfolioUnavailable("down")
+    fake_portfolio.list_unmapped_all_error = PortfolioUnavailable("down")
+
+    response = test_client.get("/admin/mappings")
+
+    # A notice, not "No mappings yet": an outage must not look like an empty table.
+    assert response.status_code == 200
+    assert "Can&#39;t reach the portfolio service right now" in response.text
+    assert "No mappings yet." not in response.text
+    assert "Every instrument is mapped." not in response.text
+
+
+def test_mappings_page_shows_the_outcome_of_the_last_change(client):
+    test_client, _, fake_auth, _ = client
+    _logged_in_as_admin(test_client, fake_auth)
+
+    saved = test_client.get("/admin/mappings", params={"saved": "1", "rebuilt": "2", "failed": "0"})
+    failed = test_client.get(
+        "/admin/mappings", params={"saved": "1", "rebuilt": "1", "failed": "1"}
+    )
+
+    assert "Mapping saved. Positions rebuilt for 2 account(s)." in saved.text
+    assert "1 rebuild(s) failed" in failed.text
+
+
+def test_setting_a_mapping_sends_the_admin_as_updated_by_and_redirects(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in_as_admin(test_client, fake_auth)
+    fake_portfolio.set_ticker_mapping_result = _mapping_write(accounts_rebuilt=2)
+    token = _mappings_csrf_token(test_client)
+
+    response = test_client.post(
+        "/admin/mappings", data=_set_mapping_form(token), follow_redirects=False
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/admin/mappings?saved=1&rebuilt=2&failed=0"
+    assert ("set_ticker_mapping", "SYMBOL", "IWDA", "globex", "IWDA.AS", "u9") in (
+        fake_portfolio.calls
+    )
+
+
+def test_setting_an_isin_mapping_sends_no_broker(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in_as_admin(test_client, fake_auth)
+    fake_portfolio.set_ticker_mapping_result = _mapping_write()
+    token = _mappings_csrf_token(test_client)
+
+    test_client.post(
+        "/admin/mappings",
+        data=_set_mapping_form(token, identifier_kind="ISIN", identifier="IE00B4L5Y983", broker=""),
+        follow_redirects=False,
+    )
+
+    set_call = next(c for c in fake_portfolio.calls if c[0] == "set_ticker_mapping")
+    assert set_call[3] is None
+
+
+def test_setting_a_mapping_shows_portfolios_validation_message(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in_as_admin(test_client, fake_auth)
+    fake_portfolio.set_ticker_mapping_error = InvalidPortfolioRequest(
+        "IWDA.AM isn't in Stakehold's market data -- pick a ticker from the list."
+    )
+    token = _mappings_csrf_token(test_client)
+
+    response = test_client.post("/admin/mappings", data=_set_mapping_form(token))
+
+    assert response.status_code == 422
+    assert "IWDA.AM isn&#39;t in Stakehold&#39;s market data" in response.text
+
+
+def test_setting_a_mapping_rejects_a_bad_csrf_token(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in_as_admin(test_client, fake_auth)
+    _mappings_csrf_token(test_client)
+
+    response = test_client.post("/admin/mappings", data=_set_mapping_form("wrong"))
+
+    assert response.status_code == 400
+    assert not any(c[0] == "set_ticker_mapping" for c in fake_portfolio.calls)
+
+
+def test_setting_a_mapping_is_forbidden_to_a_regular_user(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    token = _accounts_csrf_token(test_client)
+
+    response = test_client.post("/admin/mappings", data=_set_mapping_form(token))
+
+    assert response.status_code == 403
+    assert not any(c[0] == "set_ticker_mapping" for c in fake_portfolio.calls)
+
+
+def test_deleting_a_mapping_redirects_with_the_rebuild_outcome(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in_as_admin(test_client, fake_auth)
+    fake_portfolio.delete_ticker_mapping_result = _mapping_write(accounts_rebuilt=1)
+    token = _mappings_csrf_token(test_client)
+
+    response = test_client.post(
+        "/admin/mappings/7/delete", data={"csrf_token": token}, follow_redirects=False
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/admin/mappings?deleted=1&rebuilt=1&failed=0"
+    assert ("delete_ticker_mapping", 7, "u9") in fake_portfolio.calls
+
+
+def test_deleting_a_mapping_that_is_already_gone_says_so(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in_as_admin(test_client, fake_auth)
+    fake_portfolio.delete_ticker_mapping_error = TickerMappingNotFound("gone")
+    token = _mappings_csrf_token(test_client)
+
+    response = test_client.post("/admin/mappings/7/delete", data={"csrf_token": token})
+
+    assert response.status_code == 404
+    assert "That mapping was already deleted." in response.text
+
+
+def test_deleting_a_mapping_is_forbidden_to_a_regular_user(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    token = _accounts_csrf_token(test_client)
+
+    response = test_client.post("/admin/mappings/7/delete", data={"csrf_token": token})
+
+    assert response.status_code == 403
+    assert not any(c[0] == "delete_ticker_mapping" for c in fake_portfolio.calls)
 
 
 # --- login: GET ---------------------------------------------------------------

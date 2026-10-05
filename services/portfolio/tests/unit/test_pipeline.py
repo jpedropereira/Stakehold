@@ -21,12 +21,15 @@ from portfolio.errors import (
     BrokerParserNotFound,
     BrokerPluginError,
     InvalidBroker,
+    InvalidTickerMapping,
     InvalidTransaction,
+    TickerMappingNotFound,
     UnknownTicker,
 )
 from portfolio.positions.calculator import PositionSnapshot
 from portfolio.returns.calculator import ReturnSnapshot
-from portfolio.ticker_mapping.loader import TickerMappings
+from portfolio.ticker_mapping.base import TickerMappings
+from portfolio.ticker_mapping.repository import TickerMappingRow
 from portfolio.transactions.base import CanonicalTransaction
 
 _ISIN = "IE00B4L5Y983"
@@ -110,6 +113,29 @@ class FakeTransactionsRepo:
                 continue
             pairs.add((txn.instrument_identifier_kind, txn.instrument_identifier, account.broker))
         return sorted(pairs)
+
+    def list_distinct_instruments_all(self, conn):
+        triples = set()
+        for txn in self.saved:
+            if txn.instrument_identifier is None:
+                continue
+            account = self._accounts_repo.get_by_id(txn.account_id)
+            triples.add((txn.instrument_identifier_kind, txn.instrument_identifier, account.broker))
+        return sorted(triples)
+
+    def list_accounts_using_instrument(self, conn, *, identifier_kind, identifier, broker):
+        found = set()
+        for txn in self.saved:
+            if (txn.instrument_identifier_kind, txn.instrument_identifier) != (
+                identifier_kind,
+                identifier,
+            ):
+                continue
+            account = self._accounts_repo.get_by_id(txn.account_id)
+            if broker is not None and account.broker != broker:
+                continue
+            found.add((account.user_id, account.account_label))
+        return sorted(found, key=lambda pair: (str(pair[0]), pair[1]))
 
     def list_by_accounts(self, conn, account_ids, *, transaction_types=None):
         self.list_by_accounts_calls.append(list(account_ids))
@@ -2148,3 +2174,308 @@ def test_list_latest_returns_returns_one_row_per_ticker(repos, returns_repo, con
 def test_list_latest_returns_raises_for_an_unknown_account_label(repos, returns_repo, conn):
     with pytest.raises(AccountNotFound):
         pipeline.list_latest_returns(conn, user_id=uuid.uuid4(), account_label="nope")
+
+
+# --- ticker mappings (admin) ---
+
+
+class FakeTickerMappingRepo:
+    """Keyed the way the real table's two partial unique indexes are: (kind, identifier) for an
+    ISIN, (kind, identifier, broker) for a SYMBOL -- broker is None for every ISIN row."""
+
+    def __init__(self):
+        self.rows: dict[tuple, TickerMappingRow] = {}
+        self._next_id = 1
+
+    def upsert(self, conn, *, identifier_kind, identifier, broker, canonical_ticker, updated_by):
+        key = (identifier_kind, identifier, broker)
+        existing = self.rows.get(key)
+        row = TickerMappingRow(
+            id=existing.id if existing else self._next_id,
+            identifier_kind=identifier_kind,
+            identifier=identifier,
+            broker=broker,
+            canonical_ticker=canonical_ticker,
+            updated_by=updated_by,
+            created_at=existing.created_at if existing else NOW,
+            updated_at=NOW,
+        )
+        if existing is None:
+            self._next_id += 1
+        self.rows[key] = row
+        return row
+
+    def delete(self, conn, mapping_id):
+        for key, row in self.rows.items():
+            if row.id == mapping_id:
+                del self.rows[key]
+                return row
+        return None
+
+    def list_all(self, conn):
+        return sorted(self.rows.values(), key=lambda r: r.id)
+
+    def load_all(self, conn):
+        mappings = TickerMappings(isin={}, symbol={})
+        for row in self.rows.values():
+            if row.identifier_kind == "ISIN":
+                mappings.isin[row.identifier] = row.canonical_ticker
+            else:
+                mappings.symbol.setdefault(row.broker, {})[row.identifier] = row.canonical_ticker
+        return mappings
+
+
+@pytest.fixture
+def mapping_repo(monkeypatch):
+    fake = FakeTickerMappingRepo()
+    monkeypatch.setattr(pipeline, "ticker_mapping_repository", fake)
+    return fake
+
+
+_ADMIN = uuid.UUID("00000000-0000-7000-8000-000000000001")
+
+
+def _set_mapping(conn, **overrides):
+    kwargs = dict(
+        identifier_kind="ISIN",
+        identifier=_ISIN,
+        broker=None,
+        canonical_ticker="IWDA.AS",
+        updated_by=_ADMIN,
+        datastore_client=FakeDataStoreClient(),
+    )
+    kwargs.update(overrides)
+    return pipeline.set_ticker_mapping(conn, **kwargs)
+
+
+def test_set_ticker_mapping_saves_an_isin_mapping_in_one_transaction(mapping_repo, conn):
+    row = _set_mapping(conn)
+
+    assert (row.identifier_kind, row.identifier, row.broker, row.canonical_ticker) == (
+        "ISIN",
+        _ISIN,
+        None,
+        "IWDA.AS",
+    )
+    assert row.updated_by == _ADMIN
+    assert conn.commits == 1
+
+
+def test_set_ticker_mapping_saves_a_symbol_mapping_scoped_to_its_broker(mapping_repo, conn):
+    row = _set_mapping(conn, identifier_kind="SYMBOL", identifier="IWDA", broker="globex")
+
+    assert (row.identifier_kind, row.identifier, row.broker) == ("SYMBOL", "IWDA", "globex")
+
+
+def test_set_ticker_mapping_repoints_an_existing_mapping(mapping_repo, conn):
+    first = _set_mapping(conn)
+
+    second = _set_mapping(conn, canonical_ticker="IWDA.L")
+
+    assert second.id == first.id
+    assert second.canonical_ticker == "IWDA.L"
+    assert len(mapping_repo.rows) == 1
+
+
+def test_set_ticker_mapping_strips_whitespace(mapping_repo, conn):
+    row = _set_mapping(
+        conn,
+        identifier_kind="SYMBOL",
+        identifier="  IWDA ",
+        broker=" globex ",
+        canonical_ticker=" IWDA.AS ",
+    )
+
+    assert (row.identifier, row.broker, row.canonical_ticker) == ("IWDA", "globex", "IWDA.AS")
+
+
+def test_set_ticker_mapping_treats_a_blank_broker_as_none_for_an_isin(mapping_repo, conn):
+    row = _set_mapping(conn, broker="  ")
+
+    assert row.broker is None
+
+
+def test_set_ticker_mapping_rejects_an_isin_mapping_with_a_broker(mapping_repo, conn):
+    with pytest.raises(InvalidTickerMapping, match="every broker"):
+        _set_mapping(conn, broker="globex")
+
+    assert mapping_repo.rows == {}
+
+
+def test_set_ticker_mapping_rejects_a_symbol_mapping_without_a_broker(mapping_repo, conn):
+    with pytest.raises(InvalidTickerMapping, match="needs a broker"):
+        _set_mapping(conn, identifier_kind="SYMBOL", identifier="IWDA", broker=None)
+
+
+@pytest.mark.parametrize("kind", ["TICKER", "CUSIP", ""])
+def test_set_ticker_mapping_rejects_a_kind_that_is_not_mapped(mapping_repo, conn, kind):
+    # TICKER is a valid identifier kind, but it never needs a mapping: it resolves to itself.
+    with pytest.raises(InvalidTickerMapping, match="ISIN or SYMBOL"):
+        _set_mapping(conn, identifier_kind=kind)
+
+
+def test_set_ticker_mapping_rejects_a_blank_identifier(mapping_repo, conn):
+    with pytest.raises(InvalidTickerMapping, match="identifier"):
+        _set_mapping(conn, identifier="   ")
+
+
+def test_set_ticker_mapping_rejects_a_blank_ticker(mapping_repo, conn):
+    with pytest.raises(InvalidTickerMapping, match="ticker"):
+        _set_mapping(conn, canonical_ticker="  ")
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [("identifier", "X" * 51), ("broker", "b" * 51), ("canonical_ticker", "T" * 21)],
+)
+def test_set_ticker_mapping_rejects_values_longer_than_their_columns(
+    mapping_repo, conn, field, value
+):
+    overrides = {field: value}
+    if field == "broker":
+        overrides.update(identifier_kind="SYMBOL", identifier="IWDA")
+
+    with pytest.raises(InvalidTickerMapping, match="too long"):
+        _set_mapping(conn, **overrides)
+
+
+def test_set_ticker_mapping_rejects_a_ticker_data_store_does_not_have(mapping_repo, conn):
+    client = FakeDataStoreClient(
+        ticker_info={"IWDA.AM": TickerInfo(exists=False, has_returns=False)}
+    )
+
+    with pytest.raises(UnknownTicker, match="IWDA.AM"):
+        _set_mapping(conn, canonical_ticker="IWDA.AM", datastore_client=client)
+
+    assert client.ticker_info_calls == ["IWDA.AM"]
+    assert mapping_repo.rows == {}
+    assert conn.commits == 0
+
+
+def test_delete_ticker_mapping_removes_it_and_returns_the_deleted_row(mapping_repo, conn):
+    saved = _set_mapping(conn)
+
+    deleted = pipeline.delete_ticker_mapping(conn, mapping_id=saved.id)
+
+    assert deleted == saved
+    assert mapping_repo.rows == {}
+    assert conn.commits == 2
+
+
+def test_delete_ticker_mapping_raises_for_an_unknown_id(mapping_repo, conn):
+    with pytest.raises(TickerMappingNotFound):
+        pipeline.delete_ticker_mapping(conn, mapping_id=999)
+
+
+def test_list_ticker_mappings_returns_every_mapping(mapping_repo, conn):
+    isin = _set_mapping(conn)
+    symbol = _set_mapping(conn, identifier_kind="SYMBOL", identifier="IWDA", broker="globex")
+
+    assert pipeline.list_ticker_mappings(conn) == [isin, symbol]
+
+
+def test_load_ticker_mappings_reads_the_table(mapping_repo, conn):
+    _set_mapping(conn)
+
+    mappings = pipeline.load_ticker_mappings(conn)
+
+    assert mappings.resolve("ISIN", _ISIN, broker="anything") == "IWDA.AS"
+
+
+def _seed_instrument(repos, *, user_id, label, broker, kind, identifier, ref):
+    accounts_repo, transactions_repo, _ = repos
+    account = accounts_repo.get_by_label(None, user_id=user_id, account_label=label)
+    if account is None:
+        accounts_repo.insert_account(None, user_id=user_id, broker=broker, account_label=label)
+        account = accounts_repo.get_by_label(None, user_id=user_id, account_label=label)
+    transactions_repo.insert_transactions(
+        None,
+        [
+            _position_txn(
+                account_id=account.id,
+                broker_transaction_ref=ref,
+                instrument_identifier=identifier,
+                instrument_identifier_kind=kind,
+            )
+        ],
+    )
+
+
+def test_list_all_unmapped_instruments_spans_every_user(repos, conn):
+    ann, bea = uuid.uuid4(), uuid.uuid4()
+    _seed_instrument(
+        repos, user_id=ann, label="a", broker="acme", kind="ISIN", identifier=_ISIN, ref="1"
+    )
+    _seed_instrument(
+        repos, user_id=bea, label="b", broker="globex", kind="SYMBOL", identifier="SGLD", ref="2"
+    )
+    mappings = TickerMappings(isin={}, symbol={})
+
+    unmapped = pipeline.list_all_unmapped_instruments(conn, mappings=mappings)
+
+    assert unmapped == [("ISIN", _ISIN, None), ("SYMBOL", "SGLD", "globex")]
+
+
+def test_list_all_unmapped_instruments_lists_an_isin_once_whatever_its_brokers(repos, conn):
+    # An ISIN mapping covers every broker, so the brokers reporting it don't matter here.
+    ann, bea = uuid.uuid4(), uuid.uuid4()
+    _seed_instrument(
+        repos, user_id=ann, label="a", broker="acme", kind="ISIN", identifier=_ISIN, ref="1"
+    )
+    _seed_instrument(
+        repos, user_id=bea, label="b", broker="globex", kind="ISIN", identifier=_ISIN, ref="2"
+    )
+
+    unmapped = pipeline.list_all_unmapped_instruments(
+        conn, mappings=TickerMappings(isin={}, symbol={})
+    )
+
+    assert unmapped == [("ISIN", _ISIN, None)]
+
+
+def test_list_all_unmapped_instruments_excludes_mapped_and_ticker_instruments(repos, conn):
+    user = uuid.uuid4()
+    _seed_instrument(
+        repos, user_id=user, label="a", broker="acme", kind="ISIN", identifier=_ISIN, ref="1"
+    )
+    _seed_instrument(
+        repos, user_id=user, label="a", broker="acme", kind="TICKER", identifier="SGLD.L", ref="2"
+    )
+
+    unmapped = pipeline.list_all_unmapped_instruments(
+        conn, mappings=TickerMappings(isin={_ISIN: "IWDA.AS"}, symbol={})
+    )
+
+    assert unmapped == []
+
+
+def test_list_accounts_using_instrument_finds_an_isin_at_every_broker(repos, conn):
+    ann, bea = uuid.uuid4(), uuid.uuid4()
+    _seed_instrument(
+        repos, user_id=ann, label="a", broker="acme", kind="ISIN", identifier=_ISIN, ref="1"
+    )
+    _seed_instrument(
+        repos, user_id=bea, label="b", broker="globex", kind="ISIN", identifier=_ISIN, ref="2"
+    )
+
+    accounts = pipeline.list_accounts_using_instrument(
+        conn, identifier_kind="ISIN", identifier=_ISIN, broker=None
+    )
+
+    assert sorted(accounts, key=lambda pair: pair[1]) == [(ann, "a"), (bea, "b")]
+
+
+def test_list_accounts_using_instrument_scopes_a_symbol_to_its_broker(repos, conn):
+    ann, bea = uuid.uuid4(), uuid.uuid4()
+    _seed_instrument(
+        repos, user_id=ann, label="a", broker="acme", kind="SYMBOL", identifier="IWDA", ref="1"
+    )
+    _seed_instrument(
+        repos, user_id=bea, label="b", broker="globex", kind="SYMBOL", identifier="IWDA", ref="2"
+    )
+
+    accounts = pipeline.list_accounts_using_instrument(
+        conn, identifier_kind="SYMBOL", identifier="IWDA", broker="globex"
+    )
+
+    assert accounts == [(bea, "b")]

@@ -1208,3 +1208,182 @@ def test_add_transaction_amount_is_optional(monkeypatch):
 
     assert exit_code == 0
     assert captured["native_amount"] is None
+
+
+# --- list-unmapped-instruments --all ---
+
+
+def test_list_unmapped_instruments_all_lists_every_users_instruments(monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli.jobs,
+        "run_list_all_unmapped_instruments",
+        lambda: {
+            "status": "ok",
+            "rows_saved": 0,
+            "instruments_unmapped": 2,
+            "unmapped_instruments": [
+                {"kind": "ISIN", "identifier": "IE00B4L5Y983", "broker": None},
+                {"kind": "SYMBOL", "identifier": "IWDA", "broker": "globex"},
+            ],
+        },
+    )
+
+    assert cli.main(["list-unmapped-instruments", "--all"]) == 0
+
+    assert capsys.readouterr().out == (
+        "ISIN\tIE00B4L5Y983\t-\n" "SYMBOL\tIWDA\tglobex\n" "2 instrument(s) unmapped\n"
+    )
+
+
+def test_list_unmapped_instruments_needs_exactly_one_of_user_or_all():
+    for argv in (
+        ["list-unmapped-instruments"],
+        ["list-unmapped-instruments", "--all", "--user", str(uuid.uuid4())],
+    ):
+        with pytest.raises(SystemExit) as exc_info:
+            cli.main(argv)
+        assert exc_info.value.code != 0
+
+
+# --- ticker-mapping ---
+
+_ADMIN = "00000000-0000-7000-8000-000000000001"
+_MAPPING = {
+    "id": 7,
+    "identifier_kind": "SYMBOL",
+    "identifier": "IWDA",
+    "broker": "globex",
+    "canonical_ticker": "IWDA.AS",
+    "updated_by": _ADMIN,
+    "created_at": "2026-10-01T00:00:00+00:00",
+    "updated_at": "2026-10-06T00:00:00+00:00",
+}
+
+
+def _write_result(**overrides):
+    result = {
+        "status": "ok",
+        "rows_saved": 1,
+        "accounts_rebuilt": 2,
+        "rebuilds_failed": 0,
+        "mapping": _MAPPING,
+    }
+    result.update(overrides)
+    return result
+
+
+def test_ticker_mapping_list_prints_one_line_per_mapping_then_the_count(monkeypatch, capsys):
+    isin = {
+        **_MAPPING,
+        "id": 3,
+        "identifier_kind": "ISIN",
+        "identifier": "IE00B4L5Y983",
+        "broker": None,
+    }
+    monkeypatch.setattr(cli.jobs, "get_ticker_mappings", lambda: [isin, _MAPPING])
+
+    assert cli.main(["ticker-mapping", "list"]) == 0
+
+    assert capsys.readouterr().out == (
+        "3\tISIN\tIE00B4L5Y983\t-\tIWDA.AS\n"
+        "7\tSYMBOL\tIWDA\tglobex\tIWDA.AS\n"
+        "2 ticker mapping(s)\n"
+    )
+
+
+def test_ticker_mapping_set_dispatches_and_reports_the_rebuild(monkeypatch, capsys):
+    captured = {}
+
+    def fake_set(**kw):
+        captured.update(kw)
+        return _write_result()
+
+    monkeypatch.setattr(cli.jobs, "run_set_ticker_mapping", fake_set)
+
+    exit_code = cli.main(
+        [
+            "ticker-mapping",
+            "set",
+            "--kind",
+            "SYMBOL",
+            "--identifier",
+            "IWDA",
+            "--broker",
+            "globex",
+            "--ticker",
+            "IWDA.AS",
+            "--user",
+            _ADMIN,
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured == {
+        "identifier_kind": "SYMBOL",
+        "identifier": "IWDA",
+        "broker": "globex",
+        "canonical_ticker": "IWDA.AS",
+        "updated_by": uuid.UUID(_ADMIN),
+    }
+    assert capsys.readouterr().out == (
+        "SYMBOL IWDA (globex) -> IWDA.AS\n" "positions rebuilt for 2 account(s), 0 failed\n"
+    )
+
+
+def test_ticker_mapping_set_without_broker_passes_none(monkeypatch):
+    captured = {}
+
+    def fake_set(**kw):
+        captured.update(kw)
+        return _write_result()
+
+    monkeypatch.setattr(cli.jobs, "run_set_ticker_mapping", fake_set)
+
+    cli.main(
+        ["ticker-mapping", "set", "--kind", "ISIN", "--identifier", "IE00B4L5Y983"]
+        + ["--ticker", "IWDA.AS", "--user", _ADMIN]
+    )
+
+    assert captured["broker"] is None
+
+
+def test_ticker_mapping_set_only_accepts_mappable_kinds():
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(
+            ["ticker-mapping", "set", "--kind", "TICKER", "--identifier", "X"]
+            + ["--ticker", "X", "--user", _ADMIN]
+        )
+
+    assert exc_info.value.code != 0
+
+
+def test_ticker_mapping_set_exits_nonzero_when_a_rebuild_failed(monkeypatch):
+    monkeypatch.setattr(
+        cli.jobs, "run_set_ticker_mapping", lambda **kw: _write_result(rebuilds_failed=1)
+    )
+
+    exit_code = cli.main(
+        ["ticker-mapping", "set", "--kind", "ISIN", "--identifier", "IE00B4L5Y983"]
+        + ["--ticker", "IWDA.AS", "--user", _ADMIN]
+    )
+
+    # The mapping is saved, but a rebuild that needs retrying must not look like a clean run.
+    assert exit_code == 1
+
+
+def test_ticker_mapping_delete_dispatches_and_reports(monkeypatch, capsys):
+    captured = {}
+
+    def fake_delete(**kw):
+        captured.update(kw)
+        return _write_result(accounts_rebuilt=1)
+
+    monkeypatch.setattr(cli.jobs, "run_delete_ticker_mapping", fake_delete)
+
+    exit_code = cli.main(["ticker-mapping", "delete", "--id", "7", "--user", _ADMIN])
+
+    assert exit_code == 0
+    assert captured == {"mapping_id": 7, "updated_by": uuid.UUID(_ADMIN)}
+    assert capsys.readouterr().out == (
+        "deleted SYMBOL IWDA (globex) -> IWDA.AS\n" "positions rebuilt for 1 account(s), 0 failed\n"
+    )

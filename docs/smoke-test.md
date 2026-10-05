@@ -112,7 +112,8 @@ In a browser at `http://localhost:8000`:
 `services/portfolio/docs/architecture.md`, "Positions follow every transaction write"). **Returns
 are still CLI-only.** The web UI never triggers `rebuild-returns`; run it from inside the
 `portfolio-api` container. `rebuild-positions` is shown too, for accounts whose transactions
-predate that change or after editing `configs/ticker_mappings.yaml`:
+predate that change (a ticker-mapping change on the admin page, `/admin/mappings`, rebuilds the
+accounts it affects by itself):
 
 ```bash
 # Look up the signed-up user's id -- there is no lookup-by-email CLI command anywhere.
