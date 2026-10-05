@@ -45,6 +45,31 @@ services:
     image: postgres:17
     container_name: data-store-postgres
     restart: unless-stopped
+    # log_statement=mod: logs every INSERT/UPDATE/DELETE/TRUNCATE (who, when, what), including a
+    # direct psql connection bypassing the app entirely -- there was previously no way to
+    # reconstruct what happened to a row after the fact. log_line_prefix adds the role and
+    # database to every line (plain %m/%p alone can't say *who*); log_connections/
+    # log_disconnections cover sessions that end without ever running a logged statement.
+    # log_parameter_max_length=0 keeps the statement template in the log but drops bind-parameter
+    # values, which would otherwise write ingested OHLCV/dividend data to the log in cleartext as
+    # a DETAIL line. See docs/architecture.md.
+    command:
+      - "postgres"
+      - "-c"
+      - "log_statement=mod"
+      - "-c"
+      - "log_line_prefix=%m [%p] %q%u@%d "
+      - "-c"
+      - "log_connections=on"
+      - "-c"
+      - "log_disconnections=on"
+      - "-c"
+      - "log_parameter_max_length=0"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     env_file:
       - .env
     environment:

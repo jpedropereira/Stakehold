@@ -869,6 +869,11 @@ scrutiny. **`app-postgres` remains the shared database for every other future no
 service** — the one such a service uses instead of standing up a fourth instance — but that sharing
 principle stops at the credential boundary; `auth` is the one deliberate carve-out from it.
 
+**`app-postgres` runs with `log_statement=mod`** (`docker-compose.yml`'s `command:`), logging
+every `INSERT`/`UPDATE`/`DELETE`/`TRUNCATE` — including a direct `psql` connection bypassing
+`portfolio`'s own code — to the container's own log. See `auth/docs/architecture.md`'s
+"Deployment" section for the incident that prompted this across all three instances.
+
 **`app-postgres`'s compose file lives at `services/portfolio/docker-compose.yml`**, even though the
 instance is meant to be shared, because portfolio is its only tenant today and every other service
 here keeps its own containers next to its own code. Naming it `app-postgres` rather than

@@ -548,6 +548,12 @@ flowchart TB
 **Two separate Postgres instances.** Airflow's metadata database and the data warehouse share
 nothing. Airflow's is disposable; the data one is not.
 
+**`postgres` (the data warehouse, not `airflow-postgres`) runs with `log_statement=mod`**
+(`docker-compose.yml`'s `command:`), logging every `INSERT`/`UPDATE`/`DELETE`/`TRUNCATE` —
+including a direct `psql` connection bypassing `data_store`'s own code — to the container's own
+log. See `auth/docs/architecture.md`'s "Deployment" section for the incident that prompted this
+across all three app-data instances.
+
 **Airflow runs a custom image** (`Dockerfile.airflow`) that layers `uv` and this workspace onto the
 official Airflow image. The DAGs call the same `jobs.run_*` functions the CLI calls, through
 `@task.external_python`.

@@ -179,6 +179,41 @@ helpers and log setup underneath both are the *same* code, not just the same pat
 services depend on [`services/shared`](../../shared/docs/architecture.md) rather than each keeping
 its own copy.
 
+**`auth-postgres` runs with `log_statement=mod`** (`docker-compose.yml`'s `command:`), logging
+every `INSERT`/`UPDATE`/`DELETE`/`TRUNCATE` to the container's own log — including a direct `psql`
+connection that bypasses `auth`'s own code entirely. Added after an incident where a `users` row
+(and its cascaded `sessions` row) vanished with no application code path capable of deleting
+either, and no way to reconstruct what happened after the fact. This is container-log-level
+forensics, not a durable audit table — a real `audit_log` table with triggers was considered and
+deferred, since it's a schema change needing its own sign-off per `data-schema.md`.
+
+Three settings alongside `log_statement=mod` close gaps the initial version of this logging had:
+
+- **`log_line_prefix=%m [%p] %q%u@%d `** adds the connecting role and database to every line.
+  Without it a logged line carries only a timestamp and OS PID — enough to see *what* ran, not
+  *who* ran it, which defeats the forensic point of turning this on. (`auth-api` and any direct
+  `psql` session connect as the same `AUTH_POSTGRES_USER` today, so this doesn't yet distinguish
+  app traffic from an operator bypassing it — only a per-operator role would. Flagged, not fixed:
+  that's a role-model change, out of scope here.)
+- **`log_connections=on` / `log_disconnections=on`** record sessions that open and close without
+  ever running a statement `log_statement=mod` would catch — relevant for reconstructing a direct
+  `psql` connection that only ran `SELECT`s before whatever it did next.
+- **`log_parameter_max_length=0`** keeps the statement template in the log (`INSERT INTO users
+  (email, ...) VALUES ($1, $2)`) but drops the bound parameter values. Without it, `log_statement
+  =mod` logs every bind parameter verbatim in a `DETAIL:` line — for `auth` that means every
+  signup/login would otherwise write the user's plaintext email into the container log, a new
+  place PII lives that this change didn't originally account for.
+
+Logs still rotate with Docker's log driver if not shipped somewhere durable; `docker-compose.yml`
+caps the default `json-file` driver at `max-size: 10m` / `max-file: 5` per container so turning
+this on doesn't grow unboundedly on a long-lived host — it does not make the logs durable, only
+bounded.
+
+`portfolio`'s `_ensure_role_and_schema` (`services/portfolio/src/portfolio/jobs.py`) temporarily
+sets `log_statement=none` for the one transaction that runs `CREATE ROLE ... PASSWORD`, since that
+password is a SQL literal, not a bind parameter — `log_parameter_max_length` has no effect on it,
+and it would otherwise be logged in full on every fresh environment's first `db init` run.
+
 Two further containers share that one image (`services/auth/Dockerfile`), built from the repo
 root the same way `data-store`'s `Dockerfile.airflow` is, since `uv sync` needs every workspace
 member's source present even though the image only runs `auth`'s own entry points:

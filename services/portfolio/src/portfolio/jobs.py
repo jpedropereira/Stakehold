@@ -62,6 +62,11 @@ def _ensure_role_and_schema(admin_conn, role: str, password: str) -> None:
         with admin_conn.cursor() as cur:
             cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (role,))
             if cur.fetchone() is None:
+                # CREATE ROLE embeds the password as a literal, not a bind parameter -- with
+                # `log_statement=mod` (docker-compose.yml) that would otherwise write it to the
+                # server log verbatim. SET LOCAL reverts automatically when this transaction
+                # commits, so it can't leak into later connections or statements.
+                cur.execute("SET LOCAL log_statement = 'none'")
                 cur.execute(
                     sql.SQL("CREATE ROLE {} LOGIN PASSWORD {}").format(
                         sql.Identifier(role), sql.Literal(password)
