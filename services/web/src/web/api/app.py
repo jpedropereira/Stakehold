@@ -3,11 +3,11 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import httpx
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, Request, Response, status
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from shared.logging_config import configure_logging
-from web.api.deps import AuthRequired
+from web.api.deps import AdminRequired, AuthRequired
 from web.api.htmx import htmx_or_redirect
 from web.api.routes import health_router, router
 from web.api.security_headers import SecurityHeadersMiddleware
@@ -65,5 +65,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.exception_handler(AuthRequired)
     async def _auth_required(request: Request, _exc: AuthRequired) -> Response:
         return htmx_or_redirect(request, "/login")
+
+    @app.exception_handler(AdminRequired)
+    async def _admin_required(request: Request, _exc: AdminRequired) -> Response:
+        # Rendered without the user: the 403 page has no nav or logout form, so it needs no
+        # user or CSRF token -- the visitor gets back via its link to the home page.
+        return request.app.state.templates.TemplateResponse(
+            request, "forbidden.html", {"user": None}, status_code=status.HTTP_403_FORBIDDEN
+        )
 
     return app

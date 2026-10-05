@@ -6,6 +6,7 @@ repository modules' own SQL shape is covered separately by
 tests/unit/{users,sessions}/test_repository.py and the integration suite.
 """
 
+from dataclasses import replace
 from datetime import UTC, datetime
 
 import psycopg
@@ -78,6 +79,7 @@ class FakeUsersRepo:
             display_name=display_name,
             password_hash=password_hash,
             created_at=NOW,
+            is_admin=False,
         )
         self.by_email[email] = user
         self.by_id[user_id] = user
@@ -87,6 +89,15 @@ class FakeUsersRepo:
 
     def get_by_id(self, conn, user_id):
         return self.by_id.get(user_id)
+
+    def set_admin(self, conn, email, *, is_admin):
+        user = self.by_email.get(email)
+        if user is None:
+            return False
+        updated = replace(user, is_admin=is_admin)
+        self.by_email[email] = updated
+        self.by_id[user.id] = updated
+        return True
 
 
 class FakeSessionsRepo:
@@ -115,6 +126,7 @@ class FakeSessionsRepo:
             user_id=user.id,
             email=user.email,
             display_name=user.display_name,
+            is_admin=user.is_admin,
             expires_at=record["expires_at"],
         )
 

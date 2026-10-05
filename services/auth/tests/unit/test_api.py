@@ -171,6 +171,7 @@ def test_signup_returns_201_with_the_user_and_sets_the_session_cookie(client):
     body = response.json()
     assert body["email"] == "person@example.com"
     assert body["display_name"] == "Person"
+    assert body["is_admin"] is False
     assert "password" not in body
     assert "token" not in body
 
@@ -313,6 +314,20 @@ def test_validate_session_returns_200_for_a_freshly_signed_up_session(client):
 
     assert response.status_code == 200
     assert response.json()["email"] == "person@example.com"
+
+
+def test_validate_session_reports_an_admin(client, repos):
+    test_client, settings = client
+    _signup(test_client, settings)
+    users_repo, _ = repos
+    users_repo.set_admin(None, "person@example.com", is_admin=True)
+
+    response = test_client.post(
+        "/sessions/validate", headers={"X-Internal-Secret": settings.internal_secret}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["is_admin"] is True
 
 
 def test_validate_session_without_a_cookie_returns_401(client):

@@ -69,7 +69,13 @@ class HttpAuthClient:
         try:
             body = response.json()
             user = AuthUser(
-                user_id=body["user_id"], email=body["email"], display_name=body["display_name"]
+                user_id=body["user_id"],
+                email=body["email"],
+                display_name=body["display_name"],
+                # `is True`, not truthiness, and absent means False: anything other than a JSON
+                # true fails closed rather than granting admin, and a web deployed ahead of an
+                # auth that doesn't send the field yet still lets everyone log in.
+                is_admin=body.get("is_admin") is True,
             )
         except (ValueError, KeyError, TypeError) as exc:
             # ValueError covers json.JSONDecodeError; KeyError/TypeError cover a 2xx body that

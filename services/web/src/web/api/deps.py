@@ -14,6 +14,14 @@ class AuthRequired(Exception):
     """
 
 
+class AdminRequired(Exception):
+    """Raised by require_admin when the caller is logged in but isn't an admin.
+
+    Mapped by an app-level exception handler to a 403 page, the way AuthRequired is mapped to a
+    redirect to /login.
+    """
+
+
 def get_settings(request: Request) -> Settings:
     return request.app.state.settings
 
@@ -91,3 +99,15 @@ async def optional_user(
     """Used where a page renders either way (the home page, or bouncing an already-logged-in
     visitor away from /login and /signup)."""
     return await _resolve_user(request, response, auth_client)
+
+
+async def require_admin(user: AuthUser = Depends(require_user)) -> AuthUser:
+    """require_user, plus the admin check. The gate lives here in web, the only caller of
+    portfolio's admin endpoints -- see docs/architecture.md, "Admin pages".
+
+    Anonymous (or auth unreachable) still redirects to /login via require_user; only a confirmed
+    non-admin gets the 403.
+    """
+    if not user.is_admin:
+        raise AdminRequired()
+    return user

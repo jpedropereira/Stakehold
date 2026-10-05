@@ -33,6 +33,8 @@ one-time snapshot.
 | 13 | [End-to-end integration & smoke test](#13-end-to-end-integration--smoke-test) | 12 | done |
 | 14 | [Broker cash-ledger import](#14-broker-cash-ledger-import) | 6 | done |
 | 15 | [Extract broker-parser plugins to a private repo](#15-extract-broker-parser-plugins-to-a-private-repo) | 6, 14 | done |
+| 16 | [Admin role](#16-admin-role) | 2, 10 | done |
+| 17 | [Ticker mappings in the database, managed by admins](#17-ticker-mappings-in-the-database-managed-by-admins) | 16, 9 | ready |
 
 No task is `ready` today — every dependency chain resolves to `done`.
 
@@ -661,3 +663,26 @@ straightforward call, not a hard one.
 `stakehold-brokers` uninstalled, `portfolio broker list` reports zero and the full test suite
 (810 unit, 15 integration) still passes — a deployment that downloads only this repo can still
 create accounts and record transactions manually; only broker-file import needs the plugin.
+
+### 16. Admin role — done
+
+Some settings apply to every user rather than one: first, the ticker mappings that turn a broker's
+ISIN or symbol into a data-store ticker (task 17). This task adds the role that may change them.
+
+- **auth**: `users.is_admin BOOLEAN NOT NULL DEFAULT false`, added by an idempotent
+  `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` in `schema.sql` (schema signed off). Reported as
+  `is_admin` on signup, login and session validation, read fresh from `users` on every
+  validation so revoking applies on the next request. Granted only by the new CLI command
+  `auth user set-admin --email <e> [--revoke]`; there is deliberately no HTTP endpoint (see
+  `auth/docs/architecture.md`, "Admin role").
+- **web**: `AuthUser.is_admin` (a missing or non-boolean value counts as `False`), a
+  `require_admin` dependency that 403s a logged-in non-admin, an `/admin` page (empty until
+  task 17), and an "Admin" nav link shown only to admins.
+
+### 17. Ticker mappings in the database, managed by admins — ready
+
+Moves `configs/ticker_mappings.yaml` (hand-edited, baked into the portfolio image at build time,
+so every fix needs a rebuild) into a global `portfolio.ticker_mappings` table (schema signed off),
+managed from an admin-only page under `/admin`. Saving or deleting a mapping rebuilds positions
+for every account whose transactions use that identifier. The YAML file and
+`PORTFOLIO_TICKER_MAPPINGS_PATH` are retired.

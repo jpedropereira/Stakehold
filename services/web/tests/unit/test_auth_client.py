@@ -262,3 +262,41 @@ async def test_no_cookie_leaks_from_one_call_into_the_next():
 
     assert captured_cookies[0] in (None, "")
     assert captured_cookies[1] in (None, ""), "user A's session cookie leaked into user B's call"
+
+
+def _validate_returning(body):
+    return _client(
+        lambda request: httpx.Response(
+            200, json=body, headers={"set-cookie": "stakehold_session=tok; Path=/"}
+        )
+    )
+
+
+async def test_validate_session_parses_is_admin():
+    client = _validate_returning(
+        {"user_id": "u1", "email": "a@example.com", "display_name": "Ann", "is_admin": True}
+    )
+
+    result = await client.validate_session(cookie_header="stakehold_session=tok")
+
+    assert result.user.is_admin is True
+
+
+async def test_a_response_without_is_admin_is_treated_as_not_admin():
+    # Fails closed: a web deployed ahead of an auth that doesn't send the field yet must not
+    # lock everyone out (a malformed-body AuthUnavailable) or grant anything.
+    client = _validate_returning({"user_id": "u1", "email": "a@example.com", "display_name": "Ann"})
+
+    result = await client.validate_session(cookie_header="stakehold_session=tok")
+
+    assert result.user.is_admin is False
+
+
+async def test_a_non_boolean_is_admin_is_treated_as_not_admin():
+    client = _validate_returning(
+        {"user_id": "u1", "email": "a@example.com", "display_name": "Ann", "is_admin": "true"}
+    )
+
+    result = await client.validate_session(cookie_header="stakehold_session=tok")
+
+    assert result.user.is_admin is False

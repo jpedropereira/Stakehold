@@ -12,6 +12,9 @@ class AuthUser:
     user_id: str
     email: str
     display_name: str
+    # Gates the /admin pages (api/deps.require_admin). Defaults to False so anything that
+    # builds an AuthUser without saying otherwise is a regular user.
+    is_admin: bool = False
 
 
 @dataclass(frozen=True)

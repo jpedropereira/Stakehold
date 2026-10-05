@@ -8,6 +8,10 @@ CREATE TABLE IF NOT EXISTS users (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users (email);
 
+-- Added after the table shipped, so a column on CREATE TABLE above would never reach an existing
+-- database. Granted only via `auth user set-admin` -- see docs/schema.md.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT false;
+
 CREATE TABLE IF NOT EXISTS sessions (
     id                  UUID        PRIMARY KEY,
     token_hash          BYTEA       NOT NULL,

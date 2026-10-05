@@ -175,3 +175,26 @@ async def test_login_with_wrong_password_is_rejected(web_client):
 
     assert response.status_code == 401
     assert "don" in response.text  # "don&#39;t match" -- HTML-escaped apostrophe
+
+
+async def test_admin_page_follows_the_role_auth_grants_and_revokes(web_client):
+    web_client.get("/signup")
+    web_client.post(
+        "/signup",
+        data={
+            "email": "ada@example.com",
+            "password": PASSWORD,
+            "display_name": "Ada",
+            "csrf_token": _csrf_token(web_client),
+        },
+        follow_redirects=False,
+    )
+    assert web_client.get("/admin", follow_redirects=False).status_code == 403
+
+    assert auth_cli.main(["user", "set-admin", "--email", "ada@example.com"]) == 0
+    granted = web_client.get("/admin", follow_redirects=False)
+    assert granted.status_code == 200
+    assert 'href="/admin"' in granted.text
+
+    assert auth_cli.main(["user", "set-admin", "--email", "ada@example.com", "--revoke"]) == 0
+    assert web_client.get("/admin", follow_redirects=False).status_code == 403

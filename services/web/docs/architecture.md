@@ -44,6 +44,16 @@ calls [`portfolio`](../../portfolio/docs/architecture.md), `data-store`, and
   (`auth_client/http_client.py`)** — the same split `portfolio`'s `DataStoreClient` uses. This is
   what makes `tests/unit/test_routes.py` runnable against a fake with no live `auth` service, and
   keeps HTTP status-code mapping in exactly one place.
+- **Admin pages are gated here, in `web` (`api/deps.require_admin`).** `auth` owns the role
+  (`users.is_admin`, granted only by the `auth user set-admin` CLI) and reports it on every
+  session validation; `require_admin` builds on `require_user` and raises `AdminRequired`, which an
+  app-level handler turns into a 403 page. The check happens on every request, against what
+  `auth` just reported, so revoking admin takes effect on the next page load with no cached role
+  to expire. `portfolio` doesn't re-check the role on the admin endpoints `web` will call: it
+  already trusts its internal-secret caller for every user's data, and an admin check there would
+  rest on the same trust (a forwarded flag), so it would add no protection the secret doesn't
+  already give. `AuthClient` treats a missing or non-boolean `is_admin` as `False`, so the gate
+  fails closed and a `web` deployed ahead of `auth` still lets everyone log in.
 - **CSRF: a stateless double-submit cookie (`api/csrf.py`)**, not a signed/itsdangerous token.
   A random value is set in a cookie and re-embedded as a hidden form field; a POST is accepted
   only if the two match (`secrets.compare_digest` on encoded bytes, mirroring
@@ -189,6 +199,7 @@ calls [`portfolio`](../../portfolio/docs/architecture.md), `data-store`, and
 | Route | Behaviour |
 |---|---|
 | `GET /` | `require_user` dependency: logged in → the placeholder home page; no valid session → redirected to `/login` (an `AuthRequired` exception mapped to a 303 by an app-level handler) |
+| `GET /admin` | `require_admin` dependency: an admin → the admin page (empty for now; ticker mappings land here next), linked from the nav only for admins; a logged-in non-admin → a 403 page (`AdminRequired`, mapped by an app-level handler); no valid session → redirected to `/login`, like every `require_user` route |
 | `GET /login`, `GET /signup` | `optional_user` dependency: already logged in → redirected to `/`; otherwise renders the form with a fresh or existing CSRF cookie |
 | `POST /login`, `POST /signup` | CSRF-checked, calls `auth`, proxies the `Set-Cookie` `auth` returned, then redirects to `/` — a 303 for a plain form post, or an `HX-Redirect` response header for an `hx-post` (htmx's own XHR follows a 303 by swapping the *content* of the request's own response into the target element, which would drop a full HTML document into a form's error slot; `HX-Redirect` instead triggers a real browser navigation) |
 | `POST /logout` | CSRF-checked, calls `auth` (best-effort — a failure is logged, not surfaced, since the user's intent to log out should not depend on `auth` being reachable), clears the session cookie locally, redirects to `/login` |
@@ -232,7 +243,7 @@ exists to close; no equivalent concern applies to the portfolio routes; see "Key
   `returns/calculator.py` is a pure function.
 - `api/{app,deps,routes,csrf,security_headers,htmx}.py` — app assembly and lifespan (opens/closes
   two shared `httpx.AsyncClient`s, one per upstream service), FastAPI dependencies (`require_user`,
-  `optional_user`, `client_ip`, `get_auth_client`/`get_portfolio_client`, and friends), the route
+  `require_admin`, `optional_user`, `client_ip`, `get_auth_client`/`get_portfolio_client`, and friends), the route
   handlers, the CSRF helpers, the security-headers middleware, and `htmx.py`'s
   `is_htmx`/`htmx_or_redirect` (shared by `routes.py`'s redirects and `app.py`'s `AuthRequired`
   handler, so every redirect in the app picks htmx-partial vs. full-navigation the same way).

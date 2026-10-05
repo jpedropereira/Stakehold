@@ -53,7 +53,12 @@ def health(request: Request, response: Response) -> dict[str, str]:
 
 
 def _user_response(user: AuthenticatedUser) -> UserResponse:
-    return UserResponse(user_id=str(user.id), email=user.email, display_name=user.display_name)
+    return UserResponse(
+        user_id=str(user.id),
+        email=user.email,
+        display_name=user.display_name,
+        is_admin=user.is_admin,
+    )
 
 
 @router.post("/signup", status_code=status.HTTP_201_CREATED, response_model=UserResponse)
