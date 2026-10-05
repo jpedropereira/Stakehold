@@ -108,8 +108,11 @@ In a browser at `http://localhost:8000`:
 3. Enter a manual transaction (`/transactions/new?account=<label>`) or import a broker file
    (`/transactions/import?account=<label>`).
 
-**Rebuilding positions/returns is CLI-only** — the web UI never triggers it (see task 12's own
-note in `tasks.md`). Run it from inside the `portfolio-api` container:
+**Positions rebuild automatically** when step 3 saves a transaction (see
+`services/portfolio/docs/architecture.md`, "Positions follow every transaction write"). **Returns
+are still CLI-only.** The web UI never triggers `rebuild-returns`; run it from inside the
+`portfolio-api` container. `rebuild-positions` is shown too, for accounts whose transactions
+predate that change or after editing `configs/ticker_mappings.yaml`:
 
 ```bash
 # Look up the signed-up user's id -- there is no lookup-by-email CLI command anywhere.

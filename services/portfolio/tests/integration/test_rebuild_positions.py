@@ -69,6 +69,16 @@ def _add_buy(user_id, *, account_label, ref, currency="EUR", amount="-950.00", i
     assert exit_code == 0
 
 
+def _clear_position_snapshots(pg_connect):
+    """`add-transaction` now rebuilds its own account's positions as soon as it saves (see
+    docs/architecture.md's "Positions follow every transaction write"), so seeding through it no
+    longer leaves `position_snapshots` empty. Tests about what `rebuild-positions` itself writes
+    -- and which accounts/users it scopes to -- call this after seeding, so their assertions can
+    only be satisfied by the rebuild under test, never by the write's own follow-on one."""
+    with pg_connect() as conn, conn.cursor() as cur:
+        cur.execute("DELETE FROM position_snapshots")
+
+
 def _rebuild(user_id, *, account_label=None):
     args = ["rebuild-positions", "--user", str(user_id)]
     if account_label is not None:
@@ -80,6 +90,7 @@ def test_rebuilding_writes_a_position_snapshot(pg_connect, capsys):
     user_id = uuid.uuid4()
     _add_account(user_id, label="m")
     _add_buy(user_id, account_label="m", ref="t1")
+    _clear_position_snapshots(pg_connect)
     capsys.readouterr()
 
     exit_code = _rebuild(user_id)
@@ -119,6 +130,7 @@ def test_rebuild_is_scoped_to_one_account_via_the_account_flag(pg_connect):
     _add_account(user_id, label="b")
     _add_buy(user_id, account_label="a", ref="t1")
     _add_buy(user_id, account_label="b", ref="t2")
+    _clear_position_snapshots(pg_connect)
 
     exit_code = _rebuild(user_id, account_label="a")
 
@@ -138,6 +150,7 @@ def test_rebuild_with_no_account_flag_rebuilds_every_account_for_the_user(pg_con
     _add_account(user_id, label="b")
     _add_buy(user_id, account_label="a", ref="t1")
     _add_buy(user_id, account_label="b", ref="t2")
+    _clear_position_snapshots(pg_connect)
 
     exit_code = _rebuild(user_id)
 
@@ -154,6 +167,7 @@ def test_rebuild_is_isolated_per_user(pg_connect):
     _add_account(user_b, label="b")
     _add_buy(user_a, account_label="a", ref="t1")
     _add_buy(user_b, account_label="b", ref="t2")
+    _clear_position_snapshots(pg_connect)
 
     exit_code = _rebuild(user_a)
 

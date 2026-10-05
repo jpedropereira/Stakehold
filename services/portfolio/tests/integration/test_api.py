@@ -157,3 +157,67 @@ def test_add_transaction_then_rebuild_positions_then_read_them_back(client):
     assert len(positions) == 1
     assert positions[0]["canonical_ticker"] == "IWDA.AS"
     assert positions[0]["quantity"] == "10.000000"
+
+
+def _add_buy(client, user_id, *, ref, identifier):
+    return client.post(
+        "/transactions",
+        json={
+            "user_id": str(user_id),
+            "account_label": "main",
+            "broker_transaction_ref": ref,
+            "transaction_type": "BUY",
+            "trade_datetime": "2026-01-05T10:00:00+00:00",
+            "native_amount": "-950.00",
+            "native_currency": "EUR",
+            "instrument_identifier": identifier,
+            "instrument_identifier_kind": "ISIN",
+            "quantity": "10",
+            "price": "95.00",
+        },
+        headers=_headers(),
+    )
+
+
+def test_adding_a_transaction_updates_positions_without_a_manual_rebuild(client):
+    user_id = uuid.uuid4()
+    client.post(
+        "/accounts",
+        json={"user_id": str(user_id), "broker": "acme", "account_label": "main"},
+        headers=_headers(),
+    )
+
+    add_response = _add_buy(client, user_id, ref="ref-1", identifier=_ISIN)
+    positions_response = client.get(
+        "/positions",
+        params={"user_id": str(user_id), "account_label": "main"},
+        headers=_headers(),
+    )
+
+    assert add_response.status_code == 201
+    assert add_response.json()["positions_rebuild"] == "ok"
+    positions = positions_response.json()
+    assert len(positions) == 1
+    assert positions[0]["canonical_ticker"] == "IWDA.AS"
+    assert positions[0]["quantity"] == "10.000000"
+
+
+def test_an_unmapped_instrument_still_saves_the_transaction_and_reports_a_partial_rebuild(client):
+    user_id = uuid.uuid4()
+    client.post(
+        "/accounts",
+        json={"user_id": str(user_id), "broker": "acme", "account_label": "main"},
+        headers=_headers(),
+    )
+
+    add_response = _add_buy(client, user_id, ref="ref-1", identifier="XX0000000000")
+    transactions_response = client.get(
+        "/transactions",
+        params={"user_id": str(user_id), "account_label": "main"},
+        headers=_headers(),
+    )
+
+    assert add_response.status_code == 201
+    assert add_response.json()["status"] == "ok"
+    assert add_response.json()["positions_rebuild"] == "partial"
+    assert len(transactions_response.json()) == 1

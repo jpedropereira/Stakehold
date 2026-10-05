@@ -171,13 +171,16 @@ calls [`portfolio`](../../portfolio/docs/architecture.md), `data-store`, and
   positions/returns endpoint is `account_label`-scoped with no cross-account aggregation endpoint,
   so the view is one page per account (linked from `accounts.html`); a cross-account "whole
   portfolio" rollup is future work. The route only displays whatever `position_snapshots`/
-  `return_snapshots` rows already exist — `rebuild-positions`/`rebuild-returns` stay CLI-only. An
+  `return_snapshots` rows already exist. `web` never calls a rebuild itself: `portfolio` rebuilds
+  an account's positions on every transaction write (see `portfolio/docs/architecture.md`, "Positions
+  follow every transaction write"), and `rebuild-returns` stays CLI-only. An
   `AccountNotFound` from either the positions or returns call is treated as fatal (a distinct 404,
   "that account doesn't exist") rather than folded into the generic degrade-to-inline-error path
   `_list_accounts_and_brokers` (task 11) established, since a bad `account_label` has nothing
   partial to show either way; any other `PortfolioClientError` on either call degrades that half
   of the page independently, mirroring `_list_accounts_and_brokers` exactly. An account with no
-  positions and/or no return history yet (nobody has run the CLI rebuild) renders as an ordinary
+  positions (no buy transactions yet, or only unmapped instruments) and/or no return history yet
+  (nobody has run the CLI `rebuild-returns`) renders as an ordinary
   empty state, not an error — `web` has no way to distinguish "never rebuilt" from "rebuilt into
   zero rows" and doesn't need to.
 
@@ -267,9 +270,9 @@ one-time network creation. See `docs/smoke-test.md` for the full bring-up sequen
   `X-Forwarded-For` on signup/login.
 - **`portfolio`** (tasks 11–12) — account creation, manual transaction entry, broker-file import,
   and (task 12) reading positions/returns, server-to-server, carrying
-  `WEB_PORTFOLIO_INTERNAL_SECRET` as `X-Internal-Secret`. Rebuild triggers (`rebuild-positions`/
-  `rebuild-returns`) still aren't called from `web` — those stay CLI-only; see task 12's "Key
-  decisions" entry.
+  `WEB_PORTFOLIO_INTERNAL_SECRET` as `X-Internal-Secret`. Rebuild triggers aren't called from
+  `web`: positions are rebuilt by `portfolio` itself on each transaction write, and
+  `rebuild-returns` stays CLI-only; see task 12's "Key decisions" entry.
 - **`data-store`** — turns out not to be needed directly. This line previously anticipated task 12
   calling `data-store` for market-data reads; in practice `portfolio`'s own `/positions`/`/returns`
   already return EUR-converted figures (computed against `data-store` on `portfolio`'s side, at

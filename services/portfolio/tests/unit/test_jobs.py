@@ -235,10 +235,30 @@ class _SimpleFakeConnection:
         self.closed = True
 
 
+def _stub_rebuild_positions(monkeypatch, *, status="ok"):
+    """Replaces the follow-on positions rebuild every transaction write triggers, recording each
+    call. The rebuild itself has its own tests below; these tests are about the write jobs'
+    orchestration of it."""
+    calls = []
+
+    def fake_rebuild(**kw):
+        calls.append(kw)
+        return {"status": status, "rows_saved": 0}
+
+    monkeypatch.setattr(jobs, "run_rebuild_positions", fake_rebuild)
+    return calls
+
+
 def _patch_new_job_common(monkeypatch):
     monkeypatch.setattr(jobs, "load_settings", _fake_settings)
     fake_conn = _SimpleFakeConnection()
     monkeypatch.setattr(jobs, "get_connection", lambda url: fake_conn)
+    return fake_conn
+
+
+def _patch_write_job_common(monkeypatch):
+    fake_conn = _patch_new_job_common(monkeypatch)
+    _stub_rebuild_positions(monkeypatch)
     return fake_conn
 
 
@@ -384,26 +404,36 @@ _TXN_KWARGS = dict(
 
 
 def test_run_add_transaction_reports_ok_when_saved(monkeypatch):
-    fake_conn = _patch_new_job_common(monkeypatch)
+    fake_conn = _patch_write_job_common(monkeypatch)
     monkeypatch.setattr(jobs.pipeline, "add_manual_transaction", lambda conn, **kw: 1)
 
     result = jobs.run_add_transaction(user_id=uuid.uuid4(), **_TXN_KWARGS)
 
-    assert result == {"status": "ok", "rows_saved": 1, "transactions_saved": 1}
+    assert result == {
+        "status": "ok",
+        "rows_saved": 1,
+        "transactions_saved": 1,
+        "positions_rebuild": "ok",
+    }
     assert fake_conn.closed is True
 
 
 def test_run_add_transaction_reports_nothing_to_do_when_ref_already_exists(monkeypatch):
-    _patch_new_job_common(monkeypatch)
+    _patch_write_job_common(monkeypatch)
     monkeypatch.setattr(jobs.pipeline, "add_manual_transaction", lambda conn, **kw: 0)
 
     result = jobs.run_add_transaction(user_id=uuid.uuid4(), **_TXN_KWARGS)
 
-    assert result == {"status": "nothing_to_do", "rows_saved": 0, "transactions_saved": 0}
+    assert result == {
+        "status": "nothing_to_do",
+        "rows_saved": 0,
+        "transactions_saved": 0,
+        "positions_rebuild": "skipped",
+    }
 
 
 def test_run_add_transaction_propagates_domain_error_and_closes_connection(monkeypatch):
-    fake_conn = _patch_new_job_common(monkeypatch)
+    fake_conn = _patch_write_job_common(monkeypatch)
 
     def boom(conn, **kw):
         raise AccountNotFound("nope")
@@ -422,28 +452,38 @@ _IMPORT_KWARGS = dict(account_label="m", file_path=Path("acme.csv"))
 
 
 def test_run_import_transactions_reports_ok_when_saved(monkeypatch):
-    fake_conn = _patch_new_job_common(monkeypatch)
+    fake_conn = _patch_write_job_common(monkeypatch)
     monkeypatch.setattr(jobs.pipeline, "import_transactions", lambda conn, **kw: 82)
 
     result = jobs.run_import_transactions(user_id=uuid.uuid4(), **_IMPORT_KWARGS)
 
-    assert result == {"status": "ok", "rows_saved": 82, "transactions_saved": 82}
+    assert result == {
+        "status": "ok",
+        "rows_saved": 82,
+        "transactions_saved": 82,
+        "positions_rebuild": "ok",
+    }
     assert fake_conn.closed is True
 
 
 def test_run_import_transactions_reports_nothing_to_do_on_a_reimport(monkeypatch):
-    _patch_new_job_common(monkeypatch)
+    _patch_write_job_common(monkeypatch)
     monkeypatch.setattr(jobs.pipeline, "import_transactions", lambda conn, **kw: 0)
 
     result = jobs.run_import_transactions(user_id=uuid.uuid4(), **_IMPORT_KWARGS)
 
-    assert result == {"status": "nothing_to_do", "rows_saved": 0, "transactions_saved": 0}
+    assert result == {
+        "status": "nothing_to_do",
+        "rows_saved": 0,
+        "transactions_saved": 0,
+        "positions_rebuild": "skipped",
+    }
 
 
 def test_run_import_transactions_propagates_domain_error_and_closes_connection(
     monkeypatch,
 ):
-    fake_conn = _patch_new_job_common(monkeypatch)
+    fake_conn = _patch_write_job_common(monkeypatch)
 
     def boom(conn, **kw):
         raise AccountNotFound("nope")
@@ -457,7 +497,7 @@ def test_run_import_transactions_propagates_domain_error_and_closes_connection(
 
 
 def test_run_import_transactions_passes_the_file_path_through(monkeypatch):
-    _patch_new_job_common(monkeypatch)
+    _patch_write_job_common(monkeypatch)
     captured = {}
 
     def fake_import(conn, **kw):
@@ -474,7 +514,7 @@ def test_run_import_transactions_passes_the_file_path_through(monkeypatch):
 
 def test_run_import_transactions_logs_start_before_completion(monkeypatch, caplog):
     caplog.set_level(logging.INFO)
-    _patch_new_job_common(monkeypatch)
+    _patch_write_job_common(monkeypatch)
     monkeypatch.setattr(jobs.pipeline, "import_transactions", lambda conn, **kw: 1)
 
     jobs.run_import_transactions(user_id=uuid.uuid4(), **_IMPORT_KWARGS)
@@ -582,6 +622,7 @@ def _patch_cashflow_job_common(monkeypatch):
     )
     fake_conn = _SimpleFakeConnection()
     monkeypatch.setattr(jobs, "get_connection", lambda url: fake_conn)
+    _stub_rebuild_positions(monkeypatch)
     return fake_conn
 
 
@@ -591,7 +632,12 @@ def test_run_import_cashflow_reports_ok_when_saved(monkeypatch):
 
     result = jobs.run_import_cashflow(user_id=uuid.uuid4(), **_CASHFLOW_KWARGS)
 
-    assert result == {"status": "ok", "rows_saved": 339, "transactions_saved": 339}
+    assert result == {
+        "status": "ok",
+        "rows_saved": 339,
+        "transactions_saved": 339,
+        "positions_rebuild": "ok",
+    }
     assert fake_conn.closed is True
 
 
@@ -601,7 +647,12 @@ def test_run_import_cashflow_reports_nothing_to_do_on_a_reimport(monkeypatch):
 
     result = jobs.run_import_cashflow(user_id=uuid.uuid4(), **_CASHFLOW_KWARGS)
 
-    assert result == {"status": "nothing_to_do", "rows_saved": 0, "transactions_saved": 0}
+    assert result == {
+        "status": "nothing_to_do",
+        "rows_saved": 0,
+        "transactions_saved": 0,
+        "positions_rebuild": "skipped",
+    }
 
 
 def test_run_import_cashflow_propagates_domain_error_and_closes_connection(monkeypatch):
@@ -658,6 +709,108 @@ def test_run_import_cashflow_builds_the_http_client_from_settings(monkeypatch):
         "base_url": "http://datastore:8000",
         "internal_api_secret": "secret",  # pragma: allowlist secret
     }
+
+
+# --- positions rebuild following a transaction write ---
+
+# Each write job, the pipeline function it wraps, and the kwargs it's called with. Parametrized
+# rather than repeated per job: the follow-on rebuild is the same contract for all three.
+_WRITE_JOBS = [
+    pytest.param(
+        "run_add_transaction", "add_manual_transaction", _TXN_KWARGS, False, id="add-transaction"
+    ),
+    pytest.param(
+        "run_import_transactions",
+        "import_transactions",
+        _IMPORT_KWARGS,
+        False,
+        id="import-transactions",
+    ),
+    pytest.param(
+        "run_import_cashflow", "import_cashflow", _CASHFLOW_KWARGS, True, id="import-cashflow"
+    ),
+]
+
+
+def _patch_write_job(monkeypatch, *, needs_datastore, pipeline_fn, saved, rebuild_status="ok"):
+    if needs_datastore:
+        _patch_cashflow_job_common(monkeypatch)
+    else:
+        _patch_write_job_common(monkeypatch)
+    monkeypatch.setattr(jobs.pipeline, pipeline_fn, lambda conn, **kw: saved)
+    return _stub_rebuild_positions(monkeypatch, status=rebuild_status)
+
+
+@pytest.mark.parametrize("job_name, pipeline_fn, kwargs, needs_datastore", _WRITE_JOBS)
+def test_write_rebuilds_positions_for_the_written_account_when_rows_were_saved(
+    monkeypatch, job_name, pipeline_fn, kwargs, needs_datastore
+):
+    calls = _patch_write_job(
+        monkeypatch, needs_datastore=needs_datastore, pipeline_fn=pipeline_fn, saved=2
+    )
+    user_id = uuid.uuid4()
+
+    result = getattr(jobs, job_name)(user_id=user_id, **kwargs)
+
+    assert len(calls) == 1
+    assert calls[0]["user_id"] == user_id
+    assert calls[0]["account_label"] == kwargs["account_label"]
+    assert result["positions_rebuild"] == "ok"
+
+
+@pytest.mark.parametrize("job_name, pipeline_fn, kwargs, needs_datastore", _WRITE_JOBS)
+def test_write_skips_the_positions_rebuild_when_nothing_was_saved(
+    monkeypatch, caplog, job_name, pipeline_fn, kwargs, needs_datastore
+):
+    caplog.set_level(logging.INFO)
+    calls = _patch_write_job(
+        monkeypatch, needs_datastore=needs_datastore, pipeline_fn=pipeline_fn, saved=0
+    )
+
+    result = getattr(jobs, job_name)(user_id=uuid.uuid4(), **kwargs)
+
+    assert calls == []
+    assert result["positions_rebuild"] == "skipped"
+    assert any("positions rebuild skipped" in r.message for r in caplog.records)
+
+
+@pytest.mark.parametrize("job_name, pipeline_fn, kwargs, needs_datastore", _WRITE_JOBS)
+def test_write_reports_a_partial_positions_rebuild_without_changing_its_own_status(
+    monkeypatch, job_name, pipeline_fn, kwargs, needs_datastore
+):
+    _patch_write_job(
+        monkeypatch,
+        needs_datastore=needs_datastore,
+        pipeline_fn=pipeline_fn,
+        saved=1,
+        rebuild_status="partial",
+    )
+
+    result = getattr(jobs, job_name)(user_id=uuid.uuid4(), **kwargs)
+
+    assert result["status"] == "ok"
+    assert result["positions_rebuild"] == "partial"
+
+
+@pytest.mark.parametrize("job_name, pipeline_fn, kwargs, needs_datastore", _WRITE_JOBS)
+def test_write_still_reports_its_saved_rows_when_the_positions_rebuild_raises(
+    monkeypatch, caplog, job_name, pipeline_fn, kwargs, needs_datastore
+):
+    _patch_write_job(monkeypatch, needs_datastore=needs_datastore, pipeline_fn=pipeline_fn, saved=1)
+
+    def boom(**kw):
+        raise TickerMappingError("broken mappings file")
+
+    monkeypatch.setattr(jobs, "run_rebuild_positions", boom)
+
+    result = getattr(jobs, job_name)(user_id=uuid.uuid4(), **kwargs)
+
+    assert result["status"] == "ok"
+    assert result["transactions_saved"] == 1
+    assert result["positions_rebuild"] == "failed"
+    failure_logs = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert len(failure_logs) == 1
+    assert failure_logs[0].exc_info is not None
 
 
 # --- run_rebuild_positions ---
