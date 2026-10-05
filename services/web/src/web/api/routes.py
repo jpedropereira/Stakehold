@@ -145,7 +145,7 @@ async def _render_form_error(
     brokers) so that cost is paid only on this, the actual error-render path, never on success.
     """
     if is_htmx(request):
-        return _render(
+        built = _render(
             request,
             response,
             templates,
@@ -153,6 +153,12 @@ async def _render_form_error(
             {"error": message},
             status_code=status_code,
         )
+        # Marks this 4xx/5xx as the app's own deliberate error partial, not a server crash --
+        # htmx-error-swap.js checks for this header before forcing the swap, so an unmapped
+        # exception's default error page still surfaces as a normal htmx error instead of
+        # being silently rendered into the form.
+        built.headers["X-Form-Error"] = "true"
+        return built
     token = ensure_csrf_cookie(request, response, cookie_secure=settings.cookie_secure)
     context = {"csrf_token": token, "error": message, **extra_context}
     if extra_context_loader is not None:
