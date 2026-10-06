@@ -23,6 +23,7 @@ from web.api.deps import (
     get_settings,
     get_templates,
     optional_user,
+    require_admin,
     require_user,
 )
 from web.api.htmx import htmx_or_redirect, is_htmx
@@ -40,6 +41,7 @@ from web.portfolio_client.errors import (
     AccountNotFound,
     InvalidPortfolioRequest,
     PortfolioClientError,
+    TickerMappingNotFound,
 )
 from web.portfolio_view import aggregate_portfolio_returns, filter_open_positions
 from web.settings import Settings
@@ -49,13 +51,15 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 health_router = APIRouter()
 
-# Mirrors portfolio/transactions/base.py's TRANSACTION_TYPES/IDENTIFIER_KINDS -- not imported
+# Mirrors portfolio/transactions/base.py's TRANSACTION_TYPES -- not imported
 # directly, since web talks to portfolio only over HTTP (it has no Python dependency on the
 # portfolio package). Kept here as the one place this contract is duplicated, the same way
 # _SESSION_COOKIE_NAME below documents auth's cookie name as part of the HTTP contract rather
 # than a shared import.
 _TRANSACTION_TYPES = ("BUY", "SELL", "DEPOSIT", "WITHDRAWAL", "DIVIDEND", "FX", "FEE", "ADJUSTMENT")
-_IDENTIFIER_KINDS = ("ISIN", "SYMBOL")
+# Manual entry only ever submits a data-store ticker picked from the list, never an ISIN/SYMBOL
+# -- those need a ticker mapping, which is for broker imports. See portfolio/docs/schema.md.
+_MANUAL_IDENTIFIER_KIND = "TICKER"
 
 # Matches portfolio's own cap (portfolio/api/routes.py's _MAX_UPLOAD_BYTES) -- read here, before
 # the bytes are ever forwarded, so an oversized upload doesn't sit fully buffered in web's memory
@@ -306,6 +310,234 @@ async def home(
     csrf_token = ensure_csrf_cookie(request, response, cookie_secure=settings.cookie_secure)
     return _render(
         request, response, templates, "home.html", {"user": user, "csrf_token": csrf_token}
+    )
+
+
+@router.get("/admin")
+async def admin_page(
+    request: Request,
+    response: Response,
+    settings: Settings = Depends(get_settings),
+    templates=Depends(get_templates),
+    user: AuthUser = Depends(require_admin),
+):
+    csrf_token = ensure_csrf_cookie(request, response, cookie_secure=settings.cookie_secure)
+    return _render(
+        request, response, templates, "admin.html", {"user": user, "csrf_token": csrf_token}
+    )
+
+
+# --- admin: ticker mappings ------------------------------------------------------
+
+_MAPPING_ERRORS: dict[type[PortfolioClientError], tuple[str, int]] = {
+    TickerMappingNotFound: ("That mapping was already deleted.", status.HTTP_404_NOT_FOUND),
+}
+
+
+def _query_count(request: Request, name: str) -> int:
+    raw = request.query_params.get(name, "")
+    return int(raw) if raw.isdigit() else 0
+
+
+def _mapping_outcome(request: Request) -> str | None:
+    """The banner after a redirect back from a save or delete, read from its query string."""
+    if request.query_params.get("saved") == "1":
+        done = "Mapping saved."
+    elif request.query_params.get("deleted") == "1":
+        done = "Mapping deleted."
+    else:
+        return None
+    outcome = f"{done} Positions rebuilt for {_query_count(request, 'rebuilt')} account(s)."
+    failed = _query_count(request, "failed")
+    if failed:
+        outcome += (
+            f" {failed} rebuild(s) failed — the mapping is saved; rebuild those accounts' "
+            "positions to retry."
+        )
+    return outcome
+
+
+async def _mappings_context(portfolio_client: PortfolioClient) -> dict:
+    """Everything admin_mappings.html shows, fetched concurrently. Each list degrades on its own
+    to empty plus a notice, the _list_accounts_and_brokers pattern, so an outage never looks
+    like "no mappings" or "nothing to map"."""
+    mappings, unmapped = await asyncio.gather(
+        portfolio_client.list_ticker_mappings(),
+        portfolio_client.list_all_unmapped_instruments(),
+        return_exceptions=True,
+    )
+    list_error = None
+    if isinstance(mappings, PortfolioClientError):
+        logger.exception(
+            "portfolio service unavailable listing ticker mappings.", exc_info=mappings
+        )
+        mappings, list_error = None, _PORTFOLIO_LIST_ERROR
+    elif isinstance(mappings, BaseException):
+        raise mappings
+    if isinstance(unmapped, PortfolioClientError):
+        logger.exception(
+            "portfolio service unavailable listing unmapped instruments.", exc_info=unmapped
+        )
+        unmapped, list_error = None, _PORTFOLIO_LIST_ERROR
+    elif isinstance(unmapped, BaseException):
+        raise unmapped
+    tickers, tickers_notice = await _load_tickers(portfolio_client)
+    return {
+        # None (not []) when the list couldn't be loaded, so the template can tell "empty" from
+        # "unknown" and say only the true one.
+        "mappings": mappings,
+        "unmapped": unmapped,
+        "list_error": list_error,
+        "tickers": tickers,
+        "tickers_notice": tickers_notice,
+    }
+
+
+@router.get("/admin/mappings")
+async def admin_mappings_page(
+    request: Request,
+    response: Response,
+    settings: Settings = Depends(get_settings),
+    templates=Depends(get_templates),
+    user: AuthUser = Depends(require_admin),
+    portfolio_client: PortfolioClient = Depends(get_portfolio_client),
+):
+    csrf_token = ensure_csrf_cookie(request, response, cookie_secure=settings.cookie_secure)
+    return _render(
+        request,
+        response,
+        templates,
+        "admin_mappings.html",
+        {
+            "user": user,
+            "csrf_token": csrf_token,
+            "error": None,
+            "outcome": _mapping_outcome(request),
+            **await _mappings_context(portfolio_client),
+        },
+    )
+
+
+def _redirect_after_mapping_change(request: Request, response: Response, action: str, result):
+    return _redirect(
+        request,
+        response,
+        f"/admin/mappings?{action}=1&rebuilt={result.accounts_rebuilt}"
+        f"&failed={result.rebuilds_failed}",
+    )
+
+
+async def _submit_mapping_change(
+    request: Request,
+    response: Response,
+    settings: Settings,
+    templates,
+    *,
+    user: AuthUser,
+    portfolio_client: PortfolioClient,
+    csrf_token: str,
+    action_name: str,
+    call,
+    redirect_action: str,
+) -> Response:
+    """The CSRF check, call and outcome both mapping forms share. An error re-renders the whole
+    page, lists and all, with portfolio's own message (or _MAPPING_ERRORS')."""
+
+    async def load_page_context() -> dict:
+        return {"outcome": None, **await _mappings_context(portfolio_client)}
+
+    csrf_error = await _check_csrf(
+        request,
+        response,
+        settings,
+        templates,
+        "admin_mappings.html",
+        action_name,
+        csrf_token,
+        user=user,
+        extra_context_loader=load_page_context,
+    )
+    if csrf_error is not None:
+        return csrf_error
+    return await _submit_portfolio_form(
+        request,
+        response,
+        settings,
+        templates,
+        template_name="admin_mappings.html",
+        action_name=action_name,
+        call=call,
+        error_messages=_MAPPING_ERRORS,
+        on_success=lambda result: _redirect_after_mapping_change(
+            request, response, redirect_action, result
+        ),
+        user=user,
+        extra_context_loader=load_page_context,
+    )
+
+
+@router.post("/admin/mappings")
+async def admin_mappings_set(
+    request: Request,
+    response: Response,
+    # default="", not Form(...) -- see accounts_submit.
+    identifier_kind: str = Form(default=""),
+    identifier: str = Form(default=""),
+    broker: str = Form(default=""),
+    canonical_ticker: str = Form(default=""),
+    csrf_token: str = Form(default=""),
+    settings: Settings = Depends(get_settings),
+    templates=Depends(get_templates),
+    user: AuthUser = Depends(require_admin),
+    portfolio_client: PortfolioClient = Depends(get_portfolio_client),
+):
+    return await _submit_mapping_change(
+        request,
+        response,
+        settings,
+        templates,
+        user=user,
+        portfolio_client=portfolio_client,
+        csrf_token=csrf_token,
+        action_name="set_ticker_mapping",
+        # A blank broker is "no broker" -- what an ISIN mapping needs. portfolio enforces which
+        # kind needs one, so its message is the one the admin sees.
+        call=lambda: portfolio_client.set_ticker_mapping(
+            identifier_kind=identifier_kind,
+            identifier=identifier,
+            broker=broker.strip() or None,
+            canonical_ticker=canonical_ticker,
+            updated_by=user.user_id,
+        ),
+        redirect_action="saved",
+    )
+
+
+@router.post("/admin/mappings/{mapping_id}/delete")
+async def admin_mappings_delete(
+    request: Request,
+    response: Response,
+    mapping_id: int,
+    csrf_token: str = Form(default=""),
+    settings: Settings = Depends(get_settings),
+    templates=Depends(get_templates),
+    user: AuthUser = Depends(require_admin),
+    portfolio_client: PortfolioClient = Depends(get_portfolio_client),
+):
+    # POST, not DELETE: a plain HTML form can only send GET or POST, and the page has no script.
+    return await _submit_mapping_change(
+        request,
+        response,
+        settings,
+        templates,
+        user=user,
+        portfolio_client=portfolio_client,
+        csrf_token=csrf_token,
+        action_name="delete_ticker_mapping",
+        call=lambda: portfolio_client.delete_ticker_mapping(
+            mapping_id=mapping_id, updated_by=user.user_id
+        ),
+        redirect_action="deleted",
     )
 
 
@@ -597,11 +829,31 @@ _TRANSACTION_ERRORS: dict[type[PortfolioClientError], tuple[str, int]] = {
 }
 
 
-def _transaction_new_context(account_label: str, *, saved: bool) -> dict:
+_TICKERS_UNAVAILABLE = (
+    "The ticker list couldn't be loaded right now — type the ticker exactly as Stakehold lists it."
+)
+
+
+async def _load_tickers(portfolio_client: PortfolioClient) -> tuple[list[str], str | None]:
+    """The tickers the manual-entry picker offers, or an empty list plus a notice when portfolio
+    (or data-store behind it) can't be reached. The form stays usable either way: the picker is
+    a convenience, and portfolio still checks whatever is typed when the transaction is saved."""
+    try:
+        return await portfolio_client.list_tickers(), None
+    except PortfolioClientError as exc:
+        logger.exception("portfolio service unavailable listing tickers.", exc_info=exc)
+        return [], _TICKERS_UNAVAILABLE
+
+
+async def _transaction_new_context(
+    portfolio_client: PortfolioClient, account_label: str, *, saved: bool
+) -> dict:
+    tickers, tickers_notice = await _load_tickers(portfolio_client)
     return {
         "account_label": account_label,
         "transaction_types": _TRANSACTION_TYPES,
-        "identifier_kinds": _IDENTIFIER_KINDS,
+        "tickers": tickers,
+        "tickers_notice": tickers_notice,
         "saved": saved,
     }
 
@@ -614,6 +866,7 @@ async def transaction_new_form(
     settings: Settings = Depends(get_settings),
     templates=Depends(get_templates),
     user: AuthUser = Depends(require_user),
+    portfolio_client: PortfolioClient = Depends(get_portfolio_client),
 ):
     csrf_token = ensure_csrf_cookie(request, response, cookie_secure=settings.cookie_secure)
     saved = request.query_params.get("saved") == "1"
@@ -626,7 +879,7 @@ async def transaction_new_form(
             "user": user,
             "csrf_token": csrf_token,
             "error": None,
-            **_transaction_new_context(account, saved=saved),
+            **await _transaction_new_context(portfolio_client, account, saved=saved),
         },
     )
 
@@ -655,7 +908,9 @@ def _parse_transaction_form(
             parsed_datetime = parsed_datetime.replace(tzinfo=timezone.utc)
         else:
             parsed_datetime = parsed_datetime.astimezone(timezone.utc)
-        parsed_amount = Decimal(native_amount)
+        # Blank is allowed: portfolio derives a BUY/SELL's amount and reports a missing one
+        # for any other type itself.
+        parsed_amount = Decimal(native_amount) if native_amount else None
         parsed_quantity = Decimal(quantity) if quantity else None
         parsed_price = Decimal(price) if price else None
         parsed_fx_rate = Decimal(fx_rate) if fx_rate else None
@@ -691,7 +946,6 @@ async def transaction_new_submit(
     native_amount: str = Form(default=""),
     native_currency: str = Form(default=""),
     instrument_identifier: str = Form(default=""),
-    instrument_identifier_kind: str = Form(default=""),
     quantity: str = Form(default=""),
     price: str = Form(default=""),
     fx_rate: str = Form(default=""),
@@ -702,7 +956,10 @@ async def transaction_new_submit(
     user: AuthUser = Depends(require_user),
     portfolio_client: PortfolioClient = Depends(get_portfolio_client),
 ):
-    form_context = {"user": user, **_transaction_new_context(account_label, saved=False)}
+    form_context = {
+        "user": user,
+        **await _transaction_new_context(portfolio_client, account_label, saved=False),
+    }
     csrf_error = await _check_csrf(
         request,
         response,
@@ -749,8 +1006,10 @@ async def transaction_new_submit(
             broker_transaction_ref=broker_transaction_ref,
             transaction_type=transaction_type,
             native_currency=native_currency,
-            instrument_identifier=instrument_identifier or None,
-            instrument_identifier_kind=instrument_identifier_kind or None,
+            instrument_identifier=instrument_identifier.strip() or None,
+            instrument_identifier_kind=(
+                _MANUAL_IDENTIFIER_KIND if instrument_identifier.strip() else None
+            ),
             **parsed,
         ),
         error_messages=_TRANSACTION_ERRORS,

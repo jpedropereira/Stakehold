@@ -8,7 +8,6 @@ dependencies = [
     "psycopg[binary]>=3.3",
     "python-dotenv>=1.0",
     "python-multipart>=0.0.20",
-    "pyyaml>=6.0",
     "requests>=2.32",
     "shared",
     "uvicorn[standard]>=0.34",

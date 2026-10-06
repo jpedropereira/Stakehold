@@ -20,6 +20,11 @@ class AccountLabelConflict(PortfolioClientError):
     """portfolio returned 409 -- the label is already used under a different broker."""
 
 
+class TickerMappingNotFound(PortfolioClientError):
+    """portfolio returned 404 on a ticker-mapping delete -- the mapping is already gone. Its own
+    class because on every other route a 404 means AccountNotFound."""
+
+
 class InvalidPortfolioRequest(PortfolioClientError):
     """portfolio returned 422 -- a caller-supplied value failed validation or parsing (a bad
     fx_rate, an unmapped broker, a malformed export file, and so on).

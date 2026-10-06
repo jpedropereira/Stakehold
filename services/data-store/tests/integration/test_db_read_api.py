@@ -13,6 +13,7 @@ from data_store.read_flows import fx_rate_series
 from data_store.returns.repository import (
     get_return_series,
     get_returns_date_range,
+    list_tickers,
     save_market_returns,
     ticker_exists,
 )
@@ -108,6 +109,34 @@ def test_ticker_exists_and_get_returns_date_range_against_a_real_schema():
     assert ticker_exists(conn, "TEST_DOES_NOT_EXIST", "yfinance") is False
     assert get_returns_date_range(conn, TICKER, "yfinance") == (date(2024, 1, 2), date(2024, 1, 2))
     conn.close()
+
+
+def test_list_tickers_is_distinct_sorted_and_scoped_to_the_source():
+    """The loose-index-scan query: one entry per ticker however many dates it has, in ticker
+    order, and a ticker ingested only under another source is left out. Asserted on this
+    test's own TEST_ tickers only -- the database may hold other rows."""
+    conn = _connect()
+    two_days = [
+        ["TEST_LIST_B", date(2024, 1, 2), 10.0, 10.0, 10.0, 10.0, 10.0, 100, 0.0, 0.0],
+        ["TEST_LIST_B", date(2024, 1, 3), 10.0, 10.0, 10.0, 10.0, 10.0, 100, 0.0, 0.0],
+        ["TEST_LIST_A", date(2024, 1, 2), 10.0, 10.0, 10.0, 10.0, 10.0, 100, 0.0, 0.0],
+    ]
+    save_raw_market_data(conn, "yfinance", "equity", make_prices_df(two_days))
+    save_raw_market_data(
+        conn,
+        "test_other_source",
+        "equity",
+        make_prices_df(
+            [["TEST_LIST_OTHER", date(2024, 1, 2), 1.0, 1.0, 1.0, 1.0, 1.0, 1, 0.0, 0.0]]
+        ),
+    )
+
+    tickers = list_tickers(conn, "yfinance")
+    conn.close()
+
+    ours = [t for t in tickers if t.startswith("TEST_LIST_")]
+    assert ours == ["TEST_LIST_A", "TEST_LIST_B"]
+    assert tickers == sorted(tickers)
 
 
 def test_get_return_series_preserves_null_returns_from_a_real_numeric_column():

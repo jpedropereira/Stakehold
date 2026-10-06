@@ -27,11 +27,13 @@ copy of `email`/`display_name`.
 | `display_name`  | `VARCHAR(100)`  | Collected at signup. Exists so `web` has somewhere to read a greeting from without keeping its own copy of user data. |
 | `password_hash` | `TEXT`          | An Argon2id PHC string (`passwords.hash_password`, `argon2-cffi`). `TEXT`, not a fixed width: the string's length moves with the cost parameters, and re-tuning those parameters later shouldn't force a migration. |
 | `created_at`    | `TIMESTAMPTZ`   | Defaults to `now()`.                                            |
+| `is_admin`      | `BOOLEAN`       | `NOT NULL DEFAULT false`. Lets the user manage settings that apply to every user (ticker mappings, first). Added after the table shipped, so it comes from an `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` rather than the `CREATE TABLE`; the default makes every existing user a non-admin. Set only by `auth user set-admin` — no HTTP endpoint writes it (see [`architecture.md`](architecture.md#admin-role)). A plain flag rather than a roles table: there is one role, and a roles table is easy to introduce if a second one ever appears. |
 
 Indexes: `UNIQUE (email)` — the signup uniqueness check and the login lookup both key off it.
 
 **Loading strategy**: single-row insert at signup (`POST /signup`). Never bulk-loaded, never
-updated in bulk — a password change or display-name edit is a single-row `UPDATE` by `id`.
+updated in bulk — a password change or display-name edit is a single-row `UPDATE` by `id`, and
+granting or revoking admin a single-row `UPDATE` by `email`.
 
 ## `sessions`
 

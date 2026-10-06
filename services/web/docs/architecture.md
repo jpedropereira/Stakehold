@@ -44,6 +44,16 @@ calls [`portfolio`](../../portfolio/docs/architecture.md), `data-store`, and
   (`auth_client/http_client.py`)** — the same split `portfolio`'s `DataStoreClient` uses. This is
   what makes `tests/unit/test_routes.py` runnable against a fake with no live `auth` service, and
   keeps HTTP status-code mapping in exactly one place.
+- **Admin pages are gated here, in `web` (`api/deps.require_admin`).** `auth` owns the role
+  (`users.is_admin`, granted only by the `auth user set-admin` CLI) and reports it on every
+  session validation; `require_admin` builds on `require_user` and raises `AdminRequired`, which an
+  app-level handler turns into a 403 page. The check happens on every request, against what
+  `auth` just reported, so revoking admin takes effect on the next page load with no cached role
+  to expire. `portfolio` doesn't re-check the role on the admin endpoints `web` will call: it
+  already trusts its internal-secret caller for every user's data, and an admin check there would
+  rest on the same trust (a forwarded flag), so it would add no protection the secret doesn't
+  already give. `AuthClient` treats a missing or non-boolean `is_admin` as `False`, so the gate
+  fails closed and a `web` deployed ahead of `auth` still lets everyone log in.
 - **CSRF: a stateless double-submit cookie (`api/csrf.py`)**, not a signed/itsdangerous token.
   A random value is set in a cookie and re-embedded as a hidden form field; a POST is accepted
   only if the two match (`secrets.compare_digest` on encoded bytes, mirroring
@@ -189,14 +199,18 @@ calls [`portfolio`](../../portfolio/docs/architecture.md), `data-store`, and
 | Route | Behaviour |
 |---|---|
 | `GET /` | `require_user` dependency: logged in → the placeholder home page; no valid session → redirected to `/login` (an `AuthRequired` exception mapped to a 303 by an app-level handler) |
+| `GET /admin` | `require_admin` dependency: an admin → the admin page (a link to ticker mappings), linked from the nav only for admins; a logged-in non-admin → a 403 page (`AdminRequired`, mapped by an app-level handler); no valid session → redirected to `/login`, like every `require_user` route |
+| `GET /admin/mappings` | `require_admin`; fetches `portfolio`'s `GET /ticker-mappings`, `GET /instruments/unmapped/all` and `GET /instruments/tickers`, and renders three things: the instruments still waiting for a mapping (each with an inline "map to ticker" form), the existing mappings (each with a delete button), and a form to add or re-point one. Each list degrades on its own to a notice rather than an empty table, so an outage never reads as "nothing to map". After a save or delete, the redirect's query string (`saved`/`deleted`, `rebuilt`, `failed`) drives a one-line outcome banner |
+| `POST /admin/mappings` | `require_admin`, CSRF-checked; calls `portfolio`'s `PUT /ticker-mappings` with the admin's own `user_id` as `updated_by` (a blank broker is sent as `null`, which an ISIN needs; portfolio enforces which kind needs one and its 422 message is shown as-is). Redirects to `/admin/mappings?saved=1&rebuilt=<n>&failed=<m>` |
+| `POST /admin/mappings/{id}/delete` | `require_admin`, CSRF-checked; calls `DELETE /ticker-mappings/{id}`. POST rather than DELETE because a plain HTML form can't send DELETE and the page has no script. An already-deleted mapping (portfolio's 404, mapped to `TickerMappingNotFound` on this route only) re-renders with "That mapping was already deleted." |
 | `GET /login`, `GET /signup` | `optional_user` dependency: already logged in → redirected to `/`; otherwise renders the form with a fresh or existing CSRF cookie |
 | `POST /login`, `POST /signup` | CSRF-checked, calls `auth`, proxies the `Set-Cookie` `auth` returned, then redirects to `/` — a 303 for a plain form post, or an `HX-Redirect` response header for an `hx-post` (htmx's own XHR follows a 303 by swapping the *content* of the request's own response into the target element, which would drop a full HTML document into a form's error slot; `HX-Redirect` instead triggers a real browser navigation) |
 | `POST /logout` | CSRF-checked, calls `auth` (best-effort — a failure is logged, not surfaced, since the user's intent to log out should not depend on `auth` being reachable), clears the session cookie locally, redirects to `/login` |
 | `GET /health` | `200 {"status": "ok"}`, unauthenticated, no dependency check (see "Key decisions") |
 | `GET /accounts` | `require_user`; lists the caller's accounts (`portfolio`'s `GET /accounts`) and available broker parsers (`GET /brokers`, for the create-account `<datalist>` hint) and renders the create-account form |
 | `POST /accounts` | CSRF-checked, calls `portfolio`'s `POST /accounts`, redirects to `/accounts` on success |
-| `GET /transactions/new` | `require_user`; required `account` query param (a bare 422 for a missing/blank value — reachable only via a hand-crafted URL, since every link that points here already includes it); renders the manual-entry form, with a confirmation banner if `?saved=1` |
-| `POST /transactions/new` | CSRF-checked, calls `portfolio`'s `POST /transactions`, redirects to `/transactions/new?account=<label>&saved=1` on success |
+| `GET /transactions/new` | `require_user`; required `account` query param (a bare 422 for a missing/blank value — reachable only via a hand-crafted URL, since every link that points here already includes it); renders the manual-entry form, with a confirmation banner if `?saved=1`. The instrument field is a ticker picker: a native `<datalist>` filled from `portfolio`'s `GET /instruments/tickers` (no script, so the strict CSP is untouched). If that call fails, the form still renders with an empty list and a notice; the picker is a convenience, and portfolio checks whatever is typed when it's saved |
+| `POST /transactions/new` | CSRF-checked, calls `portfolio`'s `POST /transactions` (an instrument, when given, is always sent as `instrument_identifier_kind = 'TICKER'`; a blank Amount is sent as `null`, for portfolio to derive on a BUY/SELL or reject as missing on anything else), redirects to `/transactions/new?account=<label>&saved=1` on success. An unknown ticker comes back as portfolio's 422, whose message is shown as-is like every other 422. The ticker list is re-fetched for the error re-render |
 | `GET /transactions/import` | `require_user`; required `account` query param; renders the upload form, with a confirmation banner (row count) if `?imported=<n>` |
 | `POST /transactions/import` | CSRF-checked, multipart; size-capped at 20MB (matching `portfolio`'s own cap) before the bytes are forwarded; calls `portfolio`'s `POST /transactions/import`, redirects to `/transactions/import?account=<label>&imported=<rows_saved>` on success |
 | `GET /portfolio` | `require_user`; required `account` query param; fetches `portfolio`'s `GET /positions`/`GET /returns` concurrently, aggregates the per-ticker return series into one portfolio-level series (`portfolio_view.aggregate_portfolio_returns`), and renders a positions table plus a Chart.js return-over-time chart. `AccountNotFound` on either call renders a 404; any other failure degrades that half of the page independently, mirroring `GET /accounts`'s own pattern. No writes, no rebuild trigger. |
@@ -219,20 +233,23 @@ exists to close; no equivalent concern applies to the portfolio routes; see "Key
   uses, extracted there after both carried a byte-for-byte copy.
 - `auth_client/{base,http_client,errors}.py` — the `AuthClient` Protocol, its real
   implementation, and one error hierarchy (`AuthClientError`) routes catch with a single `except`.
-- `portfolio_client/{base,http_client,errors}.py` (task 11, extended task 12) — the
+- `portfolio_client/{base,http_client,errors}.py` (task 11, extended tasks 12 and 17) — the
   `PortfolioClient` Protocol, its real implementation, and one error hierarchy
   (`PortfolioClientError`); see "Key decisions" for how and why it departs from `auth_client`'s
   shape in a couple of places. Task 12 added `list_positions`/`list_returns` (plus `Position`/
   `Return` dataclasses) to the same trio rather than inventing new files — no new error types were
   needed, since `AccountNotFound`/`PortfolioUnavailable` already cover every failure mode these
-  two reads can produce.
+  two reads can produce. Task 17 added the ticker-mapping calls (`TickerMapping`,
+  `UnmappedInstrument`, `TickerMappingWriteResult`) and one error, `TickerMappingNotFound`: a 404
+  from the mapping delete means the mapping is gone, not an account, so it can't reuse
+  `AccountNotFound`.
 - `portfolio_view.py` (task 12) — pure, I/O-free reshaping of what `routes.py` fetches for
   `GET /portfolio`: `filter_open_positions` and `aggregate_portfolio_returns` (see "Key
   decisions"). No FastAPI/httpx dependency, tested in isolation, mirroring how `portfolio`'s own
   `returns/calculator.py` is a pure function.
 - `api/{app,deps,routes,csrf,security_headers,htmx}.py` — app assembly and lifespan (opens/closes
   two shared `httpx.AsyncClient`s, one per upstream service), FastAPI dependencies (`require_user`,
-  `optional_user`, `client_ip`, `get_auth_client`/`get_portfolio_client`, and friends), the route
+  `require_admin`, `optional_user`, `client_ip`, `get_auth_client`/`get_portfolio_client`, and friends), the route
   handlers, the CSRF helpers, the security-headers middleware, and `htmx.py`'s
   `is_htmx`/`htmx_or_redirect` (shared by `routes.py`'s redirects and `app.py`'s `AuthRequired`
   handler, so every redirect in the app picks htmx-partial vs. full-navigation the same way).

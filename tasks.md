@@ -2,7 +2,7 @@
 
 Roadmap for the UI/UX chunk: making `web` look and feel like a finished product rather than a
 walking skeleton, in both aesthetics (a real design system, dark mode) and UX (navigation, readable
-figures, data that refreshes from the UI, forms that fit the task). The previous chunk, the
+figures, visible data freshness, forms that fit the task). The previous chunk, the
 walking skeleton across all four services, is complete and archived in
 [`docs/roadmap-archive/walking-skeleton.md`](docs/roadmap-archive/walking-skeleton.md).
 
@@ -46,7 +46,7 @@ numbers. Code comments and docs throughout the repo say "task 9", "task 13", and
 | UI-4 | [App shell & navigation](#ui-4-app-shell--navigation) | UI-1 | blocked |
 | UI-5 | [Number & date formatting](#ui-5-number--date-formatting) | — | ready |
 | UI-6 | [Account portfolio page redesign](#ui-6-account-portfolio-page-redesign) | UI-4, UI-5 | blocked |
-| UI-7 | [Refresh data from the UI](#ui-7-refresh-data-from-the-ui) | UI-6 | blocked |
+| UI-7 | [Data freshness & rebuild feedback](#ui-7-data-freshness--rebuild-feedback) | UI-6 | blocked |
 | UI-8 | [Transactions list](#ui-8-transactions-list) | UI-4, UI-5 | blocked |
 | UI-9 | [Transaction entry form UX](#ui-9-transaction-entry-form-ux) | UI-1 | blocked |
 | UI-10 | [Accounts & import pages](#ui-10-accounts--import-pages) | UI-4 | blocked |
@@ -76,7 +76,9 @@ rule, and has no focus styles, button variants, spacing scale or responsive rule
 - Shared components: one `.card` (replacing the three card classes), `.field` (label, input, help
   text, error), and `.btn` with `primary` (gold), `secondary` and `ghost` variants. Visible
   `:focus-visible` on every interactive element.
-- Templates migrated to the new class names. No route or behaviour change.
+- Templates migrated to the new class names, including the admin pages (`admin.html`,
+  `admin_mappings.html`) and `forbidden.html` added by walking-skeleton tasks 16–17. No route or
+  behaviour change.
 
 Files: `services/web/src/web/static/web.css`, every template under `templates/`,
 `tests/unit/test_templates.py`.
@@ -142,8 +144,8 @@ Tests: `POST /theme` (each valid value, invalid value rejected, CSRF required, c
 Depends on UI-1. Today the nav has one "Portfolio" link that goes to `/accounts`, with no active
 state; nothing ties an account's pages together.
 
-- Header nav: **Overview** (`/`) and **Accounts** (`/accounts`), with an active state driven by a
-  template variable each route sets.
+- Header nav: **Overview** (`/`), **Accounts** (`/accounts`) and, for admins only, the existing
+  **Admin** link (`/admin`), with an active state driven by a template variable each route sets.
 - On account-scoped pages (`/portfolio`, `/transactions`, `/transactions/new`,
   `/transactions/import`): a shared account header with the account label and broker, a sub-nav
   (Holdings / Transactions / Add / Import), and an account switcher (a plain `<select>` +
@@ -206,28 +208,34 @@ Tests: the new client method (happy path, 404, malformed body); the join/weight 
 `portfolio_view.py` (a position with no return row yet, zero total value, rounding); route tests
 for the tiles and the degrade-on-partial-failure behaviour UI-6 must keep.
 
-### UI-7. Refresh data from the UI
+### UI-7. Data freshness & rebuild feedback
 
 **Status:** blocked
 
-Depends on UI-6. Positions and returns are only rebuilt from the CLI today, and the empty state
-literally tells the user to "run rebuild-returns", although `portfolio` already exposes
-`POST /positions/rebuild` and `POST /returns/rebuild`.
+Depends on UI-6.
 
-- A **Refresh** button on the account page posts to a new CSRF-checked
-  `POST /portfolio/refresh?account=`. That route calls rebuild-positions and then rebuild-returns
-  through two new `PortfolioClient` methods, then re-renders the page.
-- The outcome is reported plainly: rows saved, and any `blocked` or `failed_pairs` tickers by name.
-  Unmapped instruments (`GET /instruments/unmapped`, a third new client method) are listed with a
-  hint that they need a ticker mapping.
-- htmx loading state on the button while it runs (rebuild-returns can take seconds).
-- All CLI wording is removed from empty states.
+**Rescoped (2026-10-07).** This was "Refresh data from the UI": a manual Refresh button calling the
+rebuild endpoints. Walking-skeleton task 18 made that unnecessary. `portfolio` now rebuilds
+positions and returns after every write and every six hours, and the CLI wording is gone from the
+empty states. What's left is making the automatic rebuilds visible, so a holding with no figures
+never looks like a bug.
 
-Open question, to settle with the user at the start of the task: should saving a transaction or
-importing a file also trigger a refresh automatically, or offer a "Refresh now" link?
+- **Rebuild outcome after a write.** `portfolio`'s `TransactionsWriteResponse` already reports
+  `positions_rebuild` and `returns_rebuild` (`ok` / `partial` / `nothing_to_do` / `skipped` /
+  `failed`), but `web`'s `TransactionWriteResult` drops both. Carry them through, and turn the
+  "saved" / "imported" confirmations on `/transactions/new` and `/transactions/import` into a
+  plain one-line outcome: for example "Saved. Holdings and returns updated.", or "Saved. Returns
+  couldn't be updated; they'll catch up on the next scheduled refresh."
+- **Pending states on the account page.** A holding with a position but no return row yet is
+  labelled with the reason, not left blank. Either it is waiting for a ticker mapping (from
+  `GET /instruments/unmapped`, which needs a new client method; an admin sees a link to
+  `/admin/mappings`) or it is waiting for prices.
+- **Freshness.** Say in plain words that prices refresh automatically. The "prices as of <date>"
+  line itself stays in UI-6.
 
-Tests: client methods (including the `partial` result shape); route success, partial, and
-`DataStoreApiError` → 502-mapped error, each rendering an appropriate message.
+Tests: the write-result fields parsed by the client, including an older response missing them;
+the confirmation message for each rebuild status; route and template tests for the two pending
+states, and for the admin-only mapping link.
 
 ### UI-8. Transactions list
 
@@ -250,11 +258,14 @@ Tests: client method; route (login required, happy path, empty, unknown account 
 
 **Status:** blocked
 
-Depends on UI-1. `/transactions/new` shows 12 fields at once regardless of type, requires a
-hand-typed reference, takes the currency as free text, and shows the FX field even for EUR.
+Depends on UI-1. Partly done on main since this was planned: the instrument is now picked from
+`data-store`'s tickers (a `<datalist>`), the identifier-kind field is gone, and buys and sells
+derive the amount from price × quantity + fees. Still open: `/transactions/new` shows all its
+fields at once regardless of type, requires a hand-typed reference, takes the currency as free
+text, and shows the FX field even for EUR.
 
 - Fields grouped into fieldsets: *What* (type), *When* (date), *Amount* (amount, currency, FX
-  rate, fees), *Instrument* (identifier, kind, quantity, price).
+  rate, fees), *Instrument* (ticker, quantity, price).
 - A new `static/transaction_form.js` shows only the fields relevant to the selected type (for
   example instrument, quantity and price for BUY/SELL; no instrument for a deposit), and shows FX
   rate only when the currency isn't EUR. Hidden fields are cleared so they aren't submitted.
@@ -264,7 +275,7 @@ hand-typed reference, takes the currency as free text, and shows the FX field ev
   because it is the idempotency key, so a user re-entering a known broker reference can still do so.
 - Currency as a `<select>` (or input + datalist) of the currencies `data-store` supports,
   defaulting to EUR. Date defaults to now. Short help text on the less obvious fields (reference,
-  FX rate direction, identifier kind).
+  FX rate direction, when the amount is derived).
 - The type→fields mapping is confirmed against `transactions/base.py`'s `validate()` in
   `portfolio`, not guessed.
 
@@ -280,10 +291,11 @@ Depends on UI-4.
 - **Accounts**: the account list comes first as rows or cards, each with its broker and one
   primary action (open holdings) plus secondary links. "New account" moves to a secondary
   `<details>` disclosure, open automatically when the user has no accounts. A first-run empty
-  state explains the three steps: create an account, add or import transactions, refresh.
+  state explains the steps: create an account, then add or import transactions.
 - **Import**: a styled file drop zone (a real `<input type="file">` underneath, so it works without
   JS), the account and broker shown, the 20 MB limit stated, and after a successful import a
-  result summary with next steps (Refresh, from UI-7 if done, and view transactions).
+  result summary (with UI-7's rebuild outcome, if done) and next steps (view holdings, view
+  transactions).
 
 Tests: route/template tests for the empty-state disclosure behaviour and the import summary.
 
@@ -318,7 +330,8 @@ Depends on UI-1 and UI-2 (the error treatment).
 - htmx `hx-indicator` plus a disabled submit button while any form request is in flight, so a slow
   submit can't be double-posted.
 - Branded 404 and 5xx pages (extending `base.html`, plain copy) instead of FastAPI's JSON or
-  Starlette's default error pages.
+  Starlette's default error pages, following the pattern of the existing 403 page
+  (`forbidden.html`).
 - Auth pages: centered card with the mark, a password show/hide toggle (external JS), and the
   12-character minimum stated up front on signup instead of only on failure.
 
@@ -334,8 +347,8 @@ Last, once every page exists in its new form.
 - Tables (holdings, transactions) reflow at phone width (stacked rows or a horizontally
   scrollable container with a visible cue). No page scrolls horizontally at 360 px.
 - Contrast audit of every page in both themes against WCAG AA; fix any regressions.
-- Keyboard-only walkthrough of every flow (signup → account → add → refresh → view), with visible
-  focus throughout.
+- Keyboard-only walkthrough of every flow (signup → account → add → view, and the admin
+  mapping flow), with visible focus throughout.
 - A Playwright screenshot script under `services/web/` (Playwright is already a workspace
   dependency, used by `data-store`) that captures every page in light and dark at desktop and
   phone width, for review rather than as a pixel-diff gate.

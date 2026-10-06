@@ -23,7 +23,7 @@ from portfolio.accounts.repository import Account
 from portfolio.datastore_client.http_client import HttpDataStoreClient
 from portfolio.run_result import build_run_result
 from portfolio.settings import Settings, SettingsError, load_settings
-from portfolio.ticker_mapping.loader import load_ticker_mappings
+from portfolio.ticker_mapping.repository import TickerMappingRow
 from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict
 from shared.db.connection import apply_schema, get_connection, transaction
@@ -33,7 +33,13 @@ logger = logging.getLogger(__name__)
 
 SCHEMA_PATH = Path(__file__).resolve().parent / "db" / "schema.sql"
 
-_TARGET_TABLES = ("accounts", "transactions", "position_snapshots", "return_snapshots")
+_TARGET_TABLES = (
+    "accounts",
+    "transactions",
+    "position_snapshots",
+    "return_snapshots",
+    "ticker_mappings",
+)
 
 
 def _existing_tables(conn, schema: str) -> set[str]:
@@ -193,18 +199,33 @@ def run_list_available_brokers() -> dict[str, int | str]:
     return result
 
 
-# What a write job reports under `positions_rebuild` when it didn't run one, or when one raised.
-# Every other value is the rebuild run's own `status` (ok / partial / nothing_to_do).
-POSITIONS_REBUILD_SKIPPED = "skipped"
-POSITIONS_REBUILD_FAILED = "failed"
+def _require_datastore_client(settings: Settings, *, command: str) -> HttpDataStoreClient:
+    """A data-store client for a command that can't run without one, or SettingsError naming
+    the command. Checked per command rather than in settings.py, since most commands -- and
+    manual entry of anything but a TICKER -- never touch data-store."""
+    if not settings.datastore_api_url or not settings.internal_api_secret:
+        raise SettingsError(
+            f"DATASTORE_API_URL and INTERNAL_API_SECRET must both be set for {command}"
+        )
+    return HttpDataStoreClient(
+        base_url=settings.datastore_api_url, internal_api_secret=settings.internal_api_secret
+    )
 
 
-def _rebuild_positions_after_write(
+# What a write job reports under `positions_rebuild`/`returns_rebuild` when it didn't run that
+# rebuild, or when it raised. Every other value is the rebuild run's own `status` (ok / partial /
+# nothing_to_do).
+REBUILD_SKIPPED = "skipped"
+REBUILD_FAILED = "failed"
+
+
+def _rebuild_after_write(
     *, saved: int, user_id: UUID, account_label: str, settings: Settings
-) -> str:
-    """Rebuild one account's positions right after a write to its transaction log committed, so
-    `position_snapshots` (all GET /positions ever reads) never silently lags the log it derives
-    from. Returns the value each write job reports as `positions_rebuild`.
+) -> dict[str, str]:
+    """Rebuild one account's positions, then its returns, right after a write to its
+    transaction log committed, so neither `position_snapshots` nor `return_snapshots` silently
+    lags the log they derive from. Returns the `positions_rebuild`/`returns_rebuild` pair each
+    write job reports.
 
     Skipped when the write saved nothing: the log is unchanged, so the snapshots are too.
 
@@ -214,30 +235,96 @@ def _rebuild_positions_after_write(
     saved transaction into an error response, and a caller retrying on that would be acting on
     a false signal. Deliberately reported alongside the write's own `status`, never folded into
     it: an unmapped instrument blocking its own ticker is a fact about the rebuild, not about
-    whether the transaction was saved. See docs/architecture.md's "Positions follow every
-    transaction write".
+    whether the transaction was saved. See docs/architecture.md's "Positions and returns follow
+    every transaction write".
     """
     if not saved:
         logger.info(
-            "positions rebuild skipped for account %r (user %s): no transactions were saved.",
+            "positions and returns rebuilds skipped for account %r (user %s): no transactions "
+            "were saved.",
             account_label,
             user_id,
         )
-        return POSITIONS_REBUILD_SKIPPED
+        return {"positions_rebuild": REBUILD_SKIPPED, "returns_rebuild": REBUILD_SKIPPED}
+    positions, returns = _rebuild_derived_isolated(
+        user_id=user_id, account_label=account_label, settings=settings, saved_what="transactions"
+    )
+    return {"positions_rebuild": positions, "returns_rebuild": returns}
+
+
+def _rebuild_derived_isolated(
+    *, user_id: UUID, account_label: str, settings: Settings, saved_what: str
+) -> tuple[str, str]:
+    """One account's positions rebuild and then its returns rebuild, each isolated the way
+    _rebuild_positions_isolated describes. Returns the two statuses.
+
+    Returns come second because they're computed from position_snapshots, and are skipped
+    (not attempted) when the positions rebuild failed -- they'd be computed from stale
+    positions -- or when data-store isn't configured, since prices come from there. The second
+    case is logged with the command to run once it is, so a CLI-only setup with no data-store
+    still saves transactions.
+    """
+    positions = _rebuild_positions_isolated(
+        user_id=user_id, account_label=account_label, settings=settings, saved_what=saved_what
+    )
+    if positions == REBUILD_FAILED:
+        logger.info(
+            "returns rebuild skipped for account %r (user %s): its positions rebuild failed.",
+            account_label,
+            user_id,
+        )
+        return positions, REBUILD_SKIPPED
+    if not settings.datastore_api_url or not settings.internal_api_secret:
+        logger.warning(
+            "returns rebuild skipped for account %r (user %s): DATASTORE_API_URL and "
+            "INTERNAL_API_SECRET aren't both set -- run `portfolio rebuild-returns --user %s "
+            "--account %s` once they are.",
+            account_label,
+            user_id,
+            user_id,
+            account_label,
+        )
+        return positions, REBUILD_SKIPPED
+    try:
+        result = run_rebuild_returns(
+            user_id=user_id, account_label=account_label, settings=settings
+        )
+    except Exception:
+        logger.exception(
+            "returns rebuild after write failed for account %r (user %s) -- the %s are saved; "
+            "run `portfolio rebuild-returns --user %s --account %s` to retry.",
+            account_label,
+            user_id,
+            saved_what,
+            user_id,
+            account_label,
+        )
+        return positions, REBUILD_FAILED
+    return positions, result["status"]
+
+
+def _rebuild_positions_isolated(
+    *, user_id: UUID, account_label: str, settings: Settings, saved_what: str
+) -> str:
+    """One account's positions rebuild, run after some other write has already committed: a
+    failure is logged with its traceback and reported as `failed`, never raised, since raising
+    would make the committed write look like it failed. `saved_what` names that write in the
+    log line."""
     try:
         result = run_rebuild_positions(
             user_id=user_id, account_label=account_label, settings=settings
         )
     except Exception:
         logger.exception(
-            "positions rebuild after write failed for account %r (user %s) -- the transactions "
+            "positions rebuild after write failed for account %r (user %s) -- the %s "
             "are saved; run `portfolio rebuild-positions --user %s --account %s` to retry.",
             account_label,
             user_id,
+            saved_what,
             user_id,
             account_label,
         )
-        return POSITIONS_REBUILD_FAILED
+        return REBUILD_FAILED
     return result["status"]
 
 
@@ -248,7 +335,7 @@ def run_add_transaction(
     broker_transaction_ref: str,
     transaction_type: str,
     trade_datetime: datetime,
-    native_amount: Decimal,
+    native_amount: Decimal | None,
     native_currency: str,
     instrument_identifier: str | None = None,
     instrument_identifier_kind: str | None = None,
@@ -259,9 +346,18 @@ def run_add_transaction(
     settings: Settings | None = None,
 ) -> dict[str, int | str]:
     """Record one manually-entered transaction. See pipeline.add_manual_transaction for what
-    `saved` means."""
+    `saved` means.
+
+    A TICKER-kind instrument needs data-store to confirm it exists, so only then is a client
+    built -- and SettingsError raised if data-store isn't configured. Any other kind keeps
+    working with no data-store at all."""
     configure_logging()
     settings = settings or load_settings()
+    datastore_client = (
+        _require_datastore_client(settings, command="add-transaction with a TICKER instrument")
+        if instrument_identifier_kind == "TICKER"
+        else None
+    )
     conn = get_connection(settings.database_url)
     try:
         logger.info(
@@ -285,6 +381,7 @@ def run_add_transaction(
             price=price,
             fx_rate=fx_rate,
             fees_native=fees_native,
+            datastore_client=datastore_client,
         )
     finally:
         conn.close()
@@ -293,8 +390,10 @@ def run_add_transaction(
     result = build_run_result(
         units_total=saved, rows_saved=saved, failed=0, transactions_saved=saved
     )
-    result["positions_rebuild"] = _rebuild_positions_after_write(
-        saved=saved, user_id=user_id, account_label=account_label, settings=settings
+    result.update(
+        _rebuild_after_write(
+            saved=saved, user_id=user_id, account_label=account_label, settings=settings
+        )
     )
     return result
 
@@ -327,8 +426,10 @@ def run_import_transactions(
     result = build_run_result(
         units_total=saved, rows_saved=saved, failed=0, transactions_saved=saved
     )
-    result["positions_rebuild"] = _rebuild_positions_after_write(
-        saved=saved, user_id=user_id, account_label=account_label, settings=settings
+    result.update(
+        _rebuild_after_write(
+            saved=saved, user_id=user_id, account_label=account_label, settings=settings
+        )
     )
     return result
 
@@ -336,15 +437,15 @@ def run_import_transactions(
 def run_list_unmapped_instruments(
     *, user_id: UUID, settings: Settings | None = None
 ) -> dict[str, int | str]:
-    """Every (kind, identifier, broker) this user's transactions reference that
-    configs/ticker_mappings.yaml can't resolve. Saves nothing, so rows_saved is always 0 -- an
+    """Every (kind, identifier, broker) this user's transactions reference that no saved ticker
+    mapping resolves. Saves nothing, so rows_saved is always 0 -- an
     empty result is still reported as `nothing_to_do`, not `ok`, per the logging rule."""
     configure_logging()
     settings = settings or load_settings()
     conn = get_connection(settings.database_url)
     try:
         logger.info("list-unmapped-instruments: checking instruments for user %s.", user_id)
-        mappings = load_ticker_mappings(settings.ticker_mappings_path)
+        mappings = pipeline.load_ticker_mappings(conn)
         unmapped = pipeline.list_unmapped_instruments(conn, user_id=user_id, mappings=mappings)
     finally:
         conn.close()
@@ -403,8 +504,10 @@ def run_import_cashflow(
     result = build_run_result(
         units_total=saved, rows_saved=saved, failed=0, transactions_saved=saved
     )
-    result["positions_rebuild"] = _rebuild_positions_after_write(
-        saved=saved, user_id=user_id, account_label=account_label, settings=settings
+    result.update(
+        _rebuild_after_write(
+            saved=saved, user_id=user_id, account_label=account_label, settings=settings
+        )
     )
     return result
 
@@ -426,7 +529,7 @@ def run_rebuild_positions(
     conn = get_connection(settings.database_url)
     try:
         logger.info("rebuild-positions: rebuilding positions for user %s (%s).", user_id, scope)
-        mappings = load_ticker_mappings(settings.ticker_mappings_path)
+        mappings = pipeline.load_ticker_mappings(conn)
         outcome = pipeline.rebuild_positions(
             conn, user_id=user_id, mappings=mappings, account_label=account_label
         )
@@ -510,7 +613,7 @@ def run_rebuild_returns(
     conn = get_connection(settings.database_url)
     try:
         logger.info("rebuild-returns: rebuilding returns for user %s (%s).", user_id, scope)
-        mappings = load_ticker_mappings(settings.ticker_mappings_path)
+        mappings = pipeline.load_ticker_mappings(conn)
         outcome = pipeline.rebuild_returns(
             conn,
             user_id=user_id,
@@ -549,6 +652,251 @@ def run_rebuild_returns(
         for account_label, ticker, error in outcome.failed_pairs
     ]
     return result
+
+
+def _mapping_to_dict(row: TickerMappingRow) -> dict:
+    return {
+        "id": row.id,
+        "identifier_kind": row.identifier_kind,
+        "identifier": row.identifier,
+        "broker": row.broker,
+        "canonical_ticker": row.canonical_ticker,
+        "updated_by": str(row.updated_by),
+        "created_at": row.created_at.isoformat(),
+        "updated_at": row.updated_at.isoformat(),
+    }
+
+
+def _describe_mapping(row: TickerMappingRow) -> str:
+    broker = f" (broker {row.broker})" if row.broker else ""
+    return f"{row.identifier_kind} {row.identifier}{broker} -> {row.canonical_ticker}"
+
+
+def _rebuild_accounts_for_mapping(
+    accounts: list[tuple[UUID, str]], *, settings: Settings, command: str
+) -> dict[str, int]:
+    """Rebuild the positions, then the returns, of every account a mapping change affects --
+    across users, since a mapping is global. Each rebuild is isolated: one failing doesn't stop
+    the rest, and none of them can undo the mapping change, which has already committed.
+    `rebuilds_failed` counts positions rebuilds, `returns_rebuilds_failed` returns rebuilds."""
+    logger.info("%s: rebuilding positions and returns for %d account(s).", command, len(accounts))
+    failed = returns_failed = 0
+    for user_id, account_label in accounts:
+        positions, returns = _rebuild_derived_isolated(
+            user_id=user_id, account_label=account_label, settings=settings, saved_what="mapping"
+        )
+        if positions == REBUILD_FAILED:
+            failed += 1
+        if returns == REBUILD_FAILED:
+            returns_failed += 1
+    return {
+        "accounts_rebuilt": len(accounts) - failed,
+        "rebuilds_failed": failed,
+        "returns_rebuilds_failed": returns_failed,
+    }
+
+
+def _mapping_write_result(row: TickerMappingRow, rebuilds: dict[str, int]) -> dict:
+    # Like a transaction write, `status` describes the mapping change alone; how the follow-on
+    # rebuilds went is reported beside it, never folded in.
+    result = build_run_result(units_total=1, rows_saved=1, failed=0, **rebuilds)
+    result["mapping"] = _mapping_to_dict(row)
+    return result
+
+
+def run_set_ticker_mapping(
+    *,
+    identifier_kind: str,
+    identifier: str,
+    broker: str | None,
+    canonical_ticker: str,
+    updated_by: UUID,
+    settings: Settings | None = None,
+) -> dict:
+    """Save (or re-point) one global ticker mapping, then rebuild the positions of every account
+    whose transactions it covers. See pipeline.set_ticker_mapping. Needs data-store, to check
+    the ticker exists."""
+    configure_logging()
+    settings = settings or load_settings()
+    datastore_client = _require_datastore_client(settings, command="ticker-mapping set")
+    conn = get_connection(settings.database_url)
+    try:
+        logger.info(
+            "ticker-mapping set: mapping %s %s%s to %s (by user %s).",
+            identifier_kind,
+            identifier,
+            f" at broker {broker}" if broker else "",
+            canonical_ticker,
+            updated_by,
+        )
+        row = pipeline.set_ticker_mapping(
+            conn,
+            identifier_kind=identifier_kind,
+            identifier=identifier,
+            broker=broker,
+            canonical_ticker=canonical_ticker,
+            updated_by=updated_by,
+            datastore_client=datastore_client,
+        )
+        accounts = pipeline.list_accounts_using_instrument(
+            conn, identifier_kind=row.identifier_kind, identifier=row.identifier, broker=row.broker
+        )
+    finally:
+        conn.close()
+
+    logger.info("ticker-mapping set: saved %s.", _describe_mapping(row))
+    rebuilds = _rebuild_accounts_for_mapping(
+        accounts, settings=settings, command="ticker-mapping set"
+    )
+    logger.info(
+        "ticker-mapping set: done, %d account(s) rebuilt, %d failed.",
+        rebuilds["accounts_rebuilt"],
+        rebuilds["rebuilds_failed"],
+    )
+    return _mapping_write_result(row, rebuilds)
+
+
+def run_delete_ticker_mapping(
+    *, mapping_id: int, updated_by: UUID, settings: Settings | None = None
+) -> dict:
+    """Delete one ticker mapping, then rebuild the accounts it covered. `updated_by` is only
+    logged: the row it would be recorded on is the one being deleted. See
+    pipeline.delete_ticker_mapping for what happens to positions the mapping produced."""
+    configure_logging()
+    settings = settings or load_settings()
+    conn = get_connection(settings.database_url)
+    try:
+        logger.info(
+            "ticker-mapping delete: deleting mapping %d (by user %s).", mapping_id, updated_by
+        )
+        row = pipeline.delete_ticker_mapping(conn, mapping_id=mapping_id)
+        accounts = pipeline.list_accounts_using_instrument(
+            conn, identifier_kind=row.identifier_kind, identifier=row.identifier, broker=row.broker
+        )
+    finally:
+        conn.close()
+
+    logger.info("ticker-mapping delete: deleted %s.", _describe_mapping(row))
+    rebuilds = _rebuild_accounts_for_mapping(
+        accounts, settings=settings, command="ticker-mapping delete"
+    )
+    logger.info(
+        "ticker-mapping delete: done, %d account(s) rebuilt, %d failed.",
+        rebuilds["accounts_rebuilt"],
+        rebuilds["rebuilds_failed"],
+    )
+    return _mapping_write_result(row, rebuilds)
+
+
+def get_ticker_mappings(*, settings: Settings | None = None) -> list[dict]:
+    """Every ticker mapping, for the admin page and `ticker-mapping list`."""
+    configure_logging()
+    settings = settings or load_settings()
+    conn = get_connection(settings.database_url)
+    try:
+        logger.info("ticker-mapping list: listing every mapping.")
+        rows = pipeline.list_ticker_mappings(conn)
+    finally:
+        conn.close()
+    logger.info("ticker-mapping list: done, %d mapping(s).", len(rows))
+    return [_mapping_to_dict(row) for row in rows]
+
+
+def run_list_all_unmapped_instruments(*, settings: Settings | None = None) -> dict:
+    """run_list_unmapped_instruments across every user -- what an admin has left to map."""
+    configure_logging()
+    settings = settings or load_settings()
+    conn = get_connection(settings.database_url)
+    try:
+        logger.info("list-unmapped-instruments: checking instruments across every user.")
+        mappings = pipeline.load_ticker_mappings(conn)
+        unmapped = pipeline.list_all_unmapped_instruments(conn, mappings=mappings)
+    finally:
+        conn.close()
+
+    logger.info("list-unmapped-instruments: done, %d unmapped instrument(s) found.", len(unmapped))
+    result = build_run_result(
+        units_total=len(unmapped), rows_saved=0, failed=0, instruments_unmapped=len(unmapped)
+    )
+    result["unmapped_instruments"] = [
+        {"kind": kind, "identifier": identifier, "broker": broker}
+        for kind, identifier, broker in unmapped
+    ]
+    return result
+
+
+def run_rebuild_returns_all(*, settings: Settings | None = None) -> dict[str, int | str]:
+    """run_rebuild_returns for every user with an account -- what the returns-refresh container
+    runs on a schedule, so new prices from data-store's daily ingestion reach every holder's
+    returns without anyone touching their account. See docs/architecture.md's "Returns follow
+    new prices".
+
+    Each user's rebuild is isolated: one raising is logged with its traceback and counted in
+    `users_failed`, and the rest still run. Blocked tickers and failed pairs inside a user's own
+    run are summed, and make the whole run `partial`, the same as they would for that user.
+    """
+    configure_logging()
+    settings = settings or load_settings()
+    # Checked up front, not per user: without data-store every user's rebuild would fail the
+    # same way, and one SettingsError says so more plainly than N tracebacks.
+    _require_datastore_client(settings, command="rebuild-returns --all")
+    conn = get_connection(settings.database_url)
+    try:
+        user_ids = pipeline.list_user_ids(conn)
+    finally:
+        conn.close()
+
+    logger.info("rebuild-returns --all: rebuilding returns for %d user(s).", len(user_ids))
+    rows_saved = users_failed = tickers_blocked = pairs_failed = 0
+    for user_id in user_ids:
+        try:
+            result = run_rebuild_returns(user_id=user_id, settings=settings)
+        except Exception:
+            logger.exception(
+                "rebuild-returns --all: user %s failed -- run `portfolio rebuild-returns --user "
+                "%s` to retry; carrying on with the rest.",
+                user_id,
+                user_id,
+            )
+            users_failed += 1
+            continue
+        logger.info(
+            "rebuild-returns --all: user %s %s, %d return snapshot(s) saved.",
+            user_id,
+            result["status"],
+            result["rows_saved"],
+        )
+        rows_saved += result["rows_saved"]
+        tickers_blocked += result["tickers_blocked"]
+        pairs_failed += result["pairs_failed"]
+
+    logger.info(
+        "rebuild-returns --all: done, %d return snapshot(s) saved for %d user(s), %d failed.",
+        rows_saved,
+        len(user_ids) - users_failed,
+        users_failed,
+    )
+    return build_run_result(
+        units_total=len(user_ids),
+        rows_saved=rows_saved,
+        failed=users_failed + tickers_blocked + pairs_failed,
+        users_rebuilt=len(user_ids) - users_failed,
+        users_failed=users_failed,
+        tickers_blocked=tickers_blocked,
+        pairs_failed=pairs_failed,
+    )
+
+
+def get_tickers(*, settings: Settings | None = None) -> list[str]:
+    """Every ticker data-store prices, for manual entry's picker. A read job like the other
+    `get_*` here: returns data, not a run result."""
+    configure_logging()
+    settings = settings or load_settings()
+    datastore_client = _require_datastore_client(settings, command="the ticker list")
+    logger.info("get-tickers: listing data-store's tickers.")
+    tickers = pipeline.list_tickers(datastore_client=datastore_client)
+    logger.info("get-tickers: done, %d ticker(s) found.", len(tickers))
+    return tickers
 
 
 def get_transactions(

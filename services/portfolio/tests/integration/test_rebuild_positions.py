@@ -11,7 +11,6 @@ pipeline.rebuild_positions' account/user scoping, not about any particular broke
 import uuid
 
 import pytest
-import yaml
 from portfolio import cli
 
 pytestmark = pytest.mark.integration
@@ -20,15 +19,8 @@ _ISIN = "IE00B4L5Y983"
 
 
 @pytest.fixture(autouse=True)
-def _ticker_mappings(monkeypatch, tmp_path):
-    """The default configs/ticker_mappings.yaml is real, gitignored broker data (task 15) and
-    doesn't exist in a dev checkout -- point PORTFOLIO_TICKER_MAPPINGS_PATH at a throwaway file
-    with just what this test needs, the same absolute-path override settings.py already supports.
-    """
-    path = tmp_path / "ticker_mappings.yaml"
-    path.write_text(yaml.dump({"isin": {_ISIN: "IWDA.AS"}}))
-    monkeypatch.setenv("PORTFOLIO_TICKER_MAPPINGS_PATH", str(path))
-    return path
+def _ticker_mappings(seed_mapping):
+    seed_mapping("ISIN", _ISIN, "IWDA.AS")
 
 
 def _add_account(user_id, *, label, broker="acme"):
@@ -38,7 +30,16 @@ def _add_account(user_id, *, label, broker="acme"):
     assert exit_code == 0
 
 
-def _add_buy(user_id, *, account_label, ref, currency="EUR", amount="-950.00", identifier=_ISIN):
+def _add_buy(
+    user_id,
+    *,
+    account_label,
+    ref,
+    currency="EUR",
+    amount="-950.00",
+    price="95.00",
+    identifier=_ISIN,
+):
     exit_code = cli.main(
         [
             "add-transaction",
@@ -59,7 +60,7 @@ def _add_buy(user_id, *, account_label, ref, currency="EUR", amount="-950.00", i
             "--quantity",
             "10",
             "--price",
-            "95.00",
+            price,
             "--amount",
             amount,
             "--currency",
@@ -114,7 +115,7 @@ def test_rebuilding_twice_replaces_rather_than_duplicates(pg_connect):
     _add_buy(user_id, account_label="m", ref="t1")
     _rebuild(user_id)
 
-    _add_buy(user_id, account_label="m", ref="t2", amount="-1050.00")
+    _add_buy(user_id, account_label="m", ref="t2", amount="-1050.00", price="105.00")
     exit_code = _rebuild(user_id)
 
     with pg_connect() as conn, conn.cursor() as cur:
@@ -197,12 +198,9 @@ def test_rebuild_with_an_unknown_account_label_exits_cleanly_rather_than_crashin
     assert exit_code == 1
 
 
-def test_an_unmapped_instrument_blocks_its_rebuild_and_exits_nonzero(
-    monkeypatch, tmp_path, pg_connect, capsys
-):
-    empty_mappings = tmp_path / "empty.yaml"
-    empty_mappings.write_text(yaml.dump({"isin": {}}))
-    monkeypatch.setenv("PORTFOLIO_TICKER_MAPPINGS_PATH", str(empty_mappings))
+def test_an_unmapped_instrument_blocks_its_rebuild_and_exits_nonzero(pg_connect, capsys):
+    with pg_connect() as conn, conn.cursor() as cur:
+        cur.execute("DELETE FROM ticker_mappings")
     user_id = uuid.uuid4()
     _add_account(user_id, label="m")
     _add_buy(user_id, account_label="m", ref="t1")

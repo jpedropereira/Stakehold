@@ -53,6 +53,7 @@ def test_create_transaction_returns_201_when_saved(monkeypatch, client):
             "rows_saved": 1,
             "transactions_saved": 1,
             "positions_rebuild": "ok",
+            "returns_rebuild": "ok",
         },
     )
 
@@ -75,6 +76,7 @@ def test_create_transaction_returns_201_when_saved(monkeypatch, client):
         "rows_saved": 1,
         "transactions_saved": 1,
         "positions_rebuild": "ok",
+        "returns_rebuild": "ok",
     }
 
 
@@ -87,6 +89,7 @@ def test_create_transaction_returns_200_when_nothing_to_do(monkeypatch, client):
             "rows_saved": 0,
             "transactions_saved": 0,
             "positions_rebuild": "skipped",
+            "returns_rebuild": "skipped",
         },
     )
 
@@ -145,7 +148,13 @@ def test_create_transaction_passes_fields_through(monkeypatch, client):
 
     def fake_run_add_transaction(**kw):
         captured.update(kw)
-        return {"status": "ok", "rows_saved": 1, "transactions_saved": 1, "positions_rebuild": "ok"}
+        return {
+            "status": "ok",
+            "rows_saved": 1,
+            "transactions_saved": 1,
+            "positions_rebuild": "ok",
+            "returns_rebuild": "ok",
+        }
 
     monkeypatch.setattr(jobs, "run_add_transaction", fake_run_add_transaction)
     user_id = uuid.uuid4()
@@ -180,7 +189,13 @@ def test_import_transactions_streams_the_upload_to_a_temp_path(monkeypatch, clie
         captured["file_path"] = file_path
         captured["file_exists_during_call"] = file_path.exists()
         captured["file_contents"] = file_path.read_bytes()
-        return {"status": "ok", "rows_saved": 3, "transactions_saved": 3, "positions_rebuild": "ok"}
+        return {
+            "status": "ok",
+            "rows_saved": 3,
+            "transactions_saved": 3,
+            "positions_rebuild": "ok",
+            "returns_rebuild": "ok",
+        }
 
     monkeypatch.setattr(jobs, "run_import_transactions", fake_run_import_transactions)
     user_id = uuid.uuid4()
@@ -197,6 +212,7 @@ def test_import_transactions_streams_the_upload_to_a_temp_path(monkeypatch, clie
         "rows_saved": 3,
         "transactions_saved": 3,
         "positions_rebuild": "ok",
+        "returns_rebuild": "ok",
     }
     assert captured["user_id"] == user_id
     assert captured["account_label"] == "m"
@@ -230,7 +246,13 @@ def test_import_cashflow_streams_the_upload_to_a_temp_path(monkeypatch, client):
 
     def fake_run_import_cashflow(*, user_id, account_label, file_path, settings):
         captured["file_contents"] = file_path.read_bytes()
-        return {"status": "ok", "rows_saved": 1, "transactions_saved": 1, "positions_rebuild": "ok"}
+        return {
+            "status": "ok",
+            "rows_saved": 1,
+            "transactions_saved": 1,
+            "positions_rebuild": "ok",
+            "returns_rebuild": "ok",
+        }
 
     monkeypatch.setattr(jobs, "run_import_cashflow", fake_run_import_cashflow)
 
@@ -242,3 +264,78 @@ def test_import_cashflow_streams_the_upload_to_a_temp_path(monkeypatch, client):
 
     assert response.status_code == 201
     assert captured["file_contents"] == b"cash,flow\n"
+
+
+def test_list_tickers_returns_the_jobs_list(monkeypatch, client):
+    monkeypatch.setattr(jobs, "get_tickers", lambda **kw: ["AAPL", "IWDA.AS"])
+
+    response = client.get("/instruments/tickers")
+
+    assert response.status_code == 200
+    assert response.json() == ["AAPL", "IWDA.AS"]
+
+
+def test_create_transaction_accepts_a_buy_without_an_amount(monkeypatch, client):
+    captured = {}
+
+    def fake_add(**kw):
+        captured.update(kw)
+        return {
+            "status": "ok",
+            "rows_saved": 1,
+            "transactions_saved": 1,
+            "positions_rebuild": "ok",
+            "returns_rebuild": "ok",
+        }
+
+    monkeypatch.setattr(jobs, "run_add_transaction", fake_add)
+
+    response = client.post(
+        "/transactions",
+        json={
+            "user_id": str(uuid.uuid4()),
+            "account_label": "m",
+            "broker_transaction_ref": "ref-1",
+            "transaction_type": "BUY",
+            "trade_datetime": "2026-01-05T00:00:00+00:00",
+            "native_currency": "EUR",
+            "instrument_identifier": "IWDA.AS",
+            "instrument_identifier_kind": "TICKER",
+            "quantity": "5",
+            "price": "128.65",
+        },
+    )
+
+    assert response.status_code == 201
+    assert captured["native_amount"] is None
+
+
+def test_create_transaction_reports_the_returns_rebuild_beside_the_positions_one(
+    monkeypatch, client
+):
+    monkeypatch.setattr(
+        jobs,
+        "run_add_transaction",
+        lambda **kw: {
+            "status": "ok",
+            "rows_saved": 1,
+            "transactions_saved": 1,
+            "positions_rebuild": "ok",
+            "returns_rebuild": "failed",
+        },
+    )
+
+    response = client.post(
+        "/transactions",
+        json={
+            "user_id": str(uuid.uuid4()),
+            "account_label": "m",
+            "broker_transaction_ref": "ref-1",
+            "transaction_type": "DEPOSIT",
+            "trade_datetime": "2026-01-05T00:00:00+00:00",
+            "native_amount": "100.00",
+            "native_currency": "EUR",
+        },
+    )
+
+    assert response.json()["returns_rebuild"] == "failed"

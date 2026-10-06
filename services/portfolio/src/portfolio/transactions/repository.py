@@ -18,6 +18,28 @@ _DISTINCT_INSTRUMENTS_SQL = """
     ORDER BY t.instrument_identifier_kind, t.instrument_identifier, a.broker
 """
 
+# Unscoped: the admin page's view across every user. Only kind/identifier/broker leave here --
+# never which user or account holds the instrument.
+_DISTINCT_INSTRUMENTS_ALL_SQL = """
+    SELECT DISTINCT t.instrument_identifier_kind, t.instrument_identifier, a.broker
+    FROM transactions t
+    JOIN accounts a ON a.id = t.account_id
+    WHERE t.instrument_identifier IS NOT NULL
+    ORDER BY t.instrument_identifier_kind, t.instrument_identifier, a.broker
+"""
+
+# %(broker)s IS NULL matches any broker: an ISIN mapping applies at every broker, a SYMBOL
+# mapping only at its own.
+_ACCOUNTS_USING_INSTRUMENT_SQL = """
+    SELECT DISTINCT a.user_id, a.account_label
+    FROM transactions t
+    JOIN accounts a ON a.id = t.account_id
+    WHERE t.instrument_identifier_kind = %(identifier_kind)s
+      AND t.instrument_identifier = %(identifier)s
+      AND (%(broker)s::text IS NULL OR a.broker = %(broker)s)
+    ORDER BY a.user_id, a.account_label
+"""
+
 _LIST_BY_ACCOUNTS_SQL = """
     SELECT account_id, broker_transaction_ref, transaction_type, trade_datetime,
            instrument_identifier, instrument_identifier_kind, quantity, price,
@@ -77,15 +99,36 @@ def insert_transactions(conn, transactions: Sequence[CanonicalTransaction]) -> i
 def list_distinct_instruments(conn, user_id: UUID) -> list[tuple[str, str, str]]:
     """Every (kind, identifier, broker) triple this user's transactions reference.
 
-    Powers list-unmapped-instruments: the caller diffs these against configs/ticker_mappings.yaml
-    in application code (there's no DB anti-join, since the mapping isn't a database table -- see
-    docs/schema.md). Scoped through accounts.user_id, the isolation chokepoint, and includes the
+    Powers list-unmapped-instruments: the caller diffs these against the loaded TickerMappings
+    in application code, through the same TickerMappings.resolve a rebuild uses, so "unmapped"
+    can never mean something different in the two places. Scoped through accounts.user_id, the
+    isolation chokepoint, and includes the
     owning account's broker because SYMBOL mappings are broker-scoped (schema.md); joining here
     is also what removes the need for an unscoped account lookup.
     """
     with conn.cursor() as cur:
         cur.execute(_DISTINCT_INSTRUMENTS_SQL, (user_id,))
         return [(kind, identifier, broker) for kind, identifier, broker in cur.fetchall()]
+
+
+def list_distinct_instruments_all(conn) -> list[tuple[str, str, str]]:
+    """list_distinct_instruments across every user, for the admin's global unmapped list."""
+    with conn.cursor() as cur:
+        cur.execute(_DISTINCT_INSTRUMENTS_ALL_SQL)
+        return [(kind, identifier, broker) for kind, identifier, broker in cur.fetchall()]
+
+
+def list_accounts_using_instrument(
+    conn, *, identifier_kind: str, identifier: str, broker: str | None
+) -> list[tuple[UUID, str]]:
+    """(user_id, account_label) of every account whose transactions reference this instrument --
+    the accounts a mapping change has to rebuild. `broker` None means any broker (an ISIN)."""
+    with conn.cursor() as cur:
+        cur.execute(
+            _ACCOUNTS_USING_INSTRUMENT_SQL,
+            {"identifier_kind": identifier_kind, "identifier": identifier, "broker": broker},
+        )
+        return [(user_id, account_label) for user_id, account_label in cur.fetchall()]
 
 
 def list_by_accounts(

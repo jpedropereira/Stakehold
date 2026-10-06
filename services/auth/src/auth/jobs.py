@@ -2,6 +2,7 @@ import logging
 from datetime import UTC, datetime
 from pathlib import Path
 
+from auth import service
 from auth.sessions import repository as sessions_repository
 from auth.settings import load_settings
 from shared.db.connection import apply_schema, get_connection, transaction
@@ -13,6 +14,7 @@ SCHEMA_PATH = Path(__file__).resolve().parent / "db" / "schema.sql"
 
 STATUS_OK = "ok"
 STATUS_NOTHING_TO_DO = "nothing_to_do"
+STATUS_USER_NOT_FOUND = "user_not_found"
 
 _TARGET_TABLES = ("users", "sessions")
 
@@ -69,3 +71,22 @@ def run_purge_expired_sessions() -> dict[str, int | str]:
     status = STATUS_OK if deleted else STATUS_NOTHING_TO_DO
     logger.info("sessions purge-expired: done, %d session(s) deleted.", deleted)
     return {"status": status, "rows_saved": deleted}
+
+
+def run_set_admin(*, email: str, is_admin: bool) -> dict[str, int | str]:
+    """Grant or revoke admin for one user. The email stays out of the log, like signup/login's."""
+    configure_logging()
+    settings = load_settings()
+    action = "granting admin" if is_admin else "revoking admin"
+    conn = get_connection(settings.database_url)
+    try:
+        logger.info("user set-admin: %s for 1 user.", action)
+        found = service.set_admin(conn, email=email, is_admin=is_admin)
+    finally:
+        conn.close()
+
+    if not found:
+        logger.error("user set-admin: no user with that email, nothing changed.")
+        return {"status": STATUS_USER_NOT_FOUND, "rows_saved": 0}
+    logger.info("user set-admin: done, 1 user updated.")
+    return {"status": STATUS_OK, "rows_saved": 1}

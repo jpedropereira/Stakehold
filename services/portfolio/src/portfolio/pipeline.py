@@ -11,7 +11,7 @@ service.py's repository modules.
 import logging
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from uuid import UUID
 
@@ -29,13 +29,18 @@ from portfolio.errors import (
     BrokerParserNotFound,
     BrokerPluginError,
     InvalidBroker,
+    InvalidTickerMapping,
     InvalidTransaction,
+    TickerMappingNotFound,
+    UnknownTicker,
 )
 from portfolio.positions import repository as positions_repository
 from portfolio.positions.calculator import PositionSnapshot, replay
 from portfolio.returns import repository as returns_repository
 from portfolio.returns.calculator import DividendEvent, ReturnSnapshot, compute_returns
-from portfolio.ticker_mapping.loader import TickerMappings
+from portfolio.ticker_mapping import repository as ticker_mapping_repository
+from portfolio.ticker_mapping.base import MAPPED_KINDS, TickerMappings
+from portfolio.ticker_mapping.repository import TickerMappingRow
 from portfolio.transactions import repository as transactions_repository
 from portfolio.transactions.base import (
     FX_RATE_SOURCE_MANUAL,
@@ -168,6 +173,11 @@ def add_account(conn, *, user_id: UUID, broker: str, account_label: str) -> int:
         return 0
 
 
+def list_user_ids(conn) -> list[UUID]:
+    """Every user with an account -- for the scheduled returns refresh across users."""
+    return accounts_repository.list_user_ids(conn)
+
+
 def list_accounts(conn, *, user_id: UUID) -> list[Account]:
     return accounts_repository.list_by_user(conn, user_id)
 
@@ -219,6 +229,55 @@ def list_latest_returns(conn, *, user_id: UUID, account_label: str) -> list[Retu
     return returns_repository.list_latest_snapshots(conn, account.id)
 
 
+# How far a typed BUY/SELL amount may differ from price * quantity + fees and still be kept:
+# enough for a broker's own figure that rounds differently by a cent, too little for a typo
+# (a manually entered BUY once carried an amount of 10 for a 643.25 trade).
+_TRADE_AMOUNT_TOLERANCE = Decimal("0.01")
+
+
+def _trade_amount(*, quantity: Decimal, price: Decimal, fees_native: Decimal | None) -> Decimal:
+    """The cash a BUY/SELL moves, signed from the account's side: -(quantity * price) - fees.
+    One formula for both, since quantity is already signed: a BUY (quantity > 0) comes out
+    negative, cash out including fees; a SELL (quantity < 0) positive, cash in net of fees.
+    Rounded half-up to native_amount's own four places, as to_eur rounds eur_amount."""
+    amount = -(quantity * price) - (fees_native or Decimal("0"))
+    return amount.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+
+
+def _manual_amount(
+    *,
+    transaction_type: str,
+    native_amount: Decimal | None,
+    quantity: Decimal | None,
+    price: Decimal | None,
+    fees_native: Decimal | None,
+) -> Decimal:
+    """The native_amount a manual entry is saved with. Only BUY/SELL have a quantity and price
+    to derive it from; every other type is a cash event whose amount is the only figure there
+    is, so it must be given. Manual entry only: a broker import keeps the broker's own figure,
+    which this never second-guesses."""
+    if transaction_type not in ("BUY", "SELL"):
+        if native_amount is None:
+            raise InvalidTransaction(f"{transaction_type} requires an amount")
+        return native_amount
+
+    if quantity is None or price is None:
+        if native_amount is None:
+            raise InvalidTransaction(f"{transaction_type} requires a quantity and a price")
+        # validate() reports the missing quantity/price itself.
+        return native_amount
+
+    derived = _trade_amount(quantity=quantity, price=price, fees_native=fees_native)
+    if native_amount is None:
+        return derived
+    if not native_amount.is_finite() or abs(native_amount - derived) > _TRADE_AMOUNT_TOLERANCE:
+        raise InvalidTransaction(
+            f"amount {native_amount} doesn't match this {transaction_type}: price x quantity "
+            f"+ fees comes to {derived:.2f}. Leave the amount blank to have it calculated."
+        )
+    return native_amount
+
+
 def add_manual_transaction(
     conn,
     *,
@@ -227,7 +286,7 @@ def add_manual_transaction(
     broker_transaction_ref: str,
     transaction_type: str,
     trade_datetime: datetime,
-    native_amount: Decimal,
+    native_amount: Decimal | None,
     native_currency: str,
     instrument_identifier: str | None = None,
     instrument_identifier_kind: str | None = None,
@@ -235,14 +294,38 @@ def add_manual_transaction(
     price: Decimal | None = None,
     fx_rate: Decimal | None = None,
     fees_native: Decimal | None = None,
+    datastore_client: DataStoreClient | None = None,
 ) -> int:
     """Record one manually-entered transaction. Returns 1 if written, 0 if
     (account, broker_transaction_ref) already existed -- manual entry's own idempotency, since
     --ref is mandatory on the CLI. Raises AccountNotFound if account_label doesn't resolve for
     this user (the isolation chokepoint in action) or InvalidTransaction if the entry fails
     transactions/base.py's rules -- including a missing --fx-rate for a non-EUR currency.
+
+    A TICKER-kind instrument is checked against data-store before anything is written, raising
+    UnknownTicker if data-store has never ingested it. That check is the whole reason a TICKER
+    row can skip ticker mappings at rebuild time, so `datastore_client` is required for one.
+
+    A BUY/SELL's `native_amount` is derived when omitted -- see _trade_amount. A typed one is
+    kept only if it agrees with the derived figure to within _TRADE_AMOUNT_TOLERANCE.
     """
+    native_amount = _manual_amount(
+        transaction_type=transaction_type,
+        native_amount=native_amount,
+        quantity=quantity,
+        price=price,
+        fees_native=fees_native,
+    )
     account = _resolve_account(conn, user_id=user_id, account_label=account_label)
+
+    if instrument_identifier_kind == "TICKER":
+        if datastore_client is None:
+            raise ValueError("a TICKER instrument needs a datastore_client to check it against")
+        if not datastore_client.get_ticker_info(instrument_identifier).exists:
+            raise UnknownTicker(
+                f"{instrument_identifier} isn't in Stakehold's market data -- "
+                "pick a ticker from the list."
+            )
 
     if native_currency == "EUR":
         if fx_rate is not None:
@@ -273,6 +356,11 @@ def add_manual_transaction(
 
     with transaction(conn):
         return transactions_repository.insert_transactions(conn, [txn])
+
+
+def list_tickers(*, datastore_client: DataStoreClient) -> list[str]:
+    """Every ticker data-store prices -- what manual entry offers to pick from."""
+    return datastore_client.list_tickers()
 
 
 def import_transactions(conn, *, user_id: UUID, account_label: str, file_path: Path) -> int:
@@ -309,14 +397,131 @@ def list_unmapped_instruments(
 ) -> list[tuple[str, str, str]]:
     """Every (kind, identifier, broker) this user's transactions reference that `mappings` can't
     resolve to a canonical_ticker -- see docs/architecture.md's "unmapped instrument blocks its
-    own rebuild, loudly" rule. Read-only; diffed in application code since the mapping is a YAML
-    file, not a database table (docs/schema.md)."""
+    own rebuild, loudly" rule. Read-only; diffed through TickerMappings.resolve, the same check a
+    rebuild applies."""
     instruments = transactions_repository.list_distinct_instruments(conn, user_id)
     return [
         (kind, identifier, broker)
         for kind, identifier, broker in instruments
         if mappings.resolve(kind, identifier, broker=broker) is None
     ]
+
+
+def list_all_unmapped_instruments(
+    conn, *, mappings: TickerMappings
+) -> list[tuple[str, str, str | None]]:
+    """list_unmapped_instruments across every user, for the admin page. An ISIN is listed once
+    with broker None, whichever brokers report it, since one ISIN mapping covers them all."""
+    unmapped = set()
+    for kind, identifier, broker in transactions_repository.list_distinct_instruments_all(conn):
+        if mappings.resolve(kind, identifier, broker=broker) is not None:
+            continue
+        unmapped.add((kind, identifier, None if kind == "ISIN" else broker))
+    return sorted(unmapped, key=lambda row: (row[0], row[1], row[2] or ""))
+
+
+# --- ticker mappings (admin) ---
+
+# Column widths in db/schema.sql's ticker_mappings -- checked here so an over-long value is the
+# admin's 422, not a database error.
+_MAPPING_MAX_LENGTHS = {"identifier": 50, "broker": 50, "canonical_ticker": 20}
+
+
+def _mapping_field(name: str, value: str | None, *, label: str) -> str | None:
+    value = (value or "").strip() or None
+    if value is not None and len(value) > _MAPPING_MAX_LENGTHS[name]:
+        raise InvalidTickerMapping(
+            f"The {label} is too long -- at most {_MAPPING_MAX_LENGTHS[name]} characters."
+        )
+    return value
+
+
+def load_ticker_mappings(conn) -> TickerMappings:
+    """Every saved mapping, as the lookup a rebuild resolves instruments through."""
+    return ticker_mapping_repository.load_all(conn)
+
+
+def list_ticker_mappings(conn) -> list[TickerMappingRow]:
+    return ticker_mapping_repository.list_all(conn)
+
+
+def set_ticker_mapping(
+    conn,
+    *,
+    identifier_kind: str,
+    identifier: str,
+    broker: str | None,
+    canonical_ticker: str,
+    updated_by: UUID,
+    datastore_client: DataStoreClient,
+) -> TickerMappingRow:
+    """Map one broker-reported instrument to a data-store ticker, or re-point its existing
+    mapping. Global: the mapping applies to every user's transactions.
+
+    Raises InvalidTickerMapping for a value that breaks the ISIN/SYMBOL rules (db/schema.sql's
+    CHECK, enforced here first so the admin gets a sentence, not a constraint name), and
+    UnknownTicker for a ticker data-store has never ingested -- the same check manual TICKER
+    entry makes. Nothing is written in either case.
+
+    Rebuilding the positions it affects is the caller's job (jobs.run_set_ticker_mapping), after
+    this commits -- the same split as a transaction write.
+    """
+    if identifier_kind not in MAPPED_KINDS:
+        raise InvalidTickerMapping(
+            f"A mapping is for an ISIN or SYMBOL instrument, not {identifier_kind!r}."
+        )
+    identifier = _mapping_field("identifier", identifier, label="identifier")
+    broker = _mapping_field("broker", broker, label="broker")
+    canonical_ticker = _mapping_field("canonical_ticker", canonical_ticker, label="ticker")
+    if identifier is None:
+        raise InvalidTickerMapping("Enter the identifier the broker reports.")
+    if canonical_ticker is None:
+        raise InvalidTickerMapping("Pick the ticker to map it to.")
+    if identifier_kind == "ISIN" and broker is not None:
+        raise InvalidTickerMapping(
+            "An ISIN mapping applies to every broker -- leave the broker blank."
+        )
+    if identifier_kind == "SYMBOL" and broker is None:
+        raise InvalidTickerMapping(
+            "A SYMBOL mapping needs a broker -- the same symbol can mean different instruments "
+            "at different brokers."
+        )
+    if not datastore_client.get_ticker_info(canonical_ticker).exists:
+        raise UnknownTicker(
+            f"{canonical_ticker} isn't in Stakehold's market data -- pick a ticker from the list."
+        )
+
+    with transaction(conn):
+        return ticker_mapping_repository.upsert(
+            conn,
+            identifier_kind=identifier_kind,
+            identifier=identifier,
+            broker=broker,
+            canonical_ticker=canonical_ticker,
+            updated_by=updated_by,
+        )
+
+
+def delete_ticker_mapping(conn, *, mapping_id: int) -> TickerMappingRow:
+    """Remove one mapping, returning it. Raises TickerMappingNotFound if it's already gone.
+
+    The instrument goes back to being unmapped: its next rebuild blocks it, and -- per "blocked
+    means don't touch" -- leaves the snapshots the old mapping produced in place. See
+    docs/architecture.md's known limitations."""
+    with transaction(conn):
+        deleted = ticker_mapping_repository.delete(conn, mapping_id)
+    if deleted is None:
+        raise TickerMappingNotFound(f"No ticker mapping with id {mapping_id}.")
+    return deleted
+
+
+def list_accounts_using_instrument(
+    conn, *, identifier_kind: str, identifier: str, broker: str | None
+) -> list[tuple[UUID, str]]:
+    """(user_id, account_label) of every account a mapping for this instrument affects."""
+    return transactions_repository.list_accounts_using_instrument(
+        conn, identifier_kind=identifier_kind, identifier=identifier, broker=broker
+    )
 
 
 def import_cashflow(
@@ -409,8 +614,8 @@ def rebuild_positions(
     that broker (e.g. SYMBOL), that ticker's snapshot is built only from the mapped rows -- it is
     silently a partial view, not the blocked-and-untouched outcome the paragraph above describes,
     because the code has no way to know the two identifiers name the same instrument until
-    configs/ticker_mappings.yaml says so for both. The fix lives in that YAML file (map every
-    identifier kind a broker actually emits for an instrument), not in this function.
+    the ticker mappings say so for both. The fix lives in the mappings (map every identifier kind
+    a broker actually emits for an instrument), not in this function.
 
     Each (account, ticker) pair's delete-then-insert is wrapped in its own transaction here,
     rather than inside positions/repository.py, so that pair's replacement is atomic without
@@ -606,7 +811,7 @@ def rebuild_returns(
                 # A cash-only DIVIDEND row (validate() allows both instrument fields to be
                 # None) has no instrument to resolve -- treated the same as an unresolvable
                 # one, not passed to mappings.resolve, which raises TickerMappingError for any
-                # kind other than "ISIN"/"SYMBOL" rather than returning None for it.
+                # kind other than "ISIN"/"SYMBOL"/"TICKER" rather than returning None for it.
                 continue
             ticker = mappings.resolve(
                 txn.instrument_identifier_kind, txn.instrument_identifier, broker=account.broker

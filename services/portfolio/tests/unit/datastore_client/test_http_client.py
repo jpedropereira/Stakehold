@@ -365,3 +365,44 @@ def test_get_ticker_info_raises_when_the_request_itself_fails(client, monkeypatc
 
     with pytest.raises(DataStoreApiError):
         client.get_ticker_info("IWDA.AS")
+
+
+# --- list_tickers ---
+
+
+def test_list_tickers_returns_the_ticker_list(client, monkeypatch):
+    captured = {}
+
+    def fake_get(url, headers, timeout):
+        captured.update(url=url, headers=headers)
+        return FakeResponse(200, {"tickers": ["AAPL", "IWDA.AS"]})
+
+    monkeypatch.setattr(requests, "get", fake_get)
+
+    assert client.list_tickers() == ["AAPL", "IWDA.AS"]
+    assert captured["url"] == "http://datastore:8000/tickers"
+    assert captured["headers"]["Authorization"] == "Bearer secret"
+
+
+def test_list_tickers_raises_on_a_server_error(client, monkeypatch):
+    monkeypatch.setattr(requests, "get", lambda *a, **kw: FakeResponse(500))
+
+    with pytest.raises(DataStoreApiError):
+        client.list_tickers()
+
+
+def test_list_tickers_raises_on_a_malformed_response(client, monkeypatch):
+    monkeypatch.setattr(requests, "get", lambda *a, **kw: FakeResponse(200, {"tickers": [1]}))
+
+    with pytest.raises(DataStoreApiError):
+        client.list_tickers()
+
+
+def test_list_tickers_raises_when_the_request_itself_fails(client, monkeypatch):
+    def boom(*a, **kw):
+        raise requests.ConnectionError("connection refused")
+
+    monkeypatch.setattr(requests, "get", boom)
+
+    with pytest.raises(DataStoreApiError):
+        client.list_tickers()

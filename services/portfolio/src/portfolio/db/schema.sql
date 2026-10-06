@@ -107,3 +107,30 @@ ALTER TABLE return_snapshots
     ADD COLUMN IF NOT EXISTS dividends_received_eur NUMERIC(20,4) NOT NULL DEFAULT 0,
     ADD COLUMN IF NOT EXISTS total_return_eur       NUMERIC(20,4) NOT NULL DEFAULT 0,
     ADD COLUMN IF NOT EXISTS total_return_pct       NUMERIC(18,8);
+
+-- Global, not per user: one instrument is the same instrument for everyone. Written only by an
+-- admin (gated in web, see docs/architecture.md). Replaces configs/ticker_mappings.yaml.
+CREATE TABLE IF NOT EXISTS ticker_mappings (
+    id                BIGSERIAL    PRIMARY KEY,
+    identifier_kind   VARCHAR(10)  NOT NULL,
+    identifier        VARCHAR(50)  NOT NULL,
+    broker            VARCHAR(50),
+    canonical_ticker  VARCHAR(20)  NOT NULL,
+    -- The auth user id of the admin who last set it -- a trusted plain column, like user_id.
+    updated_by        UUID         NOT NULL,
+    created_at        TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    updated_at        TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    -- An ISIN identifies one instrument worldwide, so its mapping covers every broker; a bare
+    -- symbol doesn't, so its mapping is scoped to one broker. TICKER never needs a mapping.
+    CONSTRAINT ticker_mappings_kind_broker CHECK (
+        (identifier_kind = 'ISIN' AND broker IS NULL)
+        OR (identifier_kind = 'SYMBOL' AND broker IS NOT NULL)
+    )
+);
+
+-- Two partial indexes rather than one over (identifier_kind, identifier, broker): a NULL
+-- broker never equals another NULL, so a single index would let an ISIN be mapped twice.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ticker_mappings_isin
+    ON ticker_mappings (identifier) WHERE identifier_kind = 'ISIN';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ticker_mappings_symbol
+    ON ticker_mappings (broker, identifier) WHERE identifier_kind = 'SYMBOL';

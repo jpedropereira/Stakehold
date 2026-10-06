@@ -10,11 +10,10 @@ Keep it in lockstep with any future schema change, the same discipline
 out this way*, see [`architecture.md`](architecture.md), which this document turns from a
 conceptual entity model into concrete tables.
 
-Four tables: `accounts` (who owns what — `user_id` is a plain UUID referencing `auth`, not a local
-`users` table), `transactions` (the immutable ledger), and `position_snapshots` /
-`return_snapshots` (derived, materialized, rebuildable). The manual broker-instrument →
-`data-store`-ticker mapping is **not** a table here — it's defined in a YAML config file for now;
-see "Ticker mappings — not a table here" below.
+Five tables: `accounts` (who owns what — `user_id` is a plain UUID referencing `auth`, not a local
+`users` table), `transactions` (the immutable ledger), `position_snapshots` /
+`return_snapshots` (derived, materialized, rebuildable), and `ticker_mappings` (the global,
+admin-managed broker-instrument → `data-store`-ticker mapping).
 
 ## Users — not a table here
 
@@ -59,16 +58,42 @@ re-running with the same broker is a safe no-op; re-running with a *different* b
 already taken is rejected rather than silently ignored, since the two calls disagree about a fact
 that can't both be true.
 
-## Ticker mappings — not a table here
+## `ticker_mappings`
 
-The manual mapping from a broker-reported instrument to the canonical ticker `data-store` prices
-was originally designed as a `ticker_links` table (two partial unique indexes enforcing ISIN-global
-/ symbol-per-broker uniqueness, a `link-ticker` CLI upsert) and signed off on as such in an earlier
-pass of this document. That table is **deliberately removed here, not an oversight** — mappings are
-now defined in `configs/ticker_mappings.yaml` instead. See `architecture.md`'s "Configuration"
-section and its cross-cutting decision on ticker-mapping storage for the reasoning, the sharp edge
-(the file is deployment-wide, not per-user), and the not-yet-designed migration path back to a
-database table once a UI exists.
+One row per mapping from a broker-reported instrument to the canonical ticker `data-store` prices.
+**Global, not per user**: an ISIN or a broker's symbol names the same instrument whoever holds it,
+so one mapping serves every user, and only an admin changes it (the check lives in `web` — see
+`architecture.md`'s "Ticker mappings live in the database, managed by an admin"). This is close to
+the `ticker_links` table an early pass of this document signed off on; it spent a while as
+`configs/ticker_mappings.yaml` instead, which this table replaces.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `BIGSERIAL` | PK. What the admin page deletes by. |
+| `identifier_kind` | `VARCHAR(10) NOT NULL` | `'ISIN'` \| `'SYMBOL'`, the kinds broker exports report. `'TICKER'` never gets a row: it resolves to itself. |
+| `identifier` | `VARCHAR(50) NOT NULL` | As the broker reports it — same width as `transactions.instrument_identifier`, which it's matched against exactly. |
+| `broker` | `VARCHAR(50)` | `NULL` for an ISIN (one ISIN mapping covers every broker), required for a SYMBOL (a bare symbol isn't globally unambiguous). Matched against `accounts.broker`. Enforced by the CHECK below. |
+| `canonical_ticker` | `VARCHAR(20) NOT NULL` | Same spelling/width as `position_snapshots.canonical_ticker` and `data-store`'s `raw_market_data.ticker`. **No FK** — data-store is another database; the ticker is checked against data-store's API when the mapping is saved instead. |
+| `updated_by` | `UUID NOT NULL` | The `auth` user id of the admin who last set it. A trusted plain column, like `accounts.user_id`. A delete isn't recorded here (the row is gone); `jobs.run_delete_ticker_mapping` logs who did it. |
+| `created_at` / `updated_at` | `TIMESTAMPTZ NOT NULL DEFAULT now()` | `updated_at` moves when a mapping is re-pointed. |
+
+Constraints and indexes:
+
+- `CHECK ((identifier_kind = 'ISIN' AND broker IS NULL) OR (identifier_kind = 'SYMBOL' AND broker
+  IS NOT NULL))` — the ISIN-global / symbol-per-broker rule, which also rejects any other kind.
+  `pipeline.set_ticker_mapping` checks the same rule first, so an admin gets a sentence rather than
+  a constraint violation; the CHECK is the backstop for anything that writes around it.
+- `UNIQUE (identifier) WHERE identifier_kind = 'ISIN'` and `UNIQUE (broker, identifier) WHERE
+  identifier_kind = 'SYMBOL'` — two partial indexes rather than one over `(identifier_kind,
+  identifier, broker)`, because Postgres treats two `NULL` brokers as distinct, so a single index
+  would let the same ISIN be mapped twice.
+
+**Loading strategy**: single-row upsert from the admin page or `portfolio ticker-mapping set`
+(`INSERT ... ON CONFLICT` against whichever partial index the kind uses, so saving a mapping for an
+already-mapped instrument re-points it in place), and single-row `DELETE` by `id`. Each change is
+followed by a positions rebuild of every account whose transactions use that instrument. A rebuild
+reads the whole table once into memory (`repository.load_all`) and resolves every row against
+that.
 
 The practical consequence for this document: `position_snapshots` and `return_snapshots` below
 reference a `canonical_ticker` string directly rather than a `ticker_link_id` foreign key, since
@@ -86,11 +111,11 @@ The immutable ledger. One row per broker-reported line item or manually entered 
 | `transaction_type` | `VARCHAR(20) NOT NULL` | `BUY` \| `SELL` \| `DEPOSIT` \| `WITHDRAWAL` \| `DIVIDEND` \| `FX` \| `FEE` \| `ADJUSTMENT`. App-layer validated, not a DB `CHECK` — an unrecognized broker transaction type is meant to be a parser-level error (per `architecture.md`), not something that reaches this table at all. |
 | `trade_datetime` | `TIMESTAMPTZ NOT NULL` | |
 | `instrument_identifier` | `VARCHAR(50)` | `NULL` for cash-only rows (deposits, adjustments). |
-| `instrument_identifier_kind` | `VARCHAR(10)` | `'ISIN'` \| `'SYMBOL'`, `NULL` alongside `instrument_identifier`. |
+| `instrument_identifier_kind` | `VARCHAR(10)` | `'ISIN'` \| `'SYMBOL'` \| `'TICKER'`, `NULL` alongside `instrument_identifier`. `'TICKER'` means the identifier already is a `data-store` ticker (the `canonical_ticker` spelling): it's what manual entry stores, picked from `data-store`'s own list and checked against it when saved, so it resolves to itself and never needs a ticker mapping. `'ISIN'`/`'SYMBOL'` are what broker exports report, and do. The allowed set lives in `transactions/base.py`'s `IDENTIFIER_KINDS`, not a CHECK constraint, so adding `'TICKER'` needed no DDL. |
 | `quantity` | `NUMERIC(20,6)` | Signed: `+` buy, `-` sell. `NULL` for cash-only rows. Six fractional digits to accommodate fractional-share brokers. |
 | `price` | `NUMERIC(18,6)` | Per unit, native currency. `NULL` for cash-only rows. |
 | `native_currency` | `VARCHAR(10) NOT NULL` | ISO 4217, exactly as the broker reports it — same column width as `etf_holdings.currency`. |
-| `native_amount` | `NUMERIC(20,4) NOT NULL` | Signed cash-flow, the broker's own figure — the immutable source of truth (see `architecture.md`'s currency decision). |
+| `native_amount` | `NUMERIC(20,4) NOT NULL` | Signed cash-flow, the broker's own figure — the immutable source of truth (see `architecture.md`'s currency decision). For a manually entered BUY/SELL it's derived as `-(quantity * price) - fees_native` unless given, and a given one must agree with that to within 0.01 (see `architecture.md`'s "Manual transaction entry"). |
 | `eur_amount` | `NUMERIC(20,4) NOT NULL` | Signed, frozen at transaction time — never recomputed later even if an FX source is subsequently revised. |
 | `fx_rate` | `NUMERIC(18,8)` | Nullable — absent when `native_currency = 'EUR'`, required otherwise. |
 | `fx_rate_source` | `VARCHAR(20)` | `'broker_reported'` \| `'companion_row'` \| `'datastore_series'` \| `'manual'`, nullable alongside `fx_rate`. **`'manual'` added at task 5** for a rate the user typed in on `add-transaction` — none of the three broker-derived sources fit one, and leaving `fx_rate_source` `NULL` for a manual rate would collide with `NULL`'s other meaning ("EUR, no rate needed"). App-layer vocabulary only, no DDL change — the column was already `VARCHAR(20)` with no `CHECK` constraint. **`'companion_row'` turned out unused at task 6**: it was reserved for matching Globex's `Forex Trade Component` rows to their parent trade, but a real Globex export shows `Gross Amount`/`Net Amount` are already EUR-denominated, so both parsers only ever write `'broker_reported'` — kept in the vocabulary rather than removed, in case a future broker genuinely needs it. **`'datastore_series'` got its first real writer at task 14**: `broker_import/acme_cashflow.py` (Acme's cash-ledger import) resolves a non-EUR row's rate via `datastore_client.get_fx_rate` — the daily FX series read from `data-store` this value was always meant to name, realized well before `returns/` (task 8), which is where it was originally expected to first appear. |
@@ -117,15 +142,18 @@ Indexes:
   (`transactions/repository.py`'s `list_distinct_instruments`, task 6): find distinct `(kind,
   identifier)` pairs here, joined to `accounts` for the owning `broker` (needed because SYMBOL
   mappings are broker-scoped — see `architecture.md`'s TickerLink key-scoping note — and for the
-  `user_id` isolation scoping itself), then diff the resulting triples in application code against
-  the keys loaded from `configs/ticker_mappings.yaml`. There's no DB anti-join for this, since the
-  mapping isn't a database table.
+  `user_id` isolation scoping itself), then diff the resulting triples in application code through
+  the same `TickerMappings.resolve` a rebuild uses. Not a DB anti-join against `ticker_mappings`,
+  even though one is now possible: going through `resolve` keeps "unmapped" meaning exactly what
+  blocks a rebuild (a `TICKER` row, for one, is never unmapped), in one place. The same index
+  serves the admin page's cross-user version (`list_distinct_instruments_all`) and the lookup of
+  which accounts a mapping change affects (`list_accounts_using_instrument`).
 
-**No foreign key to a ticker-mapping table** — there isn't one. A transaction must be importable
-*before* its instrument is mapped — that's a first-class, visible state, not an error — so
-`instrument_identifier`/`kind` are stored exactly as reported and resolved against the loaded YAML
-mapping at rebuild time, not resolved once and cached on the row. Caching the resolved
-`canonical_ticker` here would go stale silently the moment the YAML file is edited.
+**No foreign key to `ticker_mappings`.** A transaction must be importable *before* its instrument
+is mapped — that's a first-class, visible state, not an error — so `instrument_identifier`/`kind`
+are stored exactly as reported and resolved against the mappings at rebuild time, not resolved once
+and cached on the row. Caching the resolved `canonical_ticker` here would go stale silently the
+moment a mapping is re-pointed.
 
 **Loading strategy: insert with `ON CONFLICT (account_id, broker_transaction_ref) DO NOTHING` —
 deliberately not a true upsert.** This is the opposite choice from `raw_market_data`'s
@@ -143,7 +171,7 @@ Derived, materialized, rebuildable — never hand-edited.
 | Column | Type | Notes |
 |---|---|---|
 | `account_id` | `BIGINT NOT NULL REFERENCES accounts(id)` | Part of PK. |
-| `canonical_ticker` | `VARCHAR(20) NOT NULL` | Part of PK. Same spelling/width as `data-store`'s `raw_market_data.ticker` — deliberately **no FK**, the same way `raw_market_data.ticker`/`market_returns.ticker` have no FK to any ticker-reference table in `data-store` either. Resolved from `transactions.instrument_identifier`/`kind` via `configs/ticker_mappings.yaml` at rebuild time. A snapshot can only exist once an instrument is mapped — an unmapped instrument's position is exactly what `rebuild-positions` reports as blocked, not a row with an empty ticker here. |
+| `canonical_ticker` | `VARCHAR(20) NOT NULL` | Part of PK. Same spelling/width as `data-store`'s `raw_market_data.ticker` — deliberately **no FK**, the same way `raw_market_data.ticker`/`market_returns.ticker` have no FK to any ticker-reference table in `data-store` either. Resolved from `transactions.instrument_identifier`/`kind` via `ticker_mappings` at rebuild time. A snapshot can only exist once an instrument is mapped — an unmapped instrument's position is exactly what `rebuild-positions` reports as blocked, not a row with an empty ticker here. |
 | `as_of_date` | `DATE NOT NULL` | Part of PK. Event-driven grain — one row per date a transaction actually changed this position. "Position as of date D" is read as the latest row with `as_of_date <= D`, not a row that must exist for every calendar date. |
 | `quantity` | `NUMERIC(20,6) NOT NULL` | Running total after this date's transactions. |
 | `average_cost_native` | `NUMERIC(18,6) NOT NULL` | Blended average cost per unit, in the instrument's trading currency. |
@@ -245,10 +273,17 @@ extending past that point.
   for `position_snapshots`: if one account's dividend rows for a holding arrive under a different,
   unmapped identifier kind than its trade rows, that dividend is silently excluded from
   `dividends_received_eur` rather than blocking the ticker's rebuild. Fixed the same way — map
-  every identifier kind a broker actually emits for an instrument in
-  `configs/ticker_mappings.yaml` — not in code.
-- **The YAML → database migration path for ticker mappings**, once a UI exists, isn't designed
-  yet — see `architecture.md`'s cross-cutting decision on ticker-mapping storage.
+  every identifier kind a broker actually emits for an instrument in `ticker_mappings` — not in
+  code.
+- **No migration from `configs/ticker_mappings.yaml`.** The file's mappings aren't imported into
+  `ticker_mappings`; a deployment re-enters them on the admin page, which lists exactly the
+  instruments that need one. A one-off importer wasn't worth building for the handful of entries
+  the only deployment had.
+- **Deleting a mapping leaves the positions it produced.** The instrument goes back to being
+  unmapped, and a blocked instrument's existing snapshots are left untouched (`architecture.md`'s
+  "blocked means don't touch"), so they stay until the instrument is mapped again. Re-pointing a
+  mapping prunes the old ticker's snapshots, except in an account that still holds some other
+  unmapped instrument: pruning is skipped for any account with a blocked instrument.
 - **`accounts.user_id` is unvalidated at write time.** There's no foreign key (no local `users`
   table to reference) and no call to `auth` to confirm the UUID is real — `account add` accepts any
   syntactically valid UUID. Acceptable for a solo hobby deployment; worth revisiting once `auth` has

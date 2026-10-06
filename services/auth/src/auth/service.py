@@ -43,6 +43,7 @@ class AuthenticatedUser:
     id: uuid.UUID
     email: str
     display_name: str
+    is_admin: bool
 
 
 @dataclass(frozen=True)
@@ -125,7 +126,7 @@ def signup(
 
     logger.info("signup: new user registered.")
     return Session(
-        user=AuthenticatedUser(id=user_id, email=email, display_name=display_name),
+        user=AuthenticatedUser(id=user_id, email=email, display_name=display_name, is_admin=False),
         token=token,
         expires_at=expires_at,
     )
@@ -168,7 +169,9 @@ def login(
         )
     logger.info("login: session created.")
     return Session(
-        user=AuthenticatedUser(id=user.id, email=user.email, display_name=user.display_name),
+        user=AuthenticatedUser(
+            id=user.id, email=user.email, display_name=user.display_name, is_admin=user.is_admin
+        ),
         token=token,
         expires_at=expires_at,
     )
@@ -188,7 +191,10 @@ def validate_session(conn, *, token: str, now: datetime, ttl_days: int) -> Sessi
 
     return Session(
         user=AuthenticatedUser(
-            id=result.user_id, email=result.email, display_name=result.display_name
+            id=result.user_id,
+            email=result.email,
+            display_name=result.display_name,
+            is_admin=result.is_admin,
         ),
         token=token,
         expires_at=result.expires_at,
@@ -199,3 +205,13 @@ def logout(conn, *, token: str) -> None:
     with transaction(conn):
         sessions_repository.delete_by_token_hash(conn, tokens.hash_token(token))
     logger.info("logout: session removed.")
+
+
+def set_admin(conn, *, email: str, is_admin: bool) -> bool:
+    """Grant or revoke admin. Returns False when no user has that email.
+
+    Reachable only from the `auth user set-admin` CLI, never the HTTP API -- see
+    architecture.md, "Admin role".
+    """
+    with transaction(conn):
+        return users_repository.set_admin(conn, _normalize_email(email), is_admin=is_admin)

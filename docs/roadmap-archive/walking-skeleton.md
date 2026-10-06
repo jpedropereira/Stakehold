@@ -1,6 +1,6 @@
 # Walking skeleton roadmap (archived)
 
-Completed 2026-10, tasks 1–15. This is the original `tasks.md`, moved here when `tasks.md` was
+Completed 2026-10, tasks 1–18. This is the original `tasks.md`, moved here when `tasks.md` was
 repurposed for the next roadmap chunk (UI/UX). The content is verbatim except for relative links,
 adjusted for the new location. References elsewhere in the repo to "walking-skeleton task N"
 point at the subsections below.
@@ -42,6 +42,9 @@ one-time snapshot.
 | 13 | [End-to-end integration & smoke test](#13-end-to-end-integration--smoke-test) | 12 | done |
 | 14 | [Broker cash-ledger import](#14-broker-cash-ledger-import) | 6 | done |
 | 15 | [Extract broker-parser plugins to a private repo](#15-extract-broker-parser-plugins-to-a-private-repo) | 6, 14 | done |
+| 16 | [Admin role](#16-admin-role) | 2, 10 | done |
+| 17 | [Ticker mappings in the database, managed by admins](#17-ticker-mappings-in-the-database-managed-by-admins) | 16, 9 | done |
+| 18 | [Rebuild returns automatically](#18-rebuild-returns-automatically) | 8, 9 | done |
 
 No task is `ready` today — every dependency chain resolves to `done`.
 
@@ -670,3 +673,52 @@ straightforward call, not a hard one.
 `stakehold-brokers` uninstalled, `portfolio broker list` reports zero and the full test suite
 (810 unit, 15 integration) still passes — a deployment that downloads only this repo can still
 create accounts and record transactions manually; only broker-file import needs the plugin.
+
+### 16. Admin role — done
+
+Some settings apply to every user rather than one: first, the ticker mappings that turn a broker's
+ISIN or symbol into a data-store ticker (task 17). This task adds the role that may change them.
+
+- **auth**: `users.is_admin BOOLEAN NOT NULL DEFAULT false`, added by an idempotent
+  `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` in `schema.sql` (schema signed off). Reported as
+  `is_admin` on signup, login and session validation, read fresh from `users` on every
+  validation so revoking applies on the next request. Granted only by the new CLI command
+  `auth user set-admin --email <e> [--revoke]`; there is deliberately no HTTP endpoint (see
+  `auth/docs/architecture.md`, "Admin role").
+- **web**: `AuthUser.is_admin` (a missing or non-boolean value counts as `False`), a
+  `require_admin` dependency that 403s a logged-in non-admin, an `/admin` page (empty until
+  task 17), and an "Admin" nav link shown only to admins.
+
+### 17. Ticker mappings in the database, managed by admins — done
+
+Moves `configs/ticker_mappings.yaml` (hand-edited, baked into the portfolio image at build time,
+so every fix needs a rebuild) into a global `portfolio.ticker_mappings` table (schema signed off),
+managed from an admin-only page under `/admin`. Saving or deleting a mapping rebuilds positions
+for every account whose transactions use that identifier. The YAML file and
+`PORTFOLIO_TICKER_MAPPINGS_PATH` are retired.
+
+- **portfolio**: new `ticker_mappings` table (two partial unique indexes and a kind/broker CHECK;
+  schema signed off), `ticker_mapping/repository.py`, and `TickerMappings` moved to
+  `ticker_mapping/base.py`. Every rebuild and the unmapped report load mappings from the table.
+  New `PUT/GET /ticker-mappings`, `DELETE /ticker-mappings/{id}`, `GET /instruments/unmapped/all`,
+  and matching CLI commands (`ticker-mapping list|set|delete`, `list-unmapped-instruments --all`).
+  Saving or deleting a mapping rebuilds positions for every affected account, across users.
+- **web**: `/admin/mappings` — the unmapped instruments with an inline map form, the existing
+  mappings with delete, and an add/re-point form, all behind `require_admin` and CSRF.
+- **Retired**: `configs/ticker_mappings.yaml.example`, `PORTFOLIO_TICKER_MAPPINGS_PATH`, and
+  portfolio's `pyyaml` dependency. Existing mappings aren't imported: they're re-entered on the
+  admin page, which lists what's waiting.
+
+### 18. Rebuild returns automatically — done
+
+`return_snapshots` was written only by a manual `rebuild-returns`, so a new transaction's returns
+chart stayed empty, and new prices from data-store's daily ingestion never reached anyone's.
+
+- **After every write**: each transaction write and ticker-mapping change now rebuilds the
+  affected accounts' returns right after their positions (`jobs._rebuild_derived_isolated`),
+  reported as `returns_rebuild` / `returns_rebuilds_failed`. Skipped if the positions rebuild
+  failed, or if data-store isn't configured.
+- **After new prices**: `rebuild-returns --all` (`jobs.run_rebuild_returns_all`), run every six
+  hours by a new `returns-refresh` container in portfolio's stakehold-net overlay. Portfolio
+  polls rather than having data-store's DAG call it, keeping the dependency one-way.
+- **web**: the empty returns state no longer tells the visitor to run a CLI command.

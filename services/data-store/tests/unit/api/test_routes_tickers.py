@@ -94,3 +94,28 @@ def test_health_endpoint_needs_no_auth():
     response = client.get("/health")
 
     assert response.status_code == 200
+
+
+def test_ticker_list_returns_every_ingested_ticker(monkeypatch, client):
+    calls = []
+    monkeypatch.setattr(
+        jobs,
+        "get_ticker_list",
+        lambda **kw: calls.append(kw) or {"tickers": ["AAPL", "IWDA.AS"]},
+    )
+
+    response = client.get("/tickers")
+
+    assert response.status_code == 200
+    assert response.json() == {"tickers": ["AAPL", "IWDA.AS"]}
+    assert calls == [{"source": "yfinance"}]
+
+
+def test_ticker_list_passes_the_source_through(monkeypatch, client):
+    calls = []
+    monkeypatch.setattr(jobs, "get_ticker_list", lambda **kw: calls.append(kw) or {"tickers": []})
+
+    response = client.get("/tickers", params={"source": "other"})
+
+    assert response.json() == {"tickers": []}
+    assert calls == [{"source": "other"}]

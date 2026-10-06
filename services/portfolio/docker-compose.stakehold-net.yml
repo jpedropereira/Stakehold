@@ -10,8 +10,54 @@ services:
       # Overrides the host-oriented DATASTORE_API_URL from .env (localhost:DATA_STORE_API_PORT)
       # with the in-network address data-store's api container is reachable at on stakehold-net
       # -- note this is data-store-api's *container* port (8000), not its host-published one
-      # (8082). Needed for `rebuild-returns`, run via `docker compose exec ... portfolio rebuild-returns`.
+      # (8082). Needed for manual TICKER entry, the ticker list, and the returns rebuild every
+      # write now chains after its positions rebuild.
       DATASTORE_API_URL: http://data-store-api:8000
+
+  # Rebuilds every user's returns on a timer, so the closes data-store's daily_pipeline ingests
+  # reach the chart without anyone touching their account. Polls rather than being called by
+  # data-store when its DAG finishes: portfolio depends on data-store, never the reverse, and
+  # Airflow isn't on stakehold-net. Lives in this overlay, not docker-compose.yml, because it's
+  # useless without data-store reachable. See docs/architecture.md's "Returns follow new prices".
+  returns-refresh:
+    # Same build and tag as docker-compose.yml's x-portfolio-image anchor, which this file can't
+    # reference -- a build block rather than only `image:`, so `up` builds the local tag instead
+    # of trying to pull it.
+    build:
+      context: ../..
+      dockerfile: services/portfolio/Dockerfile
+    image: ${PORTFOLIO_API_IMAGE_NAME:-stakehold-portfolio-api:local}
+    container_name: portfolio-returns-refresh
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # The in-network addresses the anchor and `api` above override .env's host-oriented ones
+      # with.
+      PORTFOLIO_DATABASE_URL: postgresql://${APP_POSTGRES_USER}:${APP_POSTGRES_PASSWORD}@postgres:5432/${APP_POSTGRES_DB}
+      APP_POSTGRES_ADMIN_DATABASE_URL: postgresql://${APP_POSTGRES_ADMIN_USER}:${APP_POSTGRES_ADMIN_PASSWORD}@postgres:5432/${APP_POSTGRES_DB}
+      DATASTORE_API_URL: http://data-store-api:8000
+      # Six hours: at most that long after a daily close lands before it shows. A run when
+      # nothing changed only re-upserts the same rows.
+      PORTFOLIO_RETURNS_REFRESH_SECONDS: ${PORTFOLIO_RETURNS_REFRESH_SECONDS:-21600}
+    # $$ so compose leaves the variable for the container's shell to expand. A failed run only
+    # logs its own failure and exits non-zero; the loop still sleeps and tries again.
+    command:
+      - sh
+      - -c
+      - >-
+        while true;
+        do uv run --frozen portfolio rebuild-returns --all;
+        sleep "$$PORTFOLIO_RETURNS_REFRESH_SECONDS";
+        done
+    depends_on:
+      postgres:
+        condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
+    networks:
+      - default
+      - stakehold-net
 
 networks:
   stakehold-net:

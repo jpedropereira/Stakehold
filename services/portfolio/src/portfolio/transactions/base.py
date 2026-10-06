@@ -25,7 +25,9 @@ TRANSACTION_TYPES = (
     "FEE",
     "ADJUSTMENT",
 )
-IDENTIFIER_KINDS = ("ISIN", "SYMBOL")
+# TICKER: the identifier already is a data-store ticker (picked from data-store's own list at
+# manual entry), so it needs no mapping -- see docs/schema.md.
+IDENTIFIER_KINDS = ("ISIN", "SYMBOL", "TICKER")
 # "manual" is a user-typed rate -- none of the other three sources fit one, and leaving
 # fx_rate_source NULL for a manual rate would collide with NULL's other meaning ("EUR, no rate
 # needed"). See docs/schema.md.

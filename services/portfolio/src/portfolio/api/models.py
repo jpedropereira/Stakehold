@@ -40,8 +40,10 @@ class TransactionCreateRequest(BaseModel):
     broker_transaction_ref: str
     transaction_type: str
     trade_datetime: datetime
-    native_amount: Decimal
     native_currency: str
+    # Optional for a BUY/SELL, which derives it from price * quantity + fees -- see
+    # pipeline.add_manual_transaction. Required (by the pipeline) for every other type.
+    native_amount: Decimal | None = None
     instrument_identifier: str | None = None
     instrument_identifier_kind: str | None = None
     quantity: Decimal | None = None
@@ -113,6 +115,46 @@ class UnmappedInstrumentResponse(BaseModel):
     broker: str
 
 
+class UnmappedInstrumentAnyBrokerResponse(BaseModel):
+    """The admin's cross-user view: an ISIN carries no broker, since one mapping covers them all."""
+
+    kind: str
+    identifier: str
+    broker: str | None
+
+
+class TickerMappingSetRequest(BaseModel):
+    # Plain strings: pipeline.set_ticker_mapping owns every rule (kind, broker-vs-kind,
+    # lengths), so its message reaches the admin rather than a Pydantic one.
+    identifier_kind: str
+    identifier: str
+    broker: str | None = None
+    canonical_ticker: str
+    updated_by: UUID
+
+
+class TickerMappingResponse(BaseModel):
+    id: int
+    identifier_kind: str
+    identifier: str
+    broker: str | None
+    canonical_ticker: str
+    updated_by: UUID
+    created_at: datetime
+    updated_at: datetime
+
+
+class TickerMappingWriteResponse(BaseModel):
+    status: str
+    rows_saved: int
+    # How the follow-on positions rebuilds went, beside `status` rather than folded into it --
+    # see jobs._mapping_write_result.
+    accounts_rebuilt: int
+    rebuilds_failed: int
+    returns_rebuilds_failed: int
+    mapping: TickerMappingResponse
+
+
 class FailedPairResponse(BaseModel):
     account_label: str
     ticker: str
@@ -136,8 +178,11 @@ class TransactionsWriteResponse(BaseModel):
     transactions_saved: int
     # The follow-on positions rebuild's own status (ok / partial / nothing_to_do), or `skipped`
     # / `failed` -- kept apart from `status`, which describes only the write. See
-    # jobs._rebuild_positions_after_write.
+    # jobs._rebuild_after_write.
     positions_rebuild: str
+    # The returns rebuild chained after it, reported the same way -- also `skipped` when the
+    # positions rebuild failed or data-store isn't configured.
+    returns_rebuild: str
 
 
 class RebuildPositionsResponse(BaseModel):

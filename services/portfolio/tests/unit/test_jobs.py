@@ -7,12 +7,13 @@ from pathlib import Path
 import pytest
 from portfolio import jobs
 from portfolio.accounts.repository import Account
-from portfolio.errors import AccountNotFound, TickerMappingError
+from portfolio.errors import AccountNotFound, TickerMappingNotFound, UnknownTicker
 from portfolio.pipeline import RebuildOutcome, ReturnsRebuildOutcome
 from portfolio.positions.calculator import PositionSnapshot
 from portfolio.returns.calculator import ReturnSnapshot
 from portfolio.settings import SettingsError
-from portfolio.ticker_mapping.loader import TickerMappings
+from portfolio.ticker_mapping.base import TickerMappings
+from portfolio.ticker_mapping.repository import TickerMappingRow
 from portfolio.transactions.base import CanonicalTransaction
 
 _FAKE_DATABASE_URL = "postgresql://portfolio:pw@localhost/app"  # pragma: allowlist secret
@@ -26,7 +27,6 @@ def _fake_settings(*, datastore_api_url=None, internal_api_secret=None):
         {
             "database_url": _FAKE_DATABASE_URL,
             "admin_database_url": _FAKE_ADMIN_DATABASE_URL,
-            "ticker_mappings_path": Path("configs/ticker_mappings.yaml"),
             "datastore_api_url": datastore_api_url,
             "internal_api_secret": internal_api_secret,
         },
@@ -237,8 +237,9 @@ class _SimpleFakeConnection:
 
 def _stub_rebuild_positions(monkeypatch, *, status="ok"):
     """Replaces the follow-on positions rebuild every transaction write triggers, recording each
-    call. The rebuild itself has its own tests below; these tests are about the write jobs'
-    orchestration of it."""
+    call -- and the returns rebuild chained after it, which _stub_rebuild_returns can then
+    replace with its own recorder. The rebuilds themselves have their own tests below; these
+    tests are about the write jobs' orchestration of them."""
     calls = []
 
     def fake_rebuild(**kw):
@@ -246,6 +247,18 @@ def _stub_rebuild_positions(monkeypatch, *, status="ok"):
         return {"status": status, "rows_saved": 0}
 
     monkeypatch.setattr(jobs, "run_rebuild_positions", fake_rebuild)
+    _stub_rebuild_returns(monkeypatch)
+    return calls
+
+
+def _stub_rebuild_returns(monkeypatch, *, status="ok"):
+    calls = []
+
+    def fake_rebuild(**kw):
+        calls.append(kw)
+        return {"status": status, "rows_saved": 0}
+
+    monkeypatch.setattr(jobs, "run_rebuild_returns", fake_rebuild)
     return calls
 
 
@@ -414,6 +427,7 @@ def test_run_add_transaction_reports_ok_when_saved(monkeypatch):
         "rows_saved": 1,
         "transactions_saved": 1,
         "positions_rebuild": "ok",
+        "returns_rebuild": "skipped",
     }
     assert fake_conn.closed is True
 
@@ -429,6 +443,7 @@ def test_run_add_transaction_reports_nothing_to_do_when_ref_already_exists(monke
         "rows_saved": 0,
         "transactions_saved": 0,
         "positions_rebuild": "skipped",
+        "returns_rebuild": "skipped",
     }
 
 
@@ -462,6 +477,7 @@ def test_run_import_transactions_reports_ok_when_saved(monkeypatch):
         "rows_saved": 82,
         "transactions_saved": 82,
         "positions_rebuild": "ok",
+        "returns_rebuild": "skipped",
     }
     assert fake_conn.closed is True
 
@@ -477,6 +493,7 @@ def test_run_import_transactions_reports_nothing_to_do_on_a_reimport(monkeypatch
         "rows_saved": 0,
         "transactions_saved": 0,
         "positions_rebuild": "skipped",
+        "returns_rebuild": "skipped",
     }
 
 
@@ -531,7 +548,7 @@ def test_run_import_transactions_logs_start_before_completion(monkeypatch, caplo
 def test_run_list_unmapped_instruments_reports_ok_with_the_payload(monkeypatch):
     _patch_new_job_common(monkeypatch)
     monkeypatch.setattr(
-        jobs, "load_ticker_mappings", lambda path: TickerMappings(isin={}, symbol={})
+        jobs.pipeline, "load_ticker_mappings", lambda conn: TickerMappings(isin={}, symbol={})
     )
     monkeypatch.setattr(
         jobs.pipeline,
@@ -552,7 +569,7 @@ def test_run_list_unmapped_instruments_reports_ok_with_the_payload(monkeypatch):
 def test_run_list_unmapped_instruments_reports_nothing_to_do_when_empty(monkeypatch):
     _patch_new_job_common(monkeypatch)
     monkeypatch.setattr(
-        jobs, "load_ticker_mappings", lambda path: TickerMappings(isin={}, symbol={})
+        jobs.pipeline, "load_ticker_mappings", lambda conn: TickerMappings(isin={}, symbol={})
     )
     monkeypatch.setattr(jobs.pipeline, "list_unmapped_instruments", lambda conn, **kw: [])
 
@@ -565,43 +582,11 @@ def test_run_list_unmapped_instruments_reports_nothing_to_do_when_empty(monkeypa
 def test_run_list_unmapped_instruments_closes_the_connection(monkeypatch):
     fake_conn = _patch_new_job_common(monkeypatch)
     monkeypatch.setattr(
-        jobs, "load_ticker_mappings", lambda path: TickerMappings(isin={}, symbol={})
+        jobs.pipeline, "load_ticker_mappings", lambda conn: TickerMappings(isin={}, symbol={})
     )
     monkeypatch.setattr(jobs.pipeline, "list_unmapped_instruments", lambda conn, **kw: [])
 
     jobs.run_list_unmapped_instruments(user_id=uuid.uuid4())
-
-    assert fake_conn.closed is True
-
-
-def test_run_list_unmapped_instruments_loads_mappings_from_the_settings_path(monkeypatch):
-    _patch_new_job_common(monkeypatch)
-    captured = {}
-
-    def fake_load(path):
-        captured["path"] = path
-        return TickerMappings(isin={}, symbol={})
-
-    monkeypatch.setattr(jobs, "load_ticker_mappings", fake_load)
-    monkeypatch.setattr(jobs.pipeline, "list_unmapped_instruments", lambda conn, **kw: [])
-
-    jobs.run_list_unmapped_instruments(user_id=uuid.uuid4())
-
-    assert captured["path"] == Path("configs/ticker_mappings.yaml")
-
-
-def test_run_list_unmapped_instruments_propagates_error_on_a_missing_mappings_file(monkeypatch):
-    """A missing/malformed configs/ticker_mappings.yaml is a domain error -- jobs.py lets it
-    propagate to the caller (cli.py, or the future HTTP API) rather than swallowing it."""
-    fake_conn = _patch_new_job_common(monkeypatch)
-
-    def boom(path):
-        raise TickerMappingError("Ticker mappings file not found")
-
-    monkeypatch.setattr(jobs, "load_ticker_mappings", boom)
-
-    with pytest.raises(TickerMappingError):
-        jobs.run_list_unmapped_instruments(user_id=uuid.uuid4())
 
     assert fake_conn.closed is True
 
@@ -637,6 +622,7 @@ def test_run_import_cashflow_reports_ok_when_saved(monkeypatch):
         "rows_saved": 339,
         "transactions_saved": 339,
         "positions_rebuild": "ok",
+        "returns_rebuild": "ok",
     }
     assert fake_conn.closed is True
 
@@ -652,6 +638,7 @@ def test_run_import_cashflow_reports_nothing_to_do_on_a_reimport(monkeypatch):
         "rows_saved": 0,
         "transactions_saved": 0,
         "positions_rebuild": "skipped",
+        "returns_rebuild": "skipped",
     }
 
 
@@ -709,6 +696,108 @@ def test_run_import_cashflow_builds_the_http_client_from_settings(monkeypatch):
         "base_url": "http://datastore:8000",
         "internal_api_secret": "secret",  # pragma: allowlist secret
     }
+
+
+# --- run_add_transaction: TICKER rows are checked against data-store ---
+
+_TICKER_TXN_KWARGS = dict(
+    _TXN_KWARGS,
+    transaction_type="BUY",
+    instrument_identifier="IWDA.AS",
+    instrument_identifier_kind="TICKER",
+    quantity=Decimal("5"),
+    price=Decimal("100"),
+)
+
+
+def _patch_datastore_settings(
+    monkeypatch, *, url="http://datastore:8000", secret="secret"  # pragma: allowlist secret
+):
+    monkeypatch.setattr(
+        jobs,
+        "load_settings",
+        lambda: _fake_settings(datastore_api_url=url, internal_api_secret=secret),
+    )
+
+
+def test_run_add_transaction_checks_a_ticker_with_a_client_built_from_settings(monkeypatch):
+    _patch_write_job_common(monkeypatch)
+    _patch_datastore_settings(monkeypatch)
+    built = {}
+    passed = {}
+
+    class FakeHttpDataStoreClient:
+        def __init__(self, base_url, internal_api_secret):
+            built.update(base_url=base_url, internal_api_secret=internal_api_secret)
+
+    def fake_add(conn, **kw):
+        passed.update(kw)
+        return 1
+
+    monkeypatch.setattr(jobs, "HttpDataStoreClient", FakeHttpDataStoreClient)
+    monkeypatch.setattr(jobs.pipeline, "add_manual_transaction", fake_add)
+
+    jobs.run_add_transaction(user_id=uuid.uuid4(), **_TICKER_TXN_KWARGS)
+
+    assert built == {
+        "base_url": "http://datastore:8000",
+        "internal_api_secret": "secret",  # pragma: allowlist secret
+    }
+    assert isinstance(passed["datastore_client"], FakeHttpDataStoreClient)
+
+
+@pytest.mark.parametrize(
+    "url, secret", [(None, "secret"), ("http://datastore:8000", None)], ids=["no-url", "no-secret"]
+)
+def test_run_add_transaction_requires_data_store_settings_for_a_ticker(monkeypatch, url, secret):
+    _patch_write_job_common(monkeypatch)
+    _patch_datastore_settings(monkeypatch, url=url, secret=secret)
+    monkeypatch.setattr(jobs.pipeline, "add_manual_transaction", lambda conn, **kw: 1)
+
+    with pytest.raises(SettingsError):
+        jobs.run_add_transaction(user_id=uuid.uuid4(), **_TICKER_TXN_KWARGS)
+
+
+def test_run_add_transaction_needs_no_data_store_for_a_non_ticker_row(monkeypatch):
+    """An ISIN/SYMBOL row is resolved through mappings at rebuild time, not checked here -- so
+    manual entry of one keeps working on a deployment with no data-store configured."""
+    _patch_write_job_common(monkeypatch)
+    passed = {}
+
+    def fake_add(conn, **kw):
+        passed.update(kw)
+        return 1
+
+    monkeypatch.setattr(jobs.pipeline, "add_manual_transaction", fake_add)
+
+    jobs.run_add_transaction(user_id=uuid.uuid4(), **_TXN_KWARGS)
+
+    assert passed["datastore_client"] is None
+
+
+# --- get_tickers ---
+
+
+def test_get_tickers_lists_data_stores_tickers(monkeypatch):
+    _patch_datastore_settings(monkeypatch)
+
+    class FakeHttpDataStoreClient:
+        def __init__(self, base_url, internal_api_secret):
+            pass
+
+    monkeypatch.setattr(jobs, "HttpDataStoreClient", FakeHttpDataStoreClient)
+    monkeypatch.setattr(
+        jobs.pipeline, "list_tickers", lambda *, datastore_client: ["AAPL", "IWDA.AS"]
+    )
+
+    assert jobs.get_tickers() == ["AAPL", "IWDA.AS"]
+
+
+def test_get_tickers_requires_data_store_settings(monkeypatch):
+    _patch_datastore_settings(monkeypatch, url=None)
+
+    with pytest.raises(SettingsError):
+        jobs.get_tickers()
 
 
 # --- positions rebuild following a transaction write ---
@@ -771,7 +860,7 @@ def test_write_skips_the_positions_rebuild_when_nothing_was_saved(
 
     assert calls == []
     assert result["positions_rebuild"] == "skipped"
-    assert any("positions rebuild skipped" in r.message for r in caplog.records)
+    assert any("positions and returns rebuilds skipped" in r.message for r in caplog.records)
 
 
 @pytest.mark.parametrize("job_name, pipeline_fn, kwargs, needs_datastore", _WRITE_JOBS)
@@ -799,7 +888,7 @@ def test_write_still_reports_its_saved_rows_when_the_positions_rebuild_raises(
     _patch_write_job(monkeypatch, needs_datastore=needs_datastore, pipeline_fn=pipeline_fn, saved=1)
 
     def boom(**kw):
-        raise TickerMappingError("broken mappings file")
+        raise RuntimeError("database went away")
 
     monkeypatch.setattr(jobs, "run_rebuild_positions", boom)
 
@@ -813,13 +902,117 @@ def test_write_still_reports_its_saved_rows_when_the_positions_rebuild_raises(
     assert failure_logs[0].exc_info is not None
 
 
+# --- the returns rebuild chained after a write ---
+
+
+@pytest.mark.parametrize("job_name, pipeline_fn, kwargs, needs_datastore", _WRITE_JOBS)
+def test_write_rebuilds_returns_for_the_written_account_after_positions(
+    monkeypatch, job_name, pipeline_fn, kwargs, needs_datastore
+):
+    _patch_write_job(monkeypatch, needs_datastore=needs_datastore, pipeline_fn=pipeline_fn, saved=1)
+    _patch_datastore_settings(monkeypatch)
+    order = []
+    monkeypatch.setattr(
+        jobs,
+        "run_rebuild_positions",
+        lambda **kw: order.append("positions") or {"status": "ok", "rows_saved": 1},
+    )
+    returns_calls = []
+
+    def fake_returns(**kw):
+        order.append("returns")
+        returns_calls.append(kw)
+        return {"status": "partial", "rows_saved": 3}
+
+    monkeypatch.setattr(jobs, "run_rebuild_returns", fake_returns)
+    user_id = uuid.uuid4()
+
+    result = getattr(jobs, job_name)(user_id=user_id, **kwargs)
+
+    # Returns read position_snapshots, so they have to come second.
+    assert order == ["positions", "returns"]
+    assert returns_calls[0]["user_id"] == user_id
+    assert returns_calls[0]["account_label"] == kwargs["account_label"]
+    assert result["returns_rebuild"] == "partial"
+
+
+@pytest.mark.parametrize("job_name, pipeline_fn, kwargs, needs_datastore", _WRITE_JOBS)
+def test_write_skips_the_returns_rebuild_when_nothing_was_saved(
+    monkeypatch, job_name, pipeline_fn, kwargs, needs_datastore
+):
+    _patch_write_job(monkeypatch, needs_datastore=needs_datastore, pipeline_fn=pipeline_fn, saved=0)
+    returns_calls = _stub_rebuild_returns(monkeypatch)
+
+    result = getattr(jobs, job_name)(user_id=uuid.uuid4(), **kwargs)
+
+    assert result["returns_rebuild"] == "skipped"
+    assert returns_calls == []
+
+
+@pytest.mark.parametrize("job_name, pipeline_fn, kwargs, needs_datastore", _WRITE_JOBS)
+def test_write_skips_the_returns_rebuild_when_the_positions_rebuild_raised(
+    monkeypatch, job_name, pipeline_fn, kwargs, needs_datastore
+):
+    _patch_write_job(monkeypatch, needs_datastore=needs_datastore, pipeline_fn=pipeline_fn, saved=1)
+    _patch_datastore_settings(monkeypatch)
+
+    def boom(**kw):
+        raise RuntimeError("database went away")
+
+    monkeypatch.setattr(jobs, "run_rebuild_positions", boom)
+    returns_calls = _stub_rebuild_returns(monkeypatch)
+
+    result = getattr(jobs, job_name)(user_id=uuid.uuid4(), **kwargs)
+
+    # Returns computed from positions that failed to rebuild would be stale.
+    assert result["positions_rebuild"] == "failed"
+    assert result["returns_rebuild"] == "skipped"
+    assert returns_calls == []
+
+
+def test_a_write_without_data_store_configured_skips_returns_and_says_how_to_run_them(
+    monkeypatch, caplog
+):
+    _patch_write_job(monkeypatch, needs_datastore=False, pipeline_fn="import_transactions", saved=1)
+    returns_calls = _stub_rebuild_returns(monkeypatch)
+    user_id = uuid.uuid4()
+
+    result = jobs.run_import_transactions(user_id=user_id, **_IMPORT_KWARGS)
+
+    assert result["status"] == "ok"
+    assert result["returns_rebuild"] == "skipped"
+    assert returns_calls == []
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert any(f"portfolio rebuild-returns --user {user_id}" in m for m in warnings)
+
+
+@pytest.mark.parametrize("job_name, pipeline_fn, kwargs, needs_datastore", _WRITE_JOBS)
+def test_write_still_succeeds_when_the_returns_rebuild_raises(
+    monkeypatch, caplog, job_name, pipeline_fn, kwargs, needs_datastore
+):
+    _patch_write_job(monkeypatch, needs_datastore=needs_datastore, pipeline_fn=pipeline_fn, saved=1)
+    _patch_datastore_settings(monkeypatch)
+
+    def boom(**kw):
+        raise RuntimeError("data-store unreachable")
+
+    monkeypatch.setattr(jobs, "run_rebuild_returns", boom)
+
+    result = getattr(jobs, job_name)(user_id=uuid.uuid4(), **kwargs)
+
+    assert result["status"] == "ok"
+    assert result["positions_rebuild"] == "ok"
+    assert result["returns_rebuild"] == "failed"
+    assert any(r.exc_info for r in caplog.records if r.levelno >= logging.ERROR)
+
+
 # --- run_rebuild_positions ---
 
 
 def test_run_rebuild_positions_reports_ok_with_the_payload(monkeypatch):
     fake_conn = _patch_new_job_common(monkeypatch)
     monkeypatch.setattr(
-        jobs, "load_ticker_mappings", lambda path: TickerMappings(isin={}, symbol={})
+        jobs.pipeline, "load_ticker_mappings", lambda conn: TickerMappings(isin={}, symbol={})
     )
     outcome = RebuildOutcome(
         snapshots_saved=3,
@@ -851,7 +1044,7 @@ def test_run_rebuild_positions_reports_ok_with_the_payload(monkeypatch):
 def test_run_rebuild_positions_reports_nothing_to_do_with_no_accounts(monkeypatch):
     _patch_new_job_common(monkeypatch)
     monkeypatch.setattr(
-        jobs, "load_ticker_mappings", lambda path: TickerMappings(isin={}, symbol={})
+        jobs.pipeline, "load_ticker_mappings", lambda conn: TickerMappings(isin={}, symbol={})
     )
     outcome = RebuildOutcome(
         snapshots_saved=0,
@@ -875,7 +1068,7 @@ def test_run_rebuild_positions_reports_ok_when_only_pruning_occurred(monkeypatch
     to omit positions_removed, so this used to report `nothing_to_do`)."""
     _patch_new_job_common(monkeypatch)
     monkeypatch.setattr(
-        jobs, "load_ticker_mappings", lambda path: TickerMappings(isin={}, symbol={})
+        jobs.pipeline, "load_ticker_mappings", lambda conn: TickerMappings(isin={}, symbol={})
     )
     outcome = RebuildOutcome(
         snapshots_saved=0,
@@ -897,7 +1090,7 @@ def test_run_rebuild_positions_reports_partial_with_blocked_instruments(monkeypa
     """An unmapped instrument must flip the run to partial -- never a quiet ok."""
     _patch_new_job_common(monkeypatch)
     monkeypatch.setattr(
-        jobs, "load_ticker_mappings", lambda path: TickerMappings(isin={}, symbol={})
+        jobs.pipeline, "load_ticker_mappings", lambda conn: TickerMappings(isin={}, symbol={})
     )
     outcome = RebuildOutcome(
         snapshots_saved=1,
@@ -924,7 +1117,7 @@ def test_run_rebuild_positions_reports_partial_with_failed_pairs(monkeypatch):
     pair -- the same treatment blocked instruments already get, not a silent drop."""
     _patch_new_job_common(monkeypatch)
     monkeypatch.setattr(
-        jobs, "load_ticker_mappings", lambda path: TickerMappings(isin={}, symbol={})
+        jobs.pipeline, "load_ticker_mappings", lambda conn: TickerMappings(isin={}, symbol={})
     )
     outcome = RebuildOutcome(
         snapshots_saved=0,
@@ -953,7 +1146,7 @@ def test_run_rebuild_positions_propagates_domain_error_and_closes_connection(mon
         raise AccountNotFound("nope")
 
     monkeypatch.setattr(
-        jobs, "load_ticker_mappings", lambda path: TickerMappings(isin={}, symbol={})
+        jobs.pipeline, "load_ticker_mappings", lambda conn: TickerMappings(isin={}, symbol={})
     )
     monkeypatch.setattr(jobs.pipeline, "rebuild_positions", boom)
 
@@ -963,15 +1156,15 @@ def test_run_rebuild_positions_propagates_domain_error_and_closes_connection(mon
     assert fake_conn.closed is True
 
 
-def test_run_rebuild_positions_propagates_error_on_a_missing_mappings_file(monkeypatch):
+def test_run_rebuild_positions_propagates_a_failure_loading_the_mappings(monkeypatch):
     fake_conn = _patch_new_job_common(monkeypatch)
 
-    def boom(path):
-        raise TickerMappingError("Ticker mappings file not found")
+    def boom(conn):
+        raise RuntimeError("database went away")
 
-    monkeypatch.setattr(jobs, "load_ticker_mappings", boom)
+    monkeypatch.setattr(jobs.pipeline, "load_ticker_mappings", boom)
 
-    with pytest.raises(TickerMappingError):
+    with pytest.raises(RuntimeError):
         jobs.run_rebuild_positions(user_id=uuid.uuid4())
 
     assert fake_conn.closed is True
@@ -980,7 +1173,7 @@ def test_run_rebuild_positions_propagates_error_on_a_missing_mappings_file(monke
 def test_run_rebuild_positions_passes_the_account_label_through(monkeypatch):
     _patch_new_job_common(monkeypatch)
     monkeypatch.setattr(
-        jobs, "load_ticker_mappings", lambda path: TickerMappings(isin={}, symbol={})
+        jobs.pipeline, "load_ticker_mappings", lambda conn: TickerMappings(isin={}, symbol={})
     )
     captured = {}
 
@@ -1011,7 +1204,7 @@ def test_run_rebuild_positions_reports_positions_with_anomalies_from_the_outcome
     this deliberately sets a count that disagrees with the raw message count."""
     _patch_new_job_common(monkeypatch)
     monkeypatch.setattr(
-        jobs, "load_ticker_mappings", lambda path: TickerMappings(isin={}, symbol={})
+        jobs.pipeline, "load_ticker_mappings", lambda conn: TickerMappings(isin={}, symbol={})
     )
     outcome = RebuildOutcome(
         snapshots_saved=1,
@@ -1037,7 +1230,7 @@ def test_run_rebuild_positions_logs_start_before_completion(monkeypatch, caplog)
     caplog.set_level(logging.INFO)
     _patch_new_job_common(monkeypatch)
     monkeypatch.setattr(
-        jobs, "load_ticker_mappings", lambda path: TickerMappings(isin={}, symbol={})
+        jobs.pipeline, "load_ticker_mappings", lambda conn: TickerMappings(isin={}, symbol={})
     )
     outcome = RebuildOutcome(
         snapshots_saved=1,
@@ -1071,7 +1264,7 @@ def _patch_returns_job_common(monkeypatch):
         ),
     )
     monkeypatch.setattr(
-        jobs, "load_ticker_mappings", lambda path: TickerMappings(isin={}, symbol={})
+        jobs.pipeline, "load_ticker_mappings", lambda conn: TickerMappings(isin={}, symbol={})
     )
     fake_conn = _SimpleFakeConnection()
     monkeypatch.setattr(jobs, "get_connection", lambda url: fake_conn)
@@ -1496,3 +1689,411 @@ def test_get_latest_returns_propagates_account_not_found(monkeypatch):
 
     with pytest.raises(AccountNotFound):
         jobs.get_latest_returns(user_id=uuid.uuid4(), account_label="nope")
+
+
+# --- ticker mappings (admin) ---
+
+_ADMIN = uuid.UUID("00000000-0000-7000-8000-000000000001")
+_MAPPING_ROW = TickerMappingRow(
+    id=7,
+    identifier_kind="ISIN",
+    identifier="IE00B4L5Y983",
+    broker=None,
+    canonical_ticker="IWDA.AS",
+    updated_by=_ADMIN,
+    created_at=datetime(2026, 10, 1, tzinfo=UTC),
+    updated_at=datetime(2026, 10, 6, tzinfo=UTC),
+)
+_MAPPING_DICT = {
+    "id": 7,
+    "identifier_kind": "ISIN",
+    "identifier": "IE00B4L5Y983",
+    "broker": None,
+    "canonical_ticker": "IWDA.AS",
+    "updated_by": str(_ADMIN),
+    "created_at": "2026-10-01T00:00:00+00:00",
+    "updated_at": "2026-10-06T00:00:00+00:00",
+}
+_SET_KWARGS = dict(
+    identifier_kind="ISIN",
+    identifier="IE00B4L5Y983",
+    broker=None,
+    canonical_ticker="IWDA.AS",
+    updated_by=_ADMIN,
+)
+
+
+def _patch_mapping_job(monkeypatch, *, accounts=(), rebuild_status="ok"):
+    """A data-store-configured job whose affected-account lookup returns `accounts`, with the
+    follow-on positions rebuild stubbed out and recorded."""
+    fake_conn = _patch_new_job_common(monkeypatch)
+    _patch_datastore_settings(monkeypatch)
+    monkeypatch.setattr(
+        jobs.pipeline, "list_accounts_using_instrument", lambda conn, **kw: list(accounts)
+    )
+    rebuilds = _stub_rebuild_positions(monkeypatch, status=rebuild_status)
+    return fake_conn, rebuilds
+
+
+def test_run_set_ticker_mapping_saves_and_rebuilds_every_affected_account(monkeypatch):
+    user_a, user_b = uuid.uuid4(), uuid.uuid4()
+    fake_conn, rebuilds = _patch_mapping_job(
+        monkeypatch, accounts=[(user_a, "main"), (user_b, "isa")]
+    )
+    passed = {}
+
+    def fake_set(conn, **kw):
+        passed.update(kw)
+        return _MAPPING_ROW
+
+    monkeypatch.setattr(jobs.pipeline, "set_ticker_mapping", fake_set)
+
+    result = jobs.run_set_ticker_mapping(**_SET_KWARGS)
+
+    assert result == {
+        "status": "ok",
+        "rows_saved": 1,
+        "accounts_rebuilt": 2,
+        "rebuilds_failed": 0,
+        "returns_rebuilds_failed": 0,
+        "mapping": _MAPPING_DICT,
+    }
+    assert passed["canonical_ticker"] == "IWDA.AS"
+    assert passed["updated_by"] == _ADMIN
+    assert passed["datastore_client"] is not None
+    assert [(c["user_id"], c["account_label"]) for c in rebuilds] == [
+        (user_a, "main"),
+        (user_b, "isa"),
+    ]
+    assert fake_conn.closed is True
+
+
+def test_run_set_ticker_mapping_looks_up_affected_accounts_by_the_saved_row(monkeypatch):
+    _patch_mapping_job(monkeypatch)
+    symbol_row = TickerMappingRow(
+        **{**_MAPPING_ROW.__dict__, "identifier_kind": "SYMBOL", "broker": "globex"}
+    )
+    monkeypatch.setattr(jobs.pipeline, "set_ticker_mapping", lambda conn, **kw: symbol_row)
+    looked_up = {}
+
+    def fake_lookup(conn, **kw):
+        looked_up.update(kw)
+        return []
+
+    monkeypatch.setattr(jobs.pipeline, "list_accounts_using_instrument", fake_lookup)
+
+    jobs.run_set_ticker_mapping(**_SET_KWARGS)
+
+    assert looked_up == {
+        "identifier_kind": "SYMBOL",
+        "identifier": "IE00B4L5Y983",
+        "broker": "globex",
+    }
+
+
+def test_run_set_ticker_mapping_counts_a_rebuild_that_raises_and_keeps_going(monkeypatch, caplog):
+    user_a, user_b = uuid.uuid4(), uuid.uuid4()
+    _patch_mapping_job(monkeypatch, accounts=[(user_a, "main"), (user_b, "isa")])
+    monkeypatch.setattr(jobs.pipeline, "set_ticker_mapping", lambda conn, **kw: _MAPPING_ROW)
+    calls = []
+
+    def flaky_rebuild(**kw):
+        calls.append(kw["account_label"])
+        if kw["account_label"] == "main":
+            raise RuntimeError("database went away")
+        return {"status": "ok", "rows_saved": 1}
+
+    monkeypatch.setattr(jobs, "run_rebuild_positions", flaky_rebuild)
+
+    result = jobs.run_set_ticker_mapping(**_SET_KWARGS)
+
+    # The mapping is saved either way; a failed follow-on rebuild is reported, not raised.
+    assert result["status"] == "ok"
+    assert result["accounts_rebuilt"] == 1
+    assert result["rebuilds_failed"] == 1
+    assert calls == ["main", "isa"]
+    assert any(r.exc_info for r in caplog.records if r.levelno >= logging.ERROR)
+
+
+def test_run_set_ticker_mapping_with_no_affected_accounts_still_saves(monkeypatch):
+    _, rebuilds = _patch_mapping_job(monkeypatch)
+    monkeypatch.setattr(jobs.pipeline, "set_ticker_mapping", lambda conn, **kw: _MAPPING_ROW)
+
+    result = jobs.run_set_ticker_mapping(**_SET_KWARGS)
+
+    assert result["status"] == "ok"
+    assert result["accounts_rebuilt"] == 0
+    assert rebuilds == []
+
+
+def test_run_set_ticker_mapping_requires_data_store(monkeypatch):
+    _patch_new_job_common(monkeypatch)
+
+    with pytest.raises(SettingsError, match="ticker-mapping set"):
+        jobs.run_set_ticker_mapping(**_SET_KWARGS)
+
+
+def test_run_set_ticker_mapping_propagates_an_unknown_ticker_and_closes(monkeypatch):
+    fake_conn, rebuilds = _patch_mapping_job(monkeypatch)
+
+    def boom(conn, **kw):
+        raise UnknownTicker("IWDA.AM isn't in Stakehold's market data")
+
+    monkeypatch.setattr(jobs.pipeline, "set_ticker_mapping", boom)
+
+    with pytest.raises(UnknownTicker):
+        jobs.run_set_ticker_mapping(**_SET_KWARGS)
+
+    assert fake_conn.closed is True
+    assert rebuilds == []
+
+
+def test_run_set_ticker_mapping_logs_start_and_outcome(monkeypatch, caplog):
+    caplog.set_level(logging.INFO)
+    _patch_mapping_job(monkeypatch, accounts=[(uuid.uuid4(), "main")])
+    monkeypatch.setattr(jobs.pipeline, "set_ticker_mapping", lambda conn, **kw: _MAPPING_ROW)
+
+    jobs.run_set_ticker_mapping(**_SET_KWARGS)
+
+    assert "ticker-mapping set: mapping ISIN IE00B4L5Y983" in caplog.text
+    assert "1 account(s) rebuilt, 0 failed" in caplog.text
+
+
+def test_run_delete_ticker_mapping_deletes_and_rebuilds_affected_accounts(monkeypatch):
+    user_a = uuid.uuid4()
+    fake_conn, rebuilds = _patch_mapping_job(monkeypatch, accounts=[(user_a, "main")])
+    passed = {}
+
+    def fake_delete(conn, **kw):
+        passed.update(kw)
+        return _MAPPING_ROW
+
+    monkeypatch.setattr(jobs.pipeline, "delete_ticker_mapping", fake_delete)
+
+    result = jobs.run_delete_ticker_mapping(mapping_id=7, updated_by=_ADMIN)
+
+    assert result == {
+        "status": "ok",
+        "rows_saved": 1,
+        "accounts_rebuilt": 1,
+        "rebuilds_failed": 0,
+        "returns_rebuilds_failed": 0,
+        "mapping": _MAPPING_DICT,
+    }
+    assert passed == {"mapping_id": 7}
+    assert [c["account_label"] for c in rebuilds] == ["main"]
+    assert fake_conn.closed is True
+
+
+def test_run_delete_ticker_mapping_does_not_need_data_store(monkeypatch):
+    # Nothing is checked against data-store when a mapping goes away.
+    _patch_new_job_common(monkeypatch)
+    _stub_rebuild_positions(monkeypatch)
+    monkeypatch.setattr(jobs.pipeline, "delete_ticker_mapping", lambda conn, **kw: _MAPPING_ROW)
+    monkeypatch.setattr(jobs.pipeline, "list_accounts_using_instrument", lambda conn, **kw: [])
+
+    assert jobs.run_delete_ticker_mapping(mapping_id=7, updated_by=_ADMIN)["status"] == "ok"
+
+
+def test_run_delete_ticker_mapping_propagates_not_found_and_closes(monkeypatch):
+    fake_conn = _patch_new_job_common(monkeypatch)
+
+    def boom(conn, **kw):
+        raise TickerMappingNotFound("no ticker mapping with id 7")
+
+    monkeypatch.setattr(jobs.pipeline, "delete_ticker_mapping", boom)
+
+    with pytest.raises(TickerMappingNotFound):
+        jobs.run_delete_ticker_mapping(mapping_id=7, updated_by=_ADMIN)
+
+    assert fake_conn.closed is True
+
+
+def test_run_delete_ticker_mapping_logs_who_deleted_it(monkeypatch, caplog):
+    caplog.set_level(logging.INFO)
+    _patch_mapping_job(monkeypatch)
+    monkeypatch.setattr(jobs.pipeline, "delete_ticker_mapping", lambda conn, **kw: _MAPPING_ROW)
+
+    jobs.run_delete_ticker_mapping(mapping_id=7, updated_by=_ADMIN)
+
+    assert f"by user {_ADMIN}" in caplog.text
+
+
+def test_get_ticker_mappings_returns_every_mapping_as_dicts(monkeypatch):
+    fake_conn = _patch_new_job_common(monkeypatch)
+    monkeypatch.setattr(jobs.pipeline, "list_ticker_mappings", lambda conn: [_MAPPING_ROW])
+
+    assert jobs.get_ticker_mappings() == [_MAPPING_DICT]
+    assert fake_conn.closed is True
+
+
+def test_run_list_all_unmapped_instruments_reports_the_global_list(monkeypatch):
+    fake_conn = _patch_new_job_common(monkeypatch)
+    monkeypatch.setattr(
+        jobs.pipeline, "load_ticker_mappings", lambda conn: TickerMappings(isin={}, symbol={})
+    )
+    monkeypatch.setattr(
+        jobs.pipeline,
+        "list_all_unmapped_instruments",
+        lambda conn, **kw: [("ISIN", "IE00B4L5Y983", None), ("SYMBOL", "SGLD", "globex")],
+    )
+
+    result = jobs.run_list_all_unmapped_instruments()
+
+    assert result["status"] == "ok"
+    assert result["instruments_unmapped"] == 2
+    assert result["unmapped_instruments"] == [
+        {"kind": "ISIN", "identifier": "IE00B4L5Y983", "broker": None},
+        {"kind": "SYMBOL", "identifier": "SGLD", "broker": "globex"},
+    ]
+    assert fake_conn.closed is True
+
+
+def test_run_list_all_unmapped_instruments_reports_nothing_to_do_when_empty(monkeypatch):
+    _patch_new_job_common(monkeypatch)
+    monkeypatch.setattr(
+        jobs.pipeline, "load_ticker_mappings", lambda conn: TickerMappings(isin={}, symbol={})
+    )
+    monkeypatch.setattr(jobs.pipeline, "list_all_unmapped_instruments", lambda conn, **kw: [])
+
+    assert jobs.run_list_all_unmapped_instruments()["status"] == "nothing_to_do"
+
+
+def test_run_db_init_targets_the_ticker_mappings_table():
+    assert "ticker_mappings" in jobs._TARGET_TABLES
+
+
+def test_a_mapping_change_rebuilds_returns_for_each_affected_account(monkeypatch):
+    user_a, user_b = uuid.uuid4(), uuid.uuid4()
+    _patch_mapping_job(monkeypatch, accounts=[(user_a, "main"), (user_b, "isa")])
+    monkeypatch.setattr(jobs.pipeline, "set_ticker_mapping", lambda conn, **kw: _MAPPING_ROW)
+    returns_calls = _stub_rebuild_returns(monkeypatch)
+
+    jobs.run_set_ticker_mapping(**_SET_KWARGS)
+
+    assert [(c["user_id"], c["account_label"]) for c in returns_calls] == [
+        (user_a, "main"),
+        (user_b, "isa"),
+    ]
+
+
+def test_a_mapping_change_counts_returns_rebuilds_that_failed(monkeypatch):
+    _patch_mapping_job(monkeypatch, accounts=[(uuid.uuid4(), "main"), (uuid.uuid4(), "isa")])
+    monkeypatch.setattr(jobs.pipeline, "set_ticker_mapping", lambda conn, **kw: _MAPPING_ROW)
+
+    def flaky_returns(**kw):
+        if kw["account_label"] == "main":
+            raise RuntimeError("data-store unreachable")
+        return {"status": "ok", "rows_saved": 1}
+
+    monkeypatch.setattr(jobs, "run_rebuild_returns", flaky_returns)
+
+    result = jobs.run_set_ticker_mapping(**_SET_KWARGS)
+
+    assert result["accounts_rebuilt"] == 2
+    assert result["rebuilds_failed"] == 0
+    assert result["returns_rebuilds_failed"] == 1
+
+
+# --- run_rebuild_returns_all ---
+
+
+def _patch_returns_all(monkeypatch, *, user_ids, per_user):
+    """`per_user` maps a user id to the result its run_rebuild_returns returns, or to an
+    exception it raises."""
+    fake_conn = _patch_new_job_common(monkeypatch)
+    _patch_datastore_settings(monkeypatch)
+    monkeypatch.setattr(jobs.pipeline, "list_user_ids", lambda conn: list(user_ids))
+    calls = []
+
+    def fake_returns(**kw):
+        calls.append(kw["user_id"])
+        outcome = per_user[kw["user_id"]]
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(jobs, "run_rebuild_returns", fake_returns)
+    return fake_conn, calls
+
+
+def _returns_result(status="ok", rows_saved=10, blocked=0, pairs_failed=0):
+    return {
+        "status": status,
+        "rows_saved": rows_saved,
+        "tickers_rebuilt": 2,
+        "tickers_blocked": blocked,
+        "pairs_failed": pairs_failed,
+        "blocked_tickers": [],
+        "failed_pairs": [],
+    }
+
+
+def test_run_rebuild_returns_all_rebuilds_every_user_and_sums_the_counts(monkeypatch, caplog):
+    caplog.set_level(logging.INFO)
+    ann, bea = uuid.uuid4(), uuid.uuid4()
+    fake_conn, calls = _patch_returns_all(
+        monkeypatch,
+        user_ids=[ann, bea],
+        per_user={ann: _returns_result(rows_saved=10), bea: _returns_result(rows_saved=5)},
+    )
+
+    result = jobs.run_rebuild_returns_all()
+
+    assert calls == [ann, bea]
+    assert result == {
+        "status": "ok",
+        "rows_saved": 15,
+        "users_rebuilt": 2,
+        "users_failed": 0,
+        "tickers_blocked": 0,
+        "pairs_failed": 0,
+    }
+    assert fake_conn.closed is True
+    assert "rebuilding returns for 2 user(s)" in caplog.text
+    assert "done, 15 return snapshot(s) saved for 2 user(s), 0 failed" in caplog.text
+
+
+def test_run_rebuild_returns_all_keeps_going_when_one_user_fails(monkeypatch, caplog):
+    ann, bea = uuid.uuid4(), uuid.uuid4()
+    _, calls = _patch_returns_all(
+        monkeypatch,
+        user_ids=[ann, bea],
+        per_user={ann: RuntimeError("data-store unreachable"), bea: _returns_result()},
+    )
+
+    result = jobs.run_rebuild_returns_all()
+
+    assert calls == [ann, bea]
+    assert result["status"] == "partial"
+    assert result["users_rebuilt"] == 1
+    assert result["users_failed"] == 1
+    assert any(r.exc_info for r in caplog.records if r.levelno >= logging.ERROR)
+
+
+def test_run_rebuild_returns_all_is_partial_when_a_user_had_blocked_tickers(monkeypatch):
+    ann = uuid.uuid4()
+    _patch_returns_all(
+        monkeypatch,
+        user_ids=[ann],
+        per_user={ann: _returns_result(status="partial", blocked=1)},
+    )
+
+    result = jobs.run_rebuild_returns_all()
+
+    assert result["status"] == "partial"
+    assert result["tickers_blocked"] == 1
+    assert result["users_failed"] == 0
+
+
+def test_run_rebuild_returns_all_with_no_users_is_nothing_to_do(monkeypatch):
+    _patch_returns_all(monkeypatch, user_ids=[], per_user={})
+
+    assert jobs.run_rebuild_returns_all()["status"] == "nothing_to_do"
+
+
+def test_run_rebuild_returns_all_requires_data_store(monkeypatch):
+    _patch_new_job_common(monkeypatch)
+
+    with pytest.raises(SettingsError, match="rebuild-returns"):
+        jobs.run_rebuild_returns_all()

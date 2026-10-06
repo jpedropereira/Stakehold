@@ -37,7 +37,7 @@ references a user only by the UUID `auth` issues at signup, as a trusted plain c
   Authentik, Ory). Those are reasonable once there's a real need for MFA or social login, but
   excess complexity for a solo hobby project with no users yet.
 - **Owns the only `users` table in the application**: `users(id UUID, email, display_name,
-  password_hash, created_at)` — see [`docs/schema.md`](schema.md) for the column-level DDL,
+  password_hash, created_at, is_admin)` — see [`docs/schema.md`](schema.md) for the column-level DDL,
   signed off per [`data-schema.md`](../../../.claude/rules/data-schema.md). `id` is a UUID v7
   generated at signup,
   chosen over v4 for index locality and sortable creation order — no meaningful downside for a
@@ -81,7 +81,7 @@ an expired session are indistinguishable to the caller.
 
 | Endpoint | Success | Notes |
 |---|---|---|
-| `POST /signup` | `201` + `Set-Cookie` | body `{user_id, email, display_name}`; `409` on a duplicate email; `429` once the signup throttle trips |
+| `POST /signup` | `201` + `Set-Cookie` | body `{user_id, email, display_name, is_admin}` (the same body for login and validate); `409` on a duplicate email; `429` once the signup throttle trips |
 | `POST /login` | `200` + `Set-Cookie` | `401` on wrong password or unknown email (identical response either way — see "user enumeration" below); `429` once the login throttle trips |
 | `POST /sessions/validate` | `200` + refreshed `Set-Cookie` | reads the `Cookie` header; `401` on missing/expired/unknown session |
 | `POST /logout` | `204` + cookie cleared | idempotent — `204` even for a missing or unrecognized token |
@@ -90,6 +90,25 @@ an expired session are indistinguishable to the caller.
 `auth` sets the `Set-Cookie` header itself (name `stakehold_session`, flags below) — `web` proxies
 it straight through to the browser rather than building its own cookie from a token in the body.
 Cookie policy lives in exactly one place (`api/cookies.py`) as a result.
+
+## Admin role
+
+`users.is_admin` marks a user who can manage settings that apply to every user (ticker mappings,
+first). `auth` only stores and reports the role; the pages it unlocks are gated in `web` (see
+[`web`'s architecture doc](../../web/docs/architecture.md#key-decisions)).
+
+- **Granted only from the CLI** (`auth user set-admin --email <e> [--revoke]`), never over HTTP.
+  An API endpoint would need its own authorization (only an admin may grant admin), and the
+  first admin would still need some way in that bypasses it. The CLI needs shell access to the
+  `auth` container, which is a stronger bar than any session, and with one operator nothing
+  calls for a self-service path. The command keeps the email out of the service log, like
+  signup and login; the `UPDATE` itself is still recorded by `auth-postgres`'s
+  `log_statement=mod` (see "Deployment").
+- **Read fresh on every validation.** `renew_and_fetch` joins `users` and selects `is_admin` in
+  the same round trip that already fetches the email and display name, so revoking admin takes
+  effect on the user's next request, with no cache or session row to invalidate.
+- **Not on `sessions`.** Copying the flag onto the session at login would make revoking it wait
+  for the session to expire, or need a second update to every live session.
 
 ## Login throttling and user enumeration
 
@@ -160,7 +179,12 @@ Consequences worth knowing:
 - `auth sessions purge-expired` (`cli.py` → `jobs.py`) — deletes sessions past `expires_at` or
   `absolute_expires_at`, using the `(expires_at)` index `docs/schema.md` describes existing for
   exactly this. Same `{"status", "rows_saved"}` contract as `auth db init`.
-- `auth db init` — unchanged from task 1.
+- `auth user set-admin --email <e> [--revoke]` (`cli.py` → `jobs.py` → `service.set_admin`) —
+  grants or revokes the admin role; see "Admin role". Exits non-zero (status `user_not_found`)
+  for an email no user has, so a typo can't look like a success.
+- `auth db init` — unchanged from task 1, except that `schema.sql` now also adds
+  `users.is_admin` to an existing database. Its "tables created" count doesn't include an added
+  column, so on an existing database it reports `nothing_to_do` while still adding it.
 
 ## Deployment
 

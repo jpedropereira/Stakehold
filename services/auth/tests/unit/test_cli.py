@@ -116,3 +116,49 @@ def test_missing_db_subcommand_exits_nonzero():
         cli.main(["db"])
 
     assert exc_info.value.code != 0
+
+
+def test_user_set_admin_grants_admin(monkeypatch, capsys):
+    called = {}
+
+    def fake_set_admin(*, email, is_admin):
+        called.update(email=email, is_admin=is_admin)
+        return {"status": "ok", "rows_saved": 1}
+
+    monkeypatch.setattr(cli.jobs, "run_set_admin", fake_set_admin)
+
+    assert cli.main(["user", "set-admin", "--email", "ann@example.com"]) == 0
+    assert called == {"email": "ann@example.com", "is_admin": True}
+    assert capsys.readouterr().out == "admin granted to ann@example.com\n"
+
+
+def test_user_set_admin_revoke_revokes_admin(monkeypatch, capsys):
+    called = {}
+
+    def fake_set_admin(*, email, is_admin):
+        called.update(email=email, is_admin=is_admin)
+        return {"status": "ok", "rows_saved": 1}
+
+    monkeypatch.setattr(cli.jobs, "run_set_admin", fake_set_admin)
+
+    assert cli.main(["user", "set-admin", "--email", "ann@example.com", "--revoke"]) == 0
+    assert called == {"email": "ann@example.com", "is_admin": False}
+    assert capsys.readouterr().out == "admin revoked from ann@example.com\n"
+
+
+def test_user_set_admin_exits_nonzero_for_an_unknown_email(monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli.jobs,
+        "run_set_admin",
+        lambda *, email, is_admin: {"status": "user_not_found", "rows_saved": 0},
+    )
+
+    assert cli.main(["user", "set-admin", "--email", "nobody@example.com"]) == 1
+    assert capsys.readouterr().out == "no user with email nobody@example.com\n"
+
+
+def test_user_set_admin_requires_an_email():
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(["user", "set-admin"])
+
+    assert exc_info.value.code != 0

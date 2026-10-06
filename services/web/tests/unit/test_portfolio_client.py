@@ -1,3 +1,4 @@
+import json
 from datetime import date, datetime, timezone
 from decimal import Decimal
 
@@ -8,6 +9,7 @@ from web.portfolio_client.errors import (
     AccountNotFound,
     InvalidPortfolioRequest,
     PortfolioUnavailable,
+    TickerMappingNotFound,
 )
 from web.portfolio_client.http_client import HttpPortfolioClient
 
@@ -58,6 +60,28 @@ async def test_list_brokers_returns_plain_list():
     brokers = await client.list_brokers()
 
     assert brokers == ["acme", "globex"]
+
+
+async def test_list_tickers_returns_plain_list_from_the_tickers_endpoint():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["path"] = request.url.path
+        return httpx.Response(200, json=["AAPL", "IWDA.AS"])
+
+    client = _client(handler)
+
+    tickers = await client.list_tickers()
+
+    assert tickers == ["AAPL", "IWDA.AS"]
+    assert captured["path"] == "/instruments/tickers"
+
+
+async def test_list_tickers_raises_unavailable_on_a_server_error():
+    client = _client(lambda request: httpx.Response(502, json={"detail": "data-store down"}))
+
+    with pytest.raises(PortfolioUnavailable):
+        await client.list_tickers()
 
 
 async def test_create_account_sends_expected_body():
@@ -353,3 +377,165 @@ async def test_success_with_non_json_body_raises_portfolio_unavailable():
 
     with pytest.raises(PortfolioUnavailable):
         await client.list_brokers()
+
+
+async def test_add_transaction_sends_a_missing_amount_as_null():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = request.read()
+        return httpx.Response(201, json={"status": "ok", "rows_saved": 1, "transactions_saved": 1})
+
+    client = _client(handler)
+    await client.add_transaction(
+        user_id=USER_ID,
+        account_label="main",
+        broker_transaction_ref="ref-1",
+        transaction_type="BUY",
+        trade_datetime=datetime(2026, 1, 5, tzinfo=timezone.utc),
+        native_amount=None,
+        native_currency="EUR",
+        quantity=Decimal("5"),
+        price=Decimal("128.65"),
+    )
+
+    body = captured["body"].decode()
+    assert '"native_amount":null' in body or '"native_amount": null' in body
+
+
+# --- ticker mappings (admin) ---
+
+ADMIN_ID = "00000000-0000-7000-8000-000000000001"
+_MAPPING_JSON = {
+    "id": 7,
+    "identifier_kind": "SYMBOL",
+    "identifier": "IWDA",
+    "broker": "globex",
+    "canonical_ticker": "IWDA.AS",
+    "updated_by": ADMIN_ID,
+    "created_at": "2026-10-01T00:00:00Z",
+    "updated_at": "2026-10-06T09:30:00Z",
+}
+_WRITE_JSON = {
+    "status": "ok",
+    "rows_saved": 1,
+    "accounts_rebuilt": 2,
+    "rebuilds_failed": 1,
+    "mapping": _MAPPING_JSON,
+}
+
+
+async def test_list_ticker_mappings_parses_each_mapping():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["path"] = request.url.path
+        return httpx.Response(200, json=[_MAPPING_JSON, {**_MAPPING_JSON, "broker": None}])
+
+    mappings = await _client(handler).list_ticker_mappings()
+
+    assert captured["path"] == "/ticker-mappings"
+    assert mappings[0].id == 7
+    assert mappings[0].identifier_kind == "SYMBOL"
+    assert mappings[0].broker == "globex"
+    assert mappings[0].canonical_ticker == "IWDA.AS"
+    assert mappings[0].updated_at == datetime(2026, 10, 6, 9, 30, tzinfo=timezone.utc)
+    assert mappings[1].broker is None
+
+
+async def test_list_ticker_mappings_raises_unavailable_on_a_malformed_body():
+    client = _client(lambda request: httpx.Response(200, json=[{"id": 7}]))
+
+    with pytest.raises(PortfolioUnavailable):
+        await client.list_ticker_mappings()
+
+
+async def test_set_ticker_mapping_puts_the_mapping_and_parses_the_result():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["method"] = request.method
+        captured["path"] = request.url.path
+        captured["body"] = request.read()
+        return httpx.Response(200, json=_WRITE_JSON)
+
+    result = await _client(handler).set_ticker_mapping(
+        identifier_kind="SYMBOL",
+        identifier="IWDA",
+        broker="globex",
+        canonical_ticker="IWDA.AS",
+        updated_by=ADMIN_ID,
+    )
+
+    assert (captured["method"], captured["path"]) == ("PUT", "/ticker-mappings")
+    assert json.loads(captured["body"]) == {
+        "identifier_kind": "SYMBOL",
+        "identifier": "IWDA",
+        "broker": "globex",
+        "canonical_ticker": "IWDA.AS",
+        "updated_by": ADMIN_ID,
+    }
+    assert result.mapping.id == 7
+    assert result.accounts_rebuilt == 2
+    assert result.rebuilds_failed == 1
+
+
+async def test_set_ticker_mapping_raises_invalid_request_with_portfolios_message():
+    client = _client(
+        lambda request: httpx.Response(422, json={"detail": "A SYMBOL mapping needs a broker."})
+    )
+
+    with pytest.raises(InvalidPortfolioRequest, match="needs a broker"):
+        await client.set_ticker_mapping(
+            identifier_kind="SYMBOL",
+            identifier="IWDA",
+            broker=None,
+            canonical_ticker="IWDA.AS",
+            updated_by=ADMIN_ID,
+        )
+
+
+async def test_delete_ticker_mapping_sends_the_admin_and_parses_the_result():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["method"] = request.method
+        captured["path"] = request.url.path
+        captured["params"] = dict(request.url.params)
+        return httpx.Response(200, json=_WRITE_JSON)
+
+    result = await _client(handler).delete_ticker_mapping(mapping_id=7, updated_by=ADMIN_ID)
+
+    assert (captured["method"], captured["path"]) == ("DELETE", "/ticker-mappings/7")
+    assert captured["params"] == {"updated_by": ADMIN_ID}
+    assert result.mapping.identifier == "IWDA"
+
+
+async def test_delete_ticker_mapping_maps_404_to_ticker_mapping_not_found():
+    # Not AccountNotFound: on this route a 404 means the mapping is already gone.
+    client = _client(lambda request: httpx.Response(404, json={"detail": "No ticker mapping"}))
+
+    with pytest.raises(TickerMappingNotFound):
+        await client.delete_ticker_mapping(mapping_id=7, updated_by=ADMIN_ID)
+
+
+async def test_list_all_unmapped_instruments_parses_instruments_with_optional_broker():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["path"] = request.url.path
+        return httpx.Response(
+            200,
+            json=[
+                {"kind": "ISIN", "identifier": "IE00B4L5Y983", "broker": None},
+                {"kind": "SYMBOL", "identifier": "SGLD", "broker": "globex"},
+            ],
+        )
+
+    unmapped = await _client(handler).list_all_unmapped_instruments()
+
+    assert captured["path"] == "/instruments/unmapped/all"
+    assert [(u.kind, u.identifier, u.broker) for u in unmapped] == [
+        ("ISIN", "IE00B4L5Y983", None),
+        ("SYMBOL", "SGLD", "globex"),
+    ]

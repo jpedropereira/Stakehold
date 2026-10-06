@@ -9,7 +9,8 @@ from portfolio import jobs
 from portfolio.errors import PortfolioError
 from portfolio.run_result import STATUS_NOTHING_TO_DO, STATUS_OK
 from portfolio.settings import SettingsError
-from portfolio.transactions.base import TRANSACTION_TYPES
+from portfolio.ticker_mapping.base import MAPPED_KINDS
+from portfolio.transactions.base import IDENTIFIER_KINDS, TRANSACTION_TYPES
 
 _SUCCESS_STATUSES = {STATUS_OK, STATUS_NOTHING_TO_DO}
 
@@ -90,9 +91,11 @@ def _import_cashflow(args: argparse.Namespace) -> int:
     return _report(result, "transaction(s) saved")
 
 
-def _print_instrument_rows(instruments: list[dict[str, str]]) -> None:
+def _print_instrument_rows(instruments: list[dict[str, str | None]]) -> None:
+    # "-" for an ISIN in the cross-user list, which has no broker: one mapping covers them all.
     for instrument in instruments:
-        print(f"{instrument['kind']}\t{instrument['identifier']}\t{instrument['broker']}")
+        broker = instrument["broker"] or "-"
+        print(f"{instrument['kind']}\t{instrument['identifier']}\t{broker}")
 
 
 def _print_failed_pairs(pairs: list[dict[str, str]]) -> None:
@@ -113,16 +116,79 @@ def _print_blocked_tickers(tickers: list[dict[str, str]]) -> None:
 
 
 def _rebuild_returns(args: argparse.Namespace) -> int:
+    if args.all:
+        if args.account:
+            # argparse can't express "--account needs --user"; exit the way it would.
+            print("rebuild-returns: --account can't be combined with --all", file=sys.stderr)
+            raise SystemExit(2)
+        return _rebuild_returns_all()
     result = jobs.run_rebuild_returns(user_id=args.user, account_label=args.account)
     _print_blocked_tickers(result["blocked_tickers"])
     _print_failed_pairs(result["failed_pairs"])
     return _report(result, "return snapshot(s) saved")
 
 
+def _rebuild_returns_all() -> int:
+    result = jobs.run_rebuild_returns_all()
+    print(f"returns rebuilt for {result['users_rebuilt']} user(s), {result['users_failed']} failed")
+    return _report(result, "return snapshot(s) saved")
+
+
 def _list_unmapped_instruments(args: argparse.Namespace) -> int:
-    result = jobs.run_list_unmapped_instruments(user_id=args.user)
+    if args.all:
+        result = jobs.run_list_all_unmapped_instruments()
+    else:
+        result = jobs.run_list_unmapped_instruments(user_id=args.user)
     _print_instrument_rows(result["unmapped_instruments"])
     return _report(result, "instrument(s) unmapped", count_key="instruments_unmapped")
+
+
+def _describe_mapping(mapping: dict) -> str:
+    broker = f" ({mapping['broker']})" if mapping["broker"] else ""
+    target = mapping["canonical_ticker"]
+    return f"{mapping['identifier_kind']} {mapping['identifier']}{broker} -> {target}"
+
+
+def _report_mapping_write(result: dict, *, prefix: str = "") -> int:
+    print(f"{prefix}{_describe_mapping(result['mapping'])}")
+    print(
+        f"positions rebuilt for {result['accounts_rebuilt']} account(s), "
+        f"{result['rebuilds_failed']} failed"
+    )
+    if result["returns_rebuilds_failed"]:
+        print(f"returns failed for {result['returns_rebuilds_failed']} account(s)")
+    # The mapping change itself succeeded, but a rebuild that needs retrying shouldn't exit 0.
+    if result["rebuilds_failed"] or result["returns_rebuilds_failed"]:
+        return 1
+    return _exit_code(result)
+
+
+def _ticker_mapping_list(_args: argparse.Namespace) -> int:
+    mappings = jobs.get_ticker_mappings()
+    for m in mappings:
+        broker = m["broker"] or "-"
+        print(
+            f"{m['id']}\t{m['identifier_kind']}\t{m['identifier']}\t{broker}\t"
+            f"{m['canonical_ticker']}"
+        )
+    print(f"{len(mappings)} ticker mapping(s)")
+    return 0
+
+
+def _ticker_mapping_set(args: argparse.Namespace) -> int:
+    result = jobs.run_set_ticker_mapping(
+        identifier_kind=args.kind,
+        identifier=args.identifier,
+        broker=args.broker,
+        canonical_ticker=args.ticker,
+        updated_by=args.user,
+    )
+    return _report_mapping_write(result)
+
+
+def _ticker_mapping_delete(args: argparse.Namespace) -> int:
+    result = jobs.run_delete_ticker_mapping(mapping_id=args.id, updated_by=args.user)
+    return _report_mapping_write(result, prefix="deleted ")
 
 
 def _serve(_args: argparse.Namespace) -> int:
@@ -207,10 +273,14 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="datetime",
         help="ISO 8601 with a UTC offset, e.g. 2026-03-01T10:00:00+00:00",
     )
-    txn_parser.add_argument("--amount", required=True, type=_decimal, help="Signed native amount")
+    txn_parser.add_argument(
+        "--amount",
+        type=_decimal,
+        help="Signed native amount. Optional for BUY/SELL: derived as -(quantity * price) - fees",
+    )
     txn_parser.add_argument("--currency", required=True, help="ISO 4217, e.g. EUR")
     txn_parser.add_argument("--instrument", help="ISIN or symbol -- omit for cash-only rows")
-    txn_parser.add_argument("--instrument-kind", dest="instrument_kind", choices=("ISIN", "SYMBOL"))
+    txn_parser.add_argument("--instrument-kind", dest="instrument_kind", choices=IDENTIFIER_KINDS)
     txn_parser.add_argument("--quantity", type=_decimal, help="Signed: positive buy, negative sell")
     txn_parser.add_argument("--price", type=_decimal, help="Per unit, native currency")
     txn_parser.add_argument(
@@ -235,10 +305,39 @@ def _build_parser() -> argparse.ArgumentParser:
     unmapped_parser = subparsers.add_parser(
         "list-unmapped-instruments", help="List instruments with no ticker mapping"
     )
-    unmapped_parser.add_argument(
-        "--user", required=True, type=_uuid, help="The auth-issued user id"
+    unmapped_scope = unmapped_parser.add_mutually_exclusive_group(required=True)
+    unmapped_scope.add_argument("--user", type=_uuid, help="The auth-issued user id")
+    unmapped_scope.add_argument(
+        "--all", action="store_true", help="Every user's instruments (what an admin has to map)"
     )
     unmapped_parser.set_defaults(handler=_list_unmapped_instruments)
+
+    mapping_parser = subparsers.add_parser(
+        "ticker-mapping",
+        help="Manage the global ISIN/SYMBOL -> ticker mappings (what the web admin page does)",
+    )
+    mapping_subparsers = mapping_parser.add_subparsers(dest="mapping_command", required=True)
+    mapping_list_parser = mapping_subparsers.add_parser("list", help="List every mapping")
+    mapping_list_parser.set_defaults(handler=_ticker_mapping_list)
+    mapping_set_parser = mapping_subparsers.add_parser(
+        "set", help="Map an instrument to a ticker, or re-point its mapping"
+    )
+    mapping_set_parser.add_argument("--kind", required=True, choices=MAPPED_KINDS)
+    mapping_set_parser.add_argument("--identifier", required=True)
+    mapping_set_parser.add_argument(
+        "--broker", default=None, help="Required for a SYMBOL, not allowed for an ISIN"
+    )
+    mapping_set_parser.add_argument("--ticker", required=True, help="A data-store ticker")
+    mapping_set_parser.add_argument(
+        "--user", required=True, type=_uuid, help="The admin making the change (auth user id)"
+    )
+    mapping_set_parser.set_defaults(handler=_ticker_mapping_set)
+    mapping_delete_parser = mapping_subparsers.add_parser("delete", help="Delete a mapping")
+    mapping_delete_parser.add_argument("--id", required=True, type=int)
+    mapping_delete_parser.add_argument(
+        "--user", required=True, type=_uuid, help="The admin making the change (auth user id)"
+    )
+    mapping_delete_parser.set_defaults(handler=_ticker_mapping_delete)
 
     cashflow_parser = subparsers.add_parser(
         "import-cashflow", help="Import a broker's cash-ledger (Account) export"
@@ -268,7 +367,13 @@ def _build_parser() -> argparse.ArgumentParser:
     returns_parser = subparsers.add_parser(
         "rebuild-returns", help="Compute return snapshots from positions, prices, FX and dividends"
     )
-    returns_parser.add_argument("--user", required=True, type=_uuid, help="The auth-issued user id")
+    returns_scope = returns_parser.add_mutually_exclusive_group(required=True)
+    returns_scope.add_argument("--user", type=_uuid, help="The auth-issued user id")
+    returns_scope.add_argument(
+        "--all",
+        action="store_true",
+        help="Every user's accounts (what the returns-refresh container runs on a schedule)",
+    )
     returns_parser.add_argument(
         "--account", help="The --label of one account to rebuild; omit to rebuild every account"
     )

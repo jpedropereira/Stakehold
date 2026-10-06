@@ -16,7 +16,6 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
-import yaml
 from portfolio import cli, jobs
 from portfolio.datastore_client.base import PricePoint, TickerInfo
 
@@ -45,15 +44,8 @@ class StubDataStoreClient:
 
 
 @pytest.fixture(autouse=True)
-def _ticker_mappings(monkeypatch, tmp_path):
-    """The default configs/ticker_mappings.yaml is real, gitignored broker data (task 15) and
-    doesn't exist in a dev checkout -- point PORTFOLIO_TICKER_MAPPINGS_PATH at a throwaway file
-    with just what this test needs, the same absolute-path override settings.py already supports.
-    """
-    path = tmp_path / "ticker_mappings.yaml"
-    path.write_text(yaml.dump({"isin": {_ISIN: "IWDA.AS"}}))
-    monkeypatch.setenv("PORTFOLIO_TICKER_MAPPINGS_PATH", str(path))
-    return path
+def _ticker_mappings(seed_mapping):
+    seed_mapping("ISIN", _ISIN, "IWDA.AS")
 
 
 @pytest.fixture(autouse=True)
@@ -63,6 +55,27 @@ def _datastore_settings(monkeypatch):
     to build the stub below instead."""
     monkeypatch.setenv("DATASTORE_API_URL", "http://stub-datastore")
     monkeypatch.setenv("INTERNAL_API_SECRET", "stub-secret")  # pragma: allowlist secret
+
+
+_PRICES = {"IWDA.AS": [PricePoint(date=date(2026, 1, 6), split_adjusted_close=Decimal("100.00"))]}
+
+
+def _serve_prices(monkeypatch, price_series):
+    monkeypatch.setattr(
+        jobs,
+        "HttpDataStoreClient",
+        lambda base_url, internal_api_secret: StubDataStoreClient(price_series=price_series),
+    )
+
+
+@pytest.fixture(autouse=True)
+def _stub_data_store(monkeypatch):
+    """Every add-transaction now chains a returns rebuild, which builds its own
+    jobs.HttpDataStoreClient. Stubbed module-wide with *no* prices, so no write here reaches
+    for a real host and the chained rebuild writes nothing -- the tests below that are about an
+    explicit `rebuild-returns` run see only what that run wrote. Tests about the chained
+    rebuild opt in with _serve_prices."""
+    _serve_prices(monkeypatch, {})
 
 
 def _add_account(user_id, *, label="m", broker="acme"):
@@ -342,3 +355,44 @@ def test_a_dividend_transaction_is_reflected_in_dividends_received_and_total_ret
         )
         rows = cur.fetchall()
     assert rows == [(50, 12, 62)]
+
+
+def _return_snapshot_users(pg_connect):
+    with pg_connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT DISTINCT a.user_id FROM return_snapshots r "
+            "JOIN accounts a ON a.id = r.account_id"
+        )
+        return {row[0] for row in cur.fetchall()}
+
+
+def test_adding_a_transaction_rebuilds_returns_without_a_manual_run(monkeypatch, pg_connect):
+    _serve_prices(monkeypatch, _PRICES)
+    user_id = uuid.uuid4()
+    _add_account(user_id)
+
+    _add_buy(user_id, account_label="m", ref="t1")
+
+    with pg_connect() as conn, conn.cursor() as cur:
+        cur.execute("SELECT canonical_ticker, price_date, market_value_eur FROM return_snapshots")
+        rows = cur.fetchall()
+    assert rows == [("IWDA.AS", date(2026, 1, 6), Decimal("1000.0000"))]
+
+
+def test_rebuild_returns_all_covers_every_users_accounts(monkeypatch, pg_connect, capsys):
+    _serve_prices(monkeypatch, _PRICES)
+    ann, bea = uuid.uuid4(), uuid.uuid4()
+    _add_account(ann)
+    _add_account(bea, label="isa")
+    _add_buy(ann, account_label="m", ref="t1")
+    _add_buy(bea, account_label="isa", ref="t1")
+    # Start from nothing, so only --all can have written what's checked below.
+    with pg_connect() as conn, conn.cursor() as cur:
+        cur.execute("DELETE FROM return_snapshots")
+    capsys.readouterr()
+
+    exit_code = cli.main(["rebuild-returns", "--all"])
+
+    assert exit_code == 0
+    assert "returns rebuilt for 2 user(s), 0 failed" in capsys.readouterr().out
+    assert _return_snapshot_users(pg_connect) == {ann, bea}

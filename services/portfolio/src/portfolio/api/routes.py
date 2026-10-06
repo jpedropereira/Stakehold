@@ -38,9 +38,13 @@ from portfolio.api.models import (
     RebuildRequest,
     RebuildReturnsResponse,
     ReturnResponse,
+    TickerMappingResponse,
+    TickerMappingSetRequest,
+    TickerMappingWriteResponse,
     TransactionCreateRequest,
     TransactionResponse,
     TransactionsWriteResponse,
+    UnmappedInstrumentAnyBrokerResponse,
     UnmappedInstrumentResponse,
 )
 from portfolio.api.security import get_settings, require_internal_secret
@@ -63,7 +67,8 @@ router = APIRouter(dependencies=[Depends(require_internal_secret)])
 # jobs._ensure_role_and_schema's docstring.
 _SCHEMA_PROBE = (
     "SELECT to_regclass('accounts'), to_regclass('transactions'), "
-    "to_regclass('position_snapshots'), to_regclass('return_snapshots')"
+    "to_regclass('position_snapshots'), to_regclass('return_snapshots'), "
+    "to_regclass('ticker_mappings')"
 )
 
 # Generous for a broker CSV/XLSX export, small enough to bound memory -- the whole file is
@@ -174,6 +179,56 @@ def list_unmapped_instruments(
 ) -> list[dict]:
     result = jobs.run_list_unmapped_instruments(user_id=user_id, settings=settings)
     return result["unmapped_instruments"]
+
+
+@router.get("/instruments/unmapped/all", response_model=list[UnmappedInstrumentAnyBrokerResponse])
+def list_all_unmapped_instruments(settings: Settings = Depends(get_settings)) -> list[dict]:
+    """Every user's unmapped instruments, for the admin page -- identifiers only, never whose."""
+    return jobs.run_list_all_unmapped_instruments(settings=settings)["unmapped_instruments"]
+
+
+@router.get("/instruments/tickers", response_model=list[str])
+def list_tickers(settings: Settings = Depends(get_settings)) -> list[str]:
+    """data-store's ticker list, passed through so web only ever talks to portfolio."""
+    return jobs.get_tickers(settings=settings)
+
+
+# --- ticker mappings ---
+#
+# Global and admin-only. The admin check itself lives in web, the only caller: like every other
+# route here, these trust a caller holding the internal secret -- see docs/architecture.md.
+# 200 rather than _write_status_code's 201: a PUT that re-points an existing mapping, or a
+# DELETE, creates nothing.
+
+
+@router.get("/ticker-mappings", response_model=list[TickerMappingResponse])
+def list_ticker_mappings(settings: Settings = Depends(get_settings)) -> list[dict]:
+    return jobs.get_ticker_mappings(settings=settings)
+
+
+@router.put("/ticker-mappings", response_model=TickerMappingWriteResponse)
+def set_ticker_mapping(
+    body: TickerMappingSetRequest, settings: Settings = Depends(get_settings)
+) -> dict:
+    return jobs.run_set_ticker_mapping(
+        identifier_kind=body.identifier_kind,
+        identifier=body.identifier,
+        broker=body.broker,
+        canonical_ticker=body.canonical_ticker,
+        updated_by=body.updated_by,
+        settings=settings,
+    )
+
+
+@router.delete("/ticker-mappings/{mapping_id}", response_model=TickerMappingWriteResponse)
+def delete_ticker_mapping(
+    mapping_id: int,
+    updated_by: UUID = Query(...),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    return jobs.run_delete_ticker_mapping(
+        mapping_id=mapping_id, updated_by=updated_by, settings=settings
+    )
 
 
 # --- transactions ---

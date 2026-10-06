@@ -17,11 +17,11 @@ Two things go in:
   broker-parser plugin. Every transaction's native-currency amount is stored exactly as the
   broker reported it — the immutable source of truth — alongside a EUR-equivalent frozen at
   transaction time.
-- **Manual ticker links** — the user's own mapping from a broker-reported instrument (an ISIN or a
-  ticker symbol, depending on the broker) to the canonical ticker `data-store` prices (e.g.
-  `0700.HK`). Defined in a YAML config file today; the plan is to move this to database-backed,
-  UI-managed mappings once the application has a UI (see "Configuration" and the cross-cutting
-  decision below). Never inferred, never fuzzy-matched, whichever way it's stored.
+- **Ticker mappings** — the mapping from a broker-reported instrument (an ISIN or a ticker symbol,
+  depending on the broker) to the canonical ticker `data-store` prices (e.g. `0700.HK`). Global,
+  stored in the `ticker_mappings` table and managed by an admin from `web`'s admin page (see the
+  cross-cutting decision below). Never inferred, never fuzzy-matched. Manual entry doesn't need
+  one: it records a `data-store` ticker directly (`TICKER`).
 
 Two things are derived, not entered — both **materialized**, not computed live:
 
@@ -66,7 +66,7 @@ flowchart TD
     subgraph domain["Domain modules"]
         ACC["accounts/<br/>repository"]
         IMP["broker_import/<br/>base · discovery<br/><i>implementations installed as plugins</i>"]
-        MAP["ticker_mapping/<br/>loader"]
+        MAP["ticker_mapping/<br/>base · repository"]
         TXN["transactions/<br/>base · repository"]
         POS["positions/<br/>calculator · repository"]
         RET["returns/<br/>calculator · repository"]
@@ -102,6 +102,7 @@ flowchart TD
     JOBS --> SH
     ACC --> SH
     TXN --> SH
+    MAP --> SH
     POS --> SH
     RET --> SH
     SH --> PG
@@ -246,7 +247,7 @@ the ticker may still be fully computable from its `BUY`/`SELL` rows regardless.
 |---|---|---|
 | `accounts/` | `repository.py` only | No external source and no `base.py` — a broker and an account are user-declared reference data, created through a CLI command, not parsed or fetched. Every read here takes a `user_id`, and every other domain module's queries are reached only by first going through an account scoped to that user — this is the one place multi-user isolation is enforced, not repeated independently by each module. **Deliberately no unscoped `get_by_id(account_id)`** alongside `get_by_label` — that absence is the design, not an oversight: it removes the one shortcut that would let a caller reach an account without proving it owns it. |
 | `broker_import/` | `base.py` (the `BrokerParser` and `CashflowParser` Protocols) + `discovery.py` (entry-point lookup, populating `pipeline.py`'s two registries) | **No `repository.py`.** A parser hands back in-memory `CanonicalTransaction` records; persistence is owned entirely by `transactions/repository.py`, so a manually-entered transaction and an imported one are written through the exact same path. Splitting persistence into `broker_import/` would let the two paths drift. **No concrete implementation lives in this module at all** — every `BrokerParser`/`CashflowParser` is an entry-point plugin from a separately-installed package; `discovery.py` is the only file here `pipeline.py` imports directly, and it never imports a concrete parser either. |
-| `ticker_mapping/` | `loader.py` only | **No `repository.py`.** The mapping lives in a YAML config file (`configs/ticker_mappings.yaml`), not a database table — mirroring `data-store`'s `yfinance_exchange_suffixes.yaml` reference-config pattern. `loader.py` reads and validates the file into an in-memory lookup; nothing here talks to Postgres. No `base.py` — nothing else is expected to implement a "mapping provider." |
+| `ticker_mapping/` | `base.py` (the `TickerMappings` lookup) + `repository.py` | `base.py` holds the in-memory lookup every rebuild resolves through, `resolve(kind, identifier, broker)`; `repository.py` persists the global `ticker_mappings` table and loads it into that lookup once per run (`load_all`), so a rebuild resolves every row against one consistent set rather than querying per row. No `*_source.py` — mappings are entered by an admin, not fetched. Until the admin page existed this was a YAML file and `loader.py`; see the cross-cutting decision on ticker-mapping storage. |
 | `transactions/` | `base.py` (the `CanonicalTransaction` record shape) + `repository.py` | `base.py` here holds a **data shape**, not a `Protocol` — the contract is "what a normalized transaction looks like," which multiple producers (`broker_import` parsers, manual CLI entry) must fill in, not a swappable behavior one class implements. |
 | `positions/` | `calculator.py` (pure) + `repository.py` | **Built at task 7.** Same shape as data-store's `returns/`: no `base.py`, no `*_source.py` — the input is this service's own `transactions` and `ticker_mapping` tables, not an external provider. One deliberate deviation from "repositories never commit": `positions/repository.py` still never commits, but `pipeline.rebuild_positions` opens the `with transaction(conn):` boundary once *per `(account, canonical_ticker)` pair* rather than once per flow, because `schema.md`'s delete-then-insert contract requires each pair's replacement to be atomic on its own, not the whole rebuild run. |
 | `returns/` | `calculator.py` (pure) + `repository.py` | **Built at task 8.** Same shape again, plus one more thing to disclose: it also needs prices and FX rates from `datastore_client`. Those are fetched by `pipeline.py` and handed into `calculator.py` as plain data — the calculator itself stays pure and knows nothing about HTTP, keeping it as unit-testable as data-store's `returns/calculator.py`. A second thing to disclose, surfaced only once `return_snapshots`' original mark-to-market-only design turned out not to account for dividend income: `calculator.py` also takes a `DividendEvent` sequence per pair, needing no `datastore_client` call at all (`transactions.eur_amount` is already frozen in EUR) — but resolving which `DIVIDEND` transactions belong to which ticker is `pipeline.rebuild_returns`'s job, via the same `mappings.resolve` `rebuild_positions` already uses for `BUY`/`SELL`. `returns/` is therefore not quite as decoupled from `ticker_mapping/` as `position_snapshots` being pre-resolved might suggest. |
@@ -255,7 +256,9 @@ the ticker may still be fully computable from its `BUY`/`SELL` rows regardless.
 **`errors.py` is not a domain module** — it's a single Foundation-layer file (`PortfolioError` plus
 `InvalidBroker`, `AccountNotFound`, `AccountLabelConflict`, `InvalidTransaction`, and, as of task 6,
 `BrokerFileError`, `TickerMappingError`, plus `BrokerParserNotFound` and `BrokerPluginError` from
-the broker-plugin extraction and `DataStoreApiError` from task 14), not one per module, so every
+the broker-plugin extraction, `DataStoreApiError` from task 14, and `UnknownTicker`,
+`InvalidTickerMapping` and `TickerMappingNotFound` from manual ticker entry and the admin mapping
+page), not one per module, so every
 domain-level failure `pipeline.py` or a pure validator raises shares one parent. Repositories
 never raise these — they let the driver's own exceptions (e.g. `psycopg.errors.UniqueViolation`)
 propagate uncaught, same as `auth`. **`jobs.py` itself no longer catches `PortfolioError`** — see
@@ -468,19 +471,18 @@ identity — not column-level DDL, which needs its own sign-off pass.
   PositionSnapshot, ReturnSnapshot) is scoped by Account and therefore transitively by User — there
   is no cross-user query path. **Stated assumption, not confirmed**: one user per account, no
   shared/joint accounts.
-- **TickerLink** (the manual mapping) — identified by `(instrument_identifier_kind,
+- **TickerLink** (the mapping) — identified by `(instrument_identifier_kind,
   instrument_identifier)`, e.g. `(ISIN, IE00B4L5Y983)` or `(SYMBOL, IWDA)`; maps to a
   `canonical_ticker` string (a `data-store` `raw_market_data.ticker` spelling, e.g. `IWDA.AS`).
-  **Now defined in `configs/ticker_mappings.yaml`, not a database table** — see "Configuration"
-  below and the cross-cutting decision on ticker-mapping storage. `PositionSnapshot`/
-  `ReturnSnapshot` reference the resolved `canonical_ticker` string directly rather than a
-  surrogate id, since there's no database row for a foreign key to point at.
+  Stored in the global `ticker_mappings` table — see [`schema.md`](schema.md) and the cross-cutting
+  decision on ticker-mapping storage. `PositionSnapshot`/`ReturnSnapshot` reference the resolved
+  `canonical_ticker` string directly rather than a mapping id, so re-pointing or deleting a mapping
+  never cascades into derived rows; the next rebuild recomputes them instead.
   - **Key scoping, carried over unchanged**: `ISIN` mappings are global (an ISIN is globally
     unique by design, so one mapping covers every ISIN-based broker); `SYMBOL` mappings are scoped
     per-broker (a raw ticker symbol is *not* globally unambiguous — two exchanges can reuse the
-    same symbol for different instruments). Expressed in the YAML as two top-level sections — a
-    flat `isin:` map and a `symbol:` map nested one level under each broker key — rather than the
-    two partial unique indexes a database table would need for the same guarantee. Keying `SYMBOL`
+    same symbol for different instruments). Enforced by a CHECK (an ISIN row has no broker, a
+    SYMBOL row must have one) and two partial unique indexes, one per kind. Keying `SYMBOL`
     mappings without a broker qualifier risks silently reusing a mapping that isn't actually the
     same instrument on a future symbol-based broker.
 - **Transaction** — identified by a surrogate id; references an Account; carries `(account_id,
@@ -513,15 +515,20 @@ identity — not column-level DDL, which needs its own sign-off pass.
 | Account setup | `account add --user <id> --broker <key> --label <label>` | `POST /accounts` | rare, manual | — | `accounts` |
 | Account listing | `account list --user <id>` | `GET /accounts` | manual, on demand | `accounts`, scoped by `user_id` | — (read-only report) |
 | Broker-plugin discovery | `broker list` | `GET /brokers` | manual, on demand | `BROKER_PARSERS` (in-memory) | — (read-only report) |
-| Ticker linking | — (hand-edit the YAML file) | — | manual, as unmapped instruments surface | — | `configs/ticker_mappings.yaml` (edited directly, not through the service) |
-| List unmapped instruments | `list-unmapped-instruments --user <id>` | `GET /instruments/unmapped` | manual, on demand | `transactions` joined to `accounts` (scoped by `user_id`, and to pick up each instrument's owning broker), `configs/ticker_mappings.yaml` | — (read-only report) |
-| Manual transaction entry | `add-transaction --user <id> --account <label> --ref <key> --type <type> --datetime <iso8601> --amount <decimal> --currency <ISO4217> [--instrument <id> --instrument-kind ISIN\|SYMBOL] [--quantity <d>] [--price <d>] [--fx-rate <d>] [--fees <d>]` | `POST /transactions` | ad hoc | `accounts`, scoped by `user_id` | `transactions` (idempotent on `(account_id, broker_transaction_ref)`, keyed by the mandatory `--ref`) |
+| Ticker mapping: set | `ticker-mapping set --kind ISIN\|SYMBOL --identifier <id> [--broker <b>] --ticker <t> --user <admin id>` | `PUT /ticker-mappings` | manual, by an admin, as unmapped instruments surface | data-store's `GET /tickers/{ticker}` (the ticker must exist), then `transactions` joined to `accounts` (every account, across users, using the instrument) | `ticker_mappings` (upsert), then `position_snapshots` for each affected account |
+| Ticker mapping: delete | `ticker-mapping delete --id <n> --user <admin id>` | `DELETE /ticker-mappings/{id}?updated_by=` | manual, by an admin | `transactions` joined to `accounts` (affected accounts) | `ticker_mappings` (delete), then `position_snapshots` for each affected account |
+| Ticker mapping listing | `ticker-mapping list` | `GET /ticker-mappings` | on demand | `ticker_mappings` | — (read-only report) |
+| Ticker list | — (CLI has none) | `GET /instruments/tickers` | on demand | `data-store`'s `GET /tickers` (`datastore_client.list_tickers`), passed through so `web` only ever talks to `portfolio` | — (read-only report) |
+| List unmapped instruments | `list-unmapped-instruments --user <id>` | `GET /instruments/unmapped` | manual, on demand | `transactions` joined to `accounts` (scoped by `user_id`, and to pick up each instrument's owning broker), `ticker_mappings` | — (read-only report) |
+| List unmapped instruments, every user | `list-unmapped-instruments --all` | `GET /instruments/unmapped/all` | on demand (the admin page) | `transactions` joined to `accounts`, unscoped; `ticker_mappings`. Returns identifiers only, never whose they are; an ISIN appears once, with no broker | — (read-only report) |
+| Manual transaction entry | `add-transaction --user <id> --account <label> --ref <key> --type <type> --datetime <iso8601> --amount <decimal> --currency <ISO4217> [--instrument <id> --instrument-kind ISIN\|SYMBOL\|TICKER] [--quantity <d>] [--price <d>] [--fx-rate <d>] [--fees <d>]` | `POST /transactions` | ad hoc | `accounts`, scoped by `user_id` | `transactions` (idempotent on `(account_id, broker_transaction_ref)`, keyed by the mandatory `--ref`) |
 | Broker file import | `import-transactions --user <id> --file <path> --account <label>` | `POST /transactions/import` (multipart) | manual, on demand | export file, `accounts` scoped by `user_id` | `transactions` (idempotent on `(account_id, broker_transaction_ref)`) |
 | Cash-ledger import | `import-cashflow --user <id> --file <path> --account <label>` | `POST /cashflows/import` (multipart) | manual, on demand | export file, `accounts` scoped by `user_id`, data-store's FX read API (`datastore_client`) for non-EUR rows | `transactions` (idempotent on `(account_id, broker_transaction_ref)`) |
 | Transaction listing | — (CLI has none) | `GET /transactions` | on demand | `transactions`, scoped through the resolved account | — (read-only report) |
-| Positions rebuild | `rebuild-positions --user <id> [--account <label>]` | `POST /positions/rebuild` | automatically after every transaction write that saves rows (see "Positions follow every transaction write"); manually after a ticker-mapping change | `transactions`, `configs/ticker_mappings.yaml` | `position_snapshots` |
+| Positions rebuild | `rebuild-positions --user <id> [--account <label>]` | `POST /positions/rebuild` | automatically after every transaction write that saves rows (see "Positions and returns follow every transaction write") and, for each affected account, after every ticker-mapping change | `transactions`, `ticker_mappings` | `position_snapshots` |
 | Position listing | — (CLI has none) | `GET /positions` | on demand | `position_snapshots`, latest row per ticker | — (read-only report) |
-| Returns rebuild | `rebuild-returns --user <id> [--account <label>]` | `POST /returns/rebuild` | after positions rebuild or new prices land | `position_snapshots`, `transactions` (`DIVIDEND` rows), `configs/ticker_mappings.yaml`, `data-store` read API | `return_snapshots` |
+| Returns rebuild | `rebuild-returns --user <id> [--account <label>]` | `POST /returns/rebuild` | automatically after every positions rebuild that follows a write or a mapping change (see "Positions and returns follow every transaction write") | `position_snapshots`, `transactions` (`DIVIDEND` rows), `ticker_mappings`, `data-store` read API | `return_snapshots` |
+| Returns refresh, every user | `rebuild-returns --all` | — | every `PORTFOLIO_RETURNS_REFRESH_SECONDS` (default 6h), by the `returns-refresh` container (see "Returns follow new prices") | as for one user, for each user with an account | `return_snapshots` |
 | Return listing | — (CLI has none) | `GET /returns`, `GET /returns/latest` | on demand | `return_snapshots`, optionally filtered by ticker/date range | — (read-only report) |
 
 **No separate `brokers` table** ever materialized — `schema.md` settled on `broker` as a plain
@@ -556,9 +563,8 @@ up — there is no way to tell, from an unresolved identifier alone, which resol
 names the same real-world instrument. If one account's transactions for a single holding are
 split across a mapped identifier kind (e.g. `ISIN`) and an unmapped one for that broker (e.g.
 `SYMBOL`), that ticker's snapshot is built only from the mapped rows — silently a partial view,
-not the blocked-and-untouched outcome described above. The fix lives in
-`configs/ticker_mappings.yaml` (map every identifier kind a broker actually emits for an
-instrument), not in `rebuild_positions` itself — there's no reliable way for the code to infer
+not the blocked-and-untouched outcome described above. The fix lives in the ticker mappings (map
+every identifier kind a broker actually emits for an instrument), not in `rebuild_positions` itself — there's no reliable way for the code to infer
 that two different identifier strings name the same instrument without the mapping saying so for
 both.
 
@@ -599,19 +605,20 @@ already, durably, succeeded.
   is no action a user can take from the CLI to resolve either anomaly, so blocking the rebuild
   would only make the portfolio look emptier without giving them a way to fix it.
 
-**Pruning a ticker `rebuild-positions` no longer produces** (e.g. a mapping in
-`configs/ticker_mappings.yaml` was re-pointed to a different `canonical_ticker`) is handled, but
+**Pruning a ticker `rebuild-positions` no longer produces** (e.g. a ticker mapping was re-pointed
+to a different `canonical_ticker`) is handled, but
 conservatively: `pipeline.rebuild_positions` only deletes a stale `(account, ticker)` pair when
 that account currently has **zero** blocked instruments. A blocked instrument's old
 `canonical_ticker` — from before its mapping was removed — is indistinguishable from a genuinely
 stale one at rebuild time, and "blocked means don't touch, not delete" means the ambiguous case
 must never delete. An account with any blocked instrument simply skips pruning for that run.
 
-### Positions follow every transaction write
+### Positions and returns follow every transaction write
 
 `run_add_transaction`, `run_import_transactions` and `run_import_cashflow` each end by calling
-`run_rebuild_positions` for the one account they just wrote to (`jobs._rebuild_positions_after_write`),
-and report its outcome as `positions_rebuild` alongside their own `status`.
+`run_rebuild_positions` and then `run_rebuild_returns` for the one account they just wrote to
+(`jobs._rebuild_after_write`), and report their outcomes as `positions_rebuild` and
+`returns_rebuild` alongside their own `status`.
 
 **Why:** `GET /positions` reads only `position_snapshots`, and before this nothing but an explicit
 `rebuild-positions` ever wrote it — so a transaction entered through the web UI was durably saved,
@@ -628,16 +635,32 @@ connection with one transaction contract; composing two of them is orchestration
 `jobs.py`'s job. Having `web` call `POST /positions/rebuild` after each write was rejected because
 it would fix only the web UI and leave the CLI and any other API caller with the same gap.
 
-**Skipped when the write saved nothing** (`positions_rebuild: skipped`): an idempotent resubmit
-leaves the transaction log unchanged, so the snapshots derived from it are unchanged too.
+**Returns second, and only on top of good positions.** `return_snapshots` is computed from
+`position_snapshots`, so the returns rebuild runs after the positions one and is skipped
+(`returns_rebuild: skipped`) when the positions rebuild failed: returns over stale positions
+would be wrong, not just late. It's also skipped when data-store isn't configured
+(`DATASTORE_API_URL`/`INTERNAL_API_SECRET`), with a WARNING naming the `rebuild-returns` command to
+run once it is, so a CLI-only setup without data-store still saves transactions.
+
+*Why returns joined the write path after first being kept off it:* this section used to leave
+returns out on purpose, because `rebuild-returns` makes HTTP calls to data-store and that put a
+cross-service failure mode on the write. In practice that left every new transaction's returns
+chart empty until someone ran a CLI command a web user can't reach — the same "saved but
+invisible" problem positions had. The failure mode is contained the same way positions' is: the
+call happens after the write has committed, and any failure is reported, never raised.
+
+**Skipped when the write saved nothing** (`positions_rebuild`/`returns_rebuild: skipped`): an
+idempotent resubmit leaves the transaction log unchanged, so the snapshots derived from it are
+unchanged too.
 
 **Failure isolation:** the rebuild opens its own connection only after the write's connection has
 closed and its transaction committed, so nothing the rebuild does can roll a saved transaction
-back. A rebuild that *raises* (a malformed `ticker_mappings.yaml`, a dropped connection) is
+back. A rebuild that *raises* (a dropped connection, say) is
 therefore caught, logged with its traceback, and reported as `positions_rebuild: failed` rather
 than propagated — propagating would turn a durably saved write into an error response and invite
-the caller to act on a false signal. This is the one place a write job catches a non-domain
-exception, and it's deliberately limited to the follow-on step, never the write itself.
+the caller to act on a false signal. The returns rebuild is isolated the same way, separately: it
+reports `returns_rebuild: failed` without touching `positions_rebuild`. These follow-on steps are
+the one place a write job catches a non-domain exception, deliberately never the write itself.
 
 **The write's own `status` never reflects the rebuild.** An unmapped instrument blocks its own
 ticker's rebuild (`positions_rebuild: partial`), but the transaction was still saved, and
@@ -645,19 +668,58 @@ ticker's rebuild (`positions_rebuild: partial`), but the transaction was still s
 
 **Known limitations:**
 
-- **Returns aren't rebuilt automatically.** `rebuild-returns` depends on a live `data-store` over
-  HTTP, which would put a cross-service network call (and its failure modes) on the write path —
-  a different trade-off, deliberately not taken here. The returns chart still needs
-  `rebuild-returns` run from the CLI.
-- **`web` doesn't surface `positions_rebuild` yet.** A `partial` or `failed` rebuild is visible in
+- **`web` doesn't surface `positions_rebuild`/`returns_rebuild` yet.** A `partial` or `failed` rebuild is visible in
   the API response and the portfolio service's logs, but the web form still just says
   "Transaction saved." — an unmapped instrument therefore still shows up in the UI only as a
   missing position.
-- **Accounts whose transactions predate this change** have no snapshots until their next write or
-  a manual `rebuild-positions`; nothing backfills them.
-- **The rebuild is synchronous**, so a write's response time now includes it. Fine for one account
-  at today's volumes; a large broker import into a long-lived account is where to look first if
-  that stops being true.
+- **Accounts whose transactions predate this change** have no position snapshots until their next
+  write or a manual `rebuild-positions`; nothing backfills them. (Returns do get backfilled, by
+  the scheduled refresh below, for any account that has positions.)
+- **The rebuilds are synchronous**, so a write's response time includes them — and, since
+  returns, a few data-store HTTP calls for that one account's tickers. Fine at today's volumes; a
+  large broker import into a long-lived account is where to look first if that stops being true.
+
+### Returns follow new prices
+
+Every day data-store's `daily_pipeline` DAG ingests new closes, which moves every holder's return
+whether or not they touched their account. The `returns-refresh` container
+(`docker-compose.stakehold-net.yml`) runs `rebuild-returns --all` in a loop, every
+`PORTFOLIO_RETURNS_REFRESH_SECONDS` (default six hours). `jobs.run_rebuild_returns_all` runs
+`run_rebuild_returns` for each user with an account, isolated per user: one raising is logged and
+counted in `users_failed`, and the rest still run. Blocked tickers and failed pairs are summed and
+make the run `partial`. A run when nothing changed only re-upserts the same rows.
+
+*Why portfolio polls instead of data-store calling it when the DAG finishes:* portfolio depends on
+data-store and never the reverse, and Airflow isn't even on `stakehold-net`. A DAG step would
+need Airflow on that network, portfolio's inbound secret in data-store's config, and data-store
+knowing portfolio exists — a new dependency in the wrong direction, to save at most one polling
+interval of lag on daily closes. *Rejected: compute returns on read* — see the cross-cutting
+decision on materialization. *Known cost:* every run rebuilds every user's returns in full,
+including users whose holdings have no new prices. Fine at this scale; the place to start if it
+isn't is skipping users whose latest snapshot is already at data-store's latest price date.
+
+### Positions follow every ticker-mapping change
+
+A mapping is global, so saving or deleting one can change positions in any user's accounts.
+`jobs.run_set_ticker_mapping`/`run_delete_ticker_mapping` therefore find every account whose
+transactions use that instrument (`transactions.list_accounts_using_instrument` — every broker for
+an ISIN, the mapping's own broker for a SYMBOL) in the same connection as the write, close it, and
+then rebuild each of those accounts' positions and returns with the same isolation the
+transaction-write rebuild uses (`_rebuild_derived_isolated`): one account's rebuild failing is
+logged and counted (`rebuilds_failed` for positions, `returns_rebuilds_failed` for returns),
+never raised, and never stops the others. The response's `status` describes the mapping change
+alone; the counts sit beside it. The CLI exits non-zero when any rebuild failed, so a
+retry-worthy outcome isn't a clean exit.
+
+*Rejected: rebuild every account in the deployment* — simplest, but its cost grows with every
+user, for a change that typically touches a handful of accounts. *Rejected: leave the rebuild to
+the next transaction write* — that's exactly the stale-positions bug the transaction-write rebuild
+exists to fix.
+
+**Deleting a mapping doesn't remove the positions it produced.** The rebuild after a delete finds
+the instrument blocked, and blocked means don't touch (see "Pruning" above), so the old ticker's
+snapshots stay until the instrument is mapped again. Re-pointing doesn't have this problem, unless
+the account holds some other unmapped instrument (pruning is skipped for the whole account then).
 
 ### Manual transaction entry
 
@@ -683,6 +745,50 @@ with `InvalidTransaction` rather than looking one up. `datastore_client.get_fx_r
 (built for `import-cashflow` below), so this is technically reachable, but wiring
 `add-transaction` to it wasn't part of what task 14 was asked to do — left as an explicit, easy
 follow-up rather than done as a drive-by.
+
+**Manual entry stores a `data-store` ticker, not an ISIN or symbol.** The web form offers
+`data-store`'s own ticker list (`GET /instruments/tickers`) and always submits
+`instrument_identifier_kind = 'TICKER'`. `pipeline.add_manual_transaction` asks `data-store`
+whether the ticker exists (`get_ticker_info`) before writing anything, and raises `UnknownTicker`
+(422) if not. `TickerMappings.resolve` returns a `TICKER` identifier as-is, so positions,
+returns and the unmapped-instruments report all handle it without a mapping.
+
+*Why:* ticker mappings exist to translate what a broker export reports into the ticker
+`data-store` prices. For a transaction the user types in, there's nothing to translate: they're
+choosing the instrument, so they can choose it in `data-store`'s own terms. Asking them for an
+identifier plus a kind, and then a separate mapping, was two extra steps, one of them a
+hand-edited config file. It also let a typo through unnoticed: a manually entered `IWDA.AM`
+(`data-store` only has `IWDA.AS`) was saved, then blocked at every rebuild with nothing in the UI
+saying why. The check at save time is what makes skipping the mapping safe: a `TICKER` row is
+only ever written once `data-store` has confirmed it.
+
+*Rejected:* looking the ticker up from an ISIN automatically (for example through a Yahoo
+search). That's the inference the ticker-mapping design rules out; a wrong match would attach the
+wrong price series to a position without anyone noticing.
+
+**A manual BUY/SELL's amount is derived, not typed.** `--amount` (and the form's Amount field) is
+optional for a BUY or SELL: `pipeline.add_manual_transaction` computes it as
+`-(quantity * price) - fees`, rounded half-up to four places. One formula covers both, since
+quantity is already signed: a BUY comes out negative (cash out, including fees), a SELL positive
+(cash in, net of fees). Every other type has no quantity or price to derive from, so its amount
+is still required.
+
+*Why:* cost basis comes from `native_amount` (task 7's decision above), and for a trade the user
+types in, that figure is just their own arithmetic on numbers they already entered. Asking for it
+separately invited a mismatch nothing caught: a manual BUY of 5 × 128.65 was saved with an amount
+of `10`, which would have priced the position at €2 a share. A typed amount is still accepted,
+since a broker's confirmation can differ from price × quantity + fees by a rounding cent and its
+figure is the one to keep, but only within €0.01 of the derived value; anything further is
+rejected with the expected figure in the message. That tolerance also enforces the sign, which
+the positions calculator itself doesn't check (it takes the absolute value).
+
+*Scope:* manual entry only. A broker import keeps the broker's own figure untouched, including
+transaction taxes and bundled fees a manual entry would put in `--fees`.
+
+**Consequence: a `TICKER` entry needs `data-store`.** `add-transaction` with a `TICKER` requires
+`DATASTORE_API_URL`/`INTERNAL_API_SECRET`, as `import-cashflow` does, and fails with `SettingsError`
+without them. Manual entry of an ISIN or symbol (still possible from the CLI) needs no
+`data-store` at all.
 
 ### Cash-ledger imports needing a live FX lookup
 
@@ -751,9 +857,10 @@ handlers, `auth`'s pattern of app-level handlers rather than per-route `try`/`ex
 | Exception | Status | Why |
 |---|---|---|
 | `AccountNotFound` | 404 | `--account`/`account_label` didn't resolve for this user — the isolation chokepoint |
+| `TickerMappingNotFound` | 404 | a mapping delete for an id that's already gone |
 | `AccountLabelConflict` | 409 | a label re-used under a different broker |
-| `InvalidBroker`, `InvalidTransaction`, `BrokerFileError`, `BrokerParserNotFound` | 422 | a caller-supplied value failed validation or parsing |
-| `TickerMappingError`, `BrokerPluginError` | 500 | a server-side configuration/plugin problem, not a caller mistake |
+| `InvalidBroker`, `InvalidTransaction`, `BrokerFileError`, `BrokerParserNotFound`, `UnknownTicker`, `InvalidTickerMapping` | 422 | a caller-supplied value failed validation or parsing |
+| `TickerMappingError`, `BrokerPluginError` | 500 | a server-side data/plugin problem, not a caller mistake (`TickerMappingError` now means a stored transaction carries an identifier kind `resolve` doesn't know) |
 | `DataStoreApiError` | 502 | the upstream `data-store` call failed |
 | any other `PortfolioError`, `SettingsError` | 500 | fails closed rather than leaking a raw traceback |
 
@@ -863,20 +970,20 @@ of its own:
 |---|---|---|
 | `.env` (`PORTFOLIO_DATABASE_URL`, `APP_POSTGRES_ADMIN_DATABASE_URL`, `DATASTORE_API_URL`, `INTERNAL_API_SECRET`, `PORTFOLIO_INTERNAL_SECRET`, `PORTFOLIO_API_HOST`, `PORTFOLIO_API_PORT`) | no — gitignored | Credentials, per-environment. **Not** the bare `DATABASE_URL`: data-store already owns that name, and both suites can run in one pytest process where a shared name would collide — the same reasoning behind `AUTH_DATABASE_URL`. `PORTFOLIO_DATABASE_URL` names the *service*, not the instance, so a future service sharing `app-postgres` gets its own name and its own role. `APP_POSTGRES_ADMIN_DATABASE_URL` is the one exception — it names the *instance*, because the admin role it points at is the shared container's own bootstrap role, not any one service's; see the role/schema paragraph above. **`INTERNAL_API_SECRET` is likewise deliberately unprefixed** (built at task 14), matching data-store's own env var name exactly — it's the one shared credential both sides of an internal *outbound* call (to data-store) must agree on, not a portfolio-owned setting. **`PORTFOLIO_INTERNAL_SECRET` (built at task 9) is a separate, prefixed credential for the *inbound* direction** — what `web` sends as `X-Internal-Secret` when calling portfolio's own HTTP API, matching `AUTH_INTERNAL_SECRET`'s convention. Keeping the inbound and outbound secrets distinct means either can be rotated without touching the other; a deployment could otherwise be tempted to reuse one secret both ways, at the cost of one leak compromising both edges. `PORTFOLIO_API_HOST`/`PORTFOLIO_API_PORT` default to `0.0.0.0`/`8002` (web is 8000, auth 8001, data-store's read API 8082). All four API-related settings are optional at `load_settings()` — the CLI must keep working with no API ever run; `create_app()` checks `PORTFOLIO_INTERNAL_SECRET` itself at startup, data-store's own pattern, and `import-cashflow`/`rebuild-returns` check `DATASTORE_API_URL`/`INTERNAL_API_SECRET` themselves. |
 | `.env.example` | yes | Template, matching data-store's convention |
-| `configs/ticker_mappings.yaml` | no — gitignored | This deployment's own ISIN/symbol → canonical-ticker choices — personal/deployment data, not generic reference data, the same reasoning `data-store` applies to `etfs.yaml`/`tracked_tickers.yaml`. |
-| `configs/ticker_mappings.yaml.example` | yes | Template, matching `data-store`'s `etfs.yaml.example` convention. |
+
+`PORTFOLIO_RETURNS_REFRESH_SECONDS` (default `21600`) isn't a `settings.py` setting: only the
+`returns-refresh` container's shell loop reads it, between runs of `rebuild-returns --all`. Set it
+in the environment `docker compose` runs with, like the other compose-level variables.
 
 No YAML config for broker parsing — the broker registry is code (a new broker is a new file plus
 one registry line), not data, since unlike data-store's exchange-suffix mapping there's no
 reference table of *known-good* per-broker quirks to maintain outside code. Accounts are still
 **database rows created via CLI commands** — they're the user's own data, not reference data
 shared across environments, so they belong in the database the rest of the service already treats
-as the source of truth. **Ticker mappings are the one exception**: for now they're config-file
-rows, not database rows or CLI-entered data — see the cross-cutting decision below for why, and
-the migration path once a UI exists. The path resolves the same way `data-store/settings.py`
-resolves its own config paths — `PORTFOLIO_TICKER_MAPPINGS_PATH`, an env var override defaulting to
-`configs/ticker_mappings.yaml`, resolved relative to the service root via the same
-`_SERVICE_ROOT`/`_resolve` mechanism, added to `portfolio/settings.py` at task 6.
+as the source of truth. Ticker mappings are database rows too, in `ticker_mappings`; they used to be
+a config file (`configs/ticker_mappings.yaml`, read via `PORTFOLIO_TICKER_MAPPINGS_PATH`), which is
+retired along with that setting — see the cross-cutting decision below. The file stays in
+`.gitignore` so a leftover local copy can't be committed.
 
 ## Deployment
 
@@ -885,6 +992,7 @@ flowchart TB
     subgraph pf["portfolio"]
         PCLI["portfolio CLI"]
         PAPI["portfolio HTTP API<br/><i>built (task 9)</i>"]
+        PREF["returns-refresh<br/><i>loop: rebuild-returns --all</i>"]
         PJOBS["jobs.py"]
     end
 
@@ -903,6 +1011,7 @@ flowchart TB
 
     PCLI --> PJOBS
     PAPI --> PJOBS
+    PREF --> PJOBS
     PJOBS --> APPDB
     PJOBS -->|"datastore_client<br/>(HTTP -- FX, prices, ticker info; task 14 + task 8)"| DSAPI
     DSAPI --> DSDB
@@ -1028,33 +1137,38 @@ via a `configure_logging()` call at every entry point, a command's actual result
 portfolio is a CLI service in the same shape, and the reasoning ("logs go to stderr, results go to
 stdout" so output stays pipeable and ordered) applies unchanged.
 
-**Ticker mappings are defined in a YAML config file (`configs/ticker_mappings.yaml`), not database
-rows, for now — with a planned move to database-backed, UI-managed mappings once the application
-has a UI.** Gets a working mapping mechanism immediately with zero CRUD/CLI investment in a
-mechanism that's expected to be replaced soon anyway, and mirrors `data-store`'s own precedent for
-this exact shape of data — a mostly-static, hand-maintained lookup table
-(`yfinance_exchange_suffixes.yaml`) that's reference data rather than something the pipeline
-writes. *Rejected: build the `ticker_links` table and a `link-ticker` CLI command now* — real,
-working code (partial unique indexes, an `ON CONFLICT` upsert, a CLI command) that would need to be
-thrown away or migrated the moment a UI takes over the same responsibility; better to defer that
-investment until the UI actually exists and its real requirements (multi-user editing? an audit
-history of who changed a mapping and when?) are known. **Known sharp edge, stated plainly**: the
-file is shared, deployment-wide config — not scoped per user — matching `TickerLink`'s original
-design (ISIN mappings were always meant to be global, symbol mappings scoped only by broker, never
-by user). A future database-backed version should preserve that scoping, not silently make
-mappings per-user. **Migration path, not designed yet**: when the UI arrives,
-`ticker_mapping/loader.py` is expected to be replaced by a database-backed repository — very likely
-close to the `ticker_links` table design already proposed once in `schema.md`'s history; the YAML
-file at that point either seeds a one-time import or is retired. Not decided now — flagged as a
-known future schema change, the same way `schema.md` already flags a future `realized_gains`
-table.
+**Ticker mappings live in the database (`ticker_mappings`), managed by an admin.** One global
+table, written from `web`'s admin page (or the `ticker-mapping` CLI, for when `web` is down), read
+once per rebuild into the same in-memory `TickerMappings` lookup the rest of the pipeline already
+used. Saving or deleting one rebuilds the affected accounts' positions (see "Positions follow every
+ticker-mapping change").
+
+*Why it moved:* for most of the project this was a hand-edited YAML file, chosen to defer a CRUD
+investment until a UI existed. The file was baked into the image at build time, so every mapping
+fix meant editing a file on the host and rebuilding a container, and a new user's imported
+instrument stayed blocked until the operator did that. Once `web` had an admin role, the file was
+the bottleneck.
+
+*Global, not per user,* as the YAML always was and `TickerLink` was always designed: an ISIN or a
+broker's symbol names the same instrument whoever holds it, so a per-user table would make every
+user map the same ETF separately. The cost is that changing a mapping needs a role above "user" —
+the admin role (`auth`'s `users.is_admin`). **The admin check lives only in `web`**
+(`require_admin`); portfolio's mapping endpoints trust their internal-secret caller like every
+other endpoint here, since a check in portfolio would rest on the same trust (a forwarded flag)
+and add nothing. `updated_by` records which admin last set a mapping.
+
+*Rejected: keep the YAML and add a mount* — fixes the rebuild-to-edit problem but not the
+operator-only one, and gives no way to see what's waiting to be mapped. *Rejected: a mappings
+table per user* — see above. *Rejected: importing the YAML file on first `db init`* — one-off code
+for a handful of entries in the only deployment; the admin page lists exactly what needs mapping
+instead.
 
 ## Testing
 
 | | Needs | Covers |
 |---|---|---|
-| `tests/unit/` | nothing | **Built as of task 6**: `ticker_mapping/loader.py`; `pipeline.import_transactions`/`list_unmapped_instruments` against fake repositories and a fake `BrokerParser`. **Built as of task 14**: `datastore_client/http_client.py` against a faked `requests.get`; `pipeline.import_cashflow` against a fake `DataStoreClient` and a fake `CashflowParser`. **Broker-plugin discovery**: `broker_import/discovery.py` against a faked `entry_points()` (`tests/unit/broker_import/test_discovery.py`) — no installed plugin required. Any given broker's own parsing logic is tested in that plugin's own repo, against its own fixtures, not here. **Built as of task 7**: `positions/calculator.py` as a pure function over in-memory `CanonicalTransaction` sequences (average-cost blending, sell-to-zero reset, the two anomaly cases, and the cross-account/cross-currency independence case); `pipeline.rebuild_positions` against fake repositories (blocked-instrument reporting, per-pair commit boundaries, account/user scoping, stale-ticker pruning, the one-batched-call fetch across every account in a whole-portfolio rebuild, and a driver-level failure on one pair being caught and reported in `failed_pairs` rather than aborting the rest of the run). **Built as of task 8**: `returns/calculator.py` as a pure function over in-memory `PositionSnapshot`/`PricePoint`/`FxPoint`/`DividendEvent` sequences (EUR vs. non-EUR conversion, a price date preceding any FX point being skipped rather than zeroed, the zero-cost-basis → `None` pct rule for both `unrealized_return_pct` and `total_return_pct`, dividend accumulation including the reopened-position case); `datastore_client/http_client.py`'s three new methods against a faked `requests.get`, same convention as `get_fx_rate`'s own tests; `pipeline.rebuild_returns` against fake repositories and a fake `DataStoreClient` (ticker-existence blocking, an isolated `DataStoreApiError`-style failure per pair, the bounded window for an open vs. closed position, `DIVIDEND` resolution via `mappings` including the unresolvable-instrument case, and the batched dividend-transaction fetch). **Built as of task 9**: the four new read flows (`list_transactions`/`list_positions`/`list_returns`/`list_latest_returns`) and the two new repository reads each backs (`positions_repository.list_latest_snapshots`, `returns_repository.list_snapshots`/`list_latest_snapshots`) against fake repositories/connections; `tests/unit/api/` (`test_security.py` calling `require_internal_secret` directly, including the non-ASCII-header-is-401-not-500 regression; `test_app.py` — `/docs`/`/redoc`/`/openapi.json` all 404, `create_app` raising `SettingsError` with no secret configured, every exception handler's status mapping parametrized over each `PortfolioError` subclass; `test_routes_{accounts,transactions,positions,returns}.py` against a bare app with `require_internal_secret` overridden, `data-store`'s own `tests/unit/api/conftest.py` pattern — argument coercion, status codes, and the upload routes' temp-file-deleted-on-both-success-and-raise contract). |
-| `tests/integration/` | live Postgres | **Built as of task 6**: re-importing the same file is a no-op (`tests/integration/test_broker_import.py`, against a synthetic `BrokerParser`), `list_distinct_instruments`'s multi-user isolation and broker attribution; task 4/5's `accounts`, `transactions` idempotent-upsert, and schema-migration-idempotency coverage. **Built as of task 14**: `import_cashflow`'s idempotent reimport and broker-mismatch rejection (`test_cashflow_import.py`, against a synthetic `CashflowParser`), routed through `pipeline.py` directly with a stub `DataStoreClient` rather than through `jobs.py`'s real `HttpDataStoreClient` — see below. Neither integration test depends on any broker plugin being installed. **Built as of task 7**: `rebuild-positions` end-to-end through the real CLI/pipeline/repository stack (`test_rebuild_positions.py`) — the delete-then-insert replacement contract a fake can't prove (a re-run replaces rows rather than duplicating them), `--account` scoping and the whole-portfolio (no `--account`) case rebuilding every account via the batched `list_by_accounts` fetch, per-user isolation, an unmapped instrument blocking with exit code 1, and a bad `--account` label exiting cleanly rather than crashing. **Built as of task 8**: `rebuild-returns` end-to-end through the real CLI stack (`test_rebuild_returns.py`) — a true-upsert re-run overwriting values in place rather than duplicating rows (the contract a fake can't prove), a closed position's window stopping at the closing date, an untracked ticker blocking with exit code 1, `--account` scoping, per-user isolation, and a real `DIVIDEND` transaction flowing through to `dividends_received_eur`/`total_return_eur`. `jobs.HttpDataStoreClient` is monkeypatched to a stub for all of these — matching `test_cashflow_import.py`'s precedent that the real HTTP path is `http_client.py`'s own unit tests' job, not this suite's. **Built as of task 9**: `test_api.py` drives a real `create_app()` with `TestClient` against live Postgres — create-account-then-list-it, an unknown account label returning 404 not 500, a second user's account label staying invisible to the first (the isolation chokepoint through the real HTTP boundary), a missing secret returning 401 on every route but `/health`, and add-transaction → rebuild-positions → read-positions end to end. **Still not built**: `ticker_mapping/` (nothing there talks to Postgres — see the module table) |
+| `tests/unit/` | nothing | **Built as of task 6**: `ticker_mapping/` (`base.py`'s `resolve`, `repository.load_all`); `pipeline.import_transactions`/`list_unmapped_instruments` against fake repositories and a fake `BrokerParser`. **Built as of task 14**: `datastore_client/http_client.py` against a faked `requests.get`; `pipeline.import_cashflow` against a fake `DataStoreClient` and a fake `CashflowParser`. **Broker-plugin discovery**: `broker_import/discovery.py` against a faked `entry_points()` (`tests/unit/broker_import/test_discovery.py`) — no installed plugin required. Any given broker's own parsing logic is tested in that plugin's own repo, against its own fixtures, not here. **Built as of task 7**: `positions/calculator.py` as a pure function over in-memory `CanonicalTransaction` sequences (average-cost blending, sell-to-zero reset, the two anomaly cases, and the cross-account/cross-currency independence case); `pipeline.rebuild_positions` against fake repositories (blocked-instrument reporting, per-pair commit boundaries, account/user scoping, stale-ticker pruning, the one-batched-call fetch across every account in a whole-portfolio rebuild, and a driver-level failure on one pair being caught and reported in `failed_pairs` rather than aborting the rest of the run). **Built as of task 8**: `returns/calculator.py` as a pure function over in-memory `PositionSnapshot`/`PricePoint`/`FxPoint`/`DividendEvent` sequences (EUR vs. non-EUR conversion, a price date preceding any FX point being skipped rather than zeroed, the zero-cost-basis → `None` pct rule for both `unrealized_return_pct` and `total_return_pct`, dividend accumulation including the reopened-position case); `datastore_client/http_client.py`'s three new methods against a faked `requests.get`, same convention as `get_fx_rate`'s own tests; `pipeline.rebuild_returns` against fake repositories and a fake `DataStoreClient` (ticker-existence blocking, an isolated `DataStoreApiError`-style failure per pair, the bounded window for an open vs. closed position, `DIVIDEND` resolution via `mappings` including the unresolvable-instrument case, and the batched dividend-transaction fetch). **Built as of task 9**: the four new read flows (`list_transactions`/`list_positions`/`list_returns`/`list_latest_returns`) and the two new repository reads each backs (`positions_repository.list_latest_snapshots`, `returns_repository.list_snapshots`/`list_latest_snapshots`) against fake repositories/connections; `tests/unit/api/` (`test_security.py` calling `require_internal_secret` directly, including the non-ASCII-header-is-401-not-500 regression; `test_app.py` — `/docs`/`/redoc`/`/openapi.json` all 404, `create_app` raising `SettingsError` with no secret configured, every exception handler's status mapping parametrized over each `PortfolioError` subclass; `test_routes_{accounts,transactions,positions,returns,ticker_mappings}.py` against a bare app with `require_internal_secret` overridden, `data-store`'s own `tests/unit/api/conftest.py` pattern — argument coercion, status codes, and the upload routes' temp-file-deleted-on-both-success-and-raise contract). |
+| `tests/integration/` | live Postgres | **Built as of task 6**: re-importing the same file is a no-op (`tests/integration/test_broker_import.py`, against a synthetic `BrokerParser`), `list_distinct_instruments`'s multi-user isolation and broker attribution; task 4/5's `accounts`, `transactions` idempotent-upsert, and schema-migration-idempotency coverage. **Built as of task 14**: `import_cashflow`'s idempotent reimport and broker-mismatch rejection (`test_cashflow_import.py`, against a synthetic `CashflowParser`), routed through `pipeline.py` directly with a stub `DataStoreClient` rather than through `jobs.py`'s real `HttpDataStoreClient` — see below. Neither integration test depends on any broker plugin being installed. **Built as of task 7**: `rebuild-positions` end-to-end through the real CLI/pipeline/repository stack (`test_rebuild_positions.py`) — the delete-then-insert replacement contract a fake can't prove (a re-run replaces rows rather than duplicating them), `--account` scoping and the whole-portfolio (no `--account`) case rebuilding every account via the batched `list_by_accounts` fetch, per-user isolation, an unmapped instrument blocking with exit code 1, and a bad `--account` label exiting cleanly rather than crashing. **Built as of task 8**: `rebuild-returns` end-to-end through the real CLI stack (`test_rebuild_returns.py`) — a true-upsert re-run overwriting values in place rather than duplicating rows (the contract a fake can't prove), a closed position's window stopping at the closing date, an untracked ticker blocking with exit code 1, `--account` scoping, per-user isolation, and a real `DIVIDEND` transaction flowing through to `dividends_received_eur`/`total_return_eur`. `jobs.HttpDataStoreClient` is monkeypatched to a stub for all of these — matching `test_cashflow_import.py`'s precedent that the real HTTP path is `http_client.py`'s own unit tests' job, not this suite's. **Built as of task 9**: `test_api.py` drives a real `create_app()` with `TestClient` against live Postgres — create-account-then-list-it, an unknown account label returning 404 not 500, a second user's account label staying invisible to the first (the isolation chokepoint through the real HTTP boundary), a missing secret returning 401 on every route but `/health`, and add-transaction → rebuild-positions → read-positions end to end. **Built with the admin mapping page**: `test_api.py` sets mappings through the real API — rebuilding every affected account across users, a SYMBOL mapping applying only at its broker, re-pointing in place, an unknown ticker rejected, delete and its 404 — and checks the table's CHECK and partial unique indexes directly. |
 
 **`datastore_client/http_client.py` itself is tested against a faked `requests.get`, not a live
 data-store instance** — status codes, the lookback-window request shape, and error mapping to

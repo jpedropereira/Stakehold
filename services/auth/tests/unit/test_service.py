@@ -170,6 +170,7 @@ def test_login_with_a_corrupt_stored_hash_is_invalid_credentials_not_a_crash(rep
         display_name=stored.display_name,
         password_hash="corrupt",  # pragma: allowlist secret
         created_at=stored.created_at,
+        is_admin=stored.is_admin,
     )
     throttle = AttemptThrottle()
 
@@ -254,3 +255,59 @@ def test_logout_removes_the_session(repos, conn):
 
 def test_logout_is_idempotent_for_an_unknown_token(repos, conn):
     service.logout(conn, token="never-issued-token")
+
+
+def test_a_new_signup_is_not_an_admin(repos, conn):
+    session = _signup(conn)
+
+    assert session.user.is_admin is False
+
+
+def test_set_admin_grants_admin_and_commits(repos, conn):
+    _signup(conn)
+    commits_before = conn.commits
+
+    assert service.set_admin(conn, email="person@example.com", is_admin=True) is True
+
+    users_repo, _ = repos
+    assert users_repo.by_email["person@example.com"].is_admin is True
+    assert conn.commits == commits_before + 1
+
+
+def test_set_admin_normalizes_the_email_like_login_does(repos, conn):
+    _signup(conn)
+
+    assert service.set_admin(conn, email="  Person@Example.COM ", is_admin=True) is True
+
+
+def test_set_admin_returns_false_for_an_unknown_email(repos, conn):
+    assert service.set_admin(conn, email="nobody@example.com", is_admin=True) is False
+
+
+def test_login_reports_is_admin(repos, conn):
+    _signup(conn)
+    service.set_admin(conn, email="person@example.com", is_admin=True)
+
+    session = _login(conn)
+
+    assert session.user.is_admin is True
+
+
+def test_validate_session_reports_is_admin(repos, conn):
+    session = _signup(conn)
+    service.set_admin(conn, email="person@example.com", is_admin=True)
+
+    validated = service.validate_session(conn, token=session.token, now=NOW, ttl_days=TTL_DAYS)
+
+    assert validated.user.is_admin is True
+
+
+def test_revoking_admin_takes_effect_on_the_next_validation(repos, conn):
+    session = _signup(conn)
+    service.set_admin(conn, email="person@example.com", is_admin=True)
+    service.validate_session(conn, token=session.token, now=NOW, ttl_days=TTL_DAYS)
+
+    service.set_admin(conn, email="person@example.com", is_admin=False)
+    validated = service.validate_session(conn, token=session.token, now=NOW, ttl_days=TTL_DAYS)
+
+    assert validated.user.is_admin is False

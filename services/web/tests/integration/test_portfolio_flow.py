@@ -14,17 +14,16 @@ task 15), so only the reliably-reproducible BrokerParserNotFound path is exercis
 """
 
 import os
-import uuid
 from pathlib import Path
 
 import httpx
 import psycopg
 import pytest
-import yaml
 from fastapi.testclient import TestClient
 from portfolio import cli as portfolio_cli
+from portfolio import jobs as portfolio_jobs
 from portfolio.api.app import create_app as create_portfolio_app
-from portfolio.jobs import run_rebuild_positions
+from portfolio.datastore_client.base import TickerInfo
 from portfolio.settings import Settings as PortfolioSettings
 from web.api.app import create_app as create_web_app
 from web.api.deps import get_portfolio_client, optional_user, require_user
@@ -36,7 +35,6 @@ pytestmark = [pytest.mark.integration, pytest.mark.anyio]
 
 _PORTFOLIO_SECRET = "integration-test-portfolio-secret"  # pragma: allowlist secret
 _BRAND_DIR = Path(__file__).resolve().parents[4] / "brand"
-_ISIN = "IE00B4L5Y983"
 _USER = AuthUser(
     user_id="11111111-1111-1111-1111-111111111111", email="ann@example.com", display_name="Ann"
 )
@@ -52,22 +50,23 @@ def _clean_portfolio_tables():
     with _connect() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "TRUNCATE return_snapshots, position_snapshots, transactions, accounts CASCADE"
+                "TRUNCATE return_snapshots, position_snapshots, transactions, accounts, "
+                "ticker_mappings CASCADE"
             )
         conn.commit()
     yield
 
 
-def _portfolio_settings(*, ticker_mappings_path: Path | None = None) -> PortfolioSettings:
+def _portfolio_settings(*, with_data_store: bool = False) -> PortfolioSettings:
     return PortfolioSettings(
         database_url=os.environ["PORTFOLIO_DATABASE_URL"],
         admin_database_url=os.environ["APP_POSTGRES_ADMIN_DATABASE_URL"],
-        # Unused by most flows here -- only rebuild-positions needs a real mapping, and that test
-        # passes its own throwaway path (the committed configs/ticker_mappings.yaml is real,
-        # gitignored broker data per task 15 and doesn't exist in a dev checkout).
-        ticker_mappings_path=ticker_mappings_path or Path("configs/ticker_mappings.yaml"),
-        datastore_api_url=None,
-        internal_api_secret=None,
+        # Only the data-store-backed fixture below sets these -- and its HttpDataStoreClient is
+        # replaced by _FakeDataStoreClient, so nothing is ever sent to this URL.
+        datastore_api_url="https://datastore.internal" if with_data_store else None,
+        internal_api_secret=(
+            "unused-in-this-suite" if with_data_store else None  # pragma: allowlist secret
+        ),
         api_internal_secret=_PORTFOLIO_SECRET,
         api_host="0.0.0.0",
         api_port=8002,
@@ -88,12 +87,10 @@ def _web_settings() -> WebSettings:
     )
 
 
-async def _make_web_client(*, ticker_mappings_path: Path | None = None):
+async def _make_web_client(*, with_data_store: bool = False, user: AuthUser = _USER):
     settings = _web_settings()
     web_app = create_web_app(settings)
-    portfolio_app = create_portfolio_app(
-        _portfolio_settings(ticker_mappings_path=ticker_mappings_path)
-    )
+    portfolio_app = create_portfolio_app(_portfolio_settings(with_data_store=with_data_store))
 
     # https base_url: WebSettings.cookie_secure=True marks the CSRF cookie Secure, and httpx's
     # cookie jar won't store/resend a Secure cookie over plain http -- same reasoning as
@@ -103,8 +100,8 @@ async def _make_web_client(*, ticker_mappings_path: Path | None = None):
     ) as portfolio_test_client:
         real_portfolio_client = HttpPortfolioClient(portfolio_test_client, _PORTFOLIO_SECRET)
         web_app.dependency_overrides[get_portfolio_client] = lambda: real_portfolio_client
-        web_app.dependency_overrides[require_user] = lambda: _USER
-        web_app.dependency_overrides[optional_user] = lambda: _USER
+        web_app.dependency_overrides[require_user] = lambda: user
+        web_app.dependency_overrides[optional_user] = lambda: user
 
         with TestClient(web_app, base_url="https://testserver") as test_client:
             yield test_client
@@ -116,16 +113,45 @@ async def web_client():
         yield test_client
 
 
+class _FakeDataStoreClient:
+    """Stands in for data-store inside the real portfolio app -- data-store isn't part of this
+    suite. Knows exactly one ticker."""
+
+    def __init__(self, base_url, internal_api_secret):
+        pass
+
+    def list_tickers(self):
+        return ["IWDA.AS"]
+
+    def get_ticker_info(self, ticker):
+        known = ticker == "IWDA.AS"
+        return TickerInfo(exists=known, has_returns=known)
+
+
 @pytest.fixture
-async def web_client_with_ticker_mapping(tmp_path):
-    """Same wiring as web_client, plus a throwaway ticker mapping so
-    test_portfolio_page_lists_position_after_rebuild_positions' BUY transaction resolves to a
-    canonical_ticker -- the same override test_rebuild_positions.py's own integration suite uses,
-    since the committed configs/ticker_mappings.yaml is real, gitignored broker data (task 15)
-    that doesn't exist in a dev checkout."""
-    path = tmp_path / "ticker_mappings.yaml"
-    path.write_text(yaml.dump({"isin": {_ISIN: "IWDA.AS"}}))
-    async for test_client in _make_web_client(ticker_mappings_path=path):
+async def web_client_with_data_store(monkeypatch):
+    """Same wiring as web_client, with portfolio configured for a data-store that
+    _FakeDataStoreClient answers for -- manual TICKER entry and the ticker picker both need
+    one."""
+    monkeypatch.setattr(portfolio_jobs, "HttpDataStoreClient", _FakeDataStoreClient)
+    async for test_client in _make_web_client(with_data_store=True):
+        yield test_client
+
+
+_ADMIN = AuthUser(
+    user_id="99999999-9999-7999-8999-999999999999",
+    email="ada@example.com",
+    display_name="Ada",
+    is_admin=True,
+)
+
+
+@pytest.fixture
+async def admin_web_client(monkeypatch):
+    """web_client_with_data_store, logged in as an admin -- the mapping page checks a ticker
+    against data-store when it's saved."""
+    monkeypatch.setattr(portfolio_jobs, "HttpDataStoreClient", _FakeDataStoreClient)
+    async for test_client in _make_web_client(with_data_store=True, user=_ADMIN):
         yield test_client
 
 
@@ -152,7 +178,6 @@ def _transaction_form(csrf_token: str, **overrides) -> dict:
         "native_amount": "100.00",
         "native_currency": "EUR",
         "instrument_identifier": "",
-        "instrument_identifier_kind": "",
         "quantity": "",
         "price": "",
         "fx_rate": "",
@@ -246,47 +271,89 @@ async def test_portfolio_page_for_unknown_account_is_404(web_client):
     assert "doesn't exist" in response.text
 
 
-async def test_portfolio_page_lists_position_after_rebuild_positions(
-    web_client_with_ticker_mapping, tmp_path
-):
-    """rebuild-returns needs a live data-store (unavailable in this dev environment, see the
-    module docstring), so this only exercises the positions half of the view -- the returns
-    section still shows its own empty state, which is itself worth asserting: a portfolio with
-    positions but no computed returns yet must not look like a service failure.
-
-    tmp_path is requested here too so it resolves to the same directory
-    web_client_with_ticker_mapping already wrote the throwaway ticker-mappings file into --
-    pytest caches a function-scoped fixture once per test, shared across every fixture/test that
-    asks for it.
-    """
-    web_client = web_client_with_ticker_mapping
+async def test_a_ticker_picked_in_the_form_shows_up_as_a_position(web_client_with_data_store):
+    """The full manual-entry path the original bug report hit: the form offers data-store's
+    tickers, the picked one is saved as a TICKER, and the position appears with no ticker mapping
+    and no manual rebuild. rebuild-returns needs a live data-store, so the returns section still
+    shows its own empty state -- itself worth asserting: positions without computed returns must
+    not look like a service failure."""
+    web_client = web_client_with_data_store
     _create_account(web_client)
 
-    token = _csrf_token(web_client, "/transactions/new", account="main")
+    form = web_client.get("/transactions/new", params={"account": "main"})
+    token = next(v for k, v in web_client.cookies.items() if "csrf" in k)
     buy_response = web_client.post(
         "/transactions/new",
         data=_transaction_form(
             token,
             broker_transaction_ref="buy-1",
             transaction_type="BUY",
-            instrument_identifier=_ISIN,
-            instrument_identifier_kind="ISIN",
+            instrument_identifier="IWDA.AS",
             quantity="10",
             price="95.00",
             native_amount="-950.00",
         ),
         follow_redirects=False,
     )
-    assert buy_response.status_code == 303
-
-    run_rebuild_positions(
-        user_id=uuid.UUID(_USER.user_id),
-        account_label="main",
-        settings=_portfolio_settings(ticker_mappings_path=tmp_path / "ticker_mappings.yaml"),
-    )
-
     response = web_client.get("/portfolio", params={"account": "main"})
 
+    assert '<option value="IWDA.AS">' in form.text
+    assert buy_response.status_code == 303
     assert response.status_code == 200
     assert "IWDA.AS" in response.text
     assert "No return history yet" in response.text
+
+
+async def test_an_admin_maps_an_imported_isin_and_the_users_position_appears(admin_web_client):
+    # Ann's account holds an ISIN-reported BUY -- what a broker import produces -- that nothing
+    # maps yet. Entered through portfolio's CLI because web's own form only sends TICKERs.
+    portfolio_cli.main(
+        ["account", "add", "--user", _USER.user_id, "--broker", "acme", "--label", "main"]
+    )
+    portfolio_cli.main(
+        [
+            "add-transaction",
+            "--user",
+            _USER.user_id,
+            "--account",
+            "main",
+            "--ref",
+            "imported-1",
+            "--type",
+            "BUY",
+            "--datetime",
+            "2026-01-05T10:00:00+00:00",
+            "--currency",
+            "EUR",
+            "--instrument",
+            "IE00B4L5Y983",
+            "--instrument-kind",
+            "ISIN",
+            "--quantity",
+            "10",
+            "--price",
+            "95.00",
+        ]
+    )
+    page = admin_web_client.get("/admin/mappings")
+    assert "IE00B4L5Y983" in page.text
+
+    response = admin_web_client.post(
+        "/admin/mappings",
+        data={
+            "identifier_kind": "ISIN",
+            "identifier": "IE00B4L5Y983",
+            "broker": "",
+            "canonical_ticker": "IWDA.AS",
+            "csrf_token": _csrf_token(admin_web_client, "/admin/mappings"),
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/admin/mappings?saved=1&rebuilt=1&failed=0"
+    after = admin_web_client.get("/admin/mappings")
+    assert "Every instrument is mapped." in after.text
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute("SELECT canonical_ticker FROM position_snapshots")
+        assert [row[0] for row in cur.fetchall()] == ["IWDA.AS"]

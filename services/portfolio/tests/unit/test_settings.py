@@ -56,33 +56,15 @@ def test_data_stores_database_url_is_not_used(monkeypatch):
         load_settings()
 
 
-def test_ticker_mappings_path_defaults_to_a_service_root_relative_path(monkeypatch):
+def test_settings_no_longer_carry_a_ticker_mappings_path(monkeypatch):
+    # Mappings live in the ticker_mappings table now; a leftover env var must not resurrect a
+    # file that nothing reads.
     monkeypatch.setenv("PORTFOLIO_DATABASE_URL", "postgresql://user:pass@localhost/app")
-    monkeypatch.delenv("PORTFOLIO_TICKER_MAPPINGS_PATH", raising=False)
+    monkeypatch.setenv("PORTFOLIO_TICKER_MAPPINGS_PATH", "configs/ticker_mappings.yaml")
 
     result = load_settings()
 
-    assert result.ticker_mappings_path == (
-        settings_module._SERVICE_ROOT / "configs" / "ticker_mappings.yaml"
-    )
-
-
-def test_ticker_mappings_path_honours_a_relative_env_override(monkeypatch):
-    monkeypatch.setenv("PORTFOLIO_DATABASE_URL", "postgresql://user:pass@localhost/app")
-    monkeypatch.setenv("PORTFOLIO_TICKER_MAPPINGS_PATH", "custom/mappings.yaml")
-
-    result = load_settings()
-
-    assert result.ticker_mappings_path == settings_module._SERVICE_ROOT / "custom" / "mappings.yaml"
-
-
-def test_ticker_mappings_path_honours_an_absolute_env_override(monkeypatch):
-    monkeypatch.setenv("PORTFOLIO_DATABASE_URL", "postgresql://user:pass@localhost/app")
-    monkeypatch.setenv("PORTFOLIO_TICKER_MAPPINGS_PATH", "/etc/stakehold/mappings.yaml")
-
-    result = load_settings()
-
-    assert str(result.ticker_mappings_path) == "/etc/stakehold/mappings.yaml"
+    assert not hasattr(result, "ticker_mappings_path")
 
 
 def test_datastore_api_url_and_internal_api_secret_default_to_none(monkeypatch):
