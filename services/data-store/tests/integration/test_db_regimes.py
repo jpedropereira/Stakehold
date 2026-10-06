@@ -13,11 +13,9 @@ def postgres_conn():
     """Session-scoped connection to the test database."""
     import os
 
-    database_url = os.environ.get(
-        "DATABASE_URL",
-        "postgresql://stakehold:stakehold@localhost/stakehold",  # pragma: allowlist secret
-    )
-    conn = get_connection(database_url)
+    # No fallback URL: the repo-root conftest.py sets DATABASE_URL and refuses any value that
+    # isn't a disposable test database. A default here would bypass that check.
+    conn = get_connection(os.environ["DATABASE_URL"])
     return conn
 
 

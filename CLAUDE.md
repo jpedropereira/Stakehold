@@ -47,12 +47,21 @@ uv run pytest services --testmon --tb=short -x                                # 
 ```
 
 Integration tests hit a real Postgres (they cover `COPY` upserts, `ON CONFLICT` behaviour and
-schema-migration idempotency — the parts a fake can't cover). They read `DATABASE_URL` and create
-their own schema, so an empty database is fine:
+schema-migration idempotency — the parts a fake can't cover). Their fixtures **truncate tables**,
+so they run only against the disposable test databases in `docker-compose.test.yml`. Those are
+in memory, on ports 5543x, and can run alongside the dev stack:
 
 ```bash
-cd services/data-store && docker compose up -d postgres  # then run -m integration from the root
+docker compose -f docker-compose.test.yml up -d --wait
+uv run pytest services -m integration
 ```
+
+**Never point integration tests at the dev stack's databases.** That twice wiped real users and
+portfolio data. The root `conftest.py` enforces it: it supplies the test databases' URLs, and it
+aborts any run that selects an integration test unless every `*DATABASE_URL` names a `*_test`
+database on a server started with `stakehold.purpose=integration-test`. It also turns off dotenv
+loading for the run, so no service's dev settings can leak in. Never add a `load_dotenv` call or
+a fallback database URL to a test.
 
 ### Lint/format
 

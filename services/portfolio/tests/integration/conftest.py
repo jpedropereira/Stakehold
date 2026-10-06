@@ -1,15 +1,13 @@
 import os
-from pathlib import Path
 
 import psycopg
 import pytest
-from dotenv import load_dotenv
 from portfolio import cli
 
-# Explicit path, not a bare load_dotenv(): the default search only walks upward from the
-# current working directory, so it wouldn't find services/portfolio/.env when pytest is run
-# from the repo root.
-load_dotenv(Path(__file__).parents[2] / ".env")
+# PORTFOLIO_DATABASE_URL comes from the repo-root conftest.py (the disposable test databases in
+# docker-compose.test.yml), which refuses to start an integration run against anything else.
+# Never load this service's own dotenv file here: it points at the dev stack, and the fixture
+# below truncates every portfolio table.
 
 
 def connect():

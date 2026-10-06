@@ -196,8 +196,11 @@ compose project; only `auth-api` additionally joins the cross-service network (s
 service trust" under "Key decisions" above). Connection config is `AUTH_DATABASE_URL`
 (`settings.py`),
 deliberately not the bare `DATABASE_URL` `data-store` already owns — the two services' integration
-suites can run in the same pytest process, where a shared env var name would mean whichever
-service's `.env` loads first silently wins for both. `auth db init` (`cli.py` → `jobs.py`) applies
+suites run in the same pytest process, where a shared env var name would point both suites at one
+database. There, the URLs come from the repo root's `conftest.py` (the disposable test databases
+in `docker-compose.test.yml`), never from a service's own `.env`. The integration fixtures
+truncate `users` and `sessions`, and reading `.env` once pointed them at the dev stack's real
+tables. `auth db init` (`cli.py` → `jobs.py`) applies
 `db/schema.sql`, mirroring `data-store`'s CLI/jobs layering exactly. The connection/transaction
 helpers and log setup underneath both are the *same* code, not just the same pattern — both
 services depend on [`services/shared`](../../shared/docs/architecture.md) rather than each keeping
