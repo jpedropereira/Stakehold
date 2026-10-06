@@ -1,7 +1,8 @@
 # Standalone for now: this compose file starts only `web`, not `auth` alongside it. Joining
 # `web` and `auth` (and, later, `portfolio`) onto one shared network with in-network URLs is
-# task 13's job (see tasks.md) -- wiring that here piecemeal would leave two half-finished
-# network topologies to reconcile later instead of one deliberate one. Until then,
+# walking-skeleton task 13's job (see docs/roadmap-archive/walking-skeleton.md) -- wiring that
+# here piecemeal would leave two half-finished network topologies to reconcile later instead of
+# one deliberate one. Until then,
 # WEB_AUTH_API_URL in .env must point at wherever auth's own compose stack already publishes its
 # API (its default: http://localhost:8001, or host.docker.internal:8001 from inside this
 # container on Docker Desktop).

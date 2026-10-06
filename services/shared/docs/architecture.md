@@ -51,7 +51,7 @@ this; it depends on nothing workspace-internal.
 
 ## Why extracted now
 
-`auth`'s schema/foundation task (task 1 in `tasks.md`) copy-pasted `data-store`'s
+`auth`'s schema/foundation task (walking-skeleton task 1, `docs/roadmap-archive/walking-skeleton.md`) copy-pasted `data-store`'s
 `db/connection.py` and `logging_config.py` near-verbatim to stand up its own `db init`. A second
 copy is a fork the instant one needs a fix: `apply_schema` not routing through `transaction()` —
 so a failed statement left the connection aborted with no rollback — was a real bug caught in
