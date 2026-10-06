@@ -474,6 +474,7 @@ def test_mappings_page_lists_mappings_unmapped_instruments_and_the_ticker_picker
     assert "IE00B4L5Y983" in response.text
     assert '<option value="SGLD.L">' in response.text
     assert 'action="/admin/mappings/7/delete"' in response.text
+    assert '<td class="mono">2026-10-06</td>' in response.text  # updated_at, via the date filter
 
 
 def test_mappings_page_says_so_when_nothing_is_left_to_map(client):
@@ -1446,6 +1447,18 @@ def test_transaction_import_form_shows_confirmation_with_row_count(client):
     assert "3" in response.text
 
 
+def test_transaction_import_confirmation_groups_thousands(client):
+    test_client, _, fake_auth, _ = client
+    _logged_in(test_client, fake_auth)
+
+    response = test_client.get(
+        "/transactions/import", params={"account": "main", "imported": "1200"}
+    )
+
+    assert response.status_code == 200
+    assert 'Imported <span class="mono">1,200</span> transaction(s).' in response.text
+
+
 # --- transactions/import: POST ---------------------------------------------------------------
 
 
@@ -1630,7 +1643,11 @@ def test_portfolio_page_renders_positions_and_returns(client):
     assert "AAPL" in response.text
     assert 'id="returns-chart"' in response.text
     assert 'id="returns-chart-data"' in response.text
-    assert "100" in response.text  # the total return figure
+    assert '<span class="mono">10</span>' in response.text  # quantity
+    assert '<span class="mono">€150.00</span>' in response.text  # average cost
+    assert '<span class="mono">€1,500.00</span>' in response.text  # cost basis
+    assert "+€100.00</span>" in response.text  # total return
+    assert "+6.67%</span>" in response.text  # total return pct
     assert fake_portfolio.calls == [
         ("list_positions", _logged_in_user().user_id, "main"),
         ("list_returns", _logged_in_user().user_id, "main"),

@@ -5,7 +5,7 @@
 <section class="card">
   <h1>Import broker file</h1>
   {% if imported is not none %}
-  <p class="confirmation-banner">Imported <span class="mono">{{ imported }}</span> transaction(s).</p>
+  <p class="confirmation-banner">Imported <span class="mono">{{ imported | qty }}</span> transaction(s).</p>
   {% endif %}
   <form hx-post="/transactions/import" hx-target="#form-errors" hx-swap="innerHTML" hx-encoding="multipart/form-data"
         method="post" action="/transactions/import" enctype="multipart/form-data">

@@ -243,6 +243,21 @@ calls [`portfolio`](../../portfolio/docs/architecture.md), `data-store`, and
   The cost is a visible "Switch" button, since the form can't submit on `change` without a script.
   The Transactions sub-nav link ships ahead of its page and 404s until UI-8 builds
   `GET /transactions`.
+- **Display formatting (UI-5) is one fixed convention, applied by Jinja filters from a pure
+  module.** `formatting.py` defines `money`, `signed_money`, `qty`, `pct` and `date`, registered on
+  the templates environment in `app.py`'s lifespan. Templates never round or append units
+  themselves. The convention: English digit grouping (`€1,234.50`), a `€` prefix because every
+  aggregated figure `portfolio` returns is EUR, a true minus sign (U+2212) instead of a hyphen,
+  `pct` taking a fraction (`0.0184` → `+1.84%`), and ISO dates (`2026-10-06`, the format the admin
+  mappings page already used, and unambiguous whatever the reader's locale). Rounding is half-up on
+  the `Decimal`, not Python's default banker's rounding, since a displayed cent should round the
+  way a reader expects. The sign is chosen *after* rounding, so a value that rounds to zero shows
+  no sign: a zero delta is neither a gain nor a loss, and `−€0.00` would be noise. `qty` trims
+  trailing zeros but never falls into scientific notation (`Decimal.normalize()` alone renders 100
+  as `1E+2`). Every filter renders `—` for `None`. Locale switching is out of scope; if it's ever
+  needed, Babel would replace the bodies of these five functions and nothing else. The module has
+  no Jinja or FastAPI import so it can be tested on its own, and so that UI-6 has a single,
+  readable reference when it mirrors the same rules in `portfolio_chart.js`.
 
 ## Endpoint surface
 
@@ -297,6 +312,8 @@ exists to close; no equivalent concern applies to the portfolio routes; see "Key
   `GET /portfolio`: `filter_open_positions` and `aggregate_portfolio_returns` (see "Key
   decisions"). No FastAPI/httpx dependency, tested in isolation, mirroring how `portfolio`'s own
   `returns/calculator.py` is a pure function.
+- `formatting.py` (UI-5) — pure display formatters (`money`, `signed_money`, `qty`, `pct`,
+  `date`) plus the `FILTERS` mapping `app.py` registers as Jinja filters; see "Key decisions".
 - `api/{app,deps,routes,csrf,security_headers,htmx}.py` — app assembly and lifespan (opens/closes
   two shared `httpx.AsyncClient`s, one per upstream service), FastAPI dependencies (`require_user`,
   `require_admin`, `optional_user`, `client_ip`, `get_auth_client`/`get_portfolio_client`, and friends), the route
