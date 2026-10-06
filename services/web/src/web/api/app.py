@@ -14,6 +14,7 @@ from web.api.security_headers import SecurityHeadersMiddleware
 from web.api.theme import router as theme_router
 from web.api.theme import theme_context
 from web.auth_client.http_client import HttpAuthClient
+from web.formatting import FILTERS
 from web.portfolio_client.http_client import HttpPortfolioClient
 from web.settings import Settings, load_settings
 
@@ -42,6 +43,7 @@ def _lifespan(settings: Settings):
             app.state.templates = Jinja2Templates(
                 directory=_TEMPLATES_DIR, context_processors=[theme_context]
             )
+            app.state.templates.env.filters.update(FILTERS)
             logger.info(
                 "web api: started, auth_api_url=%s, portfolio_api_url=%s.",
                 settings.auth_api_url,

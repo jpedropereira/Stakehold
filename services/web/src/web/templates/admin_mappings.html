@@ -67,7 +67,7 @@
           <td class="mono">{{ mapping.identifier }}</td>
           <td>{{ mapping.broker or "Any" }}</td>
           <td class="mono">{{ mapping.canonical_ticker }}</td>
-          <td class="mono">{{ mapping.updated_at.strftime("%Y-%m-%d") }}</td>
+          <td class="mono">{{ mapping.updated_at | date }}</td>
           <td>
             <form method="post" action="/admin/mappings/{{ mapping.id }}/delete" class="inline-form">
               <input type="hidden" name="csrf_token" value="{{ csrf_token }}">

@@ -14,17 +14,17 @@
       <tr>
         <th>Ticker</th>
         <th>Quantity</th>
-        <th>Avg cost (EUR)</th>
-        <th>Cost basis (EUR)</th>
+        <th>Avg cost</th>
+        <th>Cost basis</th>
       </tr>
     </thead>
     <tbody>
       {% for position in positions %}
       <tr>
         <td>{{ position.canonical_ticker }}</td>
-        <td><span class="mono">{{ position.quantity }}</span></td>
-        <td><span class="mono">{{ position.average_cost_eur }}</span></td>
-        <td><span class="mono">{{ position.cost_basis_eur }}</span></td>
+        <td><span class="mono">{{ position.quantity | qty }}</span></td>
+        <td><span class="mono">{{ position.average_cost_eur | money }}</span></td>
+        <td><span class="mono">{{ position.cost_basis_eur | money }}</span></td>
       </tr>
       {% endfor %}
     </tbody>
@@ -40,9 +40,9 @@
   {% set latest = return_points[-1] %}
   <p class="returns-summary">
     Total return:
-    <span class="mono {{ 'gain' if latest.total_return_eur >= 0 else 'loss' }}">{{ latest.total_return_eur }} EUR</span>
+    <span class="mono {{ 'gain' if latest.total_return_eur >= 0 else 'loss' }}">{{ latest.total_return_eur | signed_money }}</span>
     {% if latest.total_return_pct is not none %}
-    (<span class="mono {{ 'gain' if latest.total_return_pct >= 0 else 'loss' }}">{{ (latest.total_return_pct * 100) | round(2) }}%</span>)
+    (<span class="mono {{ 'gain' if latest.total_return_pct >= 0 else 'loss' }}">{{ latest.total_return_pct | pct }}</span>)
     {% endif %}
   </p>
   <div class="chart-wrap">
