@@ -10,13 +10,21 @@
 <style>
   :root{
     --stone:#2B2B28;
-    --stone-600:#6B6A62;
+    --stone-600:#5F5E57;
     --gold:#C99A3E;
     --forest:#33523E;
     --oxblood:#7A2E2E;
     --parchment:#F3EEE3;
     --parchment-deep:#E9E0CC;
     --hairline: rgba(43,43,40,0.16);
+    --gold-deep:#8C6A24;
+    --control-border: rgba(43,43,40,0.55);
+    --stone-deep:#1C1C1A;
+    --parchment-muted:#A9A598;
+    --hairline-on-dark: rgba(243,238,227,0.16);
+    --control-border-on-dark: rgba(243,238,227,0.45);
+    --forest-on-dark:#8FBF9F;
+    --oxblood-on-dark:#E39A9A;
   }
   *{box-sizing:border-box;}
   body{
@@ -86,10 +94,15 @@
     font-family:'IBM Plex Mono',monospace;
     font-size:12px;
     letter-spacing:0.14em;
-    color:var(--gold);
+    color:var(--stone-600);
     text-transform:uppercase;
     margin-bottom:10px;
+    display:flex;
+    align-items:center;
+    gap:10px;
   }
+  /* gold is an accent, not text on parchment (2.2:1): the label is muted ink, the gold is a bar */
+  .chapter-label::before{ content:""; width:16px; height:3px; background:var(--gold); flex:none; }
   h2{
     font-family:'Fraunces',serif;
     font-weight:600;
@@ -140,7 +153,7 @@
     border-radius:6px;
     padding:20px 22px;
   }
-  .rule-card.dont{ border-color:rgba(122,46,46,0.35); }
+  .rule-card.dont{ border-style:dashed; border-color:var(--control-border); }
   .rule-card .tag{
     font-family:'IBM Plex Mono',monospace;
     font-size:11px;
@@ -149,8 +162,10 @@
     display:inline-block;
     margin-bottom:8px;
   }
-  .rule-card.do .tag{ color:var(--forest); }
-  .rule-card.dont .tag{ color:var(--oxblood); }
+  /* ink, not forest/oxblood: those mean gains and losses, never do/don't */
+  .rule-card .tag{ color:var(--stone); font-weight:500; }
+  .rule-card.do .tag::before{ content:"\2713\00a0"; }
+  .rule-card.dont .tag::before{ content:"\2715\00a0"; }
   .rule-card p{ margin:0; font-size:14px; color:var(--stone-600); }
 
   .sizes{ display:flex; align-items:flex-end; gap:40px; margin:36px 0; flex-wrap:wrap; }
@@ -166,6 +181,57 @@
   .swatch .name{ font-family:'Fraunces',serif; font-weight:600; font-size:14px; }
   .swatch .hex{ font-family:'IBM Plex Mono',monospace; font-size:11.5px; color:var(--stone-600); margin-top:2px; }
   .swatch .use{ font-size:12px; color:var(--stone-600); margin-top:8px; line-height:1.5; }
+
+  /* ---- dark surfaces, accessible shades, errors ---- */
+  .subhead{ margin:56px 0 6px; }
+  .dark-panel{ background:var(--stone-deep); border-radius:6px; padding:28px; margin:18px 0 20px; }
+  .dark-panel .palette{ margin-bottom:24px; }
+  .dark-panel .swatch{ border-color:var(--hairline-on-dark); }
+  .dark-panel .swatch .info{ background:var(--stone); }
+  .dark-panel .swatch .name{ color:var(--parchment); }
+  .dark-panel .swatch .hex, .dark-panel .swatch .use{ color:var(--parchment-muted); }
+  .sample-card{ border-radius:6px; padding:22px 24px; max-width:380px; }
+  .sample-card.light{ background:var(--parchment-deep); color:var(--stone); }
+  .sample-card.dark{ background:var(--stone); color:var(--parchment); }
+  .sample-card .muted{ font-size:14px; }
+  .sample-card.light .muted{ color:var(--stone-600); }
+  .sample-card.dark .muted{ color:var(--parchment-muted); }
+  .sample-card .fig{ font-family:'IBM Plex Mono',monospace; font-size:15px; margin:10px 0 14px; }
+  .sample-card.light .up{ color:var(--forest); } .sample-card.light .down{ color:var(--oxblood); }
+  .sample-card.dark .up{ color:var(--forest-on-dark); } .sample-card.dark .down{ color:var(--oxblood-on-dark); }
+  .sample-card label{ display:block; font-size:14px; margin-bottom:6px; }
+  .sample-card.light label{ color:var(--stone-600); } .sample-card.dark label{ color:var(--parchment-muted); }
+  .sample-card input{ font:inherit; font-size:15px; width:100%; padding:9px 11px; border-radius:6px; }
+  .sample-card.light input{ background:var(--parchment); color:var(--stone); border:1px solid var(--control-border); }
+  .sample-card.dark input{ background:var(--stone-deep); color:var(--parchment); border:1px solid var(--control-border-on-dark); }
+  .sample-card.light input.focused{ outline:2px solid var(--gold-deep); outline-offset:2px; }
+  .sample-card.dark input.focused{ outline:2px solid var(--gold); outline-offset:2px; }
+  .sample-card .btn{ display:inline-block; margin-top:14px; padding:9px 16px; border-radius:6px; background:var(--gold); color:var(--stone); font-weight:600; font-size:14px; }
+  .pair{ display:grid; grid-template-columns:1fr 1fr; gap:20px; margin:18px 0 20px; }
+  .pair .surface{ border-radius:6px; padding:24px; }
+  .pair .surface.light{ background:var(--parchment); border:1px solid var(--hairline); }
+  .pair .surface.dark{ background:var(--stone-deep); }
+
+  .banner{ display:flex; gap:12px; align-items:flex-start; border-radius:6px; padding:14px 16px; border-left:3px solid; font-size:14px; line-height:1.55; margin-bottom:12px; }
+  .banner svg{ flex:none; width:18px; height:18px; margin-top:1px; }
+  .banner strong{ font-weight:600; }
+  .light .banner{ background:var(--parchment-deep); color:var(--stone); border-left-color:var(--stone); }
+  .dark .banner{ background:var(--stone); color:var(--parchment); border-left-color:var(--parchment); }
+  .light .banner.success{ border-left-color:var(--hairline); }
+  .dark .banner.success{ border-left-color:var(--hairline-on-dark); }
+
+  .logo-pair .surface{ display:flex; align-items:center; justify-content:center; padding:36px 0; }
+  .logo-pair .surface.mid{ background:var(--stone); }
+  .logo-pair svg{ width:56px; height:auto; }
+  .logo-pair .cap{ font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--stone-600); text-align:center; margin-top:8px; }
+
+  table.ratios{ width:100%; border-collapse:collapse; font-size:13.5px; margin:14px 0 8px; }
+  table.ratios th{ text-align:left; font-weight:600; font-size:12px; color:var(--stone-600); padding:8px 10px; border-bottom:1px solid var(--control-border); }
+  table.ratios td{ padding:7px 10px; border-bottom:1px solid var(--hairline); }
+  table.ratios td.num{ font-family:'IBM Plex Mono',monospace; text-align:right; }
+  table.ratios th.num{ text-align:right; }
+  table.ratios tr.group td{ font-family:'Fraunces',serif; font-weight:600; font-size:14px; padding-top:18px; }
+  .table-wrap{ overflow-x:auto; }
 
   /* ---- type specimen ---- */
   .specimen{ border-top:1px solid var(--hairline); padding:26px 0; }
@@ -184,7 +250,7 @@
 
   /* ---- voice ---- */
   .principles{ display:grid; grid-template-columns:1fr 1fr; gap:28px 32px; }
-  .principle .num{ font-family:'IBM Plex Mono',monospace; color:var(--gold); font-size:12px; margin-bottom:6px; }
+  .principle .num{ font-family:'IBM Plex Mono',monospace; color:var(--stone-600); font-size:12px; margin-bottom:6px; padding-top:6px; border-top:3px solid var(--gold); display:inline-block; }
   .principle h3{ margin-bottom:8px; }
   .principle p{ color:var(--stone-600); font-size:14px; }
 
@@ -214,6 +280,7 @@
     .cover h1{ font-size:38px; }
     .palette{ grid-template-columns:repeat(2,1fr); }
     .grid-2{ grid-template-columns:1fr; }
+    .pair{ grid-template-columns:1fr; }
     .principles{ grid-template-columns:1fr; }
     .specimen .row{ flex-direction:column; align-items:flex-start; gap:6px; }
   }
@@ -249,8 +316,7 @@
 
     <div class="mark-display">
       <svg viewBox="0 0 200 260" xmlns="http://www.w3.org/2000/svg">
-        <rect x="65" y="90" width="70" height="90" fill="#C99A3E"/>
-        <path d="M 90 180 L 90 162 A 10 10 0 0 1 110 162 L 110 180 Z" fill="#2B2B28"/>
+        <path d="M 65 90 H 135 V 180 H 65 Z M 90 180 L 90 162 A 10 10 0 0 1 110 162 L 110 180 Z" fill="#C99A3E" fill-rule="evenodd"/>
         <rect x="67" y="76" width="10" height="14" fill="#C99A3E"/>
         <rect x="81" y="70" width="10" height="20" fill="#C99A3E"/>
         <rect x="95" y="64" width="10" height="26" fill="#C99A3E"/>
@@ -267,8 +333,7 @@
       <svg viewBox="0 0 260 200" xmlns="http://www.w3.org/2000/svg">
         <rect x="10" y="10" width="240" height="180" fill="none" stroke="#C99A3E" stroke-width="1" stroke-dasharray="4 4" opacity="0.5"/>
         <g transform="translate(65,25)">
-          <rect x="0" y="0" width="70" height="90" fill="#2B2B28"/>
-          <path d="M 25 90 L 25 72 A 10 10 0 0 1 45 72 L 45 90 Z" fill="#F3EEE3"/>
+          <path d="M 0 0 H 70 V 90 H 0 Z M 25 90 L 25 72 A 10 10 0 0 1 45 72 L 45 90 Z" fill="#2B2B28" fill-rule="evenodd"/>
           <rect x="2" y="-14" width="10" height="14" fill="#2B2B28"/>
           <rect x="16" y="-20" width="10" height="20" fill="#2B2B28"/>
           <rect x="30" y="-26" width="10" height="26" fill="#2B2B28"/>
@@ -364,6 +429,135 @@
           <div class="use">Page and card background</div>
         </div>
       </div>
+    </div>
+
+    <h3 class="subhead">Dark surfaces</h3>
+    <p class="body2">Dark mode uses the same five hues. The page drops to a deeper stone, and cards sit on plain stone, the surface chapter V already uses. Text is parchment. Gold stays the one accent and is also the focus ring. Gains and losses switch to their on-dark shades.</p>
+    <div class="dark-panel">
+      <div class="palette">
+        <div class="swatch"><div class="fill" style="background:#1C1C1A;"></div><div class="info"><div class="name">Stone deep</div><div class="hex">#1C1C1A</div><div class="use">Page background</div></div></div>
+        <div class="swatch"><div class="fill" style="background:#2B2B28;"></div><div class="info"><div class="name">Stone</div><div class="hex">#2B2B28</div><div class="use">Raised card surface</div></div></div>
+        <div class="swatch"><div class="fill" style="background:#F3EEE3;"></div><div class="info"><div class="name">Parchment</div><div class="hex">#F3EEE3</div><div class="use">Primary text</div></div></div>
+        <div class="swatch"><div class="fill" style="background:#A9A598;"></div><div class="info"><div class="name">Parchment muted</div><div class="hex">#A9A598</div><div class="use">Secondary text, labels</div></div></div>
+        <div class="swatch"><div class="fill" style="background:#C99A3E;"></div><div class="info"><div class="name">Gold</div><div class="hex">#C99A3E</div><div class="use">Accent and focus ring, unchanged</div></div></div>
+      </div>
+      <div class="sample-card dark">
+        <div style="font-family:'Fraunces',serif; font-weight:600; font-size:17px;">Brokerage account</div>
+        <div class="muted">Prices refresh automatically.</div>
+        <div class="fig">VWCE &nbsp; €1,234.50 &nbsp; <span class="up">+1.84%</span> &nbsp; <span class="down">−0.62%</span></div>
+        <label for="dark-sample">Quantity</label>
+        <input id="dark-sample" class="focused" value="10" readonly>
+        <span class="btn">Add transaction</span>
+      </div>
+    </div>
+    <p class="body2">Dividers use <code>rgba(243,238,227,0.16)</code>, a parchment hairline. Form-control borders use <code>rgba(243,238,227,0.45)</code>, strong enough to mark a field's edge.</p>
+
+    <h3 class="subhead">Accessible shades</h3>
+    <p class="body2">These fix three light-mode pairs that failed WCAG AA. Muted stone darkens from #6B6A62 to #5F5E57, so labels on a parchment-deep card read at 4.5:1. Deep gold #8C6A24 is the light-theme focus ring, because plain gold on parchment is only 2.2:1. It's used for focus only, never as a fill or as text. Form controls get a stronger border, stone at 55%, while dividers keep the hairline.</p>
+    <div class="pair">
+      <div class="sample-card light">
+        <label for="light-sample">Quantity</label>
+        <input id="light-sample" value="10" readonly>
+        <div class="muted" style="margin-top:8px;">Control border, at rest</div>
+      </div>
+      <div class="sample-card light">
+        <label for="light-sample-2">Quantity</label>
+        <input id="light-sample-2" class="focused" value="10" readonly>
+        <div class="muted" style="margin-top:8px;">Focused: deep-gold ring</div>
+      </div>
+    </div>
+
+    <h3 class="subhead">Errors and warnings</h3>
+    <p class="body2">Red means a loss, so problems never use oxblood, and they don't use gold either, because gold means "act here." A message is an ink rule: a 3px bar in the text color, an icon, and a bold lead word. The icon and the lead word carry the meaning, not color. Error and warning differ only by icon and wording. Confirmations take the same shape with a hairline bar. Copy follows chapter IV: say what happened and what to do, flatly.</p>
+    <div class="pair">
+      <div class="surface light">
+        <div class="banner" role="note">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="8.25" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M10 5.5v5.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="10" cy="14" r="1.1" fill="currentColor"/></svg>
+          <div><strong>Couldn't save.</strong> The quantity must be greater than zero.</div>
+        </div>
+        <div class="banner" role="note">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2.5 18.5 17h-17Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M10 8v4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="10" cy="14.4" r="1" fill="currentColor"/></svg>
+          <div><strong>Check this.</strong> No ticker mapping yet, so returns will appear once it's added.</div>
+        </div>
+        <div class="banner success" role="note">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4.5 10.5 8.5 14.5 15.5 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <div><strong>Saved.</strong> Holdings and returns updated.</div>
+        </div>
+      </div>
+      <div class="surface dark">
+        <div class="banner" role="note">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="8.25" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M10 5.5v5.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="10" cy="14" r="1.1" fill="currentColor"/></svg>
+          <div><strong>Couldn't save.</strong> The quantity must be greater than zero.</div>
+        </div>
+        <div class="banner" role="note">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2.5 18.5 17h-17Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M10 8v4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="10" cy="14.4" r="1" fill="currentColor"/></svg>
+          <div><strong>Check this.</strong> No ticker mapping yet, so returns will appear once it's added.</div>
+        </div>
+        <div class="banner success" role="note">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4.5 10.5 8.5 14.5 15.5 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <div><strong>Saved.</strong> Holdings and returns updated.</div>
+        </div>
+      </div>
+    </div>
+
+    <h3 class="subhead">The mark by surface</h3>
+    <p class="body2">As chapter I says: the stone mark on parchment, the gold mark on stone. In dark mode the gold mark goes on both the page (stone deep) and cards (stone). The door is a true cutout, so it always shows the surface behind it. The mark is never recolored.</p>
+    <div class="grid-2 logo-pair" style="grid-template-columns:repeat(3,1fr);">
+      <div>
+        <div class="surface" style="background:var(--parchment); border:1px solid var(--hairline); border-radius:6px;">
+          <svg viewBox="0 0 200 260"><path d="M 65 90 H 135 V 180 H 65 Z M 90 180 L 90 162 A 10 10 0 0 1 110 162 L 110 180 Z" fill="#2B2B28" fill-rule="evenodd"/><rect x="67" y="76" width="10" height="14" fill="#2B2B28"/><rect x="81" y="70" width="10" height="20" fill="#2B2B28"/><rect x="95" y="64" width="10" height="26" fill="#2B2B28"/><rect x="109" y="58" width="10" height="32" fill="#2B2B28"/><rect x="123" y="52" width="10" height="38" fill="#2B2B28"/><line x1="128" y1="52" x2="128" y2="30" stroke="#2B2B28" stroke-width="3"/><path d="M 128 30 L 150 39 L 128 48 Z" fill="#2B2B28"/></svg>
+        </div>
+        <div class="cap">logo-stone.svg · parchment</div>
+      </div>
+      <div>
+        <div class="surface mid" style="border-radius:6px;">
+          <svg viewBox="0 0 200 260"><path d="M 65 90 H 135 V 180 H 65 Z M 90 180 L 90 162 A 10 10 0 0 1 110 162 L 110 180 Z" fill="#C99A3E" fill-rule="evenodd"/><rect x="67" y="76" width="10" height="14" fill="#C99A3E"/><rect x="81" y="70" width="10" height="20" fill="#C99A3E"/><rect x="95" y="64" width="10" height="26" fill="#C99A3E"/><rect x="109" y="58" width="10" height="32" fill="#C99A3E"/><rect x="123" y="52" width="10" height="38" fill="#C99A3E"/><line x1="128" y1="52" x2="128" y2="30" stroke="#C99A3E" stroke-width="3"/><path d="M 128 30 L 150 39 L 128 48 Z" fill="#C99A3E"/></svg>
+        </div>
+        <div class="cap">logo-gold.svg · stone</div>
+      </div>
+      <div>
+        <div class="surface" style="background:var(--stone-deep); border-radius:6px;">
+          <svg viewBox="0 0 200 260"><path d="M 65 90 H 135 V 180 H 65 Z M 90 180 L 90 162 A 10 10 0 0 1 110 162 L 110 180 Z" fill="#C99A3E" fill-rule="evenodd"/><rect x="67" y="76" width="10" height="14" fill="#C99A3E"/><rect x="81" y="70" width="10" height="20" fill="#C99A3E"/><rect x="95" y="64" width="10" height="26" fill="#C99A3E"/><rect x="109" y="58" width="10" height="32" fill="#C99A3E"/><rect x="123" y="52" width="10" height="38" fill="#C99A3E"/><line x1="128" y1="52" x2="128" y2="30" stroke="#C99A3E" stroke-width="3"/><path d="M 128 30 L 150 39 L 128 48 Z" fill="#C99A3E"/></svg>
+        </div>
+        <div class="cap">logo-gold.svg · stone deep</div>
+      </div>
+    </div>
+
+    <h3 class="subhead">Contrast</h3>
+    <p class="body2">WCAG AA: 4.5:1 for body text, 3:1 for large text, focus rings and control borders. Translucent values are measured after blending onto the surface. Dividers are decorative and exempt. Gold is never used as text on a light surface (2.2:1).</p>
+    <div class="table-wrap">
+    <table class="ratios">
+      <thead><tr><th>Foreground</th><th>Surface</th><th class="num">Ratio</th><th class="num">Needs</th></tr></thead>
+      <tbody>
+        <tr class="group"><td colspan="4">Light</td></tr>
+        <tr><td>Stone text</td><td>Parchment</td><td class="num">12.27</td><td class="num">4.5</td></tr>
+        <tr><td>Stone text</td><td>Parchment deep</td><td class="num">10.82</td><td class="num">4.5</td></tr>
+        <tr><td>Muted stone #5F5E57</td><td>Parchment</td><td class="num">5.63</td><td class="num">4.5</td></tr>
+        <tr><td>Muted stone #5F5E57</td><td>Parchment deep</td><td class="num">4.96</td><td class="num">4.5</td></tr>
+        <tr><td>Forest (gain)</td><td>Parchment</td><td class="num">7.51</td><td class="num">4.5</td></tr>
+        <tr><td>Forest (gain)</td><td>Parchment deep</td><td class="num">6.62</td><td class="num">4.5</td></tr>
+        <tr><td>Oxblood (loss)</td><td>Parchment</td><td class="num">8.04</td><td class="num">4.5</td></tr>
+        <tr><td>Oxblood (loss)</td><td>Parchment deep</td><td class="num">7.09</td><td class="num">4.5</td></tr>
+        <tr><td>Stone text</td><td>Gold (button)</td><td class="num">5.53</td><td class="num">4.5</td></tr>
+        <tr><td>Deep gold focus ring</td><td>Parchment</td><td class="num">4.32</td><td class="num">3.0</td></tr>
+        <tr><td>Deep gold focus ring</td><td>Parchment deep</td><td class="num">3.81</td><td class="num">3.0</td></tr>
+        <tr><td>Control border</td><td>Parchment</td><td class="num">3.28</td><td class="num">3.0</td></tr>
+        <tr><td>Control border</td><td>Parchment deep</td><td class="num">3.17</td><td class="num">3.0</td></tr>
+        <tr class="group"><td colspan="4">Dark</td></tr>
+        <tr><td>Parchment text</td><td>Stone deep</td><td class="num">14.75</td><td class="num">4.5</td></tr>
+        <tr><td>Parchment text</td><td>Stone</td><td class="num">12.27</td><td class="num">4.5</td></tr>
+        <tr><td>Parchment muted</td><td>Stone deep</td><td class="num">6.93</td><td class="num">4.5</td></tr>
+        <tr><td>Parchment muted</td><td>Stone</td><td class="num">5.76</td><td class="num">4.5</td></tr>
+        <tr><td>Forest on dark (gain)</td><td>Stone deep</td><td class="num">8.23</td><td class="num">4.5</td></tr>
+        <tr><td>Forest on dark (gain)</td><td>Stone</td><td class="num">6.84</td><td class="num">4.5</td></tr>
+        <tr><td>Oxblood on dark (loss)</td><td>Stone deep</td><td class="num">7.60</td><td class="num">4.5</td></tr>
+        <tr><td>Oxblood on dark (loss)</td><td>Stone</td><td class="num">6.33</td><td class="num">4.5</td></tr>
+        <tr><td>Gold focus ring</td><td>Stone deep</td><td class="num">6.64</td><td class="num">3.0</td></tr>
+        <tr><td>Gold focus ring</td><td>Stone</td><td class="num">5.53</td><td class="num">3.0</td></tr>
+        <tr><td>Control border on dark</td><td>Stone deep</td><td class="num">4.03</td><td class="num">3.0</td></tr>
+        <tr><td>Control border on dark</td><td>Stone</td><td class="num">3.74</td><td class="num">3.0</td></tr>
+      </tbody>
+    </table>
     </div>
   </section>
 

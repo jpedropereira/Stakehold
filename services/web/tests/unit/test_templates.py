@@ -107,6 +107,7 @@ def test_web_css_defines_semantic_tokens():
         "--gain",
         "--loss",
         "--focus-ring",
+        "--border-control",
         *(f"--space-{n}" for n in range(1, 9)),
         "--content-max",
     ]
@@ -173,6 +174,20 @@ def test_page_stacks_its_cards_vertically():
     assert any(
         re.search(r"flex-direction\s*:\s*column", body) for body in page_rules
     ), ".page does not stack its children in a column"
+
+
+def test_form_controls_use_the_control_border():
+    """UI-2: --border is a decorative hairline (~1.3:1). A form control's edge identifies the
+    control, so WCAG wants 3:1 -- that's --border-control's job, not --border's."""
+    offenders = []
+    for selectors, body in _RULE.findall(_css_without_comments()):
+        if not re.search(r"\b(input|select|textarea)\b", selectors):
+            continue
+        for declaration in re.findall(r"border(?:-[a-z]+)?\s*:[^;]*", body):
+            if "var(--border)" in declaration:
+                offenders.append(f"{selectors.strip()} {{ {declaration.strip()} }}")
+
+    assert offenders == [], f"form control(s) bordered with the decorative hairline: {offenders}"
 
 
 def test_decimal_inputs_are_mono():

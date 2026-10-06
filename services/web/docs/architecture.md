@@ -21,22 +21,31 @@ calls [`portfolio`](../../portfolio/docs/architecture.md), `data-store`, and
   - *Brand tokens* (`--stone`, `--parchment`, `--gold`, `--font-*`, `--text-*`, …) live in
     `brand/tokens.css`, the brand's single source of truth.
   - *Semantic aliases* (`--surface`, `--surface-raised`, `--text`, `--text-muted`, `--border`,
-    `--accent`, `--on-accent`, `--gain`, `--loss`, `--focus-ring`) are defined in the one
+    `--border-control`, `--accent`, `--on-accent`, `--gain`, `--loss`, `--focus-ring`) are
+    defined in the one
     `:root` block at the top of `static/web.css`, and that block is the only place in the file a
     brand *color* token may appear. Every rule styles through the aliases, so a theme (dark mode,
     UI-3) only re-points about ten aliases instead of rewriting rules one by one.
     `--on-accent` exists separately from `--text` because text on a gold button stays stone in
-    either theme, while body text flips. `--focus-ring` is stone, not gold: gold on parchment is
-    about 2.2:1, under WCAG's 3:1 minimum for a focus indicator.
+    either theme, while body text flips. `--focus-ring` is `--gold-deep`, not gold: gold on
+    parchment is about 2.2:1, under WCAG's 3:1 minimum for a focus indicator. UI-1 first used
+    stone, which also passes. UI-2's signed-off charter chose deep gold so focus still reads as
+    the brand accent. `--border-control` exists separately from `--border` for the same 3:1
+    rule: `--border` is a decorative hairline (about 1.3:1), fine for dividers, but a form
+    control's edge is what identifies the control. An alias is never named after the brand
+    token it points at (`--x: var(--x)` is a CSS cycle, so the property becomes invalid), which
+    is why the alias is `--border-control` and the brand token is `--control-border`.
 
   The same block holds a spacing scale (`--space-1`…`--space-8`, 4–64px) and `--content-max`.
   Pages are built from a few shared components (`.card` with `.card-narrow`/`.card-wide`,
   `.field` wrapping a label and its control, and `.btn` with `.btn-primary`/`.btn-ghost`) instead
-  of per-page copies, and every interactive element gets a stone `:focus-visible` outline.
+  of per-page copies, and every interactive element gets a deep-gold `:focus-visible` outline.
   `tests/unit/test_templates.py` enforces all of this mechanically: no hardcoded hex value, no
   brand color token outside the alias block (the list is read from `tokens.css`, so new brand
-  colors are covered automatically), no CSS class that no template uses, and no template class
-  that `web.css` doesn't define.
+  colors are covered automatically), no CSS class that no template uses, no template class
+  that `web.css` doesn't define, and no form control bordered with `--border`.
+  `tests/unit/test_brand_contrast.py` measures each alias against both surfaces for WCAG AA,
+  and rejects a self-referencing alias.
 - **`async def` route handlers and dependencies**, backed by one `httpx.AsyncClient` opened in
   the FastAPI lifespan. Every route ultimately does at least one `auth` call (`require_user`/
   `optional_user` alone means that's true even for `GET /`), and FastAPI dispatches every sync

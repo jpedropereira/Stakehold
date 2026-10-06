@@ -1,6 +1,6 @@
 /*
   Stakehold design tokens
-  Source: docs/brand-charter.html (chapters I–III)
+  Source: brand/brand-charter.html (chapters I–III)
   Import this file once at the app root, then reference the
   custom properties everywhere instead of hardcoding hex/font values.
 */
@@ -10,7 +10,7 @@
 :root {
   /* ---- color: five total, each with one job ---- */
   --stone: #2B2B28;         /* ink, primary text, dark surfaces */
-  --stone-600: #6B6A62;     /* secondary / muted text */
+  --stone-600: #5F5E57;     /* secondary / muted text (AA on parchment-deep) */
   --gold: #C99A3E;          /* the one accent — marks, CTAs, highlights */
   --forest: #33523E;        /* gains only. never decorative */
   --oxblood: #7A2E2E;       /* losses only. never decorative */
@@ -22,6 +22,17 @@
      (e.g. delta text on a stone-colored card) */
   --forest-on-dark: #8FBF9F;
   --oxblood-on-dark: #E39A9A;
+
+  /* accessible shades (chapter II): focus and form-control edges, not new hues */
+  --gold-deep: #8C6A24;                     /* light-theme focus ring only. never fill or text */
+  --control-border: rgba(43, 43, 40, 0.55); /* input/select borders on light surfaces */
+
+  /* dark surfaces (chapter II). raised cards use --stone, text uses --parchment,
+     focus ring uses --gold */
+  --stone-deep: #1C1C1A;                              /* dark page background */
+  --parchment-muted: #A9A598;                         /* secondary / muted text on dark */
+  --hairline-on-dark: rgba(243, 238, 227, 0.16);      /* dividers on dark */
+  --control-border-on-dark: rgba(243, 238, 227, 0.45);/* input/select borders on dark */
 
   /* ---- type ---- */
   --font-display: 'Fraunces', serif;   /* headlines, wordmark, emphasis only */
