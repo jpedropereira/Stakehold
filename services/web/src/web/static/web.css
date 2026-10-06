@@ -9,14 +9,17 @@
   --surface-raised: var(--parchment-deep);
   --text: var(--stone);
   --text-muted: var(--stone-600);
+  /* Dividers only. A form control's edge identifies the control, so it needs 3:1 (UI-2). */
   --border: var(--hairline);
+  --border-control: var(--control-border);
   --accent: var(--gold);
   /* Text on a gold surface stays stone in every theme, unlike --text. */
   --on-accent: var(--stone);
   --gain: var(--forest);
   --loss: var(--oxblood);
-  /* Stone, not gold: gold on parchment is ~2.2:1, under WCAG's 3:1 for focus indicators. */
-  --focus-ring: var(--stone);
+  /* Deep gold, not gold: gold on parchment is ~2.2:1, under WCAG's 3:1 for focus indicators.
+     The charter's light-theme focus color (chapter II); never a fill or text. */
+  --focus-ring: var(--gold-deep);
 
   --space-1: 4px;
   --space-2: 8px;
@@ -151,7 +154,7 @@ a {
 .inline-form input {
   font: var(--text-body);
   padding: 10px var(--space-3);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-control);
   border-radius: var(--radius-card);
   background: var(--surface);
   color: var(--text);

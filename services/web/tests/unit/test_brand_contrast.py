@@ -4,6 +4,9 @@ from pathlib import Path
 import pytest
 
 _TOKENS_PATH = Path(__file__).resolve().parents[4] / "brand" / "tokens.css"
+_WEB_CSS_PATH = Path(__file__).resolve().parents[2] / "src" / "web" / "static" / "web.css"
+_ROOT_BLOCK = re.compile(r":root\s*\{[^}]*\}")
+_ALIAS = re.compile(r"(--[\w-]+):\s*var\(\s*(--[\w-]+)\s*\)\s*;")
 _DECLARATION = re.compile(r"(--[\w-]+):\s*([^;]+);")
 _RGBA = re.compile(r"rgba\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*([\d.]+)\s*\)")
 
@@ -95,3 +98,48 @@ def test_brand_token_pair_meets_wcag_aa(fg, bg, minimum):
     ratio = _contrast(_blend(_rgba(tokens[fg]), surface), surface[:3])
 
     assert ratio >= minimum, f"{fg} on {bg} is {ratio:.2f}:1, needs {minimum}:1"
+
+
+# web.css's semantic aliases, measured against both surfaces they're drawn on. The token-level
+# pairs above prove a good combination exists; this proves web.css actually picked it, e.g. that
+# inputs are bordered with a control border rather than the decorative hairline.
+_ALIAS_PAIRS = [
+    (fg, bg, minimum)
+    for fg, minimum in (
+        ("--text", _TEXT),
+        ("--text-muted", _TEXT),
+        ("--gain", _TEXT),
+        ("--loss", _TEXT),
+        ("--focus-ring", _NON_TEXT),
+        ("--border-control", _NON_TEXT),
+    )
+    for bg in ("--surface", "--surface-raised")
+]
+
+
+def _web_css_aliases():
+    block = _ROOT_BLOCK.search(re.sub(r"/\*.*?\*/", "", _WEB_CSS_PATH.read_text(), flags=re.S))
+    assert block, "web.css has no :root semantic alias block"
+    return dict(_ALIAS.findall(block.group(0)))
+
+
+@pytest.mark.parametrize(
+    "fg, bg, minimum", _ALIAS_PAIRS, ids=[f"{f} on {b}" for f, b, _ in _ALIAS_PAIRS]
+)
+def test_web_css_semantic_alias_pair_meets_wcag_aa(fg, bg, minimum):
+    aliases, tokens = _web_css_aliases(), _tokens()
+    assert fg in aliases and bg in aliases, f"web.css :root doesn't alias {fg} or {bg}"
+
+    surface = _rgba(tokens[aliases[bg]])
+    ratio = _contrast(_blend(_rgba(tokens[aliases[fg]]), surface), surface[:3])
+
+    assert ratio >= minimum, f"{fg} ({aliases[fg]}) on {bg} is {ratio:.2f}:1, needs {minimum}:1"
+
+
+def test_web_css_aliases_are_not_self_referencing():
+    """`--x: var(--x)` is a CSS dependency cycle: the browser makes --x invalid, but resolving it
+    through tokens.css (as the contrast test above does) would still find a value and pass. A
+    semantic alias must have a different name from the brand token it points at."""
+    cycles = sorted(name for name, target in _web_css_aliases().items() if name == target)
+
+    assert cycles == [], f"web.css alias(es) reference themselves: {cycles}"
