@@ -16,10 +16,27 @@ calls [`portfolio`](../../portfolio/docs/architecture.md), `data-store`, and
   works offline and needs no script-src CDN exception in the Content-Security-Policy. Used today
   for auth forms (`hx-post` swapping an error partial); the same routes render a full page when
   the `HX-Request` header is absent, so the forms work with JS off.
-- **Plain CSS** with custom properties (`--color-*`, `--font-*`) for the brand tokens — no
-  Tailwind, no component kit, no CSS framework. `static/web.css` references only
-  `var(--…)` tokens from `brand/tokens.css`, enforced mechanically by
-  `tests/unit/test_templates.py` (no hardcoded hex value should ever land here).
+- **Plain CSS** with custom properties — no Tailwind, no component kit, no CSS framework. Two
+  token layers (UI-1):
+  - *Brand tokens* (`--stone`, `--parchment`, `--gold`, `--font-*`, `--text-*`, …) live in
+    `brand/tokens.css`, the brand's single source of truth.
+  - *Semantic aliases* (`--surface`, `--surface-raised`, `--text`, `--text-muted`, `--border`,
+    `--accent`, `--on-accent`, `--gain`, `--loss`, `--focus-ring`) are defined in the one
+    `:root` block at the top of `static/web.css`, and that block is the only place in the file a
+    brand *color* token may appear. Every rule styles through the aliases, so a theme (dark mode,
+    UI-3) only re-points about ten aliases instead of rewriting rules one by one.
+    `--on-accent` exists separately from `--text` because text on a gold button stays stone in
+    either theme, while body text flips. `--focus-ring` is stone, not gold: gold on parchment is
+    about 2.2:1, under WCAG's 3:1 minimum for a focus indicator.
+
+  The same block holds a spacing scale (`--space-1`…`--space-8`, 4–64px) and `--content-max`.
+  Pages are built from a few shared components (`.card` with `.card-narrow`/`.card-wide`,
+  `.field` wrapping a label and its control, and `.btn` with `.btn-primary`/`.btn-ghost`) instead
+  of per-page copies, and every interactive element gets a stone `:focus-visible` outline.
+  `tests/unit/test_templates.py` enforces all of this mechanically: no hardcoded hex value, no
+  brand color token outside the alias block (the list is read from `tokens.css`, so new brand
+  colors are covered automatically), no CSS class that no template uses, and no template class
+  that `web.css` doesn't define.
 - **`async def` route handlers and dependencies**, backed by one `httpx.AsyncClient` opened in
   the FastAPI lifespan. Every route ultimately does at least one `auth` call (`require_user`/
   `optional_user` alone means that's true even for `GET /`), and FastAPI dispatches every sync

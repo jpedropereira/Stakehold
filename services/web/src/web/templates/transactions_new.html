@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Add transaction — Stakehold{% endblock %}
 {% block content %}
-<section class="entry-card">
+<section class="card">
   <h1>Add transaction</h1>
   <p class="entry-subtitle">Account: {{ account_label }}</p>
   {% if saved %}<p class="confirmation-banner">Transaction saved.</p>{% endif %}
@@ -12,27 +12,39 @@
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <input type="hidden" name="account_label" value="{{ account_label }}">
 
-    <label for="broker_transaction_ref">Reference</label>
-    <input type="text" id="broker_transaction_ref" name="broker_transaction_ref" required>
+    <div class="field">
+      <label for="broker_transaction_ref">Reference</label>
+      <input type="text" id="broker_transaction_ref" name="broker_transaction_ref" required>
+    </div>
 
-    <label for="transaction_type">Type</label>
-    <select id="transaction_type" name="transaction_type" required>
-      {% for t in transaction_types %}
-      <option value="{{ t }}">{{ t }}</option>
-      {% endfor %}
-    </select>
+    <div class="field">
+      <label for="transaction_type">Type</label>
+      <select id="transaction_type" name="transaction_type" required>
+        {% for t in transaction_types %}
+        <option value="{{ t }}">{{ t }}</option>
+        {% endfor %}
+      </select>
+    </div>
 
-    <label for="trade_datetime">Date &amp; time (UTC)</label>
-    <input type="datetime-local" id="trade_datetime" name="trade_datetime" required>
+    <div class="field">
+      <label for="trade_datetime">Date &amp; time (UTC)</label>
+      <input type="datetime-local" id="trade_datetime" name="trade_datetime" required>
+    </div>
 
-    <label for="native_amount">Amount (leave blank for buys and sells: calculated as price × quantity + fees)</label>
-    <input type="text" inputmode="decimal" id="native_amount" name="native_amount">
+    <div class="field">
+      <label for="native_amount">Amount (leave blank for buys and sells: calculated as price × quantity + fees)</label>
+      <input type="text" inputmode="decimal" id="native_amount" name="native_amount">
+    </div>
 
-    <label for="native_currency">Currency</label>
-    <input type="text" id="native_currency" name="native_currency" maxlength="3" required>
+    <div class="field">
+      <label for="native_currency">Currency</label>
+      <input type="text" id="native_currency" name="native_currency" maxlength="3" required>
+    </div>
 
-    <label for="instrument_identifier">Instrument (ticker)</label>
-    <input type="text" id="instrument_identifier" name="instrument_identifier" list="ticker-options" autocomplete="off" class="mono">
+    <div class="field">
+      <label for="instrument_identifier">Instrument (ticker)</label>
+      <input type="text" id="instrument_identifier" name="instrument_identifier" list="ticker-options" autocomplete="off" class="mono">
+    </div>
     <datalist id="ticker-options">
       {% for ticker in tickers %}
       <option value="{{ ticker }}">
@@ -40,19 +52,27 @@
     </datalist>
     {% if tickers_notice %}<p class="entry-empty">{{ tickers_notice }}</p>{% endif %}
 
-    <label for="quantity">Quantity</label>
-    <input type="text" inputmode="decimal" id="quantity" name="quantity">
+    <div class="field">
+      <label for="quantity">Quantity</label>
+      <input type="text" inputmode="decimal" id="quantity" name="quantity">
+    </div>
 
-    <label for="price">Price</label>
-    <input type="text" inputmode="decimal" id="price" name="price">
+    <div class="field">
+      <label for="price">Price</label>
+      <input type="text" inputmode="decimal" id="price" name="price">
+    </div>
 
-    <label for="fx_rate">FX rate (native units per 1 EUR)</label>
-    <input type="text" inputmode="decimal" id="fx_rate" name="fx_rate">
+    <div class="field">
+      <label for="fx_rate">FX rate (native units per 1 EUR)</label>
+      <input type="text" inputmode="decimal" id="fx_rate" name="fx_rate">
+    </div>
 
-    <label for="fees_native">Fees</label>
-    <input type="text" inputmode="decimal" id="fees_native" name="fees_native">
+    <div class="field">
+      <label for="fees_native">Fees</label>
+      <input type="text" inputmode="decimal" id="fees_native" name="fees_native">
+    </div>
 
-    <button type="submit" class="primary-button">Save transaction</button>
+    <button type="submit" class="btn btn-primary">Save transaction</button>
   </form>
 </section>
 {% endblock %}

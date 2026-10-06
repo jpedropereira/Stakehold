@@ -1,27 +1,61 @@
 /* Stakehold web -- layout and components only. All color/type/shape values come from
    brand/tokens.css custom properties; nothing here hardcodes a hex value or a font name. */
 
+/* Semantic aliases: the only place in this file a brand color token may appear (enforced by
+   tests/unit/test_templates.py). Every rule below styles through these, so a theme -- dark mode
+   in particular -- is a matter of re-pointing the aliases, not rewriting rules. */
+:root {
+  --surface: var(--parchment);
+  --surface-raised: var(--parchment-deep);
+  --text: var(--stone);
+  --text-muted: var(--stone-600);
+  --border: var(--hairline);
+  --accent: var(--gold);
+  /* Text on a gold surface stays stone in every theme, unlike --text. */
+  --on-accent: var(--stone);
+  --gain: var(--forest);
+  --loss: var(--oxblood);
+  /* Stone, not gold: gold on parchment is ~2.2:1, under WCAG's 3:1 for focus indicators. */
+  --focus-ring: var(--stone);
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 64px;
+
+  --content-max: 1120px;
+}
+
 * {
   box-sizing: border-box;
 }
 
 body {
   margin: 0;
-  background: var(--parchment);
-  color: var(--stone);
+  background: var(--surface);
+  color: var(--text);
   font: var(--text-body);
 }
 
 a {
-  color: var(--stone);
+  color: var(--text);
+}
+
+:is(a, button, input, select, textarea, summary):focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 .site-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 20px 32px;
-  border-bottom: 1px solid var(--hairline);
+  padding: var(--space-5) var(--space-6);
+  border-bottom: 1px solid var(--border);
 }
 
 .brand-mark img {
@@ -30,102 +64,10 @@ a {
   width: auto;
 }
 
-.logout-form {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.user-name {
-  font: var(--text-caption);
-  color: var(--stone-600);
-}
-
-.link-button {
-  background: none;
-  border: none;
-  padding: 0;
-  font: var(--text-caption);
-  color: var(--stone);
-  text-decoration: underline;
-  cursor: pointer;
-}
-
-.page {
-  display: flex;
-  justify-content: center;
-  padding: 64px 24px;
-}
-
-.auth-card,
-.welcome-card {
-  width: 100%;
-  max-width: 380px;
-  background: var(--parchment-deep);
-  border-radius: var(--radius-card);
-  padding: 32px;
-}
-
-.auth-card h1,
-.welcome-card h1 {
-  font: var(--text-h2);
-  margin: 0 0 24px;
-}
-
-.auth-card form {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.auth-card label {
-  font: var(--text-caption);
-  color: var(--stone-600);
-  margin-top: 12px;
-}
-
-.auth-card input {
-  font: var(--text-body);
-  padding: 10px 12px;
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius-card);
-  background: var(--parchment);
-  color: var(--stone);
-}
-
-.primary-button {
-  display: inline-block;
-  margin-top: 24px;
-  padding: 12px;
-  border: none;
-  border-radius: var(--radius-card);
-  background: var(--gold);
-  color: var(--stone);
-  font: var(--text-body);
-  font-weight: 600;
-  text-decoration: none;
-  text-align: center;
-  cursor: pointer;
-}
-
-.form-error {
-  font: var(--text-caption);
-  font-weight: 600;
-  color: var(--stone);
-  margin: 0 0 4px;
-}
-
-.auth-switch {
-  font: var(--text-caption);
-  color: var(--stone-600);
-  margin-top: 20px;
-  text-align: center;
-}
-
 .site-nav {
   display: flex;
   align-items: center;
-  margin-right: 16px;
+  margin-right: var(--space-4);
 }
 
 .site-nav a {
@@ -133,63 +75,178 @@ a {
   text-decoration: none;
 }
 
+.logout-form {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.user-name {
+  font: var(--text-caption);
+  color: var(--text-muted);
+}
+
+/* A column, not a row: several cards on one page stack instead of squeezing side by side (and a
+   centered row that overflows clips its first card off the left edge, unscrollable). */
+.page {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  max-width: var(--content-max);
+  margin-inline: auto;
+  padding: var(--space-8) var(--space-5);
+}
+
+/* ---- card ---- */
+
+.card {
+  width: 100%;
+  max-width: 560px;
+  background: var(--surface-raised);
+  border-radius: var(--radius-card);
+  padding: var(--space-6);
+  margin-bottom: var(--space-5);
+}
+
+.card-narrow {
+  max-width: 380px;
+}
+
+.card-wide {
+  max-width: 880px;
+}
+
+.card h1 {
+  font: var(--text-h2);
+  margin: 0 0 var(--space-4);
+}
+
+.card form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.card form.inline-form {
+  flex-direction: row;
+  align-items: center;
+}
+
+/* ---- field ---- */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-top: var(--space-2);
+}
+
+.field label {
+  font: var(--text-caption);
+  color: var(--text-muted);
+}
+
+.field input,
+.field select,
+.inline-form input {
+  font: var(--text-body);
+  padding: 10px var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.inline-form input {
+  padding: 6px var(--space-2);
+  max-width: 140px;
+}
+
+/* Tickers and identifiers are figures: the control rule above would otherwise override .mono. */
+:is(.field, .inline-form) input.mono {
+  font: var(--text-figure);
+}
+
+/* ---- button ---- */
+
+.btn {
+  display: inline-block;
+  border-radius: var(--radius-card);
+  font: var(--text-body);
+  text-align: center;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.btn-primary {
+  padding: var(--space-3);
+  border: none;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 600;
+}
+
+.card form > .btn-primary,
+.card > .btn-primary {
+  margin-top: var(--space-5);
+}
+
+.btn-ghost {
+  padding: 0;
+  border: none;
+  background: none;
+  font: var(--text-caption);
+  color: var(--text);
+  text-decoration: underline;
+}
+
+/* ---- text ---- */
+
 .mono {
   font: var(--text-figure);
 }
 
-.entry-card {
-  width: 100%;
-  max-width: 560px;
-  background: var(--parchment-deep);
-  border-radius: var(--radius-card);
-  padding: 32px;
-  margin-bottom: 24px;
+.gain {
+  color: var(--gain);
 }
 
-.entry-card h1 {
-  font: var(--text-h2);
-  margin: 0 0 16px;
+.loss {
+  color: var(--loss);
 }
 
-.entry-card form {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.entry-card label {
+.form-error {
   font: var(--text-caption);
-  color: var(--stone-600);
-  margin-top: 12px;
-}
-
-.entry-card input,
-.entry-card select {
-  font: var(--text-body);
-  padding: 10px 12px;
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius-card);
-  background: var(--parchment);
-  color: var(--stone);
-}
-
-.entry-subtitle {
-  font: var(--text-caption);
-  color: var(--stone-600);
-  margin: 0 0 16px;
-}
-
-.entry-empty {
-  font: var(--text-caption);
-  color: var(--stone-600);
+  font-weight: 600;
+  color: var(--text);
+  margin: 0 0 var(--space-1);
 }
 
 .confirmation-banner {
   font: var(--text-caption);
   font-weight: 600;
-  color: var(--stone);
-  margin: 0 0 16px;
+  color: var(--text);
+  margin: 0 0 var(--space-4);
 }
+
+.auth-switch {
+  font: var(--text-caption);
+  color: var(--text-muted);
+  margin-top: var(--space-5);
+  text-align: center;
+}
+
+.entry-subtitle {
+  font: var(--text-caption);
+  color: var(--text-muted);
+  margin: 0 0 var(--space-4);
+}
+
+.entry-empty {
+  font: var(--text-caption);
+  color: var(--text-muted);
+}
+
+/* ---- accounts ---- */
 
 .account-list {
   list-style: none;
@@ -200,9 +257,9 @@ a {
 .account-row {
   display: flex;
   align-items: center;
-  gap: 16px;
-  padding: 12px 0;
-  border-bottom: 1px solid var(--hairline);
+  gap: var(--space-4);
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--border);
 }
 
 .account-row:last-child {
@@ -213,22 +270,20 @@ a {
   font-weight: 600;
 }
 
+.account-broker {
+  color: var(--text-muted);
+}
+
 .account-row a {
   font: var(--text-caption);
   margin-left: auto;
 }
 
 .account-row a + a {
-  margin-left: 12px;
+  margin-left: var(--space-3);
 }
 
-.gain {
-  color: var(--forest);
-}
-
-.loss {
-  color: var(--oxblood);
-}
+/* ---- tables and charts ---- */
 
 .positions-table {
   width: 100%;
@@ -238,27 +293,23 @@ a {
 .positions-table th,
 .positions-table td {
   text-align: left;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--hairline);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border);
 }
 
 .positions-table th {
   font: var(--text-caption);
-  color: var(--stone-600);
+  color: var(--text-muted);
   font-weight: 600;
 }
 
 .returns-summary {
   font: var(--text-body);
-  margin: 0 0 16px;
+  margin: 0 0 var(--space-4);
 }
 
 .chart-wrap {
   max-width: 720px;
-}
-
-.entry-card-wide {
-  max-width: 880px;
 }
 
 /* Tables on the admin page are wider than a phone; scroll them, not the page. */
@@ -266,13 +317,18 @@ a {
   overflow-x: auto;
 }
 
-.entry-card form.inline-form {
-  flex-direction: row;
-  align-items: center;
-  gap: 8px;
-}
+/* Phone width: give the content the width rather than the padding. The full responsive pass
+   is UI-13. */
+@media (max-width: 480px) {
+  .site-header {
+    padding: var(--space-4);
+  }
 
-.entry-card form.inline-form input {
-  padding: 6px 8px;
-  max-width: 140px;
+  .page {
+    padding: var(--space-5) var(--space-3);
+  }
+
+  .card {
+    padding: var(--space-5);
+  }
 }
