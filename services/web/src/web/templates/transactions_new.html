@@ -1,9 +1,9 @@
 {% extends "base.html" %}
 {% block title %}Add transaction — Stakehold{% endblock %}
 {% block content %}
+{% include "partials/_account_header.html" %}
 <section class="card">
   <h1>Add transaction</h1>
-  <p class="entry-subtitle">Account: {{ account_label }}</p>
   {% if saved %}<p class="confirmation-banner">Transaction saved.</p>{% endif %}
   <form hx-post="/transactions/new" hx-target="#form-errors" hx-swap="innerHTML" method="post" action="/transactions/new">
     <div id="form-errors">

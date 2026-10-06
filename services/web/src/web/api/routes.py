@@ -309,7 +309,11 @@ async def home(
 ):
     csrf_token = ensure_csrf_cookie(request, response, cookie_secure=settings.cookie_secure)
     return _render(
-        request, response, templates, "home.html", {"user": user, "csrf_token": csrf_token}
+        request,
+        response,
+        templates,
+        "home.html",
+        {"user": user, "csrf_token": csrf_token, "nav_active": "overview"},
     )
 
 
@@ -323,7 +327,11 @@ async def admin_page(
 ):
     csrf_token = ensure_csrf_cookie(request, response, cookie_secure=settings.cookie_secure)
     return _render(
-        request, response, templates, "admin.html", {"user": user, "csrf_token": csrf_token}
+        request,
+        response,
+        templates,
+        "admin.html",
+        {"user": user, "csrf_token": csrf_token, "nav_active": "admin"},
     )
 
 
@@ -411,6 +419,7 @@ async def admin_mappings_page(
         {
             "user": user,
             "csrf_token": csrf_token,
+            "nav_active": "admin",
             "error": None,
             "outcome": _mapping_outcome(request),
             **await _mappings_context(portfolio_client),
@@ -455,6 +464,7 @@ async def _submit_mapping_change(
         action_name,
         csrf_token,
         user=user,
+        nav_active="admin",
         extra_context_loader=load_page_context,
     )
     if csrf_error is not None:
@@ -472,6 +482,7 @@ async def _submit_mapping_change(
             request, response, redirect_action, result
         ),
         user=user,
+        nav_active="admin",
         extra_context_loader=load_page_context,
     )
 
@@ -738,6 +749,44 @@ async def _list_accounts_and_brokers(
     return accounts_result, brokers_result, error
 
 
+async def _account_header_context(
+    portfolio_client: PortfolioClient, user_id: str, account_label: str
+) -> dict:
+    """What partials/_account_header.html needs: the account (for its broker) and every account
+    the user has (for the switcher).
+
+    `account_known` is True/False once the list has loaded, and None when portfolio couldn't be
+    reached. Callers 404 only on False: an outage must never tell the visitor a real account
+    doesn't exist, so it degrades to a header with the label alone and no switcher.
+    """
+    try:
+        accounts = await portfolio_client.list_accounts(user_id=user_id)
+    except PortfolioClientError as exc:
+        logger.exception("portfolio service unavailable listing accounts.", exc_info=exc)
+        return {"account": None, "accounts": [], "account_known": None}
+    account = next((a for a in accounts if a.account_label == account_label), None)
+    return {"account": account, "accounts": accounts, "account_known": account is not None}
+
+
+def _account_page_context(account_nav_active: str) -> dict:
+    """The context every account-scoped page shares beyond the header's fetched data: which
+    top-nav section and which account sub-nav entry are current."""
+    return {"nav_active": "accounts", "account_nav_active": account_nav_active}
+
+
+def _render_account_not_found(
+    request: Request, response: Response, templates, *, user: AuthUser, csrf_token: str
+) -> Response:
+    return _render(
+        request,
+        response,
+        templates,
+        "account_not_found.html",
+        {"user": user, "csrf_token": csrf_token, "nav_active": "accounts"},
+        status_code=status.HTTP_404_NOT_FOUND,
+    )
+
+
 @router.get("/accounts")
 async def accounts_page(
     request: Request,
@@ -757,6 +806,7 @@ async def accounts_page(
         {
             "user": user,
             "csrf_token": csrf_token,
+            "nav_active": "accounts",
             "accounts": accounts,
             "brokers": brokers,
             "error": list_error,
@@ -800,6 +850,7 @@ async def accounts_submit(
         "create_account",
         csrf_token,
         user=user,
+        nav_active="accounts",
         extra_context_loader=load_error_context,
     )
     if csrf_error is not None:
@@ -818,6 +869,7 @@ async def accounts_submit(
         error_messages=_ACCOUNT_ERRORS,
         on_success=lambda _result: _redirect(request, response, "/accounts"),
         user=user,
+        nav_active="accounts",
         extra_context_loader=load_error_context,
     )
 
@@ -870,6 +922,14 @@ async def transaction_new_form(
 ):
     csrf_token = ensure_csrf_cookie(request, response, cookie_secure=settings.cookie_secure)
     saved = request.query_params.get("saved") == "1"
+    header, form = await asyncio.gather(
+        _account_header_context(portfolio_client, user.user_id, account),
+        _transaction_new_context(portfolio_client, account, saved=saved),
+    )
+    if header["account_known"] is False:
+        return _render_account_not_found(
+            request, response, templates, user=user, csrf_token=csrf_token
+        )
     return _render(
         request,
         response,
@@ -879,7 +939,9 @@ async def transaction_new_form(
             "user": user,
             "csrf_token": csrf_token,
             "error": None,
-            **await _transaction_new_context(portfolio_client, account, saved=saved),
+            **_account_page_context("add"),
+            **header,
+            **form,
         },
     )
 
@@ -958,8 +1020,14 @@ async def transaction_new_submit(
 ):
     form_context = {
         "user": user,
+        **_account_page_context("add"),
         **await _transaction_new_context(portfolio_client, account_label, saved=False),
     }
+
+    async def load_account_header() -> dict:
+        # Lazy, like accounts_submit's loader: only a full-page error re-render shows the header.
+        return await _account_header_context(portfolio_client, user.user_id, account_label)
+
     csrf_error = await _check_csrf(
         request,
         response,
@@ -968,6 +1036,7 @@ async def transaction_new_submit(
         "transactions_new.html",
         "add_transaction",
         csrf_token,
+        extra_context_loader=load_account_header,
         **form_context,
     )
     if csrf_error is not None:
@@ -990,6 +1059,7 @@ async def transaction_new_submit(
             "transactions_new.html",
             "Enter a valid date/time and numeric fields.",
             status.HTTP_400_BAD_REQUEST,
+            extra_context_loader=load_account_header,
             **form_context,
         )
 
@@ -1016,6 +1086,7 @@ async def transaction_new_submit(
         on_success=lambda _result: _redirect(
             request, response, f"/transactions/new?account={quote(account_label)}&saved=1"
         ),
+        extra_context_loader=load_account_header,
         **form_context,
     )
 
@@ -1031,8 +1102,14 @@ async def transaction_import_form(
     settings: Settings = Depends(get_settings),
     templates=Depends(get_templates),
     user: AuthUser = Depends(require_user),
+    portfolio_client: PortfolioClient = Depends(get_portfolio_client),
 ):
     csrf_token = ensure_csrf_cookie(request, response, cookie_secure=settings.cookie_secure)
+    header = await _account_header_context(portfolio_client, user.user_id, account)
+    if header["account_known"] is False:
+        return _render_account_not_found(
+            request, response, templates, user=user, csrf_token=csrf_token
+        )
     imported_raw = request.query_params.get("imported")
     imported = int(imported_raw) if imported_raw and imported_raw.isdigit() else None
     return _render(
@@ -1046,6 +1123,8 @@ async def transaction_import_form(
             "account_label": account,
             "error": None,
             "imported": imported,
+            **_account_page_context("import"),
+            **header,
         },
     )
 
@@ -1062,7 +1141,16 @@ async def transaction_import_submit(
     user: AuthUser = Depends(require_user),
     portfolio_client: PortfolioClient = Depends(get_portfolio_client),
 ):
-    form_context = {"user": user, "account_label": account_label, "imported": None}
+    form_context = {
+        "user": user,
+        "account_label": account_label,
+        "imported": None,
+        **_account_page_context("import"),
+    }
+
+    async def load_account_header() -> dict:
+        return await _account_header_context(portfolio_client, user.user_id, account_label)
+
     csrf_error = await _check_csrf(
         request,
         response,
@@ -1071,6 +1159,7 @@ async def transaction_import_submit(
         "transactions_import.html",
         "import_transactions",
         csrf_token,
+        extra_context_loader=load_account_header,
         **form_context,
     )
     if csrf_error is not None:
@@ -1086,6 +1175,7 @@ async def transaction_import_submit(
             "transactions_import.html",
             "That file is too large (20MB limit).",
             status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            extra_context_loader=load_account_header,
             **form_context,
         )
 
@@ -1112,6 +1202,7 @@ async def transaction_import_submit(
             response,
             f"/transactions/import?account={quote(account_label)}&imported={result.rows_saved}",
         ),
+        extra_context_loader=load_account_header,
         **form_context,
     )
 
@@ -1166,28 +1257,20 @@ async def portfolio_page(
     portfolio_client: PortfolioClient = Depends(get_portfolio_client),
 ):
     csrf_token = ensure_csrf_cookie(request, response, cookie_secure=settings.cookie_secure)
-    try:
-        positions, returns, error = await _load_portfolio_view(
-            portfolio_client, user.user_id, account
+    header, view = await asyncio.gather(
+        _account_header_context(portfolio_client, user.user_id, account),
+        _load_portfolio_view(portfolio_client, user.user_id, account),
+        return_exceptions=True,
+    )
+    if isinstance(header, BaseException):
+        raise header
+    if isinstance(view, AccountNotFound) or header["account_known"] is False:
+        return _render_account_not_found(
+            request, response, templates, user=user, csrf_token=csrf_token
         )
-    except AccountNotFound:
-        return _render(
-            request,
-            response,
-            templates,
-            "portfolio.html",
-            {
-                "user": user,
-                "csrf_token": csrf_token,
-                "account_label": account,
-                "not_found": True,
-                "positions": [],
-                "return_points": [],
-                "chart_payload": [],
-                "error": None,
-            },
-            status_code=status.HTTP_404_NOT_FOUND,
-        )
+    if isinstance(view, BaseException):
+        raise view
+    positions, returns, error = view
 
     open_positions = filter_open_positions(positions)
     return_points = aggregate_portfolio_returns(returns)
@@ -1204,10 +1287,11 @@ async def portfolio_page(
             "user": user,
             "csrf_token": csrf_token,
             "account_label": account,
-            "not_found": False,
             "positions": open_positions,
             "return_points": return_points,
             "chart_payload": chart_payload,
             "error": error,
+            **_account_page_context("holdings"),
+            **header,
         },
     )

@@ -43,13 +43,13 @@ numbers. Code comments and docs throughout the repo say "task 9", "task 13", and
 | UI-1 | [Design-system foundation](#ui-1-design-system-foundation) | — | done |
 | UI-2 | [Dark palette proposal & brand sign-off](#ui-2-dark-palette-proposal--brand-sign-off) | — | done |
 | UI-3 | [Dark mode](#ui-3-dark-mode) | UI-1, UI-2 | ready |
-| UI-4 | [App shell & navigation](#ui-4-app-shell--navigation) | UI-1 | ready |
+| UI-4 | [App shell & navigation](#ui-4-app-shell--navigation) | UI-1 | done |
 | UI-5 | [Number & date formatting](#ui-5-number--date-formatting) | — | ready |
 | UI-6 | [Account portfolio page redesign](#ui-6-account-portfolio-page-redesign) | UI-4, UI-5 | blocked |
 | UI-7 | [Data freshness & rebuild feedback](#ui-7-data-freshness--rebuild-feedback) | UI-6 | blocked |
 | UI-8 | [Transactions list](#ui-8-transactions-list) | UI-4, UI-5 | blocked |
 | UI-9 | [Transaction entry form UX](#ui-9-transaction-entry-form-ux) | UI-1 | ready |
-| UI-10 | [Accounts & import pages](#ui-10-accounts--import-pages) | UI-4 | blocked |
+| UI-10 | [Accounts & import pages](#ui-10-accounts--import-pages) | UI-4 | ready |
 | UI-11 | [Home dashboard](#ui-11-home-dashboard) | UI-6 | blocked |
 | UI-12 | [Feedback, loading & error states](#ui-12-feedback-loading--error-states) | UI-1, UI-2 | ready |
 | UI-13 | [Responsive & accessibility pass](#ui-13-responsive--accessibility-pass) | UI-3, UI-6, UI-7, UI-8, UI-9, UI-10, UI-11, UI-12 | blocked |
@@ -168,7 +168,7 @@ Tests: `POST /theme` (each valid value, invalid value rejected, CSRF required, c
 
 ### UI-4. App shell & navigation
 
-**Status:** ready
+**Status:** done
 
 Depends on UI-1. Today the nav has one "Portfolio" link that goes to `/accounts`, with no active
 state; nothing ties an account's pages together.
@@ -185,6 +185,19 @@ state; nothing ties an account's pages together.
 
 Done when: every page is reachable from the nav without typing a URL, and the current page is
 visibly marked.
+
+As built:
+- The active state is `aria-current="page"`, rendered from `nav_active` / `account_nav_active`
+  and styled off that attribute (gold underline plus weight), so there's no new class or script.
+- **The Transactions sub-nav link ships now and 404s until UI-8** (user's decision), so the
+  sub-nav doesn't change shape later.
+- **Unknown accounts now 404** on `/transactions/new` and `/transactions/import`, as on
+  `/portfolio`, via a shared `account_not_found.html` (user's decision). If `list_accounts`
+  fails, the pages don't 404: they degrade to a label-only header with no switcher.
+- **The switcher is a plain GET form with a "Switch" button, with no htmx enhancement.** An
+  htmx body swap would skip `portfolio_chart.js`'s `DOMContentLoaded` start, leaving
+  `/portfolio` without its chart. It is shown only when the user has two or more accounts.
+- The header wraps at phone width, with the nav on its own row. No hamburger menu, so no JS.
 
 ### UI-5. Number & date formatting
 
@@ -278,8 +291,11 @@ Depends on UI-4 and UI-5. There's no way to see what has been entered for an acc
   amount + currency, plus an empty state linking to Add / Import.
 - New `PortfolioClient.list_transactions` method and a `Transaction` dataclass mirroring
   `portfolio`'s `TransactionResponse`.
-- Reached from the account sub-nav (UI-4). Pagination is deferred unless the endpoint already
-  supports it; check before building.
+- Reached from the account sub-nav (UI-4), whose Transactions link already points to
+  `/transactions?account=`. The route renders `partials/_account_header.html` with
+  `account_nav_active="transactions"` and reuses `_account_header_context` for the
+  unknown-account 404. Pagination is deferred unless the endpoint already supports it; check
+  before building.
 
 Tests: client method; route (login required, happy path, empty, unknown account → 404).
 
