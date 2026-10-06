@@ -1,6 +1,5 @@
 <svg viewBox="0 0 200 260" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Stakehold keep mark">
-  <rect x="65" y="90" width="70" height="90" fill="#C99A3E"/>
-  <path d="M 90 180 L 90 162 A 10 10 0 0 1 110 162 L 110 180 Z" fill="#2B2B28"/>
+  <path d="M 65 90 H 135 V 180 H 65 Z M 90 180 L 90 162 A 10 10 0 0 1 110 162 L 110 180 Z" fill="#C99A3E" fill-rule="evenodd"/>
   <rect x="67" y="76" width="10" height="14" fill="#C99A3E"/>
   <rect x="81" y="70" width="10" height="20" fill="#C99A3E"/>
   <rect x="95" y="64" width="10" height="26" fill="#C99A3E"/>

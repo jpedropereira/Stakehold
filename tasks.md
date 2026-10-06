@@ -13,7 +13,7 @@ numbers. Code comments and docs throughout the repo say "task 9", "task 13", and
 **Status** is one of:
 - `done`: implemented, tested, merged.
 - `ready`: every dependency is `done`, so it can be started now.
-- `blocked`: waiting on at least one dependency (or, for UI-2, on the user's sign-off).
+- `blocked`: waiting on at least one dependency.
 
 ## Constraints that apply to every task
 
@@ -41,7 +41,7 @@ numbers. Code comments and docs throughout the repo say "task 9", "task 13", and
 | ID | Task | Depends on | Status |
 |----|------|-------------|--------|
 | UI-1 | [Design-system foundation](#ui-1-design-system-foundation) | — | ready |
-| UI-2 | [Dark palette proposal & brand sign-off](#ui-2-dark-palette-proposal--brand-sign-off) | — | ready |
+| UI-2 | [Dark palette proposal & brand sign-off](#ui-2-dark-palette-proposal--brand-sign-off) | — | done |
 | UI-3 | [Dark mode](#ui-3-dark-mode) | UI-1, UI-2 | blocked |
 | UI-4 | [App shell & navigation](#ui-4-app-shell--navigation) | UI-1 | blocked |
 | UI-5 | [Number & date formatting](#ui-5-number--date-formatting) | — | ready |
@@ -89,7 +89,7 @@ alias block; the existing hex-scan and no-inline-script tests still pass.
 
 ### UI-2. Dark palette proposal & brand sign-off
 
-**Status:** ready
+**Status:** done (signed off 2026-10-07)
 
 The brand defines light surfaces only, plus `--forest-on-dark` and `--oxblood-on-dark` for figures
 on a stone card. Dark mode needs a full set, and the palette is the user's to own.
@@ -107,6 +107,22 @@ on a stone card. Dark mode needs a full set, and the palette is the user's to ow
 
 **Gate**: present the values to the user and get explicit sign-off before UI-3 builds on them. Only
 then do the tokens land in `brand/tokens.css`. Flip to `done` on sign-off plus the charter update.
+
+**Outcome.** The scope grew during the task. Measuring the existing tokens showed three light-mode
+AA failures: `--stone-600` on `--parchment-deep` at 4.14:1, gold as a focus ring on parchment at
+2.22:1, and `--hairline` as an input border at about 1.3:1. They were fixed here and signed off
+together with the dark set:
+- **Light fixes:** `--stone-600` darkened to `#5F5E57`, plus new `--gold-deep` (focus ring only)
+  and `--control-border`.
+- **Dark set:** new `--stone-deep`, `--parchment-muted`, `--hairline-on-dark` and
+  `--control-border-on-dark`. Cards use `--stone`, text uses `--parchment`, the focus ring is
+  `--gold`.
+- **Error treatment:** an *ink rule* (a 3px bar in the text color, an icon and a bold lead word),
+  neither gold nor oxblood.
+
+These are raw tokens only. The semantic aliases and the `[data-theme]` blocks are still UI-1 and
+UI-3. Ratios are recorded in chapter II of the charter and enforced by
+`services/web/tests/unit/test_brand_contrast.py`.
 
 ### UI-3. Dark mode
 
@@ -346,7 +362,9 @@ Last, once every page exists in its new form.
 
 - Tables (holdings, transactions) reflow at phone width (stacked rows or a horizontally
   scrollable container with a visible cue). No page scrolls horizontally at 360 px.
-- Contrast audit of every page in both themes against WCAG AA; fix any regressions.
+- Contrast audit of every page in both themes against WCAG AA; fix any regressions. Token-level
+  pairs are already enforced by `test_brand_contrast.py` (UI-2), so this audit is about how pages
+  *use* the tokens (wrong token on a surface, opacity, text over images).
 - Keyboard-only walkthrough of every flow (signup → account → add → view, and the admin
   mapping flow), with visible focus throughout.
 - A Playwright screenshot script under `services/web/` (Playwright is already a workspace
