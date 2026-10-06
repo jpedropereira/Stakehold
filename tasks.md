@@ -40,15 +40,15 @@ numbers. Code comments and docs throughout the repo say "task 9", "task 13", and
 
 | ID | Task | Depends on | Status |
 |----|------|-------------|--------|
-| UI-1 | [Design-system foundation](#ui-1-design-system-foundation) | — | ready |
+| UI-1 | [Design-system foundation](#ui-1-design-system-foundation) | — | done |
 | UI-2 | [Dark palette proposal & brand sign-off](#ui-2-dark-palette-proposal--brand-sign-off) | — | ready |
 | UI-3 | [Dark mode](#ui-3-dark-mode) | UI-1, UI-2 | blocked |
-| UI-4 | [App shell & navigation](#ui-4-app-shell--navigation) | UI-1 | blocked |
+| UI-4 | [App shell & navigation](#ui-4-app-shell--navigation) | UI-1 | ready |
 | UI-5 | [Number & date formatting](#ui-5-number--date-formatting) | — | ready |
 | UI-6 | [Account portfolio page redesign](#ui-6-account-portfolio-page-redesign) | UI-4, UI-5 | blocked |
 | UI-7 | [Data freshness & rebuild feedback](#ui-7-data-freshness--rebuild-feedback) | UI-6 | blocked |
 | UI-8 | [Transactions list](#ui-8-transactions-list) | UI-4, UI-5 | blocked |
-| UI-9 | [Transaction entry form UX](#ui-9-transaction-entry-form-ux) | UI-1 | blocked |
+| UI-9 | [Transaction entry form UX](#ui-9-transaction-entry-form-ux) | UI-1 | ready |
 | UI-10 | [Accounts & import pages](#ui-10-accounts--import-pages) | UI-4 | blocked |
 | UI-11 | [Home dashboard](#ui-11-home-dashboard) | UI-6 | blocked |
 | UI-12 | [Feedback, loading & error states](#ui-12-feedback-loading--error-states) | UI-1, UI-2 | blocked |
@@ -61,7 +61,7 @@ and a decision, not code. UI-3 (dark mode) is the first task to need both UI-1 a
 
 ### UI-1. Design-system foundation
 
-**Status:** ready
+**Status:** done
 
 Preparatory refactoring, done first so that every later task (and dark mode in particular) is a
 token swap rather than a rule-by-rule rewrite. Today `web.css` styles `.auth-card`, `.welcome-card`
@@ -86,6 +86,19 @@ Files: `services/web/src/web/static/web.css`, every template under `templates/`,
 Done when: every page looks essentially unchanged in light mode; a new test asserts that `web.css`
 references brand color tokens (`--stone`, `--parchment`, `--gold`, …) only inside the semantic
 alias block; the existing hex-scan and no-inline-script tests still pass.
+
+As built:
+- One semantic token added beyond the list above: `--on-accent`, for text on a gold button. It
+  stays stone in either theme, while `--text` flips, so UI-2/UI-3 must give it a dark value
+  separately (likely unchanged).
+- `--focus-ring` is `--stone` in light mode (user's decision): gold on parchment is ~2.2:1,
+  under WCAG's 3:1. UI-2 picks the dark value. Gold on stone (~5.5:1) passes.
+- `.btn-secondary`, `.field-help` and `.field-error` were deferred to the first task that uses
+  them (UI-10, UI-9, UI-12). Two new tests forbid CSS classes that no template uses, and template
+  classes `web.css` doesn't define, so defining them now would have meant unused CSS plus an
+  allowlist.
+- `portfolio_chart.js` still reads brand tokens directly. Switching it to `--gain`/`--loss`/
+  `--border` stays with UI-3, as planned.
 
 ### UI-2. Dark palette proposal & brand sign-off
 
@@ -139,7 +152,7 @@ Tests: `POST /theme` (each valid value, invalid value rejected, CSRF required, c
 
 ### UI-4. App shell & navigation
 
-**Status:** blocked
+**Status:** ready
 
 Depends on UI-1. Today the nav has one "Portfolio" link that goes to `/accounts`, with no active
 state; nothing ties an account's pages together.
@@ -256,7 +269,7 @@ Tests: client method; route (login required, happy path, empty, unknown account 
 
 ### UI-9. Transaction entry form UX
 
-**Status:** blocked
+**Status:** ready
 
 Depends on UI-1. Partly done on main since this was planned: the instrument is now picked from
 `data-store`'s tickers (a `<datalist>`), the identifier-kind field is gone, and buys and sells
