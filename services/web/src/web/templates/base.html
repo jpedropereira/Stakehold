@@ -11,23 +11,29 @@
   <script src="/static/htmx-error-swap.js" defer></script>
 </head>
 <body>
+  <a class="skip-link" href="#main">Skip to content</a>
   <header class="site-header">
-    <a href="/" class="brand-mark">
-      <img src="/brand/logos/logo-stone.svg" alt="Stakehold">
-    </a>
-    {% if user %}
-      <nav class="site-nav">
-        <a href="/accounts">Portfolio</a>
-        {% if user.is_admin %}<a href="/admin">Admin</a>{% endif %}
-      </nav>
-      <form action="/logout" method="post" class="logout-form">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <span class="user-name">{{ user.display_name }}</span>
-        <button type="submit" class="btn btn-ghost">Log out</button>
-      </form>
-    {% endif %}
+    <div class="site-header-inner">
+      <a href="/" class="brand-mark">
+        <img src="/brand/logos/logo-stone.svg" alt="Stakehold">
+      </a>
+      {% if user %}
+        {# Each route sets nav_active; the current section is marked for screen readers and styled
+           off the same attribute, so the two can't disagree. #}
+        <nav class="site-nav" aria-label="Main">
+          <a href="/"{% if nav_active == "overview" %} aria-current="page"{% endif %}>Overview</a>
+          <a href="/accounts"{% if nav_active == "accounts" %} aria-current="page"{% endif %}>Accounts</a>
+          {% if user.is_admin %}<a href="/admin"{% if nav_active == "admin" %} aria-current="page"{% endif %}>Admin</a>{% endif %}
+        </nav>
+        <form action="/logout" method="post" class="logout-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <span class="user-name">{{ user.display_name }}</span>
+          <button type="submit" class="btn btn-ghost">Log out</button>
+        </form>
+      {% endif %}
+    </div>
   </header>
-  <main class="page">
+  <main id="main" class="page" tabindex="-1">
     {% block content %}{% endblock %}
   </main>
 </body>

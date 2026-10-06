@@ -221,3 +221,16 @@ def test_account_row_wraps():
     assert any(
         re.search(r"flex-wrap\s*:\s*wrap", body) for body in row_rules
     ), ".account-row does not wrap"
+
+
+def test_site_header_wraps_at_phone_width():
+    """The header holds the mark, three nav links, the user's name and a log-out button, which
+    is wider than a 360px phone. At phone width it must wrap, and the nav must take a row of its
+    own, rather than push the page sideways."""
+    css = _css_without_comments()
+    phone = re.search(r"@media \(max-width: 480px\)\s*\{(.*)\}\s*$", css, re.DOTALL)
+    assert phone, "web.css has no phone-width media query"
+    rules = dict((sel.strip(), body) for sel, body in _RULE.findall(phone.group(1)))
+
+    assert re.search(r"flex-wrap\s*:\s*wrap", rules.get(".site-header-inner", ""))
+    assert re.search(r"flex-basis\s*:\s*100%", rules.get(".site-nav", ""))

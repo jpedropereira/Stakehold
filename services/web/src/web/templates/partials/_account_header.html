@@ -1,0 +1,31 @@
+{# Shared by every account-scoped page. Expects account_label, account (or none when the account
+   list couldn't be loaded), accounts, and account_nav_active from the route. #}
+{% set account_query = "?account=" ~ (account_label | urlencode) %}
+<header class="account-header">
+  <div class="account-heading">
+    <h1>{{ account_label }}</h1>
+    {% if account %}<span class="account-broker">{{ account.broker }}</span>{% endif %}
+  </div>
+  <nav class="account-subnav" aria-label="Account">
+    {% for key, href, label in [
+      ("holdings", "/portfolio", "Holdings"),
+      ("transactions", "/transactions", "Transactions"),
+      ("add", "/transactions/new", "Add"),
+      ("import", "/transactions/import", "Import"),
+    ] %}
+    <a href="{{ href }}{{ account_query }}"{% if account_nav_active == key %} aria-current="page"{% endif %}>{{ label }}</a>
+    {% endfor %}
+  </nav>
+  {% if accounts|length > 1 %}
+  {# A plain GET back to this same page: switching keeps the visitor on Holdings, Add or Import. #}
+  <form class="account-switcher" method="get" action="{{ request.url.path }}">
+    <label for="account-switch">Account</label>
+    <select id="account-switch" name="account">
+      {% for option in accounts %}
+      <option value="{{ option.account_label }}"{% if option.account_label == account_label %} selected{% endif %}>{{ option.account_label }}</option>
+      {% endfor %}
+    </select>
+    <button type="submit" class="btn btn-ghost">Switch</button>
+  </form>
+  {% endif %}
+</header>
