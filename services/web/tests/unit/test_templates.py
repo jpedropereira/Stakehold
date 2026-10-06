@@ -188,3 +188,36 @@ def test_form_controls_use_the_control_border():
                 offenders.append(f"{selectors.strip()} {{ {declaration.strip()} }}")
 
     assert offenders == [], f"form control(s) bordered with the decorative hairline: {offenders}"
+
+
+def test_decimal_inputs_are_mono():
+    """The brand sets every number in mono. A field that takes a number (`inputmode="decimal"`:
+    amount, quantity, price, FX rate, fees) must be marked `.mono`, or what the user types renders
+    in Inter."""
+    offenders = {}
+    for path in sorted(_TEMPLATES_DIR.rglob("*.html")):
+        for tag in re.findall(r"<input\b[^>]*>", path.read_text()):
+            if 'inputmode="decimal"' not in tag:
+                continue
+            classes = re.search(r'\bclass="([^"]*)"', tag)
+            if not classes or "mono" not in classes.group(1).split():
+                name = re.search(r'\bname="([^"]*)"', tag)
+                offenders.setdefault(str(path.relative_to(_SRC_DIR)), []).append(
+                    name.group(1) if name else tag
+                )
+
+    assert offenders == {}, f"decimal input(s) not marked .mono: {offenders}"
+
+
+def test_account_row_wraps():
+    """Regression: an account row holds a label, a broker and three links on one flex line,
+    which is wider than a 360px phone, so the accounts page scrolled horizontally. The row must
+    be allowed to wrap."""
+    css = _css_without_comments()
+    row_rules = [
+        body for selector, body in _RULE.findall(css) if selector.strip() == ".account-row"
+    ]
+
+    assert any(
+        re.search(r"flex-wrap\s*:\s*wrap", body) for body in row_rules
+    ), ".account-row does not wrap"
