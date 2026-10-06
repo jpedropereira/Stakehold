@@ -259,7 +259,7 @@ extending past that point.
   a violation at all (see the `native_currency`/`average_cost_eur` notes above). Still not verified
   against a real multi-currency same-ticker case in a single account — only exercised by tests.
 - **The `data-store` read API** this schema's `return_snapshots` rebuild depends on now exists
-  (task 3 of [`tasks.md`](../../../tasks.md)) — see `architecture.md`'s cross-service prerequisite.
+  (walking-skeleton task 3, [`walking-skeleton.md`](../../../docs/roadmap-archive/walking-skeleton.md)) — see `architecture.md`'s cross-service prerequisite.
   **Built as of task 8**: `datastore_client/http_client.py`'s `get_price_series`,
   `get_fx_rate_series`, and `get_ticker_info`, alongside `get_fx_rate` (task 14). `accounts`,
   `transactions`, and `position_snapshots` need nothing from it either way.

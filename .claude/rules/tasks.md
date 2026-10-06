@@ -2,9 +2,14 @@
 
 ## Scope
 
-`tasks.md`, at the repo root, is the cross-service roadmap tracking the path to a basic working
-app across all four services — one row per task, its dependencies, and its status (`done` /
-`ready` / `blocked`).
+`tasks.md`, at the repo root, is the roadmap for the current chunk of planned work, one row per
+task with its dependencies and its status (`done` / `ready` / `blocked`). Its intro names the
+chunk (currently the UI/UX chunk).
+
+When every task in a chunk is `done` and the next chunk is planned, move the old `tasks.md` into
+`docs/roadmap-archive/` (verbatim apart from relative links) and start a fresh one. Give each chunk
+its own task-ID prefix (e.g. `UI-3`) so new IDs never collide with the bare "task N" references
+to the walking-skeleton chunk that code comments and docs throughout the repo already use.
 
 ## When to Update
 

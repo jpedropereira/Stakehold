@@ -6,7 +6,8 @@ one shared Docker network with in-network service discovery, then a manual walk-
 whole flow: register → login → add account → enter/import transactions → rebuild positions/returns
 → view in the web UI.
 
-This is deliberately manual, not a CI step — see `tasks.md`'s own task 13 entry for why.
+This is deliberately manual, not a CI step — see walking-skeleton task 13 in
+[`roadmap-archive/walking-skeleton.md`](roadmap-archive/walking-skeleton.md) for why.
 
 ## How the services find each other
 
