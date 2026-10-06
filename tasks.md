@@ -44,10 +44,10 @@ numbers. Code comments and docs throughout the repo say "task 9", "task 13", and
 | UI-2 | [Dark palette proposal & brand sign-off](#ui-2-dark-palette-proposal--brand-sign-off) | — | done |
 | UI-3 | [Dark mode](#ui-3-dark-mode) | UI-1, UI-2 | done |
 | UI-4 | [App shell & navigation](#ui-4-app-shell--navigation) | UI-1 | done |
-| UI-5 | [Number & date formatting](#ui-5-number--date-formatting) | — | ready |
-| UI-6 | [Account portfolio page redesign](#ui-6-account-portfolio-page-redesign) | UI-4, UI-5 | blocked |
+| UI-5 | [Number & date formatting](#ui-5-number--date-formatting) | — | done |
+| UI-6 | [Account portfolio page redesign](#ui-6-account-portfolio-page-redesign) | UI-4, UI-5 | ready |
 | UI-7 | [Data freshness & rebuild feedback](#ui-7-data-freshness--rebuild-feedback) | UI-6 | blocked |
-| UI-8 | [Transactions list](#ui-8-transactions-list) | UI-4, UI-5 | blocked |
+| UI-8 | [Transactions list](#ui-8-transactions-list) | UI-4, UI-5 | ready |
 | UI-9 | [Transaction entry form UX](#ui-9-transaction-entry-form-ux) | UI-1 | ready |
 | UI-10 | [Accounts & import pages](#ui-10-accounts--import-pages) | UI-4 | ready |
 | UI-11 | [Home dashboard](#ui-11-home-dashboard) | UI-6 | blocked |
@@ -224,7 +224,7 @@ As built:
 
 ### UI-5. Number & date formatting
 
-**Status:** ready
+**Status:** done
 
 Figures are printed as raw `Decimal`s today: `average_cost_eur` at full precision, no thousands
 separators, percentages computed inline in the template (`(pct * 100) | round(2)`).
@@ -246,9 +246,19 @@ the import confirmation today). Pick one locale convention and record it in
 Tests: `tests/unit/test_formatting.py` covering `None`, zero, negative, large and many-decimal
 inputs, and the `−` sign character.
 
+As built:
+- **Dates are ISO (`2026-10-06`)**, not `6 Oct 2026` (user's decision). `date` also accepts a
+  `datetime`, and the admin mappings page's `updated_at` now uses it too.
+- **Zero is unsigned** (user's decision): `signed_money(0)` is `€0.00` and `pct(0)` is `0.00%`.
+  The sign is chosen after half-up rounding, so `-0.001` also renders `€0.00`. `money` puts the
+  `−` before the `€` (`−€1,234.50`).
+- `qty` groups thousands (`1,200`) and is also used for the import confirmation's row count.
+- The `portfolio.html` column headers lose their "(EUR)" suffix, since each figure now carries `€`.
+  The template's gain/loss class tests (`>= 0`) are unchanged; UI-6 restyles that page anyway.
+
 ### UI-6. Account portfolio page redesign
 
-**Status:** blocked
+**Status:** ready
 
 Depends on UI-4 (account header and sub-nav) and UI-5 (formatting). `/portfolio?account=` shows
 only quantity, average cost and cost basis today, so a user can't see what the holding is
@@ -304,7 +314,7 @@ states, and for the admin-only mapping link.
 
 ### UI-8. Transactions list
 
-**Status:** blocked
+**Status:** ready
 
 Depends on UI-4 and UI-5. There's no way to see what has been entered for an account, although
 `portfolio` exposes `GET /transactions`.
@@ -352,7 +362,7 @@ field without JS (template test); existing submit tests unchanged.
 
 ### UI-10. Accounts & import pages
 
-**Status:** blocked
+**Status:** ready
 
 Depends on UI-4.
 
