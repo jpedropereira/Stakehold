@@ -33,9 +33,11 @@
     <li class="account-row">
       <span class="account-label">{{ account.account_label }}</span>
       <span class="account-broker">{{ account.broker }}</span>
-      <a href="/transactions/new?account={{ account.account_label | urlencode }}">Add transaction</a>
-      <a href="/transactions/import?account={{ account.account_label | urlencode }}">Import file</a>
-      <a href="/portfolio?account={{ account.account_label | urlencode }}">View portfolio</a>
+      <span class="account-actions">
+        <a href="/transactions/new?account={{ account.account_label | urlencode }}">Add transaction</a>
+        <a href="/transactions/import?account={{ account.account_label | urlencode }}">Import file</a>
+        <a href="/portfolio?account={{ account.account_label | urlencode }}">View portfolio</a>
+      </span>
     </li>
     {% endfor %}
   </ul>

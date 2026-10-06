@@ -254,10 +254,12 @@ a {
   padding: 0;
 }
 
+/* Wraps so a label, broker and three links never push a phone-width page sideways. */
 .account-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-4);
+  gap: var(--space-1) var(--space-4);
   padding: var(--space-3) 0;
   border-bottom: 1px solid var(--border);
 }
@@ -274,13 +276,17 @@ a {
   color: var(--text-muted);
 }
 
-.account-row a {
-  font: var(--text-caption);
+/* The links wrap as one group, so a narrow row breaks between the account and its actions
+   rather than in the middle of the actions. */
+.account-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
   margin-left: auto;
 }
 
-.account-row a + a {
-  margin-left: var(--space-3);
+.account-actions a {
+  font: var(--text-caption);
 }
 
 /* ---- tables and charts ---- */

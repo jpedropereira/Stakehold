@@ -192,3 +192,17 @@ def test_decimal_inputs_are_mono():
                 )
 
     assert offenders == {}, f"decimal input(s) not marked .mono: {offenders}"
+
+
+def test_account_row_wraps():
+    """Regression: an account row holds a label, a broker and three links on one flex line,
+    which is wider than a 360px phone, so the accounts page scrolled horizontally. The row must
+    be allowed to wrap."""
+    css = _css_without_comments()
+    row_rules = [
+        body for selector, body in _RULE.findall(css) if selector.strip() == ".account-row"
+    ]
+
+    assert any(
+        re.search(r"flex-wrap\s*:\s*wrap", body) for body in row_rules
+    ), ".account-row does not wrap"
