@@ -100,11 +100,17 @@ def test_brand_token_pair_meets_wcag_aa(fg, bg, minimum):
     assert ratio >= minimum, f"{fg} on {bg} is {ratio:.2f}:1, needs {minimum}:1"
 
 
-# web.css's semantic aliases, measured against both surfaces they're drawn on. The token-level
-# pairs above prove a good combination exists; this proves web.css actually picked it, e.g. that
-# inputs are bordered with a control border rather than the decorative hairline.
+# web.css's semantic aliases, measured against both surfaces they're drawn on, in each theme. The
+# token-level pairs above prove a good combination exists; this proves web.css actually picked it,
+# e.g. that inputs are bordered with a control border rather than the decorative hairline. The
+# system-dark block isn't listed: test_templates.py asserts it's identical to the manual one.
+_THEMES = {
+    "light": _ROOT_BLOCK,
+    "dark": re.compile(r':root\[data-theme="dark"\]\s*\{[^}]*\}'),
+}
 _ALIAS_PAIRS = [
-    (fg, bg, minimum)
+    (theme, fg, bg, minimum)
+    for theme in _THEMES
     for fg, minimum in (
         ("--text", _TEXT),
         ("--text-muted", _TEXT),
@@ -117,18 +123,21 @@ _ALIAS_PAIRS = [
 ]
 
 
-def _web_css_aliases():
-    block = _ROOT_BLOCK.search(re.sub(r"/\*.*?\*/", "", _WEB_CSS_PATH.read_text(), flags=re.S))
-    assert block, "web.css has no :root semantic alias block"
+def _web_css_aliases(theme):
+    css = re.sub(r"/\*.*?\*/", "", _WEB_CSS_PATH.read_text(), flags=re.S)
+    block = _THEMES[theme].search(css)
+    assert block, f"web.css has no {theme} semantic alias block"
     return dict(_ALIAS.findall(block.group(0)))
 
 
 @pytest.mark.parametrize(
-    "fg, bg, minimum", _ALIAS_PAIRS, ids=[f"{f} on {b}" for f, b, _ in _ALIAS_PAIRS]
+    "theme, fg, bg, minimum",
+    _ALIAS_PAIRS,
+    ids=[f"{t}: {f} on {b}" for t, f, b, _ in _ALIAS_PAIRS],
 )
-def test_web_css_semantic_alias_pair_meets_wcag_aa(fg, bg, minimum):
-    aliases, tokens = _web_css_aliases(), _tokens()
-    assert fg in aliases and bg in aliases, f"web.css :root doesn't alias {fg} or {bg}"
+def test_web_css_semantic_alias_pair_meets_wcag_aa(theme, fg, bg, minimum):
+    aliases, tokens = _web_css_aliases(theme), _tokens()
+    assert fg in aliases and bg in aliases, f"web.css {theme} block doesn't alias {fg} or {bg}"
 
     surface = _rgba(tokens[aliases[bg]])
     ratio = _contrast(_blend(_rgba(tokens[aliases[fg]]), surface), surface[:3])
@@ -136,10 +145,11 @@ def test_web_css_semantic_alias_pair_meets_wcag_aa(fg, bg, minimum):
     assert ratio >= minimum, f"{fg} ({aliases[fg]}) on {bg} is {ratio:.2f}:1, needs {minimum}:1"
 
 
-def test_web_css_aliases_are_not_self_referencing():
+@pytest.mark.parametrize("theme", _THEMES)
+def test_web_css_aliases_are_not_self_referencing(theme):
     """`--x: var(--x)` is a CSS dependency cycle: the browser makes --x invalid, but resolving it
     through tokens.css (as the contrast test above does) would still find a value and pass. A
     semantic alias must have a different name from the brand token it points at."""
-    cycles = sorted(name for name, target in _web_css_aliases().items() if name == target)
+    cycles = sorted(name for name, target in _web_css_aliases(theme).items() if name == target)
 
-    assert cycles == [], f"web.css alias(es) reference themselves: {cycles}"
+    assert cycles == [], f"web.css {theme} alias(es) reference themselves: {cycles}"

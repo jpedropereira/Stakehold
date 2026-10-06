@@ -11,6 +11,8 @@ from web.api.deps import AdminRequired, AuthRequired
 from web.api.htmx import htmx_or_redirect
 from web.api.routes import health_router, router
 from web.api.security_headers import SecurityHeadersMiddleware
+from web.api.theme import router as theme_router
+from web.api.theme import theme_context
 from web.auth_client.http_client import HttpAuthClient
 from web.formatting import FILTERS
 from web.portfolio_client.http_client import HttpPortfolioClient
@@ -38,7 +40,9 @@ def _lifespan(settings: Settings):
             app.state.portfolio_client = HttpPortfolioClient(
                 portfolio_http_client, settings.portfolio_internal_secret
             )
-            app.state.templates = Jinja2Templates(directory=_TEMPLATES_DIR)
+            app.state.templates = Jinja2Templates(
+                directory=_TEMPLATES_DIR, context_processors=[theme_context]
+            )
             app.state.templates.env.filters.update(FILTERS)
             logger.info(
                 "web api: started, auth_api_url=%s, portfolio_api_url=%s.",
@@ -63,6 +67,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(health_router)
     app.include_router(router)
+    app.include_router(theme_router)
 
     @app.exception_handler(AuthRequired)
     async def _auth_required(request: Request, _exc: AuthRequired) -> Response:
