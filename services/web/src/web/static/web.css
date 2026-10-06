@@ -86,9 +86,12 @@ a {
   color: var(--text-muted);
 }
 
+/* A column, not a row: several cards on one page stack instead of squeezing side by side (and a
+   centered row that overflows clips its first card off the left edge, unscrollable). */
 .page {
   display: flex;
-  justify-content: center;
+  flex-direction: column;
+  align-items: center;
   max-width: var(--content-max);
   margin-inline: auto;
   padding: var(--space-8) var(--space-5);

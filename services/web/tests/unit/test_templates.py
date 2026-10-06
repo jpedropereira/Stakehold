@@ -15,6 +15,7 @@ _SELECTOR_LIST = re.compile(r"([^{}]+)\{")
 _CLASS_SELECTOR = re.compile(r"\.([a-zA-Z_][\w-]*)")
 _JINJA_TAG = re.compile(r"\{\{.*?\}\}|\{%.*?%\}", re.DOTALL)
 _CLASS_ATTR = re.compile(r'\bclass="([^"]*)"')
+_RULE = re.compile(r"([^{}]+)\{([^{}]*)\}")
 
 
 def test_web_css_has_no_hardcoded_hex_colors():
@@ -152,10 +153,23 @@ def test_mono_inputs_use_the_figure_font():
     render in Inter. The brand puts every ticker in mono, so web.css needs an `input.mono` rule
     that sets the figure font explicitly."""
     css = _css_without_comments()
-    rules = re.findall(r"([^{}]+)\{([^{}]*)\}", css)
+    rules = _RULE.findall(css)
 
     mono_input_rules = [body for selector, body in rules if "input.mono" in selector]
 
     assert any(
         re.search(r"font\s*:\s*var\(--text-figure\)", body) for body in mono_input_rules
     ), "web.css has no input.mono rule setting font: var(--text-figure)"
+
+
+def test_page_stacks_its_cards_vertically():
+    """Regression: `.page` was a centered flex *row*, so a page with several cards (accounts,
+    portfolio, admin mappings) squeezed them side by side, and once they overflowed, the
+    centering pushed the first card off the left edge where it can't be scrolled to. The page
+    container must lay its children out as a column."""
+    css = _css_without_comments()
+    page_rules = [body for selector, body in _RULE.findall(css) if selector.strip() == ".page"]
+
+    assert any(
+        re.search(r"flex-direction\s*:\s*column", body) for body in page_rules
+    ), ".page does not stack its children in a column"
