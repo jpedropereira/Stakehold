@@ -2,7 +2,7 @@
 {% block title %}Portfolio — {{ account_label }} — Stakehold{% endblock %}
 {% block content %}
 {% if not_found %}
-<section class="entry-card">
+<section class="card">
   <h1>{{ account_label }}</h1>
   <p class="entry-empty">That account doesn't exist.</p>
 </section>
@@ -11,7 +11,7 @@
 <p class="confirmation-banner">{{ error }}</p>
 {% endif %}
 
-<section class="entry-card">
+<section class="card">
   <h1>{{ account_label }} — positions</h1>
   {% if positions %}
   <table class="positions-table">
@@ -39,7 +39,7 @@
   {% endif %}
 </section>
 
-<section class="entry-card">
+<section class="card">
   <h1>Returns over time</h1>
   {% if return_points %}
   {% set latest = return_points[-1] %}

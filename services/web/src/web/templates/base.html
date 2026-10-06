@@ -23,7 +23,7 @@
       <form action="/logout" method="post" class="logout-form">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <span class="user-name">{{ user.display_name }}</span>
-        <button type="submit" class="link-button">Log out</button>
+        <button type="submit" class="btn btn-ghost">Log out</button>
       </form>
     {% endif %}
   </header>
