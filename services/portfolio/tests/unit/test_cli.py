@@ -1266,6 +1266,7 @@ def _write_result(**overrides):
         "rows_saved": 1,
         "accounts_rebuilt": 2,
         "rebuilds_failed": 0,
+        "returns_rebuilds_failed": 0,
         "mapping": _MAPPING,
     }
     result.update(overrides)
@@ -1387,3 +1388,70 @@ def test_ticker_mapping_delete_dispatches_and_reports(monkeypatch, capsys):
     assert capsys.readouterr().out == (
         "deleted SYMBOL IWDA (globex) -> IWDA.AS\n" "positions rebuilt for 1 account(s), 0 failed\n"
     )
+
+
+# --- rebuild-returns --all ---
+
+
+def test_rebuild_returns_all_dispatches_and_prints_the_summary(monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli.jobs,
+        "run_rebuild_returns_all",
+        lambda: {
+            "status": "ok",
+            "rows_saved": 15,
+            "users_rebuilt": 2,
+            "users_failed": 0,
+            "tickers_blocked": 0,
+            "pairs_failed": 0,
+        },
+    )
+
+    assert cli.main(["rebuild-returns", "--all"]) == 0
+    assert capsys.readouterr().out == (
+        "returns rebuilt for 2 user(s), 0 failed\n" "15 return snapshot(s) saved\n"
+    )
+
+
+def test_rebuild_returns_all_exits_nonzero_when_partial(monkeypatch):
+    monkeypatch.setattr(
+        cli.jobs,
+        "run_rebuild_returns_all",
+        lambda: {
+            "status": "partial",
+            "rows_saved": 5,
+            "users_rebuilt": 1,
+            "users_failed": 1,
+            "tickers_blocked": 0,
+            "pairs_failed": 0,
+        },
+    )
+
+    assert cli.main(["rebuild-returns", "--all"]) == 1
+
+
+def test_rebuild_returns_needs_exactly_one_of_user_or_all():
+    for argv in (
+        ["rebuild-returns"],
+        ["rebuild-returns", "--all", "--user", str(uuid.uuid4())],
+        ["rebuild-returns", "--all", "--account", "main"],
+    ):
+        with pytest.raises(SystemExit) as exc_info:
+            cli.main(argv)
+        assert exc_info.value.code != 0
+
+
+def test_ticker_mapping_set_exits_nonzero_when_a_returns_rebuild_failed(monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli.jobs,
+        "run_set_ticker_mapping",
+        lambda **kw: _write_result(returns_rebuilds_failed=1),
+    )
+
+    exit_code = cli.main(
+        ["ticker-mapping", "set", "--kind", "ISIN", "--identifier", "IE00B4L5Y983"]
+        + ["--ticker", "IWDA.AS", "--user", _ADMIN]
+    )
+
+    assert exit_code == 1
+    assert "returns failed for 1 account(s)" in capsys.readouterr().out

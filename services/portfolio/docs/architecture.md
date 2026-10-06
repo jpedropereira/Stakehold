@@ -525,9 +525,10 @@ identity — not column-level DDL, which needs its own sign-off pass.
 | Broker file import | `import-transactions --user <id> --file <path> --account <label>` | `POST /transactions/import` (multipart) | manual, on demand | export file, `accounts` scoped by `user_id` | `transactions` (idempotent on `(account_id, broker_transaction_ref)`) |
 | Cash-ledger import | `import-cashflow --user <id> --file <path> --account <label>` | `POST /cashflows/import` (multipart) | manual, on demand | export file, `accounts` scoped by `user_id`, data-store's FX read API (`datastore_client`) for non-EUR rows | `transactions` (idempotent on `(account_id, broker_transaction_ref)`) |
 | Transaction listing | — (CLI has none) | `GET /transactions` | on demand | `transactions`, scoped through the resolved account | — (read-only report) |
-| Positions rebuild | `rebuild-positions --user <id> [--account <label>]` | `POST /positions/rebuild` | automatically after every transaction write that saves rows (see "Positions follow every transaction write") and, for each affected account, after every ticker-mapping change | `transactions`, `ticker_mappings` | `position_snapshots` |
+| Positions rebuild | `rebuild-positions --user <id> [--account <label>]` | `POST /positions/rebuild` | automatically after every transaction write that saves rows (see "Positions and returns follow every transaction write") and, for each affected account, after every ticker-mapping change | `transactions`, `ticker_mappings` | `position_snapshots` |
 | Position listing | — (CLI has none) | `GET /positions` | on demand | `position_snapshots`, latest row per ticker | — (read-only report) |
-| Returns rebuild | `rebuild-returns --user <id> [--account <label>]` | `POST /returns/rebuild` | after positions rebuild or new prices land | `position_snapshots`, `transactions` (`DIVIDEND` rows), `ticker_mappings`, `data-store` read API | `return_snapshots` |
+| Returns rebuild | `rebuild-returns --user <id> [--account <label>]` | `POST /returns/rebuild` | automatically after every positions rebuild that follows a write or a mapping change (see "Positions and returns follow every transaction write") | `position_snapshots`, `transactions` (`DIVIDEND` rows), `ticker_mappings`, `data-store` read API | `return_snapshots` |
+| Returns refresh, every user | `rebuild-returns --all` | — | every `PORTFOLIO_RETURNS_REFRESH_SECONDS` (default 6h), by the `returns-refresh` container (see "Returns follow new prices") | as for one user, for each user with an account | `return_snapshots` |
 | Return listing | — (CLI has none) | `GET /returns`, `GET /returns/latest` | on demand | `return_snapshots`, optionally filtered by ticker/date range | — (read-only report) |
 
 **No separate `brokers` table** ever materialized — `schema.md` settled on `broker` as a plain
@@ -612,11 +613,12 @@ that account currently has **zero** blocked instruments. A blocked instrument's 
 stale one at rebuild time, and "blocked means don't touch, not delete" means the ambiguous case
 must never delete. An account with any blocked instrument simply skips pruning for that run.
 
-### Positions follow every transaction write
+### Positions and returns follow every transaction write
 
 `run_add_transaction`, `run_import_transactions` and `run_import_cashflow` each end by calling
-`run_rebuild_positions` for the one account they just wrote to (`jobs._rebuild_positions_after_write`),
-and report its outcome as `positions_rebuild` alongside their own `status`.
+`run_rebuild_positions` and then `run_rebuild_returns` for the one account they just wrote to
+(`jobs._rebuild_after_write`), and report their outcomes as `positions_rebuild` and
+`returns_rebuild` alongside their own `status`.
 
 **Why:** `GET /positions` reads only `position_snapshots`, and before this nothing but an explicit
 `rebuild-positions` ever wrote it — so a transaction entered through the web UI was durably saved,
@@ -633,16 +635,32 @@ connection with one transaction contract; composing two of them is orchestration
 `jobs.py`'s job. Having `web` call `POST /positions/rebuild` after each write was rejected because
 it would fix only the web UI and leave the CLI and any other API caller with the same gap.
 
-**Skipped when the write saved nothing** (`positions_rebuild: skipped`): an idempotent resubmit
-leaves the transaction log unchanged, so the snapshots derived from it are unchanged too.
+**Returns second, and only on top of good positions.** `return_snapshots` is computed from
+`position_snapshots`, so the returns rebuild runs after the positions one and is skipped
+(`returns_rebuild: skipped`) when the positions rebuild failed: returns over stale positions
+would be wrong, not just late. It's also skipped when data-store isn't configured
+(`DATASTORE_API_URL`/`INTERNAL_API_SECRET`), with a WARNING naming the `rebuild-returns` command to
+run once it is, so a CLI-only setup without data-store still saves transactions.
+
+*Why returns joined the write path after first being kept off it:* this section used to leave
+returns out on purpose, because `rebuild-returns` makes HTTP calls to data-store and that put a
+cross-service failure mode on the write. In practice that left every new transaction's returns
+chart empty until someone ran a CLI command a web user can't reach — the same "saved but
+invisible" problem positions had. The failure mode is contained the same way positions' is: the
+call happens after the write has committed, and any failure is reported, never raised.
+
+**Skipped when the write saved nothing** (`positions_rebuild`/`returns_rebuild: skipped`): an
+idempotent resubmit leaves the transaction log unchanged, so the snapshots derived from it are
+unchanged too.
 
 **Failure isolation:** the rebuild opens its own connection only after the write's connection has
 closed and its transaction committed, so nothing the rebuild does can roll a saved transaction
 back. A rebuild that *raises* (a dropped connection, say) is
 therefore caught, logged with its traceback, and reported as `positions_rebuild: failed` rather
 than propagated — propagating would turn a durably saved write into an error response and invite
-the caller to act on a false signal. This is the one place a write job catches a non-domain
-exception, and it's deliberately limited to the follow-on step, never the write itself.
+the caller to act on a false signal. The returns rebuild is isolated the same way, separately: it
+reports `returns_rebuild: failed` without touching `positions_rebuild`. These follow-on steps are
+the one place a write job catches a non-domain exception, deliberately never the write itself.
 
 **The write's own `status` never reflects the rebuild.** An unmapped instrument blocks its own
 ticker's rebuild (`positions_rebuild: partial`), but the transaction was still saved, and
@@ -650,16 +668,35 @@ ticker's rebuild (`positions_rebuild: partial`), but the transaction was still s
 
 **Known limitations:**
 
-- **Returns aren't rebuilt automatically.** `rebuild-returns` depends on a live `data-store` over
-  HTTP, which would put a cross-service network call (and its failure modes) on the write path —
-  a different trade-off, deliberately not taken here. The returns chart still needs
-  `rebuild-returns` run from the CLI.
-- **`web` doesn't surface `positions_rebuild` yet.** A `partial` or `failed` rebuild is visible in
+- **`web` doesn't surface `positions_rebuild`/`returns_rebuild` yet.** A `partial` or `failed` rebuild is visible in
   the API response and the portfolio service's logs, but the web form still just says
   "Transaction saved." — an unmapped instrument therefore still shows up in the UI only as a
   missing position.
-- **Accounts whose transactions predate this change** have no snapshots until their next write or
-  a manual `rebuild-positions`; nothing backfills them.
+- **Accounts whose transactions predate this change** have no position snapshots until their next
+  write or a manual `rebuild-positions`; nothing backfills them. (Returns do get backfilled, by
+  the scheduled refresh below, for any account that has positions.)
+- **The rebuilds are synchronous**, so a write's response time includes them — and, since
+  returns, a few data-store HTTP calls for that one account's tickers. Fine at today's volumes; a
+  large broker import into a long-lived account is where to look first if that stops being true.
+
+### Returns follow new prices
+
+Every day data-store's `daily_pipeline` DAG ingests new closes, which moves every holder's return
+whether or not they touched their account. The `returns-refresh` container
+(`docker-compose.stakehold-net.yml`) runs `rebuild-returns --all` in a loop, every
+`PORTFOLIO_RETURNS_REFRESH_SECONDS` (default six hours). `jobs.run_rebuild_returns_all` runs
+`run_rebuild_returns` for each user with an account, isolated per user: one raising is logged and
+counted in `users_failed`, and the rest still run. Blocked tickers and failed pairs are summed and
+make the run `partial`. A run when nothing changed only re-upserts the same rows.
+
+*Why portfolio polls instead of data-store calling it when the DAG finishes:* portfolio depends on
+data-store and never the reverse, and Airflow isn't even on `stakehold-net`. A DAG step would
+need Airflow on that network, portfolio's inbound secret in data-store's config, and data-store
+knowing portfolio exists — a new dependency in the wrong direction, to save at most one polling
+interval of lag on daily closes. *Rejected: compute returns on read* — see the cross-cutting
+decision on materialization. *Known cost:* every run rebuilds every user's returns in full,
+including users whose holdings have no new prices. Fine at this scale; the place to start if it
+isn't is skipping users whose latest snapshot is already at data-store's latest price date.
 
 ### Positions follow every ticker-mapping change
 
@@ -667,11 +704,12 @@ A mapping is global, so saving or deleting one can change positions in any user'
 `jobs.run_set_ticker_mapping`/`run_delete_ticker_mapping` therefore find every account whose
 transactions use that instrument (`transactions.list_accounts_using_instrument` — every broker for
 an ISIN, the mapping's own broker for a SYMBOL) in the same connection as the write, close it, and
-then rebuild each of those accounts' positions with the same isolation the transaction-write
-rebuild uses (`_rebuild_positions_isolated`): one account's rebuild failing is logged and counted
-in `rebuilds_failed`, never raised, and never stops the others. The response's `status` describes
-the mapping change alone; `accounts_rebuilt`/`rebuilds_failed` sit beside it. The CLI exits
-non-zero when any rebuild failed, so a retry-worthy outcome isn't a clean exit.
+then rebuild each of those accounts' positions and returns with the same isolation the
+transaction-write rebuild uses (`_rebuild_derived_isolated`): one account's rebuild failing is
+logged and counted (`rebuilds_failed` for positions, `returns_rebuilds_failed` for returns),
+never raised, and never stops the others. The response's `status` describes the mapping change
+alone; the counts sit beside it. The CLI exits non-zero when any rebuild failed, so a
+retry-worthy outcome isn't a clean exit.
 
 *Rejected: rebuild every account in the deployment* — simplest, but its cost grows with every
 user, for a change that typically touches a handful of accounts. *Rejected: leave the rebuild to
@@ -682,10 +720,6 @@ exists to fix.
 the instrument blocked, and blocked means don't touch (see "Pruning" above), so the old ticker's
 snapshots stay until the instrument is mapped again. Re-pointing doesn't have this problem, unless
 the account holds some other unmapped instrument (pruning is skipped for the whole account then).
-Returns are not rebuilt after a mapping change either, for the same reason as above.
-- **The rebuild is synchronous**, so a write's response time now includes it. Fine for one account
-  at today's volumes; a large broker import into a long-lived account is where to look first if
-  that stops being true.
 
 ### Manual transaction entry
 
@@ -937,6 +971,10 @@ of its own:
 | `.env` (`PORTFOLIO_DATABASE_URL`, `APP_POSTGRES_ADMIN_DATABASE_URL`, `DATASTORE_API_URL`, `INTERNAL_API_SECRET`, `PORTFOLIO_INTERNAL_SECRET`, `PORTFOLIO_API_HOST`, `PORTFOLIO_API_PORT`) | no — gitignored | Credentials, per-environment. **Not** the bare `DATABASE_URL`: data-store already owns that name, and both suites can run in one pytest process where a shared name would collide — the same reasoning behind `AUTH_DATABASE_URL`. `PORTFOLIO_DATABASE_URL` names the *service*, not the instance, so a future service sharing `app-postgres` gets its own name and its own role. `APP_POSTGRES_ADMIN_DATABASE_URL` is the one exception — it names the *instance*, because the admin role it points at is the shared container's own bootstrap role, not any one service's; see the role/schema paragraph above. **`INTERNAL_API_SECRET` is likewise deliberately unprefixed** (built at task 14), matching data-store's own env var name exactly — it's the one shared credential both sides of an internal *outbound* call (to data-store) must agree on, not a portfolio-owned setting. **`PORTFOLIO_INTERNAL_SECRET` (built at task 9) is a separate, prefixed credential for the *inbound* direction** — what `web` sends as `X-Internal-Secret` when calling portfolio's own HTTP API, matching `AUTH_INTERNAL_SECRET`'s convention. Keeping the inbound and outbound secrets distinct means either can be rotated without touching the other; a deployment could otherwise be tempted to reuse one secret both ways, at the cost of one leak compromising both edges. `PORTFOLIO_API_HOST`/`PORTFOLIO_API_PORT` default to `0.0.0.0`/`8002` (web is 8000, auth 8001, data-store's read API 8082). All four API-related settings are optional at `load_settings()` — the CLI must keep working with no API ever run; `create_app()` checks `PORTFOLIO_INTERNAL_SECRET` itself at startup, data-store's own pattern, and `import-cashflow`/`rebuild-returns` check `DATASTORE_API_URL`/`INTERNAL_API_SECRET` themselves. |
 | `.env.example` | yes | Template, matching data-store's convention |
 
+`PORTFOLIO_RETURNS_REFRESH_SECONDS` (default `21600`) isn't a `settings.py` setting: only the
+`returns-refresh` container's shell loop reads it, between runs of `rebuild-returns --all`. Set it
+in the environment `docker compose` runs with, like the other compose-level variables.
+
 No YAML config for broker parsing — the broker registry is code (a new broker is a new file plus
 one registry line), not data, since unlike data-store's exchange-suffix mapping there's no
 reference table of *known-good* per-broker quirks to maintain outside code. Accounts are still
@@ -954,6 +992,7 @@ flowchart TB
     subgraph pf["portfolio"]
         PCLI["portfolio CLI"]
         PAPI["portfolio HTTP API<br/><i>built (task 9)</i>"]
+        PREF["returns-refresh<br/><i>loop: rebuild-returns --all</i>"]
         PJOBS["jobs.py"]
     end
 
@@ -972,6 +1011,7 @@ flowchart TB
 
     PCLI --> PJOBS
     PAPI --> PJOBS
+    PREF --> PJOBS
     PJOBS --> APPDB
     PJOBS -->|"datastore_client<br/>(HTTP -- FX, prices, ticker info; task 14 + task 8)"| DSAPI
     DSAPI --> DSDB

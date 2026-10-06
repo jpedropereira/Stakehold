@@ -116,9 +116,21 @@ def _print_blocked_tickers(tickers: list[dict[str, str]]) -> None:
 
 
 def _rebuild_returns(args: argparse.Namespace) -> int:
+    if args.all:
+        if args.account:
+            # argparse can't express "--account needs --user"; exit the way it would.
+            print("rebuild-returns: --account can't be combined with --all", file=sys.stderr)
+            raise SystemExit(2)
+        return _rebuild_returns_all()
     result = jobs.run_rebuild_returns(user_id=args.user, account_label=args.account)
     _print_blocked_tickers(result["blocked_tickers"])
     _print_failed_pairs(result["failed_pairs"])
+    return _report(result, "return snapshot(s) saved")
+
+
+def _rebuild_returns_all() -> int:
+    result = jobs.run_rebuild_returns_all()
+    print(f"returns rebuilt for {result['users_rebuilt']} user(s), {result['users_failed']} failed")
     return _report(result, "return snapshot(s) saved")
 
 
@@ -143,8 +155,10 @@ def _report_mapping_write(result: dict, *, prefix: str = "") -> int:
         f"positions rebuilt for {result['accounts_rebuilt']} account(s), "
         f"{result['rebuilds_failed']} failed"
     )
+    if result["returns_rebuilds_failed"]:
+        print(f"returns failed for {result['returns_rebuilds_failed']} account(s)")
     # The mapping change itself succeeded, but a rebuild that needs retrying shouldn't exit 0.
-    if result["rebuilds_failed"]:
+    if result["rebuilds_failed"] or result["returns_rebuilds_failed"]:
         return 1
     return _exit_code(result)
 
@@ -353,7 +367,13 @@ def _build_parser() -> argparse.ArgumentParser:
     returns_parser = subparsers.add_parser(
         "rebuild-returns", help="Compute return snapshots from positions, prices, FX and dividends"
     )
-    returns_parser.add_argument("--user", required=True, type=_uuid, help="The auth-issued user id")
+    returns_scope = returns_parser.add_mutually_exclusive_group(required=True)
+    returns_scope.add_argument("--user", type=_uuid, help="The auth-issued user id")
+    returns_scope.add_argument(
+        "--all",
+        action="store_true",
+        help="Every user's accounts (what the returns-refresh container runs on a schedule)",
+    )
     returns_parser.add_argument(
         "--account", help="The --label of one account to rebuild; omit to rebuild every account"
     )

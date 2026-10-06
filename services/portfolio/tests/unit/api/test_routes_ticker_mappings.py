@@ -21,6 +21,7 @@ _WRITE_RESULT = {
     "rows_saved": 1,
     "accounts_rebuilt": 2,
     "rebuilds_failed": 0,
+    "returns_rebuilds_failed": 0,
     "mapping": _MAPPING,
 }
 _SET_BODY = {

@@ -237,8 +237,9 @@ class _SimpleFakeConnection:
 
 def _stub_rebuild_positions(monkeypatch, *, status="ok"):
     """Replaces the follow-on positions rebuild every transaction write triggers, recording each
-    call. The rebuild itself has its own tests below; these tests are about the write jobs'
-    orchestration of it."""
+    call -- and the returns rebuild chained after it, which _stub_rebuild_returns can then
+    replace with its own recorder. The rebuilds themselves have their own tests below; these
+    tests are about the write jobs' orchestration of them."""
     calls = []
 
     def fake_rebuild(**kw):
@@ -246,6 +247,18 @@ def _stub_rebuild_positions(monkeypatch, *, status="ok"):
         return {"status": status, "rows_saved": 0}
 
     monkeypatch.setattr(jobs, "run_rebuild_positions", fake_rebuild)
+    _stub_rebuild_returns(monkeypatch)
+    return calls
+
+
+def _stub_rebuild_returns(monkeypatch, *, status="ok"):
+    calls = []
+
+    def fake_rebuild(**kw):
+        calls.append(kw)
+        return {"status": status, "rows_saved": 0}
+
+    monkeypatch.setattr(jobs, "run_rebuild_returns", fake_rebuild)
     return calls
 
 
@@ -414,6 +427,7 @@ def test_run_add_transaction_reports_ok_when_saved(monkeypatch):
         "rows_saved": 1,
         "transactions_saved": 1,
         "positions_rebuild": "ok",
+        "returns_rebuild": "skipped",
     }
     assert fake_conn.closed is True
 
@@ -429,6 +443,7 @@ def test_run_add_transaction_reports_nothing_to_do_when_ref_already_exists(monke
         "rows_saved": 0,
         "transactions_saved": 0,
         "positions_rebuild": "skipped",
+        "returns_rebuild": "skipped",
     }
 
 
@@ -462,6 +477,7 @@ def test_run_import_transactions_reports_ok_when_saved(monkeypatch):
         "rows_saved": 82,
         "transactions_saved": 82,
         "positions_rebuild": "ok",
+        "returns_rebuild": "skipped",
     }
     assert fake_conn.closed is True
 
@@ -477,6 +493,7 @@ def test_run_import_transactions_reports_nothing_to_do_on_a_reimport(monkeypatch
         "rows_saved": 0,
         "transactions_saved": 0,
         "positions_rebuild": "skipped",
+        "returns_rebuild": "skipped",
     }
 
 
@@ -605,6 +622,7 @@ def test_run_import_cashflow_reports_ok_when_saved(monkeypatch):
         "rows_saved": 339,
         "transactions_saved": 339,
         "positions_rebuild": "ok",
+        "returns_rebuild": "ok",
     }
     assert fake_conn.closed is True
 
@@ -620,6 +638,7 @@ def test_run_import_cashflow_reports_nothing_to_do_on_a_reimport(monkeypatch):
         "rows_saved": 0,
         "transactions_saved": 0,
         "positions_rebuild": "skipped",
+        "returns_rebuild": "skipped",
     }
 
 
@@ -841,7 +860,7 @@ def test_write_skips_the_positions_rebuild_when_nothing_was_saved(
 
     assert calls == []
     assert result["positions_rebuild"] == "skipped"
-    assert any("positions rebuild skipped" in r.message for r in caplog.records)
+    assert any("positions and returns rebuilds skipped" in r.message for r in caplog.records)
 
 
 @pytest.mark.parametrize("job_name, pipeline_fn, kwargs, needs_datastore", _WRITE_JOBS)
@@ -881,6 +900,110 @@ def test_write_still_reports_its_saved_rows_when_the_positions_rebuild_raises(
     failure_logs = [r for r in caplog.records if r.levelno >= logging.ERROR]
     assert len(failure_logs) == 1
     assert failure_logs[0].exc_info is not None
+
+
+# --- the returns rebuild chained after a write ---
+
+
+@pytest.mark.parametrize("job_name, pipeline_fn, kwargs, needs_datastore", _WRITE_JOBS)
+def test_write_rebuilds_returns_for_the_written_account_after_positions(
+    monkeypatch, job_name, pipeline_fn, kwargs, needs_datastore
+):
+    _patch_write_job(monkeypatch, needs_datastore=needs_datastore, pipeline_fn=pipeline_fn, saved=1)
+    _patch_datastore_settings(monkeypatch)
+    order = []
+    monkeypatch.setattr(
+        jobs,
+        "run_rebuild_positions",
+        lambda **kw: order.append("positions") or {"status": "ok", "rows_saved": 1},
+    )
+    returns_calls = []
+
+    def fake_returns(**kw):
+        order.append("returns")
+        returns_calls.append(kw)
+        return {"status": "partial", "rows_saved": 3}
+
+    monkeypatch.setattr(jobs, "run_rebuild_returns", fake_returns)
+    user_id = uuid.uuid4()
+
+    result = getattr(jobs, job_name)(user_id=user_id, **kwargs)
+
+    # Returns read position_snapshots, so they have to come second.
+    assert order == ["positions", "returns"]
+    assert returns_calls[0]["user_id"] == user_id
+    assert returns_calls[0]["account_label"] == kwargs["account_label"]
+    assert result["returns_rebuild"] == "partial"
+
+
+@pytest.mark.parametrize("job_name, pipeline_fn, kwargs, needs_datastore", _WRITE_JOBS)
+def test_write_skips_the_returns_rebuild_when_nothing_was_saved(
+    monkeypatch, job_name, pipeline_fn, kwargs, needs_datastore
+):
+    _patch_write_job(monkeypatch, needs_datastore=needs_datastore, pipeline_fn=pipeline_fn, saved=0)
+    returns_calls = _stub_rebuild_returns(monkeypatch)
+
+    result = getattr(jobs, job_name)(user_id=uuid.uuid4(), **kwargs)
+
+    assert result["returns_rebuild"] == "skipped"
+    assert returns_calls == []
+
+
+@pytest.mark.parametrize("job_name, pipeline_fn, kwargs, needs_datastore", _WRITE_JOBS)
+def test_write_skips_the_returns_rebuild_when_the_positions_rebuild_raised(
+    monkeypatch, job_name, pipeline_fn, kwargs, needs_datastore
+):
+    _patch_write_job(monkeypatch, needs_datastore=needs_datastore, pipeline_fn=pipeline_fn, saved=1)
+    _patch_datastore_settings(monkeypatch)
+
+    def boom(**kw):
+        raise RuntimeError("database went away")
+
+    monkeypatch.setattr(jobs, "run_rebuild_positions", boom)
+    returns_calls = _stub_rebuild_returns(monkeypatch)
+
+    result = getattr(jobs, job_name)(user_id=uuid.uuid4(), **kwargs)
+
+    # Returns computed from positions that failed to rebuild would be stale.
+    assert result["positions_rebuild"] == "failed"
+    assert result["returns_rebuild"] == "skipped"
+    assert returns_calls == []
+
+
+def test_a_write_without_data_store_configured_skips_returns_and_says_how_to_run_them(
+    monkeypatch, caplog
+):
+    _patch_write_job(monkeypatch, needs_datastore=False, pipeline_fn="import_transactions", saved=1)
+    returns_calls = _stub_rebuild_returns(monkeypatch)
+    user_id = uuid.uuid4()
+
+    result = jobs.run_import_transactions(user_id=user_id, **_IMPORT_KWARGS)
+
+    assert result["status"] == "ok"
+    assert result["returns_rebuild"] == "skipped"
+    assert returns_calls == []
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert any(f"portfolio rebuild-returns --user {user_id}" in m for m in warnings)
+
+
+@pytest.mark.parametrize("job_name, pipeline_fn, kwargs, needs_datastore", _WRITE_JOBS)
+def test_write_still_succeeds_when_the_returns_rebuild_raises(
+    monkeypatch, caplog, job_name, pipeline_fn, kwargs, needs_datastore
+):
+    _patch_write_job(monkeypatch, needs_datastore=needs_datastore, pipeline_fn=pipeline_fn, saved=1)
+    _patch_datastore_settings(monkeypatch)
+
+    def boom(**kw):
+        raise RuntimeError("data-store unreachable")
+
+    monkeypatch.setattr(jobs, "run_rebuild_returns", boom)
+
+    result = getattr(jobs, job_name)(user_id=uuid.uuid4(), **kwargs)
+
+    assert result["status"] == "ok"
+    assert result["positions_rebuild"] == "ok"
+    assert result["returns_rebuild"] == "failed"
+    assert any(r.exc_info for r in caplog.records if r.levelno >= logging.ERROR)
 
 
 # --- run_rebuild_positions ---
@@ -1632,6 +1755,7 @@ def test_run_set_ticker_mapping_saves_and_rebuilds_every_affected_account(monkey
         "rows_saved": 1,
         "accounts_rebuilt": 2,
         "rebuilds_failed": 0,
+        "returns_rebuilds_failed": 0,
         "mapping": _MAPPING_DICT,
     }
     assert passed["canonical_ticker"] == "IWDA.AS"
@@ -1753,6 +1877,7 @@ def test_run_delete_ticker_mapping_deletes_and_rebuilds_affected_accounts(monkey
         "rows_saved": 1,
         "accounts_rebuilt": 1,
         "rebuilds_failed": 0,
+        "returns_rebuilds_failed": 0,
         "mapping": _MAPPING_DICT,
     }
     assert passed == {"mapping_id": 7}
@@ -1836,3 +1961,139 @@ def test_run_list_all_unmapped_instruments_reports_nothing_to_do_when_empty(monk
 
 def test_run_db_init_targets_the_ticker_mappings_table():
     assert "ticker_mappings" in jobs._TARGET_TABLES
+
+
+def test_a_mapping_change_rebuilds_returns_for_each_affected_account(monkeypatch):
+    user_a, user_b = uuid.uuid4(), uuid.uuid4()
+    _patch_mapping_job(monkeypatch, accounts=[(user_a, "main"), (user_b, "isa")])
+    monkeypatch.setattr(jobs.pipeline, "set_ticker_mapping", lambda conn, **kw: _MAPPING_ROW)
+    returns_calls = _stub_rebuild_returns(monkeypatch)
+
+    jobs.run_set_ticker_mapping(**_SET_KWARGS)
+
+    assert [(c["user_id"], c["account_label"]) for c in returns_calls] == [
+        (user_a, "main"),
+        (user_b, "isa"),
+    ]
+
+
+def test_a_mapping_change_counts_returns_rebuilds_that_failed(monkeypatch):
+    _patch_mapping_job(monkeypatch, accounts=[(uuid.uuid4(), "main"), (uuid.uuid4(), "isa")])
+    monkeypatch.setattr(jobs.pipeline, "set_ticker_mapping", lambda conn, **kw: _MAPPING_ROW)
+
+    def flaky_returns(**kw):
+        if kw["account_label"] == "main":
+            raise RuntimeError("data-store unreachable")
+        return {"status": "ok", "rows_saved": 1}
+
+    monkeypatch.setattr(jobs, "run_rebuild_returns", flaky_returns)
+
+    result = jobs.run_set_ticker_mapping(**_SET_KWARGS)
+
+    assert result["accounts_rebuilt"] == 2
+    assert result["rebuilds_failed"] == 0
+    assert result["returns_rebuilds_failed"] == 1
+
+
+# --- run_rebuild_returns_all ---
+
+
+def _patch_returns_all(monkeypatch, *, user_ids, per_user):
+    """`per_user` maps a user id to the result its run_rebuild_returns returns, or to an
+    exception it raises."""
+    fake_conn = _patch_new_job_common(monkeypatch)
+    _patch_datastore_settings(monkeypatch)
+    monkeypatch.setattr(jobs.pipeline, "list_user_ids", lambda conn: list(user_ids))
+    calls = []
+
+    def fake_returns(**kw):
+        calls.append(kw["user_id"])
+        outcome = per_user[kw["user_id"]]
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(jobs, "run_rebuild_returns", fake_returns)
+    return fake_conn, calls
+
+
+def _returns_result(status="ok", rows_saved=10, blocked=0, pairs_failed=0):
+    return {
+        "status": status,
+        "rows_saved": rows_saved,
+        "tickers_rebuilt": 2,
+        "tickers_blocked": blocked,
+        "pairs_failed": pairs_failed,
+        "blocked_tickers": [],
+        "failed_pairs": [],
+    }
+
+
+def test_run_rebuild_returns_all_rebuilds_every_user_and_sums_the_counts(monkeypatch, caplog):
+    caplog.set_level(logging.INFO)
+    ann, bea = uuid.uuid4(), uuid.uuid4()
+    fake_conn, calls = _patch_returns_all(
+        monkeypatch,
+        user_ids=[ann, bea],
+        per_user={ann: _returns_result(rows_saved=10), bea: _returns_result(rows_saved=5)},
+    )
+
+    result = jobs.run_rebuild_returns_all()
+
+    assert calls == [ann, bea]
+    assert result == {
+        "status": "ok",
+        "rows_saved": 15,
+        "users_rebuilt": 2,
+        "users_failed": 0,
+        "tickers_blocked": 0,
+        "pairs_failed": 0,
+    }
+    assert fake_conn.closed is True
+    assert "rebuilding returns for 2 user(s)" in caplog.text
+    assert "done, 15 return snapshot(s) saved for 2 user(s), 0 failed" in caplog.text
+
+
+def test_run_rebuild_returns_all_keeps_going_when_one_user_fails(monkeypatch, caplog):
+    ann, bea = uuid.uuid4(), uuid.uuid4()
+    _, calls = _patch_returns_all(
+        monkeypatch,
+        user_ids=[ann, bea],
+        per_user={ann: RuntimeError("data-store unreachable"), bea: _returns_result()},
+    )
+
+    result = jobs.run_rebuild_returns_all()
+
+    assert calls == [ann, bea]
+    assert result["status"] == "partial"
+    assert result["users_rebuilt"] == 1
+    assert result["users_failed"] == 1
+    assert any(r.exc_info for r in caplog.records if r.levelno >= logging.ERROR)
+
+
+def test_run_rebuild_returns_all_is_partial_when_a_user_had_blocked_tickers(monkeypatch):
+    ann = uuid.uuid4()
+    _patch_returns_all(
+        monkeypatch,
+        user_ids=[ann],
+        per_user={ann: _returns_result(status="partial", blocked=1)},
+    )
+
+    result = jobs.run_rebuild_returns_all()
+
+    assert result["status"] == "partial"
+    assert result["tickers_blocked"] == 1
+    assert result["users_failed"] == 0
+
+
+def test_run_rebuild_returns_all_with_no_users_is_nothing_to_do(monkeypatch):
+    _patch_returns_all(monkeypatch, user_ids=[], per_user={})
+
+    assert jobs.run_rebuild_returns_all()["status"] == "nothing_to_do"
+
+
+def test_run_rebuild_returns_all_requires_data_store(monkeypatch):
+    _patch_new_job_common(monkeypatch)
+
+    with pytest.raises(SettingsError, match="rebuild-returns"):
+        jobs.run_rebuild_returns_all()

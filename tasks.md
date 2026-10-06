@@ -35,6 +35,7 @@ one-time snapshot.
 | 15 | [Extract broker-parser plugins to a private repo](#15-extract-broker-parser-plugins-to-a-private-repo) | 6, 14 | done |
 | 16 | [Admin role](#16-admin-role) | 2, 10 | done |
 | 17 | [Ticker mappings in the database, managed by admins](#17-ticker-mappings-in-the-database-managed-by-admins) | 16, 9 | done |
+| 18 | [Rebuild returns automatically](#18-rebuild-returns-automatically) | 8, 9 | done |
 
 No task is `ready` today — every dependency chain resolves to `done`.
 
@@ -698,3 +699,17 @@ for every account whose transactions use that identifier. The YAML file and
 - **Retired**: `configs/ticker_mappings.yaml.example`, `PORTFOLIO_TICKER_MAPPINGS_PATH`, and
   portfolio's `pyyaml` dependency. Existing mappings aren't imported: they're re-entered on the
   admin page, which lists what's waiting.
+
+### 18. Rebuild returns automatically — done
+
+`return_snapshots` was written only by a manual `rebuild-returns`, so a new transaction's returns
+chart stayed empty, and new prices from data-store's daily ingestion never reached anyone's.
+
+- **After every write**: each transaction write and ticker-mapping change now rebuilds the
+  affected accounts' returns right after their positions (`jobs._rebuild_derived_isolated`),
+  reported as `returns_rebuild` / `returns_rebuilds_failed`. Skipped if the positions rebuild
+  failed, or if data-store isn't configured.
+- **After new prices**: `rebuild-returns --all` (`jobs.run_rebuild_returns_all`), run every six
+  hours by a new `returns-refresh` container in portfolio's stakehold-net overlay. Portfolio
+  polls rather than having data-store's DAG call it, keeping the dependency one-way.
+- **web**: the empty returns state no longer tells the visitor to run a CLI command.

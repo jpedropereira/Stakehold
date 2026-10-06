@@ -58,3 +58,11 @@ def list_by_user(conn, user_id: UUID) -> list[Account]:
         )
         rows = cur.fetchall()
     return [Account(*row) for row in rows]
+
+
+def list_user_ids(conn) -> list[UUID]:
+    """Every user who owns at least one account. Unscoped by design: the scheduled returns
+    refresh rebuilds every user, and goes back through the user-scoped reads for each one."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT DISTINCT user_id FROM accounts ORDER BY user_id")
+        return [row[0] for row in cur.fetchall()]

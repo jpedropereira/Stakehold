@@ -1656,6 +1656,18 @@ def test_portfolio_page_renders_empty_state_when_no_positions_or_returns(client)
     assert "Can&#39;t reach the portfolio service" not in response.text
 
 
+def test_the_empty_returns_state_no_longer_asks_for_a_manual_rebuild(client):
+    # Returns now rebuild after every write and on a schedule; a missing chart means missing
+    # prices, which nothing the visitor runs would fix.
+    test_client, _, fake_auth, _ = client
+    _logged_in(test_client, fake_auth)
+
+    response = test_client.get("/portfolio", params={"account": "main"})
+
+    assert "rebuild-returns" not in response.text
+    assert "returns appear once Stakehold has prices for your holdings' dates" in response.text
+
+
 def test_portfolio_page_account_not_found_renders_404(client):
     test_client, _, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)
