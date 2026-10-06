@@ -262,12 +262,36 @@ calls [`portfolio`](../../portfolio/docs/architecture.md), `data-store`, and
   (nobody has run the CLI `rebuild-returns`) renders as an ordinary
   empty state, not an error — `web` has no way to distinguish "never rebuilt" from "rebuilt into
   zero rows" and doesn't need to.
+- **App shell (UI-4): the current page is marked on the server, and the account pages share one
+  header.** Each route passes `nav_active` (`overview` / `accounts` / `admin`) and, on the three
+  account-scoped pages, `account_nav_active` (`holdings` / `add` / `import`; `transactions` is
+  for UI-8's list page). The templates turn these into `aria-current="page"`, and `web.css` styles
+  that attribute rather than a class. The mark a screen reader announces and the one a sighted
+  visitor sees therefore come from one source and can't disagree, and no script works out "where
+  am I" from the URL. `partials/_account_header.html` (label, broker, sub-nav, switcher) is fed by
+  `routes._account_header_context`, one `list_accounts` call. The same call answers "is this the
+  visitor's account?": `/transactions/new` and `/transactions/import` used to render a form for
+  any `?account=` label and leave `portfolio` to reject the write. They now 404 up front
+  (`account_not_found.html`, shared with `/portfolio`). The 404 happens only when the list loaded
+  and the label isn't in it. If `portfolio` can't be reached, the page renders with a label-only
+  header and no switcher, because an outage must not tell the visitor a real account doesn't
+  exist. POST routes load the header lazily (`extra_context_loader`), so only a full-page error
+  re-render pays for that call, never a successful write.
+- **The account switcher is a plain GET form, with no htmx enhancement.** The form submits
+  `?account=` back to the current path, so switching keeps the visitor on Holdings, Add or
+  Import. An htmx `hx-get` swapping the response into `<body>` was planned and rejected. htmx
+  1.9 does take a full document's `<body>` and update the title, but page scripts that start on
+  `DOMContentLoaded` (`portfolio_chart.js`) never run after a swap, so `/portfolio` would lose its
+  chart. A full navigation is also what an account switch is: every figure on the page changes.
+  The cost is a visible "Switch" button, since the form can't submit on `change` without a script.
+  The Transactions sub-nav link ships ahead of its page and 404s until UI-8 builds
+  `GET /transactions`.
 
 ## Endpoint surface
 
 | Route | Behaviour |
 |---|---|
-| `GET /` | `require_user` dependency: logged in → the placeholder home page; no valid session → redirected to `/login` (an `AuthRequired` exception mapped to a 303 by an app-level handler) |
+| `GET /` | `require_user` dependency: logged in → the placeholder home page (the nav's "Overview"); no valid session → redirected to `/login` (an `AuthRequired` exception mapped to a 303 by an app-level handler) |
 | `GET /admin` | `require_admin` dependency: an admin → the admin page (a link to ticker mappings), linked from the nav only for admins; a logged-in non-admin → a 403 page (`AdminRequired`, mapped by an app-level handler); no valid session → redirected to `/login`, like every `require_user` route |
 | `GET /admin/mappings` | `require_admin`; fetches `portfolio`'s `GET /ticker-mappings`, `GET /instruments/unmapped/all` and `GET /instruments/tickers`, and renders three things: the instruments still waiting for a mapping (each with an inline "map to ticker" form), the existing mappings (each with a delete button), and a form to add or re-point one. Each list degrades on its own to a notice rather than an empty table, so an outage never reads as "nothing to map". After a save or delete, the redirect's query string (`saved`/`deleted`, `rebuilt`, `failed`) drives a one-line outcome banner |
 | `POST /admin/mappings` | `require_admin`, CSRF-checked; calls `portfolio`'s `PUT /ticker-mappings` with the admin's own `user_id` as `updated_by` (a blank broker is sent as `null`, which an ISIN needs; portfolio enforces which kind needs one and its 422 message is shown as-is). Redirects to `/admin/mappings?saved=1&rebuilt=<n>&failed=<m>` |
@@ -279,11 +303,11 @@ calls [`portfolio`](../../portfolio/docs/architecture.md), `data-store`, and
 | `GET /health` | `200 {"status": "ok"}`, unauthenticated, no dependency check (see "Key decisions") |
 | `GET /accounts` | `require_user`; lists the caller's accounts (`portfolio`'s `GET /accounts`) and available broker parsers (`GET /brokers`, for the create-account `<datalist>` hint) and renders the create-account form |
 | `POST /accounts` | CSRF-checked, calls `portfolio`'s `POST /accounts`, redirects to `/accounts` on success |
-| `GET /transactions/new` | `require_user`; required `account` query param (a bare 422 for a missing/blank value — reachable only via a hand-crafted URL, since every link that points here already includes it); renders the manual-entry form, with a confirmation banner if `?saved=1`. The instrument field is a ticker picker: a native `<datalist>` filled from `portfolio`'s `GET /instruments/tickers` (no script, so the strict CSP is untouched). If that call fails, the form still renders with an empty list and a notice; the picker is a convenience, and portfolio checks whatever is typed when it's saved |
+| `GET /transactions/new` | `require_user`; required `account` query param (a bare 422 for a missing/blank value — reachable only via a hand-crafted URL, since every link that points here already includes it); renders the manual-entry form, with a confirmation banner if `?saved=1`. The instrument field is a ticker picker: a native `<datalist>` filled from `portfolio`'s `GET /instruments/tickers` (no script, so the strict CSP is untouched). If that call fails, the form still renders with an empty list and a notice; the picker is a convenience, and portfolio checks whatever is typed when it's saved. Also fetches `GET /accounts` (concurrently) for the account header: a label that isn't one of the visitor's accounts renders `account_not_found.html` with a 404, and a failed fetch degrades to a label-only header rather than a 404 |
 | `POST /transactions/new` | CSRF-checked, calls `portfolio`'s `POST /transactions` (an instrument, when given, is always sent as `instrument_identifier_kind = 'TICKER'`; a blank Amount is sent as `null`, for portfolio to derive on a BUY/SELL or reject as missing on anything else), redirects to `/transactions/new?account=<label>&saved=1` on success. An unknown ticker comes back as portfolio's 422, whose message is shown as-is like every other 422. The ticker list is re-fetched for the error re-render |
-| `GET /transactions/import` | `require_user`; required `account` query param; renders the upload form, with a confirmation banner (row count) if `?imported=<n>` |
+| `GET /transactions/import` | `require_user`; required `account` query param; renders the upload form, with a confirmation banner (row count) if `?imported=<n>`. Fetches `GET /accounts` for the account header, with the same 404 and degrade rules as `GET /transactions/new` |
 | `POST /transactions/import` | CSRF-checked, multipart; size-capped at 20MB (matching `portfolio`'s own cap) before the bytes are forwarded; calls `portfolio`'s `POST /transactions/import`, redirects to `/transactions/import?account=<label>&imported=<rows_saved>` on success |
-| `GET /portfolio` | `require_user`; required `account` query param; fetches `portfolio`'s `GET /positions`/`GET /returns` concurrently, aggregates the per-ticker return series into one portfolio-level series (`portfolio_view.aggregate_portfolio_returns`), and renders a positions table plus a Chart.js return-over-time chart. `AccountNotFound` on either call renders a 404; any other failure degrades that half of the page independently, mirroring `GET /accounts`'s own pattern. No writes, no rebuild trigger. |
+| `GET /portfolio` | `require_user`; required `account` query param; fetches `portfolio`'s `GET /positions`/`GET /returns` concurrently, aggregates the per-ticker return series into one portfolio-level series (`portfolio_view.aggregate_portfolio_returns`), and renders a positions table plus a Chart.js return-over-time chart. `GET /accounts` is fetched concurrently for the account header. `AccountNotFound` on either call, or a label missing from a successfully loaded account list, renders `account_not_found.html` with a 404; any other failure degrades that half of the page independently, mirroring `GET /accounts`'s own pattern. No writes, no rebuild trigger. |
 
 Every POST error (wrong credentials, a duplicate email, a tripped throttle, `auth`/`portfolio`
 being unreachable, a CSRF mismatch, or a `portfolio` validation failure) re-renders the form with
@@ -326,8 +350,10 @@ exists to close; no equivalent concern applies to the portfolio routes; see "Key
   handlers, the CSRF helpers, the security-headers middleware, and `htmx.py`'s
   `is_htmx`/`htmx_or_redirect` (shared by `routes.py`'s redirects and `app.py`'s `AuthRequired`
   handler, so every redirect in the app picks htmx-partial vs. full-navigation the same way).
-- `templates/`, `static/` — Jinja2 templates (`base.html` plus one per page,
-  `partials/_form_errors.html` for the htmx swap target) and `web.css` plus vendored `htmx.min.js`.
+- `templates/`, `static/` — Jinja2 templates (`base.html`, which holds the skip link, the
+  top nav and the theme toggle, plus one per page; `partials/_form_errors.html` for the htmx swap
+  target; `partials/_account_header.html`, included by the three account-scoped pages; and
+  `account_not_found.html`, their shared 404) and `web.css` plus vendored `htmx.min.js`.
   Same-origin scripts: `htmx-error-swap.js`, `portfolio_chart.js`, and `theme.js` (UI-3, applies
   a theme switch in place).
 - `cli.py` — `web serve` only, mirroring `auth serve`'s lazy-import-uvicorn shape.

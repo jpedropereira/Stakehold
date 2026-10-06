@@ -1,6 +1,7 @@
 """Route-level tests using a fake AuthClient (no live auth service), the same fake-dependency
 approach auth's own tests/unit/test_api.py uses for its repositories."""
 
+import re
 from datetime import date, datetime, timezone
 from decimal import Decimal
 
@@ -40,6 +41,12 @@ from web.settings import Settings
 SESSION_COOKIE = "stakehold_session=tok; Path=/; HttpOnly; SameSite=lax"
 
 
+def _account(label, broker="acme", account_id=1) -> Account:
+    return Account(
+        id=account_id, account_label=label, broker=broker, created_at="2026-01-01T00:00:00Z"
+    )
+
+
 class FakeAuthClient:
     def __init__(self):
         self.signup_result: AuthResult | None = None
@@ -77,7 +84,9 @@ class FakeAuthClient:
 
 class FakePortfolioClient:
     def __init__(self):
-        self.list_accounts_result: list[Account] = []
+        # One account by default: almost every account-scoped test uses "main", and the account
+        # header (UI-4) 404s a label the user doesn't own.
+        self.list_accounts_result: list[Account] = [_account("main")]
         self.list_accounts_error: Exception | None = None
         self.list_brokers_result: list[str] = []
         self.list_brokers_error: Exception | None = None
@@ -86,6 +95,8 @@ class FakePortfolioClient:
         # Logged apart from `calls`: the manual-entry form fetches tickers on every render, and
         # tests asserting `calls` are about the write, not the picker.
         self.list_tickers_calls = 0
+        # Same reason: the account header fetches accounts on every account-scoped render.
+        self.list_accounts_calls = 0
         self.create_account_result: AccountWriteResult | None = None
         self.create_account_error: Exception | None = None
         self.add_transaction_result: TransactionWriteResult | None = None
@@ -108,7 +119,7 @@ class FakePortfolioClient:
         self.calls: list[tuple] = []
 
     async def list_accounts(self, *, user_id):
-        self.calls.append(("list_accounts", user_id))
+        self.list_accounts_calls += 1
         if self.list_accounts_error:
             raise self.list_accounts_error
         return self.list_accounts_result
@@ -1024,7 +1035,7 @@ def test_create_account_success_redirects(client):
     test_client, _, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)
     token = _accounts_csrf_token(test_client)
-    fake_portfolio.calls = []  # drop the GET /accounts page's own list_accounts/list_brokers
+    fake_portfolio.calls = []  # drop the GET /accounts page's own list_brokers
     fake_portfolio.create_account_result = AccountWriteResult(
         status="ok", rows_saved=1, accounts_created=1
     )
@@ -1705,3 +1716,208 @@ def test_portfolio_page_degrades_when_returns_unavailable(client):
     assert "Can&#39;t reach the portfolio service" in response.text
     assert "AAPL" in response.text
     assert "No return history yet" in response.text
+
+
+# --- app shell: nav, skip link, account header (UI-4) ---------------------------
+
+_SITE_NAV = re.compile(r'<nav class="site-nav"[^>]*>(.*?)</nav>', re.DOTALL)
+_ACCOUNT_NAV = re.compile(r'<nav class="account-subnav"[^>]*>(.*?)</nav>', re.DOTALL)
+_CURRENT_LINK = re.compile(r'<a href="([^"]*)" aria-current="page"')
+
+
+def _current_links(pattern, html):
+    match = pattern.search(html)
+    assert match, f"no {pattern.pattern!r} in page"
+    return _CURRENT_LINK.findall(match.group(1))
+
+
+def test_nav_links_to_overview_and_accounts(client):
+    test_client, _, fake_auth, _ = client
+    _logged_in(test_client, fake_auth)
+
+    nav = _SITE_NAV.search(test_client.get("/").text).group(1)
+
+    assert '<a href="/"' in nav and ">Overview</a>" in nav
+    assert '<a href="/accounts"' in nav and ">Accounts</a>" in nav
+
+
+@pytest.mark.parametrize(
+    "path, params, current",
+    [
+        ("/", {}, "/"),
+        ("/accounts", {}, "/accounts"),
+        ("/portfolio", {"account": "main"}, "/accounts"),
+        ("/transactions/new", {"account": "main"}, "/accounts"),
+        ("/transactions/import", {"account": "main"}, "/accounts"),
+    ],
+)
+def test_nav_marks_the_current_section(client, path, params, current):
+    test_client, _, fake_auth, _ = client
+    _logged_in(test_client, fake_auth)
+
+    response = test_client.get(path, params=params)
+
+    assert _current_links(_SITE_NAV, response.text) == [current]
+
+
+@pytest.mark.parametrize("path", ["/admin", "/admin/mappings"])
+def test_nav_marks_admin_on_admin_pages(client, path):
+    test_client, _, fake_auth, _ = client
+    _logged_in_as_admin(test_client, fake_auth)
+
+    response = test_client.get(path)
+
+    assert _current_links(_SITE_NAV, response.text) == ["/admin"]
+
+
+def test_nav_keeps_its_current_section_on_a_full_page_error(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    token = _transactions_new_csrf_token(test_client, "main")
+    fake_portfolio.add_transaction_error = InvalidPortfolioRequest("native_amount is required")
+
+    response = test_client.post("/transactions/new", data=_transaction_form_data(token))
+
+    assert response.status_code == 422
+    assert _current_links(_SITE_NAV, response.text) == ["/accounts"]
+
+
+@pytest.mark.parametrize("path", ["/", "/login"])
+def test_every_page_has_a_skip_link_to_main(client, path):
+    test_client, _, fake_auth, _ = client
+    if path != "/login":
+        _logged_in(test_client, fake_auth)
+
+    response = test_client.get(path)
+
+    assert '<a class="skip-link" href="#main">' in response.text
+    assert '<main id="main"' in response.text
+
+
+_ACCOUNT_PAGES = [
+    ("/portfolio", "/portfolio"),
+    ("/transactions/new", "/transactions/new"),
+    ("/transactions/import", "/transactions/import"),
+]
+
+
+@pytest.mark.parametrize("path, current", _ACCOUNT_PAGES)
+def test_account_pages_share_an_account_header(client, path, current):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.list_accounts_result = [_account("my isa", broker="globex")]
+
+    response = test_client.get(path, params={"account": "my isa"})
+
+    assert response.status_code == 200
+    assert 'class="account-header"' in response.text
+    assert "my isa" in response.text
+    assert "globex" in response.text
+    subnav = _ACCOUNT_NAV.search(response.text).group(1)
+    for target in ("/portfolio", "/transactions", "/transactions/new", "/transactions/import"):
+        assert f'href="{target}?account=my%20isa"' in subnav
+    assert _current_links(_ACCOUNT_NAV, response.text) == [f"{current}?account=my%20isa"]
+
+
+@pytest.mark.parametrize("path, _current", _ACCOUNT_PAGES)
+def test_account_switcher_lists_every_account_and_stays_on_the_page(client, path, _current):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.list_accounts_result = [
+        _account("main"),
+        _account("isa", broker="globex", account_id=2),
+    ]
+
+    response = test_client.get(path, params={"account": "isa"})
+
+    assert f'<form class="account-switcher" method="get" action="{path}"' in response.text
+    assert '<select id="account-switch" name="account"' in response.text
+    assert '<option value="main">main</option>' in response.text
+    assert '<option value="isa" selected>isa</option>' in response.text
+
+
+@pytest.mark.parametrize("path, _current", _ACCOUNT_PAGES)
+def test_account_switcher_is_hidden_with_a_single_account(client, path, _current):
+    test_client, _, fake_auth, _ = client
+    _logged_in(test_client, fake_auth)
+
+    response = test_client.get(path, params={"account": "main"})
+
+    assert response.status_code == 200
+    assert "account-switcher" not in response.text
+
+
+@pytest.mark.parametrize("path, _current", _ACCOUNT_PAGES)
+def test_account_pages_404_for_an_account_the_user_does_not_have(client, path, _current):
+    test_client, _, fake_auth, _ = client
+    _logged_in(test_client, fake_auth)
+
+    response = test_client.get(path, params={"account": "ghost"})
+
+    assert response.status_code == 404
+    assert "That account doesn't exist." in response.text
+    assert 'href="/accounts"' in response.text
+    assert "stakehold_csrf" in response.cookies
+
+
+@pytest.mark.parametrize("path, _current", _ACCOUNT_PAGES)
+def test_account_pages_degrade_when_accounts_cannot_be_listed(client, path, _current):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.list_accounts_error = PortfolioUnavailable("down")
+
+    response = test_client.get(path, params={"account": "main"})
+
+    # Unknown is not "doesn't exist": an outage must not 404 a real account.
+    assert response.status_code == 200
+    assert 'class="account-header"' in response.text
+    assert "account-switcher" not in response.text
+
+
+def test_transaction_error_rerender_keeps_the_account_header(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.list_accounts_result = [_account("main", broker="globex")]
+    token = _transactions_new_csrf_token(test_client, "main")
+    fake_portfolio.add_transaction_error = InvalidPortfolioRequest("native_amount is required")
+
+    response = test_client.post("/transactions/new", data=_transaction_form_data(token))
+
+    assert response.status_code == 422
+    assert 'class="account-header"' in response.text
+    assert "globex" in response.text
+
+
+def test_import_error_rerender_keeps_the_account_header(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.list_accounts_result = [_account("main", broker="globex")]
+    token = _transactions_import_csrf_token(test_client, "main")
+    fake_portfolio.import_transactions_error = InvalidPortfolioRequest("no parser registered")
+
+    response = test_client.post(
+        "/transactions/import",
+        data={"account_label": "main", "csrf_token": token},
+        files={"file": ("export.csv", b"a,b\n1,2\n", "text/csv")},
+    )
+
+    assert response.status_code == 422
+    assert 'class="account-header"' in response.text
+    assert "globex" in response.text
+
+
+def test_a_successful_write_does_not_fetch_the_account_header(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    token = _transactions_new_csrf_token(test_client, "main")
+    fake_portfolio.list_accounts_calls = 0
+    fake_portfolio.add_transaction_result = TransactionWriteResult(
+        status="ok", rows_saved=1, transactions_saved=1
+    )
+
+    response = test_client.post(
+        "/transactions/new", data=_transaction_form_data(token), follow_redirects=False
+    )
+
+    assert response.status_code == 303
+    assert fake_portfolio.list_accounts_calls == 0

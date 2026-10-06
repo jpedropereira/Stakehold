@@ -1,18 +1,13 @@
 {% extends "base.html" %}
 {% block title %}Portfolio — {{ account_label }} — Stakehold{% endblock %}
 {% block content %}
-{% if not_found %}
-<section class="card">
-  <h1>{{ account_label }}</h1>
-  <p class="entry-empty">That account doesn't exist.</p>
-</section>
-{% else %}
+{% include "partials/_account_header.html" %}
 {% if error %}
 <p class="confirmation-banner">{{ error }}</p>
 {% endif %}
 
 <section class="card">
-  <h1>{{ account_label }} — positions</h1>
+  <h1>Positions</h1>
   {% if positions %}
   <table class="positions-table">
     <thead>
@@ -60,5 +55,4 @@
   <p class="entry-empty">No return history yet — returns appear once Stakehold has prices for your holdings' dates.</p>
   {% endif %}
 </section>
-{% endif %}
 {% endblock %}

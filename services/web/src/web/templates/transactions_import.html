@@ -1,9 +1,9 @@
 {% extends "base.html" %}
 {% block title %}Import broker file — Stakehold{% endblock %}
 {% block content %}
+{% include "partials/_account_header.html" %}
 <section class="card">
   <h1>Import broker file</h1>
-  <p class="entry-subtitle">Account: {{ account_label }}</p>
   {% if imported is not none %}
   <p class="confirmation-banner">Imported <span class="mono">{{ imported }}</span> transaction(s).</p>
   {% endif %}
