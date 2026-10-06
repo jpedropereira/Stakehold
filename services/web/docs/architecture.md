@@ -1,7 +1,7 @@
 # web architecture
 
-**Status: foundation, auth pages (task 10), portfolio entry UI (task 11), and portfolio view UI
-(task 12) implemented.**
+**Status: foundation, auth pages (task 10), portfolio entry UI (task 11), portfolio view UI
+(task 12), and dark mode (UI-3) implemented.**
 
 ## Responsibility
 
@@ -22,10 +22,11 @@ calls [`portfolio`](../../portfolio/docs/architecture.md), `data-store`, and
     `brand/tokens.css`, the brand's single source of truth.
   - *Semantic aliases* (`--surface`, `--surface-raised`, `--text`, `--text-muted`, `--border`,
     `--border-control`, `--accent`, `--on-accent`, `--gain`, `--loss`, `--focus-ring`) are
-    defined in the one
-    `:root` block at the top of `static/web.css`, and that block is the only place in the file a
-    brand *color* token may appear. Every rule styles through the aliases, so a theme (dark mode,
-    UI-3) only re-points about ten aliases instead of rewriting rules one by one.
+    defined in the
+    `:root` block at the top of `static/web.css`. That block and the dark-theme blocks after it
+    (see "Theme" under "Key decisions") are the only places in the file a brand *color* token may
+    appear. Every rule styles through the aliases, so the dark theme re-points about ten aliases
+    instead of rewriting rules one by one.
     `--on-accent` exists separately from `--text` because text on a gold button stays stone in
     either theme, while body text flips. `--focus-ring` is `--gold-deep`, not gold: gold on
     parchment is about 2.2:1, under WCAG's 3:1 minimum for a focus indicator. UI-1 first used
@@ -41,11 +42,11 @@ calls [`portfolio`](../../portfolio/docs/architecture.md), `data-store`, and
   `.field` wrapping a label and its control, and `.btn` with `.btn-primary`/`.btn-ghost`) instead
   of per-page copies, and every interactive element gets a deep-gold `:focus-visible` outline.
   `tests/unit/test_templates.py` enforces all of this mechanically: no hardcoded hex value, no
-  brand color token outside the alias block (the list is read from `tokens.css`, so new brand
+  brand color token outside the theme blocks (the list is read from `tokens.css`, so new brand
   colors are covered automatically), no CSS class that no template uses, no template class
   that `web.css` doesn't define, and no form control bordered with `--border`.
-  `tests/unit/test_brand_contrast.py` measures each alias against both surfaces for WCAG AA,
-  and rejects a self-referencing alias.
+  `tests/unit/test_brand_contrast.py` measures each alias against both surfaces for WCAG AA, in
+  each theme, and rejects a self-referencing alias.
 - **`async def` route handlers and dependencies**, backed by one `httpx.AsyncClient` opened in
   the FastAPI lifespan. Every route ultimately does at least one `auth` call (`require_user`/
   `optional_user` alone means that's true even for `GET /`), and FastAPI dispatches every sync
@@ -189,20 +190,62 @@ calls [`portfolio`](../../portfolio/docs/architecture.md), `data-store`, and
   replay anomaly `positions/calculator.py` warns about but still computes, not a modeled short
   position, and hiding it would hide the thing a user most needs to notice.
 - **Chart.js is vendored (`static/vendor/chart.min.js`), and the chart reads its colors from
-  brand tokens at runtime rather than from a hardcoded hex value.** `script-src 'self'` (no CDN
+  the semantic tokens at runtime rather than from a hardcoded hex value.** `script-src 'self'` (no CDN
   exception, no `unsafe-inline`, no nonce) rules out both a CDN `<script src>` and an inline
   `<script>` block with real logic — this codebase has never had one, and adding the first here
   would either be silently blocked by the browser or force a CSP weakening this task's own
   no-CDN framing argues against. The chart's numeric data is embedded via a non-executable
   `<script type="application/json">` data island in `portfolio.html` (inspected as data, not run
   as script — needs no `script-src` permission to be read); the logic (`getComputedStyle(...)
-  .getPropertyValue('--forest')` etc., and the `Chart` instantiation) lives in a same-origin
+  .getPropertyValue('--gain')` etc., and the `Chart` instantiation) lives in a same-origin
   `static/portfolio_chart.js`, loaded exactly like vendored htmx. `test_templates.py`'s new
   `test_templates_have_no_inline_executable_script` makes the "no inline `<script>` with logic"
   invariant mechanical rather than only reviewed by eye. The chart uses a `category` x-axis, not
   Chart.js's `time` scale, to avoid vendoring a second date-adapter dependency just to plot daily
   points — a calendar gap renders as an equal-width step rather than a proportionally wider one,
-  an accepted v1 simplification.
+  an accepted v1 simplification. Since UI-3 it reads the semantic tokens (`--gain`, `--loss`,
+  `--border`, `--text-muted`), not brand tokens, so it follows the theme. A canvas doesn't
+  restyle itself, so it re-reads them and redraws on `stakehold:themechange` (the header toggle)
+  and on a `prefers-color-scheme` change.
+- **Theme (UI-3): a cookie, applied on the server.** The choice (`light` / `dark` / `system`,
+  default `system`) is stored in a `stakehold_theme` cookie, set by `POST /theme`
+  (`api/theme.py`). A Jinja2Templates context processor (`theme_context`, registered in
+  `app.py`) gives every template a `theme`, including pages rendered outside `routes.py` such as
+  the 403 page. `base.html` renders `data-theme="light|dark"` on `<html>` from it, or no
+  attribute for `system`. This is server-side because the alternative, localStorage read by a
+  script, would have to run before first paint to avoid a flash of the wrong theme. That would
+  mean an inline `<script>` in `<head>`, which `script-src 'self'` forbids. A same-origin
+  `defer` script would run too late. The cookie is `HttpOnly`: only the server reads it, and JS
+  learns the theme from the attribute or the htmx trigger below.
+  - *CSS*: dark applies on `:root[data-theme="dark"]` (a manual choice) and on
+    `:root:not([data-theme="light"])` inside `@media (prefers-color-scheme: dark)` (no manual
+    choice, OS dark). CSS can't share one declaration block between an attribute selector and a
+    media query, so the dark aliases are written twice; `test_templates.py` asserts the two
+    copies are identical, and that every color alias the light block sets is re-pointed.
+    `color-scheme` is set alongside (`light dark` by default, one scheme per choice) so native
+    controls, scrollbars and the date picker follow. Rejected: CSS `light-dark()`, which would
+    need one block only. `getPropertyValue` returns an alias as the unresolved
+    `light-dark(...)` text, so the chart couldn't read its colors. It's also only Baseline since
+    2024.
+  - *Logo*: both `logo-stone.svg` and `logo-gold.svg` are in the header, and CSS shows one,
+    using the same selectors as the dark blocks. A server-chosen `<img>` plus `<picture>` for
+    `system` would also need JS to rebuild the element after an in-place switch. The cost is one
+    extra small SVG download per page. The hidden image is `display: none`, so screen readers
+    skip it.
+  - *Toggle*: a form in the header with three submit buttons (`name="theme"`), the current one
+    marked `aria-pressed="true"`. It's shown on every page rendered with a CSRF token, logged in
+    or not; the 403 page has no token, so no toggle. Without JS it posts and gets a 303 back to
+    the page it came from (`next`, the current path and query). With htmx (`hx-swap="none"`)
+    the route answers `200` with `HX-Trigger: {"stakehold:theme": "<value>"}`, and
+    `static/theme.js` sets the attribute and `aria-pressed`, then fires
+    `stakehold:themechange` for the chart.
+  - *`next` is a redirect target*, so `theme.safe_next` only accepts a same-site path. It refuses
+    `//host`, `/\host`, a scheme, and any control character or non-ASCII. Browsers strip tabs
+    and newlines, so `/\t/host` would otherwise become `//host`. Anything refused redirects to
+    `/`. Known sharp edge: on a page re-rendered after a failed POST (a form error), `next` is
+    the POST's own URL, so the no-JS toggle redirects to that route's GET. For
+    `/transactions/new` and `/transactions/import`, the account is lost from the query and the
+    GET answers 422. The htmx path doesn't navigate, so it's unaffected.
 - **`GET /portfolio` is per-account, read-only, and never triggers a rebuild.** Every `portfolio`
   positions/returns endpoint is `account_label`-scoped with no cross-account aggregation endpoint,
   so the view is one page per account (linked from `accounts.html`); a cross-account "whole
@@ -255,6 +298,7 @@ calls [`portfolio`](../../portfolio/docs/architecture.md), `data-store`, and
 | `POST /admin/mappings/{id}/delete` | `require_admin`, CSRF-checked; calls `DELETE /ticker-mappings/{id}`. POST rather than DELETE because a plain HTML form can't send DELETE and the page has no script. An already-deleted mapping (portfolio's 404, mapped to `TickerMappingNotFound` on this route only) re-renders with "That mapping was already deleted." |
 | `GET /login`, `GET /signup` | `optional_user` dependency: already logged in → redirected to `/`; otherwise renders the form with a fresh or existing CSRF cookie |
 | `POST /login`, `POST /signup` | CSRF-checked, calls `auth`, proxies the `Set-Cookie` `auth` returned, then redirects to `/` — a 303 for a plain form post, or an `HX-Redirect` response header for an `hx-post` (htmx's own XHR follows a 303 by swapping the *content* of the request's own response into the target element, which would drop a full HTML document into a form's error slot; `HX-Redirect` instead triggers a real browser navigation) |
+| `POST /theme` | No login needed. CSRF-checked: a mismatch changes nothing and redirects back (an `HX-Redirect` for htmx), like `POST /logout`, rather than re-rendering a form error. A value other than `light`/`dark`/`system` → `400`. Otherwise sets the `stakehold_theme` cookie (`HttpOnly`, `SameSite=Lax`, `Path=/`, one year, `Secure` per `WEB_COOKIE_SECURE`), then a 303 to the validated `next`, or for htmx a `200` with `HX-Trigger`. See "Theme" under "Key decisions" |
 | `POST /logout` | CSRF-checked, calls `auth` (best-effort — a failure is logged, not surfaced, since the user's intent to log out should not depend on `auth` being reachable), clears the session cookie locally, redirects to `/login` |
 | `GET /health` | `200 {"status": "ok"}`, unauthenticated, no dependency check (see "Key decisions") |
 | `GET /accounts` | `require_user`; lists the caller's accounts (`portfolio`'s `GET /accounts`) and available broker parsers (`GET /brokers`, for the create-account `<datalist>` hint) and renders the create-account form |
@@ -297,16 +341,21 @@ exists to close; no equivalent concern applies to the portfolio routes; see "Key
   `GET /portfolio`: `filter_open_positions` and `aggregate_portfolio_returns` (see "Key
   decisions"). No FastAPI/httpx dependency, tested in isolation, mirroring how `portfolio`'s own
   `returns/calculator.py` is a pure function.
+- `api/theme.py` (UI-3) — the theme cookie, `POST /theme` on its own router, the
+  `theme_context` context processor, and `safe_next`. It's a separate module because it's
+  self-contained and needs neither upstream client.
 - `api/{app,deps,routes,csrf,security_headers,htmx}.py` — app assembly and lifespan (opens/closes
   two shared `httpx.AsyncClient`s, one per upstream service), FastAPI dependencies (`require_user`,
   `require_admin`, `optional_user`, `client_ip`, `get_auth_client`/`get_portfolio_client`, and friends), the route
   handlers, the CSRF helpers, the security-headers middleware, and `htmx.py`'s
   `is_htmx`/`htmx_or_redirect` (shared by `routes.py`'s redirects and `app.py`'s `AuthRequired`
   handler, so every redirect in the app picks htmx-partial vs. full-navigation the same way).
-- `templates/`, `static/` — Jinja2 templates (`base.html`, which holds the skip link and the
-  top nav, plus one per page; `partials/_form_errors.html` for the htmx swap target;
-  `partials/_account_header.html`, included by the three account-scoped pages; and
+- `templates/`, `static/` — Jinja2 templates (`base.html`, which holds the skip link, the
+  top nav and the theme toggle, plus one per page; `partials/_form_errors.html` for the htmx swap
+  target; `partials/_account_header.html`, included by the three account-scoped pages; and
   `account_not_found.html`, their shared 404) and `web.css` plus vendored `htmx.min.js`.
+  Same-origin scripts: `htmx-error-swap.js`, `portfolio_chart.js`, and `theme.js` (UI-3, applies
+  a theme switch in place).
 - `cli.py` — `web serve` only, mirroring `auth serve`'s lazy-import-uvicorn shape.
 
 ## Deployment

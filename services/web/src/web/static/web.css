@@ -5,6 +5,8 @@
    tests/unit/test_templates.py). Every rule below styles through these, so a theme -- dark mode
    in particular -- is a matter of re-pointing the aliases, not rewriting rules. */
 :root {
+  /* Both, so with no manual choice the OS setting picks native controls' scheme too. */
+  color-scheme: light dark;
   --surface: var(--parchment);
   --surface-raised: var(--parchment-deep);
   --text: var(--stone);
@@ -31,6 +33,48 @@
   --space-8: 64px;
 
   --content-max: 1120px;
+}
+
+/* Theme (UI-3). base.html renders data-theme on <html> from the theme cookie: "light" or
+   "dark" for a manual choice, no attribute for "system". Dark applies on a manual choice, or
+   with no choice when the OS asks for it. CSS can't share one block between an attribute
+   selector and a media query, so the dark aliases are written twice; test_templates.py
+   asserts the two copies are identical. Only colors change: spacing and type stay in :root. */
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --surface: var(--stone-deep);
+  --surface-raised: var(--stone);
+  --text: var(--parchment);
+  --text-muted: var(--parchment-muted);
+  --border: var(--hairline-on-dark);
+  --border-control: var(--control-border-on-dark);
+  --accent: var(--gold);
+  --on-accent: var(--stone);
+  --gain: var(--forest-on-dark);
+  --loss: var(--oxblood-on-dark);
+  /* Gold passes 3:1 on both dark surfaces, so the dark ring needs no deeper shade. */
+  --focus-ring: var(--gold);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --surface: var(--stone-deep);
+    --surface-raised: var(--stone);
+    --text: var(--parchment);
+    --text-muted: var(--parchment-muted);
+    --border: var(--hairline-on-dark);
+    --border-control: var(--control-border-on-dark);
+    --accent: var(--gold);
+    --on-accent: var(--stone);
+    --gain: var(--forest-on-dark);
+    --loss: var(--oxblood-on-dark);
+    --focus-ring: var(--gold);
+  }
 }
 
 * {
@@ -82,12 +126,19 @@ main:focus {
   border-bottom: 1px solid var(--border);
 }
 
+/* Wraps so the logo, nav, logout and theme toggle never push a phone-width page sideways. The
+   logo's auto margin pushes everything else right, logged in or not. */
 .site-header-inner {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-4);
+  gap: var(--space-3) var(--space-4);
   max-width: var(--content-max);
   margin-inline: auto;
+}
+
+.brand-mark {
+  margin-right: auto;
 }
 
 .brand-mark img {
@@ -96,11 +147,34 @@ main:focus {
   width: auto;
 }
 
+/* Both logo files are in the page; the theme decides which one shows (charter chapter I: gold
+   mark on dark surfaces, stone on light). The mark itself is never recolored. */
+.brand-mark .logo-on-dark {
+  display: none;
+}
+
+:root[data-theme="dark"] .brand-mark .logo-on-light {
+  display: none;
+}
+
+:root[data-theme="dark"] .brand-mark .logo-on-dark {
+  display: block;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .brand-mark .logo-on-light {
+    display: none;
+  }
+
+  :root:not([data-theme="light"]) .brand-mark .logo-on-dark {
+    display: block;
+  }
+}
+
 .site-nav {
   display: flex;
   align-items: center;
   gap: var(--space-5);
-  margin-left: auto;
 }
 
 .site-nav a,
@@ -122,6 +196,19 @@ main:focus {
   display: flex;
   align-items: center;
   gap: var(--space-3);
+}
+
+.theme-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+/* The current choice reads as selected text rather than a link. aria-pressed carries the state
+   for assistive tech; this only mirrors it visually. */
+.theme-toggle [aria-pressed="true"] {
+  font-weight: 600;
+  text-decoration: none;
 }
 
 .user-name {
