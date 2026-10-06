@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en"{% if theme != "system" %} data-theme="{{ theme }}"{% endif %}>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -9,11 +9,13 @@
   <link rel="stylesheet" href="/static/web.css">
   <script src="/static/vendor/htmx.min.js" defer></script>
   <script src="/static/htmx-error-swap.js" defer></script>
+  <script src="/static/theme.js" defer></script>
 </head>
 <body>
   <header class="site-header">
     <a href="/" class="brand-mark">
-      <img src="/brand/logos/logo-stone.svg" alt="Stakehold">
+      <img class="logo-on-light" src="/brand/logos/logo-stone.svg" alt="Stakehold">
+      <img class="logo-on-dark" src="/brand/logos/logo-gold.svg" alt="Stakehold">
     </a>
     {% if user %}
       <nav class="site-nav">
@@ -24,6 +26,18 @@
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <span class="user-name">{{ user.display_name }}</span>
         <button type="submit" class="btn btn-ghost">Log out</button>
+      </form>
+    {% endif %}
+    {% if csrf_token is defined %}
+      {# A plain POST that redirects back without JS; htmx swaps the theme in place instead
+         (static/theme.js). Pages rendered without a CSRF token (the 403 page) show no toggle. #}
+      <form action="/theme" method="post" class="theme-toggle" hx-post="/theme" hx-swap="none"
+            aria-label="Theme">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="next" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}">
+        {% for value, label in [("light", "Light"), ("dark", "Dark"), ("system", "System")] %}
+          <button type="submit" name="theme" value="{{ value }}" class="btn btn-ghost" aria-pressed="{{ 'true' if theme == value else 'false' }}">{{ label }}</button>
+        {% endfor %}
       </form>
     {% endif %}
   </header>

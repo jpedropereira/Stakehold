@@ -42,7 +42,7 @@ numbers. Code comments and docs throughout the repo say "task 9", "task 13", and
 |----|------|-------------|--------|
 | UI-1 | [Design-system foundation](#ui-1-design-system-foundation) | — | done |
 | UI-2 | [Dark palette proposal & brand sign-off](#ui-2-dark-palette-proposal--brand-sign-off) | — | done |
-| UI-3 | [Dark mode](#ui-3-dark-mode) | UI-1, UI-2 | ready |
+| UI-3 | [Dark mode](#ui-3-dark-mode) | UI-1, UI-2 | done |
 | UI-4 | [App shell & navigation](#ui-4-app-shell--navigation) | UI-1 | ready |
 | UI-5 | [Number & date formatting](#ui-5-number--date-formatting) | — | ready |
 | UI-6 | [Account portfolio page redesign](#ui-6-account-portfolio-page-redesign) | UI-4, UI-5 | blocked |
@@ -139,32 +139,55 @@ UI-3. Ratios are recorded in chapter II of the charter and enforced by
 
 ### UI-3. Dark mode
 
-**Status:** ready
+**Status:** done
 
 Depends on UI-1 (semantic aliases to re-point) and UI-2 (signed-off values).
 
-- `brand/tokens.css` gains the dark values under both `:root[data-theme="dark"]` (manual choice)
-  and `@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { … } }` (system
-  default), and sets `color-scheme` so native form controls, scrollbars and the date picker follow.
-- **Choice persisted in a cookie** (`theme` = `light` | `dark` | `system`, default `system`). A new
+- `web.css` re-points its semantic aliases to UI-2's dark tokens under both
+  `:root[data-theme="dark"]` (manual choice) and
+  `@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { … } }` (system
+  default), and sets `color-scheme` so native form controls, scrollbars and the date picker
+  follow. `brand/tokens.css` is unchanged: UI-2 already added the raw dark values.
+- **Choice persisted in a cookie** (`stakehold_theme` = `light` | `dark` | `system`, default
+  `system`). A new
   CSRF-checked `POST /theme` sets it and redirects back. `base.html` renders `data-theme` on
   `<html>` from the cookie **on the server**, so a manual choice applies with no flash of the
   wrong theme and no inline script. `system` renders no attribute and leaves it to the media
   query.
 - A header toggle: a small form (light / dark / system) that works as a plain POST and is
   htmx-enhanced to switch without a full reload.
-- The logo swaps between `logo-stone.svg` and `logo-gold.svg` by theme: `<picture>` with a
-  `prefers-color-scheme` `<source>` for `system`, and a server-chosen `<img>` for a manual
-  choice. The mark itself is never recolored.
+- The logo swaps between `logo-stone.svg` and `logo-gold.svg` by theme: both are rendered, and
+  CSS shows one using the same selectors as the dark aliases. The mark itself is never recolored.
 - `portfolio_chart.js` reads the semantic tokens (`--gain`, `--loss`, `--border`, `--text-muted`)
   rather than raw brand tokens, and redraws when the theme changes (a `matchMedia` listener plus
   the toggle's swap event).
 
-Files: `brand/tokens.css`, `templates/base.html`, `api/routes.py` (or a small new module),
-`static/portfolio_chart.js`, `static/theme.js` (new, if htmx alone isn't enough), `docs/architecture.md`.
+Files: `static/web.css`, `templates/base.html`, `api/theme.py` (new), `api/app.py`,
+`static/portfolio_chart.js`, `static/theme.js` (new), `docs/architecture.md`.
 
 Tests: `POST /theme` (each valid value, invalid value rejected, CSRF required, cookie attributes);
 `data-theme` rendered correctly per cookie value, including no cookie; hex-scan still green.
+
+As built (decided with the user before implementation):
+- **The dark blocks live in `web.css`, not `tokens.css`** as first written. UI-1 made the aliases
+  the thing a theme re-points, and UI-2 had already added the raw dark tokens to `tokens.css`.
+  The dark block is written twice (attribute selector and media query), so a new test asserts
+  the copies are identical and re-point every color alias. The contrast test now covers the
+  dark aliases too.
+- **Logo via CSS**, not `<picture>` plus a server-chosen `<img>`. That approach would have needed
+  JS to rebuild the element after an in-place switch.
+- `theme` reaches every template through a Jinja2Templates context processor, so no route
+  changed, and the 403 page (rendered by an app-level handler) follows the cookie too.
+- The toggle is three submit buttons with `aria-pressed`. Its redirect target is a hidden
+  `next`, validated as a same-site path. The htmx path gets an `HX-Trigger` instead of a
+  redirect, and `theme.js` applies it.
+- Route tests are in a new `tests/unit/test_theme.py`, since `test_routes.py` is near the 64KB
+  file limit.
+- Checked in Chromium (Playwright, fake upstreams): system light and dark, manual over the OS
+  setting, the htmx switch without a reload, the no-JS post and redirect, the chart redrawing on
+  both the toggle and an OS change, and no horizontal scroll at 360px. Under the strict CSP the
+  console shows one blocked inline style per page load. It's also on `main`, so it predates
+  UI-3 (probably htmx's indicator `<style>`); worth picking up with UI-12's `hx-indicator` work.
 
 ### UI-4. App shell & navigation
 

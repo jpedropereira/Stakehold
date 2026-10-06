@@ -4,15 +4,25 @@ document.addEventListener("DOMContentLoaded", () => {
   if (!canvas || !dataEl) return;
 
   const points = JSON.parse(dataEl.textContent);
-  const style = getComputedStyle(document.documentElement);
-  const forest = style.getPropertyValue("--forest").trim();
-  const oxblood = style.getPropertyValue("--oxblood").trim();
-  const hairline = style.getPropertyValue("--hairline").trim();
+
+  // Semantic tokens, not brand tokens, so the chart follows the theme like the rest of the
+  // page. Custom properties resolve their var() references, so these are real colors.
+  const readColors = () => {
+    const style = getComputedStyle(document.documentElement);
+    const read = (name) => style.getPropertyValue(name).trim();
+    return {
+      gain: read("--gain"),
+      loss: read("--loss"),
+      grid: read("--border"),
+      ticks: read("--text-muted"),
+    };
+  };
+  let colors = readColors();
 
   const segmentColor = (ctx) =>
-    ctx.p0.parsed.y >= 0 && ctx.p1.parsed.y >= 0 ? forest : oxblood;
+    ctx.p0.parsed.y >= 0 && ctx.p1.parsed.y >= 0 ? colors.gain : colors.loss;
 
-  new Chart(canvas, {
+  const chart = new Chart(canvas, {
     type: "line",
     data: {
       labels: points.map((p) => p.date),
@@ -28,9 +38,23 @@ document.addEventListener("DOMContentLoaded", () => {
     options: {
       plugins: { legend: { display: false } },
       scales: {
-        x: { grid: { color: hairline } },
-        y: { grid: { color: hairline } },
+        x: { grid: { color: colors.grid }, ticks: { color: colors.ticks } },
+        y: { grid: { color: colors.grid }, ticks: { color: colors.ticks } },
       },
     },
   });
+
+  // A canvas doesn't restyle itself, so re-read the tokens and redraw when the theme changes:
+  // the OS switching scheme (only visible with no manual choice, but harmless otherwise) or the
+  // header toggle (static/theme.js).
+  const redraw = () => {
+    colors = readColors();
+    for (const axis of [chart.options.scales.x, chart.options.scales.y]) {
+      axis.grid.color = colors.grid;
+      axis.ticks.color = colors.ticks;
+    }
+    chart.update();
+  };
+  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", redraw);
+  document.addEventListener("stakehold:themechange", redraw);
 });
