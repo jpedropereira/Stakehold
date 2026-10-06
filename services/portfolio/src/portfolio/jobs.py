@@ -212,18 +212,20 @@ def _require_datastore_client(settings: Settings, *, command: str) -> HttpDataSt
     )
 
 
-# What a write job reports under `positions_rebuild` when it didn't run one, or when one raised.
-# Every other value is the rebuild run's own `status` (ok / partial / nothing_to_do).
-POSITIONS_REBUILD_SKIPPED = "skipped"
-POSITIONS_REBUILD_FAILED = "failed"
+# What a write job reports under `positions_rebuild`/`returns_rebuild` when it didn't run that
+# rebuild, or when it raised. Every other value is the rebuild run's own `status` (ok / partial /
+# nothing_to_do).
+REBUILD_SKIPPED = "skipped"
+REBUILD_FAILED = "failed"
 
 
-def _rebuild_positions_after_write(
+def _rebuild_after_write(
     *, saved: int, user_id: UUID, account_label: str, settings: Settings
-) -> str:
-    """Rebuild one account's positions right after a write to its transaction log committed, so
-    `position_snapshots` (all GET /positions ever reads) never silently lags the log it derives
-    from. Returns the value each write job reports as `positions_rebuild`.
+) -> dict[str, str]:
+    """Rebuild one account's positions, then its returns, right after a write to its
+    transaction log committed, so neither `position_snapshots` nor `return_snapshots` silently
+    lags the log they derive from. Returns the `positions_rebuild`/`returns_rebuild` pair each
+    write job reports.
 
     Skipped when the write saved nothing: the log is unchanged, so the snapshots are too.
 
@@ -233,19 +235,72 @@ def _rebuild_positions_after_write(
     saved transaction into an error response, and a caller retrying on that would be acting on
     a false signal. Deliberately reported alongside the write's own `status`, never folded into
     it: an unmapped instrument blocking its own ticker is a fact about the rebuild, not about
-    whether the transaction was saved. See docs/architecture.md's "Positions follow every
-    transaction write".
+    whether the transaction was saved. See docs/architecture.md's "Positions and returns follow
+    every transaction write".
     """
     if not saved:
         logger.info(
-            "positions rebuild skipped for account %r (user %s): no transactions were saved.",
+            "positions and returns rebuilds skipped for account %r (user %s): no transactions "
+            "were saved.",
             account_label,
             user_id,
         )
-        return POSITIONS_REBUILD_SKIPPED
-    return _rebuild_positions_isolated(
+        return {"positions_rebuild": REBUILD_SKIPPED, "returns_rebuild": REBUILD_SKIPPED}
+    positions, returns = _rebuild_derived_isolated(
         user_id=user_id, account_label=account_label, settings=settings, saved_what="transactions"
     )
+    return {"positions_rebuild": positions, "returns_rebuild": returns}
+
+
+def _rebuild_derived_isolated(
+    *, user_id: UUID, account_label: str, settings: Settings, saved_what: str
+) -> tuple[str, str]:
+    """One account's positions rebuild and then its returns rebuild, each isolated the way
+    _rebuild_positions_isolated describes. Returns the two statuses.
+
+    Returns come second because they're computed from position_snapshots, and are skipped
+    (not attempted) when the positions rebuild failed -- they'd be computed from stale
+    positions -- or when data-store isn't configured, since prices come from there. The second
+    case is logged with the command to run once it is, so a CLI-only setup with no data-store
+    still saves transactions.
+    """
+    positions = _rebuild_positions_isolated(
+        user_id=user_id, account_label=account_label, settings=settings, saved_what=saved_what
+    )
+    if positions == REBUILD_FAILED:
+        logger.info(
+            "returns rebuild skipped for account %r (user %s): its positions rebuild failed.",
+            account_label,
+            user_id,
+        )
+        return positions, REBUILD_SKIPPED
+    if not settings.datastore_api_url or not settings.internal_api_secret:
+        logger.warning(
+            "returns rebuild skipped for account %r (user %s): DATASTORE_API_URL and "
+            "INTERNAL_API_SECRET aren't both set -- run `portfolio rebuild-returns --user %s "
+            "--account %s` once they are.",
+            account_label,
+            user_id,
+            user_id,
+            account_label,
+        )
+        return positions, REBUILD_SKIPPED
+    try:
+        result = run_rebuild_returns(
+            user_id=user_id, account_label=account_label, settings=settings
+        )
+    except Exception:
+        logger.exception(
+            "returns rebuild after write failed for account %r (user %s) -- the %s are saved; "
+            "run `portfolio rebuild-returns --user %s --account %s` to retry.",
+            account_label,
+            user_id,
+            saved_what,
+            user_id,
+            account_label,
+        )
+        return positions, REBUILD_FAILED
+    return positions, result["status"]
 
 
 def _rebuild_positions_isolated(
@@ -269,7 +324,7 @@ def _rebuild_positions_isolated(
             user_id,
             account_label,
         )
-        return POSITIONS_REBUILD_FAILED
+        return REBUILD_FAILED
     return result["status"]
 
 
@@ -335,8 +390,10 @@ def run_add_transaction(
     result = build_run_result(
         units_total=saved, rows_saved=saved, failed=0, transactions_saved=saved
     )
-    result["positions_rebuild"] = _rebuild_positions_after_write(
-        saved=saved, user_id=user_id, account_label=account_label, settings=settings
+    result.update(
+        _rebuild_after_write(
+            saved=saved, user_id=user_id, account_label=account_label, settings=settings
+        )
     )
     return result
 
@@ -369,8 +426,10 @@ def run_import_transactions(
     result = build_run_result(
         units_total=saved, rows_saved=saved, failed=0, transactions_saved=saved
     )
-    result["positions_rebuild"] = _rebuild_positions_after_write(
-        saved=saved, user_id=user_id, account_label=account_label, settings=settings
+    result.update(
+        _rebuild_after_write(
+            saved=saved, user_id=user_id, account_label=account_label, settings=settings
+        )
     )
     return result
 
@@ -445,8 +504,10 @@ def run_import_cashflow(
     result = build_run_result(
         units_total=saved, rows_saved=saved, failed=0, transactions_saved=saved
     )
-    result["positions_rebuild"] = _rebuild_positions_after_write(
-        saved=saved, user_id=user_id, account_label=account_label, settings=settings
+    result.update(
+        _rebuild_after_write(
+            saved=saved, user_id=user_id, account_label=account_label, settings=settings
+        )
     )
     return result
 
@@ -614,18 +675,25 @@ def _describe_mapping(row: TickerMappingRow) -> str:
 def _rebuild_accounts_for_mapping(
     accounts: list[tuple[UUID, str]], *, settings: Settings, command: str
 ) -> dict[str, int]:
-    """Rebuild the positions of every account a mapping change affects -- across users, since
-    a mapping is global. Each rebuild is isolated: one failing doesn't stop the rest, and none
-    of them can undo the mapping change, which has already committed."""
-    logger.info("%s: rebuilding positions for %d account(s).", command, len(accounts))
-    failed = 0
+    """Rebuild the positions, then the returns, of every account a mapping change affects --
+    across users, since a mapping is global. Each rebuild is isolated: one failing doesn't stop
+    the rest, and none of them can undo the mapping change, which has already committed.
+    `rebuilds_failed` counts positions rebuilds, `returns_rebuilds_failed` returns rebuilds."""
+    logger.info("%s: rebuilding positions and returns for %d account(s).", command, len(accounts))
+    failed = returns_failed = 0
     for user_id, account_label in accounts:
-        status = _rebuild_positions_isolated(
+        positions, returns = _rebuild_derived_isolated(
             user_id=user_id, account_label=account_label, settings=settings, saved_what="mapping"
         )
-        if status == POSITIONS_REBUILD_FAILED:
+        if positions == REBUILD_FAILED:
             failed += 1
-    return {"accounts_rebuilt": len(accounts) - failed, "rebuilds_failed": failed}
+        if returns == REBUILD_FAILED:
+            returns_failed += 1
+    return {
+        "accounts_rebuilt": len(accounts) - failed,
+        "rebuilds_failed": failed,
+        "returns_rebuilds_failed": returns_failed,
+    }
 
 
 def _mapping_write_result(row: TickerMappingRow, rebuilds: dict[str, int]) -> dict:
@@ -755,6 +823,68 @@ def run_list_all_unmapped_instruments(*, settings: Settings | None = None) -> di
         for kind, identifier, broker in unmapped
     ]
     return result
+
+
+def run_rebuild_returns_all(*, settings: Settings | None = None) -> dict[str, int | str]:
+    """run_rebuild_returns for every user with an account -- what the returns-refresh container
+    runs on a schedule, so new prices from data-store's daily ingestion reach every holder's
+    returns without anyone touching their account. See docs/architecture.md's "Returns follow
+    new prices".
+
+    Each user's rebuild is isolated: one raising is logged with its traceback and counted in
+    `users_failed`, and the rest still run. Blocked tickers and failed pairs inside a user's own
+    run are summed, and make the whole run `partial`, the same as they would for that user.
+    """
+    configure_logging()
+    settings = settings or load_settings()
+    # Checked up front, not per user: without data-store every user's rebuild would fail the
+    # same way, and one SettingsError says so more plainly than N tracebacks.
+    _require_datastore_client(settings, command="rebuild-returns --all")
+    conn = get_connection(settings.database_url)
+    try:
+        user_ids = pipeline.list_user_ids(conn)
+    finally:
+        conn.close()
+
+    logger.info("rebuild-returns --all: rebuilding returns for %d user(s).", len(user_ids))
+    rows_saved = users_failed = tickers_blocked = pairs_failed = 0
+    for user_id in user_ids:
+        try:
+            result = run_rebuild_returns(user_id=user_id, settings=settings)
+        except Exception:
+            logger.exception(
+                "rebuild-returns --all: user %s failed -- run `portfolio rebuild-returns --user "
+                "%s` to retry; carrying on with the rest.",
+                user_id,
+                user_id,
+            )
+            users_failed += 1
+            continue
+        logger.info(
+            "rebuild-returns --all: user %s %s, %d return snapshot(s) saved.",
+            user_id,
+            result["status"],
+            result["rows_saved"],
+        )
+        rows_saved += result["rows_saved"]
+        tickers_blocked += result["tickers_blocked"]
+        pairs_failed += result["pairs_failed"]
+
+    logger.info(
+        "rebuild-returns --all: done, %d return snapshot(s) saved for %d user(s), %d failed.",
+        rows_saved,
+        len(user_ids) - users_failed,
+        users_failed,
+    )
+    return build_run_result(
+        units_total=len(user_ids),
+        rows_saved=rows_saved,
+        failed=users_failed + tickers_blocked + pairs_failed,
+        users_rebuilt=len(user_ids) - users_failed,
+        users_failed=users_failed,
+        tickers_blocked=tickers_blocked,
+        pairs_failed=pairs_failed,
+    )
 
 
 def get_tickers(*, settings: Settings | None = None) -> list[str]:

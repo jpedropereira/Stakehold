@@ -173,6 +173,11 @@ def add_account(conn, *, user_id: UUID, broker: str, account_label: str) -> int:
         return 0
 
 
+def list_user_ids(conn) -> list[UUID]:
+    """Every user with an account -- for the scheduled returns refresh across users."""
+    return accounts_repository.list_user_ids(conn)
+
+
 def list_accounts(conn, *, user_id: UUID) -> list[Account]:
     return accounts_repository.list_by_user(conn, user_id)
 

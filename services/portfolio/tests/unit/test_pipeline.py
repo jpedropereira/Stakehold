@@ -78,6 +78,9 @@ class FakeAccountsRepo:
     def list_by_user(self, conn, user_id):
         return [a for (u, _), a in self.by_key.items() if u == user_id]
 
+    def list_user_ids(self, conn):
+        return sorted({u for (u, _) in self.by_key}, key=str)
+
     def get_by_id(self, account_id):
         return next((a for a in self.by_key.values() if a.id == account_id), None)
 
@@ -2479,3 +2482,12 @@ def test_list_accounts_using_instrument_scopes_a_symbol_to_its_broker(repos, con
     )
 
     assert accounts == [(bea, "b")]
+
+
+def test_list_user_ids_returns_each_account_owner_once(repos, conn):
+    ann, bea = uuid.uuid4(), uuid.uuid4()
+    pipeline.add_account(conn, user_id=ann, broker="acme", account_label="a")
+    pipeline.add_account(conn, user_id=ann, broker="acme", account_label="b")
+    pipeline.add_account(conn, user_id=bea, broker="acme", account_label="a")
+
+    assert sorted(pipeline.list_user_ids(conn), key=str) == sorted([ann, bea], key=str)

@@ -151,6 +151,7 @@ class TickerMappingWriteResponse(BaseModel):
     # see jobs._mapping_write_result.
     accounts_rebuilt: int
     rebuilds_failed: int
+    returns_rebuilds_failed: int
     mapping: TickerMappingResponse
 
 
@@ -177,8 +178,11 @@ class TransactionsWriteResponse(BaseModel):
     transactions_saved: int
     # The follow-on positions rebuild's own status (ok / partial / nothing_to_do), or `skipped`
     # / `failed` -- kept apart from `status`, which describes only the write. See
-    # jobs._rebuild_positions_after_write.
+    # jobs._rebuild_after_write.
     positions_rebuild: str
+    # The returns rebuild chained after it, reported the same way -- also `skipped` when the
+    # positions rebuild failed or data-store isn't configured.
+    returns_rebuild: str
 
 
 class RebuildPositionsResponse(BaseModel):
