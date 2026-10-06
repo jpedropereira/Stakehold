@@ -18,65 +18,6 @@ jobs:
   lint-and-test:
     runs-on: ubuntu-latest
 
-    # The integration suite talks to a real Postgres rather than a fake, because what it
-    # covers is precisely the part a fake can't: COPY-into-temp-table upserts, ON CONFLICT
-    # semantics, and whether schema.sql's migrations stay idempotent. Locally that's the
-    # docker compose stack; here it's a service container, so the same tests run in both
-    # places instead of only on the machine of whoever remembered to start Postgres.
-    services:
-      postgres:
-        image: postgres:17
-        env:
-          POSTGRES_DB: data_store
-          POSTGRES_USER: data_store
-          POSTGRES_PASSWORD: ci-throwaway  # pragma: allowlist secret
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-
-      # Separate container, not a second database on the same instance: auth's real deployment
-      # is a dedicated Postgres per docs/architecture.md, and a shared instance here would let a
-      # cross-service query slip past a boundary CI is supposed to enforce.
-      auth-postgres:
-        image: postgres:17
-        env:
-          POSTGRES_DB: auth
-          POSTGRES_USER: auth
-          POSTGRES_PASSWORD: ci-throwaway  # pragma: allowlist secret
-        ports:
-          - 5434:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-
-      # app-postgres: the shared application database portfolio (and any future non-data-store,
-      # non-credential service) lives on. A third container for the same reason as auth's --
-      # portfolio's real deployment is a separate instance, and collapsing them here would let a
-      # cross-service query pass CI that production would refuse.
-      #
-      # POSTGRES_USER here is the admin bootstrap role, not portfolio's own -- see
-      # docs/architecture.md's deployment section. `db init` creates the scoped `portfolio`
-      # role itself, same as it does outside CI.
-      app-postgres:
-        image: postgres:17
-        env:
-          POSTGRES_DB: app
-          POSTGRES_USER: app_postgres_admin
-          POSTGRES_PASSWORD: ci-throwaway-admin  # pragma: allowlist secret
-        ports:
-          - 5435:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-
     steps:
       - uses: actions/checkout@v5
 
@@ -115,18 +56,16 @@ jobs:
       - name: Run unit test suite
         run: uv run pytest services
 
+      # The integration suite talks to a real Postgres rather than a fake, because what it covers
+      # is precisely the part a fake can't: COPY-into-temp-table upserts, ON CONFLICT semantics,
+      # and whether schema.sql's migrations stay idempotent. CI starts the same disposable
+      # databases a developer does (docker-compose.test.yml), and sets no database URLs of its
+      # own: the root conftest.py supplies them and refuses to run against anything that isn't
+      # one of those test servers. One setup, checked the same way in both places. This replaced
+      # GitHub service containers with CI-only URLs, which left local runs reading each
+      # service's dotenv file, i.e. the dev stack, and wiping it.
+      - name: Start test databases
+        run: docker compose -f docker-compose.test.yml up -d --wait
+
       - name: Run integration test suite
         run: uv run pytest services -m integration
-        env:
-          # Matches the service containers above. Ephemeral, created and destroyed with the
-          # job -- not a credential to anything that outlives it.
-          DATABASE_URL: postgresql://data_store:ci-throwaway@localhost:5432/data_store  # pragma: allowlist secret
-          AUTH_DATABASE_URL: postgresql://auth:ci-throwaway@localhost:5434/auth  # pragma: allowlist secret
-          AUTH_INTERNAL_SECRET: ci-throwaway-internal-secret  # pragma: allowlist secret
-          # Admin: the app-postgres service container's own bootstrap role (see above) --
-          # `db init` uses it once to create the `portfolio` role below, itself.
-          APP_POSTGRES_ADMIN_DATABASE_URL: postgresql://app_postgres_admin:ci-throwaway-admin@localhost:5435/app  # pragma: allowlist secret
-          PORTFOLIO_DATABASE_URL: postgresql://portfolio:ci-throwaway@localhost:5435/app  # pragma: allowlist secret
-          # portfolio's own HTTP API inbound secret (task 9) -- separate from AUTH_INTERNAL_SECRET
-          # above, matching the same inbound/outbound split settings.py documents.
-          PORTFOLIO_INTERNAL_SECRET: ci-throwaway-portfolio-internal-secret  # pragma: allowlist secret

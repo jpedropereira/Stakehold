@@ -1,0 +1,66 @@
+# Disposable Postgres instances for the integration suite. CI starts these exact containers too
+# (.github/workflows/ci.yml), so local and CI runs use the same databases:
+#
+#     docker compose -f docker-compose.test.yml up -d --wait
+#     uv run pytest services -m integration
+#     docker compose -f docker-compose.test.yml down
+#
+# Never run the integration suite against the dev stack: its fixtures TRUNCATE tables, and doing
+# that against the dev databases twice wiped real users and portfolio data. Each instance here is
+# kept apart from the dev stack in three ways, and the root conftest.py refuses an integration run
+# unless the first two hold:
+#   - database names end in `_test` (the dev databases never do);
+#   - the server runs with `stakehold.purpose=integration-test`, a setting the dev stack never sets;
+#   - its own ports (5543x, not the dev stack's 543x) and its own compose project, so it can
+#     run alongside the dev stack without either touching the other.
+# Data lives in tmpfs, so `down` (or a reboot) leaves nothing behind, and every run starts from
+# the empty databases the suites expect.
+#
+# One container per service database, mirroring production's topology: a single shared instance
+# would let a cross-service query pass here that the real deployment would refuse.
+#
+# The credentials are throwaway values for in-memory containers bound to localhost. The root
+# conftest.py's TEST_DATABASE_ENV holds the matching URLs; keep the two in step.
+
+name: stakehold-test
+
+x-test-postgres: &test-postgres
+  image: postgres:17
+  command: ["postgres", "-c", "stakehold.purpose=integration-test"]
+  tmpfs:
+    - /var/lib/postgresql/data
+  healthcheck:
+    test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+    interval: 2s
+    timeout: 5s
+    retries: 30
+
+services:
+  data-store-postgres-test:
+    <<: *test-postgres
+    environment:
+      POSTGRES_DB: data_store_test
+      POSTGRES_USER: data_store
+      POSTGRES_PASSWORD: test-throwaway  # pragma: allowlist secret
+    ports:
+      - "127.0.0.1:55432:5432"
+
+  auth-postgres-test:
+    <<: *test-postgres
+    environment:
+      POSTGRES_DB: auth_test
+      POSTGRES_USER: auth
+      POSTGRES_PASSWORD: test-throwaway  # pragma: allowlist secret
+    ports:
+      - "127.0.0.1:55434:5432"
+
+  # The bootstrap (admin) role, not portfolio's own: portfolio's `db init` creates the scoped
+  # `portfolio` role itself, as it does outside tests.
+  app-postgres-test:
+    <<: *test-postgres
+    environment:
+      POSTGRES_DB: app_test
+      POSTGRES_USER: app_postgres_admin
+      POSTGRES_PASSWORD: test-throwaway-admin  # pragma: allowlist secret
+    ports:
+      - "127.0.0.1:55435:5432"

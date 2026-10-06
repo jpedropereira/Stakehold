@@ -689,8 +689,11 @@ Split by what they need, and the split is enforced by a marker:
 | `tests/unit/` | nothing | Logic, resolution rules, output, error handling — with fake connections and stubbed sources |
 | `tests/integration/` | live Postgres | What a fake can't: `COPY` upserts, `ON CONFLICT` semantics, migration idempotency |
 
-`pytest` deselects `integration` by default, so a plain run is *not* the whole suite. CI runs both,
-the second against a service container. Details in [`../README.md`](../README.md).
+`pytest` deselects `integration` by default, so a plain run is *not* the whole suite. CI runs both.
+The integration suite always runs against the disposable test databases in the repo root's
+`docker-compose.test.yml`, in CI and locally, and never against this service's own `postgres`
+container, because its tests delete rows. The root `conftest.py` aborts an integration run aimed
+anywhere else. Details in [`../README.md`](../README.md).
 
 The unit tests stub at the layer boundaries above, which is the practical payoff of having them:
 

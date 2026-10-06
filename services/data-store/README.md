@@ -439,10 +439,13 @@ migrations stay idempotent across reruns. It's marked `integration` and deselect
 (root `pyproject.toml`), so it only runs when asked for:
 
 ```bash
-cd services/data-store && docker compose up -d postgres
-cd ../.. && uv run pytest services -m integration
+docker compose -f docker-compose.test.yml up -d --wait   # from the repo root
+uv run pytest services -m integration
 ```
 
-The tests read `DATABASE_URL` and apply the schema themselves, so an empty database is fine —
-no seeding step. CI runs them the same way against a Postgres service container, so they can't
-quietly rot into "passes on the machine of whoever started the database".
+They run against the disposable `data_store_test` database from the repo root's
+`docker-compose.test.yml`, never this service's own `postgres` container. The tests delete rows
+(all of `regimes`, plus test tickers in `raw_market_data` and `market_returns`), and the root
+`conftest.py` refuses to start an integration run against any other database. They apply the
+schema themselves, so the empty test database needs no seeding step. CI starts the same compose
+file, so they can't quietly rot into "passes on the machine of whoever started the database".

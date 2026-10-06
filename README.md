@@ -33,12 +33,16 @@ Tests are split in two. Unit tests are the default: the root `pyproject.toml` se
 `addopts = "-m 'not integration'"`, so a plain `pytest services` deliberately skips
 the integration suite and needs nothing running. **A green plain run is therefore not
 the whole suite** — the integration tests cover what a fake can't (real `COPY` upserts,
-`ON CONFLICT` semantics, schema migration idempotency) and need a live Postgres:
+`ON CONFLICT` semantics, schema migration idempotency) and need a live Postgres. Their
+fixtures truncate tables, so they run against disposable, in-memory test databases, never
+the dev stack:
 
 ```bash
-cd services/data-store && docker compose up -d postgres
-cd ../.. && uv run pytest services -m integration
+docker compose -f docker-compose.test.yml up -d --wait
+uv run pytest services -m integration
 ```
+
+The root `conftest.py` refuses to start an integration run against any other database.
 
 Commits run a fast, testmon-scoped subset of tests plus formatting/lint/secret
 checks; pushes run the full unit suite. See `.pre-commit-config.yaml` for the
@@ -60,9 +64,9 @@ uv run detect-secrets audit .secrets.baseline
 `.github/workflows/ci.yml` runs on every push to `main` and on pull requests.
 It runs the exact same `.pre-commit-config.yaml` hook chain via
 `pre-commit/action`, then both test suites — so CI can't drift from what runs
-locally. The integration step gets its Postgres from a service container, which
-is what keeps those tests from being "only run by whoever remembered to start
-the database".
+locally. The integration step starts the same `docker-compose.test.yml` test
+databases a developer does, which is what keeps those tests from being "only run
+by whoever remembered to start the database".
 
 ## Running the full stack
 
