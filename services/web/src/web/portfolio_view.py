@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 
-from web.portfolio_client.base import Position, Return
+from web.portfolio_client.base import Position, Return, UnmappedInstrument
 
 _ZERO = Decimal("0")
 
@@ -125,7 +125,9 @@ def summarize_latest_returns(latest: Sequence[Return]) -> PortfolioReturnPoint |
 @dataclass(frozen=True)
 class HoldingRow:
     """One open position joined to its ticker's latest return row. The figures from that row
-    are None while the ticker has none yet (no price, or no ticker mapping)."""
+    are None while the ticker has none yet: it is waiting for prices. (A missing ticker mapping
+    never gets this far -- an unmapped instrument has no position at all; see
+    unmapped_for_broker.)"""
 
     canonical_ticker: str
     quantity: Decimal
@@ -134,6 +136,10 @@ class HoldingRow:
     weight: Decimal | None
     unrealized_return_eur: Decimal | None
     unrealized_return_pct: Decimal | None
+
+    @property
+    def awaiting_prices(self) -> bool:
+        return self.market_value_eur is None
 
 
 def build_holdings(
@@ -164,3 +170,18 @@ def build_holdings(
         )
         for position, row in joined
     ]
+
+
+def unmapped_for_broker(
+    unmapped: Sequence[UnmappedInstrument], broker: str | None
+) -> list[UnmappedInstrument]:
+    """The user's unmapped instruments that could belong to an account at `broker`, sorted.
+
+    portfolio's per-user list says which broker each instrument came through, not which
+    account, so two accounts at the same broker each show both accounts' instruments -- a known
+    sharp edge (docs/architecture.md). An unknown broker (the account header degraded) shows
+    none rather than guessing.
+    """
+    if broker is None:
+        return []
+    return sorted((u for u in unmapped if u.broker == broker), key=lambda u: (u.kind, u.identifier))

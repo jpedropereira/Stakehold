@@ -79,9 +79,25 @@ def _transaction_write_result(body: dict) -> TransactionWriteResult:
             status=body["status"],
             rows_saved=body["rows_saved"],
             transactions_saved=body["transactions_saved"],
+            positions_rebuild=_opt_status(body, "positions_rebuild"),
+            returns_rebuild=_opt_status(body, "returns_rebuild"),
         )
     except (KeyError, TypeError) as exc:
         raise PortfolioUnavailable(f"malformed portfolio response: {exc}") from exc
+
+
+def _opt_status(body: dict, key: str) -> str | None:
+    """A rebuild status, or None when an older portfolio response doesn't carry it."""
+    value = body.get(key)
+    if value is not None and not isinstance(value, str):
+        raise TypeError(f"{key} is not a string")
+    return value
+
+
+def _unmapped_instrument(item: dict) -> UnmappedInstrument:
+    return UnmappedInstrument(
+        kind=item["kind"], identifier=item["identifier"], broker=item["broker"]
+    )
 
 
 def _decimal_str(value: Decimal | None) -> str | None:
@@ -300,17 +316,21 @@ class HttpPortfolioClient:
             _raise_for_status(response)
         return [_ticker_mapping(item) for item in _json_body(response)]
 
+    async def list_unmapped_instruments(self, *, user_id: str) -> list[UnmappedInstrument]:
+        response = await self._request("GET", "/instruments/unmapped", params={"user_id": user_id})
+        if response.status_code != 200:
+            _raise_for_status(response)
+        try:
+            return [_unmapped_instrument(item) for item in _json_body(response)]
+        except (KeyError, TypeError) as exc:
+            raise PortfolioUnavailable(f"malformed portfolio response: {exc}") from exc
+
     async def list_all_unmapped_instruments(self) -> list[UnmappedInstrument]:
         response = await self._request("GET", "/instruments/unmapped/all")
         if response.status_code != 200:
             _raise_for_status(response)
         try:
-            return [
-                UnmappedInstrument(
-                    kind=item["kind"], identifier=item["identifier"], broker=item["broker"]
-                )
-                for item in _json_body(response)
-            ]
+            return [_unmapped_instrument(item) for item in _json_body(response)]
         except (KeyError, TypeError) as exc:
             raise PortfolioUnavailable(f"malformed portfolio response: {exc}") from exc
 

@@ -62,6 +62,11 @@ class TransactionWriteResult:
     status: str
     rows_saved: int
     transactions_saved: int
+    # The follow-on rebuilds portfolio runs after the write (ok / partial / nothing_to_do /
+    # skipped / failed), reported apart from `status`, which is the write's own. None when an
+    # older portfolio response doesn't carry them.
+    positions_rebuild: str | None = None
+    returns_rebuild: str | None = None
 
 
 @dataclass(frozen=True)
@@ -136,6 +141,9 @@ class PortfolioClient(Protocol):
     async def list_latest_returns(self, *, user_id: str, account_label: str) -> list[Return]: ...
 
     async def list_ticker_mappings(self) -> list[TickerMapping]: ...
+
+    # This user's instruments with no ticker mapping, across all their accounts.
+    async def list_unmapped_instruments(self, *, user_id: str) -> list[UnmappedInstrument]: ...
 
     async def list_all_unmapped_instruments(self) -> list[UnmappedInstrument]: ...
 

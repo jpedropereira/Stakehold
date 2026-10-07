@@ -46,7 +46,7 @@ numbers. Code comments and docs throughout the repo say "task 9", "task 13", and
 | UI-4 | [App shell & navigation](#ui-4-app-shell--navigation) | UI-1 | done |
 | UI-5 | [Number & date formatting](#ui-5-number--date-formatting) | — | done |
 | UI-6 | [Account portfolio page redesign](#ui-6-account-portfolio-page-redesign) | UI-4, UI-5 | done |
-| UI-7 | [Data freshness & rebuild feedback](#ui-7-data-freshness--rebuild-feedback) | UI-6 | ready |
+| UI-7 | [Data freshness & rebuild feedback](#ui-7-data-freshness--rebuild-feedback) | UI-6 | done |
 | UI-8 | [Transactions list](#ui-8-transactions-list) | UI-4, UI-5 | ready |
 | UI-9 | [Transaction entry form UX](#ui-9-transaction-entry-form-ux) | UI-1 | ready |
 | UI-10 | [Accounts & import pages](#ui-10-accounts--import-pages) | UI-4 | ready |
@@ -309,7 +309,7 @@ As built (decided with the user before implementation):
 
 ### UI-7. Data freshness & rebuild feedback
 
-**Status:** ready
+**Status:** done
 
 Depends on UI-6.
 
@@ -335,6 +335,27 @@ never looks like a bug.
 Tests: the write-result fields parsed by the client, including an older response missing them;
 the confirmation message for each rebuild status; route and template tests for the two pending
 states, and for the admin-only mapping link.
+
+As built (decided with the user before implementation):
+- **An unmapped instrument is a notice, not a holdings row.** It never becomes a position:
+  `portfolio`'s positions rebuild drops it before it has a ticker, so there is no row to label.
+  The notice sits under the Holdings heading, lists `kind identifier` in mono, and shows even with
+  zero holdings. Admins get a "Map them" link to `/admin/mappings`; everyone else is told "An
+  admin needs to map them."
+- **Filtered by the account's broker**, because `GET /instruments/unmapped` is per user. This is
+  a sharp edge: two accounts at the same broker each show the other's unmapped instruments.
+  Recorded in `docs/architecture.md`, and the fix is listed under [Deferred](#deferred).
+- **"Waiting for prices" is one state**, not split into "untracked ticker" and "not priced yet".
+  It shows only when `/returns/latest` answered; if that call failed, the row keeps its `—`s.
+- **The outcome travels in the redirect's query string** (`positions=`, `returns=`), like the
+  admin mappings page's. It is turned into copy by a new pure `rebuild_outcome.py`, with
+  unknown values ignored. `saved` is now the saved count, so a duplicate reference (`saved=0`)
+  or a re-imported file (`imported=0`) says "Nothing new to save/import" instead of "saved". A
+  failed positions rebuild never promises the scheduled refresh, which recomputes returns only.
+- The freshness line names no interval ("Prices update daily; returns are recalculated a few
+  times a day."), since the refresh period is `portfolio`'s config.
+- Route tests are in a new `tests/unit/test_write_outcome.py`, because `test_routes.py` is at
+  the 64KB limit.
 
 ### UI-8. Transactions list
 
@@ -396,8 +417,8 @@ Depends on UI-4.
   state explains the steps: create an account, then add or import transactions.
 - **Import**: a styled file drop zone (a real `<input type="file">` underneath, so it works without
   JS), the account and broker shown, the 20 MB limit stated, and after a successful import a
-  result summary (with UI-7's rebuild outcome, if done) and next steps (view holdings, view
-  transactions).
+  result summary (with UI-7's rebuild outcome, already in the banner via `rebuild_outcome.py`)
+  and next steps (view holdings, view transactions).
 
 Tests: route/template tests for the empty-state disclosure behaviour and the import summary.
 
@@ -466,3 +487,5 @@ per `.claude/rules/data-schema.md`), which this chunk deliberately excludes:
 - Renaming or deleting an account.
 - A server-side cross-account return-over-time series (UI-11 shows the current snapshot only).
 - Pagination or filtering of transactions, if `GET /transactions` doesn't already support it.
+- Unmapped instruments per account, not per user (UI-7 filters by broker, so two accounts at one
+  broker share a list).

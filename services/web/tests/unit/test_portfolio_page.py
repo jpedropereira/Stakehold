@@ -1,4 +1,5 @@
-"""GET /portfolio: the account's holdings, summary tiles and return chart (task 12, UI-6).
+"""GET /portfolio: the account's holdings, summary tiles and return chart (task 12, UI-6), and
+what is still pending: holdings waiting for prices, instruments waiting for a mapping (UI-7).
 
 Kept apart from test_routes.py, which is over the repo's 64KB file limit. Like test_theme.py,
 it carries its own minimal fakes: only the calls this one page makes.
@@ -16,7 +17,7 @@ from web.api.app import create_app
 from web.api.deps import get_auth_client, get_portfolio_client
 from web.auth_client.base import AuthResult, AuthUser
 from web.auth_client.errors import SessionInvalid
-from web.portfolio_client.base import Account, Position, Return
+from web.portfolio_client.base import Account, Position, Return, UnmappedInstrument
 from web.portfolio_client.errors import AccountNotFound, PortfolioUnavailable
 from web.settings import Settings
 
@@ -51,10 +52,21 @@ class FakePortfolioClient:
         self.list_returns_error: Exception | None = None
         self.list_latest_returns_result: list = []
         self.list_latest_returns_error: Exception | None = None
+        self.list_unmapped_instruments_result: list = []
+        self.list_unmapped_instruments_error: Exception | None = None
+        self.list_accounts_error: Exception | None = None
         self.calls: list[tuple] = []
 
     async def list_accounts(self, *, user_id):
+        if self.list_accounts_error:
+            raise self.list_accounts_error
         return self.list_accounts_result
+
+    async def list_unmapped_instruments(self, *, user_id):
+        self.calls.append(("list_unmapped_instruments", user_id))
+        if self.list_unmapped_instruments_error:
+            raise self.list_unmapped_instruments_error
+        return self.list_unmapped_instruments_result
 
     async def list_positions(self, *, user_id, account_label):
         self.calls.append(("list_positions", user_id, account_label))
@@ -238,6 +250,7 @@ def test_portfolio_page_fetches_positions_returns_and_latest_returns(client):
         ("list_latest_returns", user_id, "main"),
         ("list_positions", user_id, "main"),
         ("list_returns", user_id, "main"),
+        ("list_unmapped_instruments", user_id),
     ]
 
 
@@ -343,12 +356,11 @@ def test_portfolio_page_shows_a_holding_with_no_return_row_yet(client):
 
     response = test_client.get("/portfolio", params={"account": "main"})
 
+    # One cell spanning market value, weight and both return columns, instead of four dashes.
     assert _holding_cells(response.text, "NEW")[3:] == [
-        '<span class="mono">—</span>',
-        '<span class="mono">—</span>',
-        '<span class="mono">—</span>',
-        '<span class="mono">—</span>',
+        '<span class="entry-empty">Waiting for prices</span>'
     ]
+    assert 'colspan="4"' in response.text
     assert _holding_cells(response.text, "AAPL")[4] == '<span class="mono">100.00%</span>'
 
 
@@ -486,7 +498,9 @@ def test_portfolio_page_degrades_when_latest_returns_unavailable(client):
     assert "Can&#39;t reach the portfolio service" in response.text
     assert _tile(response.text, "Market value") is None
     assert "Prices as of" not in response.text
+    # Prices may well exist: the call failed, so the row shows dashes, not "Waiting for prices".
     assert _holding_cells(response.text, "AAPL")[3] == '<span class="mono">—</span>'
+    assert "Waiting for prices" not in response.text
     assert 'id="returns-chart"' in response.text
 
 
@@ -502,3 +516,136 @@ def test_portfolio_page_degrades_when_returns_unavailable(client):
     assert "Can&#39;t reach the portfolio service" in response.text
     assert "AAPL" in response.text
     assert "No return history yet" in response.text
+
+
+# --- UI-7: instruments waiting for a ticker mapping, and freshness ---------------------------
+
+
+def _unmapped(identifier, broker="acme", kind="ISIN") -> UnmappedInstrument:
+    return UnmappedInstrument(kind=kind, identifier=identifier, broker=broker)
+
+
+def _mapping_notice(html):
+    match = re.search(r'<p class="entry-subtitle" id="unmapped-notice">(.*?)</p>', html, re.DOTALL)
+    return None if match is None else match.group(1)
+
+
+def test_portfolio_page_lists_instruments_waiting_for_a_mapping_at_this_broker(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.list_positions_result = [_position()]
+    fake_portfolio.list_unmapped_instruments_result = [
+        _unmapped("IE00B4L5Y983"),
+        _unmapped("SGLD", kind="SYMBOL"),
+        _unmapped("US0000000001", broker="globex"),
+    ]
+
+    response = test_client.get("/portfolio", params={"account": "main"})
+
+    notice = _mapping_notice(response.text)
+    assert notice.startswith("Waiting for a ticker mapping:")
+    assert '<span class="mono">ISIN IE00B4L5Y983</span>' in notice
+    assert '<span class="mono">SYMBOL SGLD</span>' in notice
+    assert "US0000000001" not in response.text
+    assert "They appear as holdings once mapped." in notice
+
+
+def test_portfolio_page_shows_the_mapping_notice_with_no_holdings_yet(client):
+    # The case that used to look like a bug: a buy saved, and nothing on the page.
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.list_unmapped_instruments_result = [_unmapped("IE00B4L5Y983")]
+
+    response = test_client.get("/portfolio", params={"account": "main"})
+
+    assert "IE00B4L5Y983" in _mapping_notice(response.text)
+    assert "No positions yet" in response.text
+
+
+def test_portfolio_page_mapping_notice_tells_a_regular_user_an_admin_maps_them(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.list_unmapped_instruments_result = [_unmapped("IE00B4L5Y983")]
+
+    response = test_client.get("/portfolio", params={"account": "main"})
+
+    notice = _mapping_notice(response.text)
+    assert "An admin needs to map them." in notice
+    assert "/admin/mappings" not in response.text
+
+
+def test_portfolio_page_mapping_notice_links_an_admin_to_the_mappings_page(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    admin = AuthUser(user_id="u1", email="ann@example.com", display_name="Ann", is_admin=True)
+    fake_auth.validate_result = AuthResult(user=admin, set_cookie=SESSION_COOKIE)
+    test_client.cookies.set("stakehold_session", "tok")
+    fake_portfolio.list_unmapped_instruments_result = [_unmapped("IE00B4L5Y983")]
+
+    response = test_client.get("/portfolio", params={"account": "main"})
+
+    notice = _mapping_notice(response.text)
+    assert '<a href="/admin/mappings">Map them</a>' in notice
+    assert "An admin needs to map them." not in notice
+
+
+def test_portfolio_page_has_no_mapping_notice_when_everything_is_mapped(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.list_unmapped_instruments_result = [_unmapped("X", broker="globex")]
+
+    response = test_client.get("/portfolio", params={"account": "main"})
+
+    assert _mapping_notice(response.text) is None
+
+
+def test_portfolio_page_degrades_when_unmapped_instruments_unavailable(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.list_positions_result = [_position()]
+    fake_portfolio.list_latest_returns_result = [_return_row()]
+    fake_portfolio.list_unmapped_instruments_error = PortfolioUnavailable("boom")
+
+    response = test_client.get("/portfolio", params={"account": "main"})
+
+    assert response.status_code == 200
+    assert "Can&#39;t reach the portfolio service" in response.text
+    assert _mapping_notice(response.text) is None
+    assert _holding_cells(response.text, "AAPL")[3] == '<span class="mono">€1,600.00</span>'
+
+
+def test_portfolio_page_shows_no_mapping_notice_when_the_broker_is_unknown(client):
+    # The account list failed, so the header degraded and the broker can't be matched.
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.list_accounts_error = PortfolioUnavailable("boom")
+    fake_portfolio.list_unmapped_instruments_result = [_unmapped("IE00B4L5Y983")]
+
+    response = test_client.get("/portfolio", params={"account": "main"})
+
+    assert response.status_code == 200
+    assert _mapping_notice(response.text) is None
+
+
+_FRESHNESS = "Prices update daily; returns are recalculated a few times a day."
+
+
+def test_portfolio_page_says_prices_refresh_automatically(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.list_positions_result = [_position()]
+    fake_portfolio.list_latest_returns_result = [_return_row()]
+
+    response = test_client.get("/portfolio", params={"account": "main"})
+
+    assert re.search(r'<p class="as-of">Prices as of .*?' + re.escape(_FRESHNESS), response.text)
+
+
+def test_the_empty_returns_state_says_prices_refresh_automatically(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.list_positions_result = [_position()]
+
+    response = test_client.get("/portfolio", params={"account": "main"})
+
+    assert "No return history yet" in response.text
+    assert _FRESHNESS in response.text

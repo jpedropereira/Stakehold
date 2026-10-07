@@ -598,3 +598,112 @@ async def test_list_all_unmapped_instruments_parses_instruments_with_optional_br
         ("ISIN", "IE00B4L5Y983", None),
         ("SYMBOL", "SGLD", "globex"),
     ]
+
+
+# --- UI-7: rebuild statuses on a write, and the user's own unmapped instruments ---
+
+
+async def _add_deposit(client: HttpPortfolioClient):
+    return await client.add_transaction(
+        user_id=USER_ID,
+        account_label="main",
+        broker_transaction_ref="ref-1",
+        transaction_type="DEPOSIT",
+        trade_datetime=datetime(2026, 1, 5, tzinfo=timezone.utc),
+        native_amount=Decimal("100.00"),
+        native_currency="EUR",
+    )
+
+
+async def test_add_transaction_parses_the_rebuild_statuses():
+    body = {
+        "status": "ok",
+        "rows_saved": 1,
+        "transactions_saved": 1,
+        "positions_rebuild": "partial",
+        "returns_rebuild": "failed",
+    }
+    client = _client(lambda request: httpx.Response(201, json=body))
+
+    result = await _add_deposit(client)
+
+    assert result.positions_rebuild == "partial"
+    assert result.returns_rebuild == "failed"
+
+
+async def test_add_transaction_tolerates_an_older_response_without_rebuild_statuses():
+    body = {"status": "ok", "rows_saved": 1, "transactions_saved": 1}
+    client = _client(lambda request: httpx.Response(201, json=body))
+
+    result = await _add_deposit(client)
+
+    assert result.positions_rebuild is None
+    assert result.returns_rebuild is None
+
+
+async def test_import_transactions_parses_the_rebuild_statuses():
+    body = {
+        "status": "ok",
+        "rows_saved": 3,
+        "transactions_saved": 3,
+        "positions_rebuild": "ok",
+        "returns_rebuild": "skipped",
+    }
+    client = _client(lambda request: httpx.Response(200, json=body))
+
+    result = await client.import_transactions(
+        user_id=USER_ID,
+        account_label="main",
+        filename="export.csv",
+        content=b"a,b\n",
+        content_type="text/csv",
+    )
+
+    assert (result.positions_rebuild, result.returns_rebuild) == ("ok", "skipped")
+
+
+async def test_a_non_string_rebuild_status_is_a_malformed_response():
+    body = {
+        "status": "ok",
+        "rows_saved": 1,
+        "transactions_saved": 1,
+        "positions_rebuild": 3,
+        "returns_rebuild": "ok",
+    }
+    client = _client(lambda request: httpx.Response(201, json=body))
+
+    with pytest.raises(PortfolioUnavailable, match="malformed"):
+        await _add_deposit(client)
+
+
+async def test_list_unmapped_instruments_is_scoped_to_the_user():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["path"] = request.url.path
+        captured["params"] = dict(request.url.params)
+        return httpx.Response(
+            200, json=[{"kind": "ISIN", "identifier": "IE00B4L5Y983", "broker": "acme"}]
+        )
+
+    unmapped = await _client(handler).list_unmapped_instruments(user_id=USER_ID)
+
+    assert captured["path"] == "/instruments/unmapped"
+    assert captured["params"] == {"user_id": USER_ID}
+    assert [(u.kind, u.identifier, u.broker) for u in unmapped] == [
+        ("ISIN", "IE00B4L5Y983", "acme")
+    ]
+
+
+async def test_list_unmapped_instruments_raises_unavailable_on_a_server_error():
+    client = _client(lambda request: httpx.Response(500, text="boom"))
+
+    with pytest.raises(PortfolioUnavailable):
+        await client.list_unmapped_instruments(user_id=USER_ID)
+
+
+async def test_list_unmapped_instruments_raises_unavailable_on_a_malformed_body():
+    client = _client(lambda request: httpx.Response(200, json=[{"kind": "ISIN"}]))
+
+    with pytest.raises(PortfolioUnavailable, match="malformed"):
+        await client.list_unmapped_instruments(user_id=USER_ID)

@@ -3,7 +3,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 from fastapi import (
     APIRouter,
@@ -36,7 +36,13 @@ from web.auth_client.errors import (
     InvalidRequest,
     RateLimited,
 )
-from web.portfolio_client.base import PortfolioClient, Position, Return
+from web.portfolio_client.base import (
+    PortfolioClient,
+    Position,
+    Return,
+    TransactionWriteResult,
+    UnmappedInstrument,
+)
 from web.portfolio_client.errors import (
     AccountLabelConflict,
     AccountNotFound,
@@ -49,7 +55,9 @@ from web.portfolio_view import (
     build_holdings,
     filter_open_positions,
     summarize_latest_returns,
+    unmapped_for_broker,
 )
+from web.rebuild_outcome import rebuild_outcome
 from web.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -903,8 +911,39 @@ async def _load_tickers(portfolio_client: PortfolioClient) -> tuple[list[str], s
         return [], _TICKERS_UNAVAILABLE
 
 
+def _query_int(request: Request, name: str) -> int | None:
+    raw = request.query_params.get(name, "")
+    return int(raw) if raw.isdigit() else None
+
+
+def _with_rebuild_statuses(url: str, result: TransactionWriteResult) -> str:
+    """The post-write redirect, plus portfolio's follow-on rebuild statuses, so the confirmation
+    page can say what they did (UI-7). A status an older portfolio doesn't report is left out."""
+    statuses = {
+        name: value
+        for name, value in (
+            ("positions", result.positions_rebuild),
+            ("returns", result.returns_rebuild),
+        )
+        if value is not None
+    }
+    return f"{url}&{urlencode(statuses)}" if statuses else url
+
+
+def _write_outcome(request: Request) -> str:
+    """The rebuild sentence for a confirmation page, from the redirect's query string.
+    rebuild_outcome ignores any status it doesn't know, so a hand-edited URL shows nothing."""
+    return rebuild_outcome(
+        request.query_params.get("positions"), request.query_params.get("returns")
+    )
+
+
 async def _transaction_new_context(
-    portfolio_client: PortfolioClient, account_label: str, *, saved: bool
+    portfolio_client: PortfolioClient,
+    account_label: str,
+    *,
+    saved: int | None = None,
+    outcome: str = "",
 ) -> dict:
     tickers, tickers_notice = await _load_tickers(portfolio_client)
     return {
@@ -913,6 +952,7 @@ async def _transaction_new_context(
         "tickers": tickers,
         "tickers_notice": tickers_notice,
         "saved": saved,
+        "outcome": outcome,
     }
 
 
@@ -927,10 +967,14 @@ async def transaction_new_form(
     portfolio_client: PortfolioClient = Depends(get_portfolio_client),
 ):
     csrf_token = ensure_csrf_cookie(request, response, cookie_secure=settings.cookie_secure)
-    saved = request.query_params.get("saved") == "1"
     header, form = await asyncio.gather(
         _account_header_context(portfolio_client, user.user_id, account),
-        _transaction_new_context(portfolio_client, account, saved=saved),
+        _transaction_new_context(
+            portfolio_client,
+            account,
+            saved=_query_int(request, "saved"),
+            outcome=_write_outcome(request),
+        ),
     )
     if header["account_known"] is False:
         return _render_account_not_found(
@@ -1027,7 +1071,7 @@ async def transaction_new_submit(
     form_context = {
         "user": user,
         **_account_page_context("add"),
-        **await _transaction_new_context(portfolio_client, account_label, saved=False),
+        **await _transaction_new_context(portfolio_client, account_label),
     }
 
     async def load_account_header() -> dict:
@@ -1089,8 +1133,14 @@ async def transaction_new_submit(
             **parsed,
         ),
         error_messages=_TRANSACTION_ERRORS,
-        on_success=lambda _result: _redirect(
-            request, response, f"/transactions/new?account={quote(account_label)}&saved=1"
+        on_success=lambda result: _redirect(
+            request,
+            response,
+            _with_rebuild_statuses(
+                f"/transactions/new?account={quote(account_label)}"
+                f"&saved={result.transactions_saved}",
+                result,
+            ),
         ),
         extra_context_loader=load_account_header,
         **form_context,
@@ -1116,8 +1166,6 @@ async def transaction_import_form(
         return _render_account_not_found(
             request, response, templates, user=user, csrf_token=csrf_token
         )
-    imported_raw = request.query_params.get("imported")
-    imported = int(imported_raw) if imported_raw and imported_raw.isdigit() else None
     return _render(
         request,
         response,
@@ -1128,7 +1176,8 @@ async def transaction_import_form(
             "csrf_token": csrf_token,
             "account_label": account,
             "error": None,
-            "imported": imported,
+            "imported": _query_int(request, "imported"),
+            "outcome": _write_outcome(request),
             **_account_page_context("import"),
             **header,
         },
@@ -1151,6 +1200,7 @@ async def transaction_import_submit(
         "user": user,
         "account_label": account_label,
         "imported": None,
+        "outcome": "",
         **_account_page_context("import"),
     }
 
@@ -1206,7 +1256,11 @@ async def transaction_import_submit(
         on_success=lambda result: _redirect(
             request,
             response,
-            f"/transactions/import?account={quote(account_label)}&imported={result.rows_saved}",
+            _with_rebuild_statuses(
+                f"/transactions/import?account={quote(account_label)}"
+                f"&imported={result.rows_saved}",
+                result,
+            ),
         ),
         extra_context_loader=load_account_header,
         **form_context,
@@ -1225,22 +1279,27 @@ class _PortfolioViewData:
     positions: list[Position]
     returns: list[Return]
     latest_returns: list[Return]
+    unmapped: list[UnmappedInstrument]
+    # Which calls degraded, so the page doesn't read a failed call's empty list as "none yet".
+    failed: frozenset[str]
     error: str | None
 
 
 async def _load_portfolio_view(
     portfolio_client: PortfolioClient, user_id: str, account_label: str
 ) -> _PortfolioViewData:
-    """Fetches this account's positions, return history and latest returns concurrently,
-    tolerating any of them failing independently -- except AccountNotFound, which is re-raised
-    rather than degraded: a bad account_label has nothing partial to show for any call, so the
-    caller renders a distinct 404 instead of the generic "service unavailable" banner."""
+    """Fetches this account's positions, return history and latest returns, plus the user's
+    unmapped instruments (UI-7), concurrently, tolerating any of them failing independently --
+    except AccountNotFound, which is re-raised rather than degraded: a bad account_label has
+    nothing partial to show for any call, so the caller renders a distinct 404 instead of the
+    generic "service unavailable" banner."""
     calls = {
         "positions": portfolio_client.list_positions(user_id=user_id, account_label=account_label),
         "returns": portfolio_client.list_returns(user_id=user_id, account_label=account_label),
         "latest returns": portfolio_client.list_latest_returns(
             user_id=user_id, account_label=account_label
         ),
+        "unmapped instruments": portfolio_client.list_unmapped_instruments(user_id=user_id),
     }
     results = dict(
         zip(calls, await asyncio.gather(*calls.values(), return_exceptions=True), strict=True)
@@ -1249,18 +1308,21 @@ async def _load_portfolio_view(
         if isinstance(result, AccountNotFound):
             raise result
 
-    error = None
+    failed = set()
     for name, result in results.items():
         if isinstance(result, PortfolioClientError):
             logger.exception("portfolio service unavailable listing %s.", name, exc_info=result)
-            results[name], error = [], _PORTFOLIO_VIEW_ERROR
+            results[name] = []
+            failed.add(name)
         elif isinstance(result, BaseException):
             raise result
     return _PortfolioViewData(
         positions=results["positions"],
         returns=results["returns"],
         latest_returns=results["latest returns"],
-        error=error,
+        unmapped=results["unmapped instruments"],
+        failed=frozenset(failed),
+        error=_PORTFOLIO_VIEW_ERROR if failed else None,
     )
 
 
@@ -1309,6 +1371,11 @@ async def portfolio_page(
             "account_label": account,
             "summary": summarize_latest_returns(view.latest_returns),
             "holdings": build_holdings(filter_open_positions(view.positions), view.latest_returns),
+            # A holding with no return row is "waiting for prices" only if the call answered.
+            "prices_known": "latest returns" not in view.failed,
+            "unmapped": unmapped_for_broker(
+                view.unmapped, header["account"].broker if header["account"] else None
+            ),
             "return_points": return_points,
             "chart_payload": chart_payload,
             "error": view.error,

@@ -207,13 +207,18 @@ async def test_add_transaction_then_resubmitting_same_ref_does_not_duplicate(web
         "/transactions/new", data=_transaction_form(first_token), follow_redirects=False
     )
     assert first.status_code == 303
-    assert first.headers["location"] == "/transactions/new?account=main&saved=1"
+    # UI-7: the redirect also carries portfolio's follow-on rebuild statuses.
+    assert first.headers["location"].startswith("/transactions/new?account=main&saved=1&positions=")
 
     second_token = _csrf_token(web_client, "/transactions/new", account="main")
     second = web_client.post(
         "/transactions/new", data=_transaction_form(second_token), follow_redirects=False
     )
     assert second.status_code == 303
+    # Nothing was saved, so portfolio ran no rebuild.
+    assert second.headers["location"] == (
+        "/transactions/new?account=main&saved=0&positions=skipped&returns=skipped"
+    )
 
     with _connect() as conn:
         with conn.cursor() as cur:

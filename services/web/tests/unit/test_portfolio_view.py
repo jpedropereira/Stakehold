@@ -1,7 +1,7 @@
 from datetime import date
 from decimal import Decimal
 
-from web.portfolio_client.base import Position, Return
+from web.portfolio_client.base import Position, Return, UnmappedInstrument
 from web.portfolio_view import (
     HoldingRow,
     PortfolioReturnPoint,
@@ -9,6 +9,7 @@ from web.portfolio_view import (
     build_holdings,
     filter_open_positions,
     summarize_latest_returns,
+    unmapped_for_broker,
 )
 
 
@@ -540,6 +541,8 @@ def test_build_holdings_leaves_a_position_with_no_return_row_blank_and_out_of_th
     assert new.weight is None
     assert new.unrealized_return_eur is None
     assert new.unrealized_return_pct is None
+    assert new.awaiting_prices is True
+    assert aapl.awaiting_prices is False
 
 
 def test_build_holdings_ignores_return_rows_for_tickers_not_held():
@@ -575,3 +578,32 @@ def test_build_holdings_keeps_full_precision_weights_for_display_rounding():
 def test_build_holdings_empty_inputs():
     assert build_holdings([], []) == []
     assert build_holdings([], [_latest("AAPL", "1", "1")]) == []
+
+
+# --- unmapped_for_broker (UI-7) ----------------------------------------------------------
+
+
+def _unmapped(identifier: str, broker: str, kind: str = "ISIN") -> UnmappedInstrument:
+    return UnmappedInstrument(kind=kind, identifier=identifier, broker=broker)
+
+
+def test_unmapped_for_broker_keeps_only_the_accounts_broker_sorted():
+    unmapped = [
+        _unmapped("SGLD", "acme", kind="SYMBOL"),
+        _unmapped("IE00B4L5Y983", "globex"),
+        _unmapped("IE00BK5BQT80", "acme"),
+    ]
+
+    assert unmapped_for_broker(unmapped, "acme") == [
+        _unmapped("IE00BK5BQT80", "acme"),
+        _unmapped("SGLD", "acme", kind="SYMBOL"),
+    ]
+
+
+def test_unmapped_for_broker_with_nothing_unmapped():
+    assert unmapped_for_broker([], "acme") == []
+
+
+def test_unmapped_for_broker_with_no_known_broker_shows_nothing():
+    # The account header degraded and the broker isn't known: no guess across brokers.
+    assert unmapped_for_broker([_unmapped("IE00B4L5Y983", "acme")], None) == []

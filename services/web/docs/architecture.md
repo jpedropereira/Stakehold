@@ -160,7 +160,16 @@ calls [`portfolio`](../../portfolio/docs/architecture.md), `data-store`, and
   always-go-home shape. Chosen to support entering several transactions for one account in a row
   without re-navigating each time; the query flag is read back by the same `GET` route to render a
   plain confirmation banner (`rows_saved`/`imported` in `--font-mono`/`--text-figure`, per the
-  brand charter's numbers-only-in-mono rule).
+  brand charter's numbers-only-in-mono rule). Since UI-7 `saved` is the count
+  (`transactions_saved`), not a flag, so `saved=0` (a reference already recorded) and `imported=0`
+  say "nothing new" instead of "saved". The redirect also carries `portfolio`'s follow-on rebuild
+  statuses as `positions=` and `returns=`, omitted when an older `portfolio` doesn't report them.
+  The banner turns them into one sentence via `rebuild_outcome.py`. That sentence is chosen from
+  fixed copy keyed on a whitelist, so a hand-edited URL can't put its own text on the page, and an
+  unknown status just leaves the banner at "Transaction saved.". *Rejected: a flash cookie
+  instead of the query string.* It would be one more cookie, plus a CSRF-style read-once dance,
+  just to hide two words from the URL. The admin mappings page already uses the query string
+  (`rebuilt`, `failed`).
 - **`account_label` is always a query parameter or a hidden form field in `web` too, never a path
   segment** — the same reasoning `portfolio`'s own API documents (a label is free text that may
   contain `/`), applied here even though nothing forces `web`'s own routing to follow it.
@@ -265,18 +274,17 @@ calls [`portfolio`](../../portfolio/docs/architecture.md), `data-store`, and
   so the view is one page per account (linked from `accounts.html`); a cross-account "whole
   portfolio" rollup is future work. The route only displays whatever `position_snapshots`/
   `return_snapshots` rows already exist. `web` never calls a rebuild itself: `portfolio` rebuilds
-  an account's positions on every transaction write (see `portfolio/docs/architecture.md`, "Positions
-  follow every transaction write"), and `rebuild-returns` stays CLI-only. An
+  an account's positions and returns on every transaction write (see `portfolio/docs/architecture.md`,
+  "Positions and returns follow every transaction write"), and refreshes returns on a schedule
+  ("Returns follow new prices"). An
   `AccountNotFound` from any of the positions, returns or latest-returns calls is treated as fatal
   (a distinct 404, "that account doesn't exist") rather than folded into the generic
   degrade-to-inline-error path `_list_accounts_and_brokers` (task 11) established, since a bad
   `account_label` has nothing partial to show either way; any other `PortfolioClientError`
   degrades only the part of the page that call feeds (holdings, chart, or tiles and table figures),
   mirroring `_list_accounts_and_brokers` exactly. An account with no
-  positions (no buy transactions yet, or only unmapped instruments) and/or no return history yet
-  (nobody has run the CLI `rebuild-returns`) renders as an ordinary
-  empty state, not an error — `web` has no way to distinguish "never rebuilt" from "rebuilt into
-  zero rows" and doesn't need to.
+  positions and/or no return history yet renders as an ordinary empty state, not an error. Since
+  UI-7 the page also says why figures are missing (see the next-but-one entry).
 - **The summary tiles and holdings figures (UI-6) come from `GET /returns/latest`, not from the
   chart's `GET /returns` history.** The latest row per ticker is also the history's last point,
   so on this page the call is redundant: one extra concurrent request, and during a rebuild the
@@ -291,10 +299,36 @@ calls [`portfolio`](../../portfolio/docs/architecture.md), `data-store`, and
   dividends stay in the account's total return, matching the chart. `build_holdings` joins each
   open position to its latest row by ticker. Quantity and average cost come from the position.
   Market value and unrealized return come from the row. Weight is a share of the summed market
-  value of the holdings that *have* a row. A holding with no row yet (no price or no mapping;
-  UI-7 will say which) shows `—` rather than counting as worth zero, and a closed ticker's
+  value of the holdings that *have* a row. A holding with no row yet is "waiting for prices"
+  (UI-7, next entry) rather than counting as worth zero, and a closed ticker's
   leftover row isn't a holding at all. Weights keep full precision, so displayed weights needn't
   sum to exactly 100%.
+- **What's still pending is said on the page, not left blank (UI-7).** A missing figure has two
+  possible causes, and they surface in different places because of where the data stops:
+  - *Waiting for prices.* There is a position but no return row yet: data-store hasn't priced
+    the ticker, or the scheduled refresh hasn't run since. The holdings row shows "Waiting for
+    prices" across its four figure columns. This only shows when `GET /returns/latest` answered.
+    If that call failed, the row keeps its `—`s, because prices may well exist.
+    `_PortfolioViewData.failed` records which calls degraded, so an outage's empty list is never
+    read as "none yet". *Not split* into "data-store doesn't track this ticker" versus "not priced
+    yet" (user's decision). That would cost one more call (`list_tickers`) for a case an admin
+    fixes upstream anyway.
+  - *Waiting for a ticker mapping.* An unmapped instrument never becomes a position, because
+    `portfolio`'s positions rebuild drops it before it has a ticker. So it can't be a holdings
+    row, and is shown as a notice under the Holdings heading instead. The notice shows even with
+    zero holdings, which is exactly the case that used to look like a bug. It comes from
+    `portfolio`'s per-user `GET /instruments/unmapped`, fetched as the page's fourth concurrent
+    call and filtered by `portfolio_view.unmapped_for_broker` to the account's broker. Admins get
+    a link to `/admin/mappings`; everyone else is told an admin needs to map them.
+    **Known sharp edge:** that list says which *broker* an instrument came through, not which
+    account. Two accounts at the same broker therefore each show the other's unmapped
+    instruments. The fix is a per-account unmapped endpoint in `portfolio`, deferred because
+    this UI chunk adds no `portfolio` endpoints. When the account header degraded and the broker
+    is unknown, no notice is shown rather than a guess.
+  - A plain freshness line ("Prices update daily; returns are recalculated a few times a day.")
+    sits next to "Prices as of" and in the no-history empty state. It names no interval because
+    the refresh period is `portfolio`'s config (`PORTFOLIO_RETURNS_REFRESH_SECONDS`), not
+    `web`'s.
 - **App shell (UI-4): the current page is marked on the server, and the account pages share one
   header.** Each route passes `nav_active` (`overview` / `accounts` / `admin`) and, on the three
   account-scoped pages, `account_nav_active` (`holdings` / `add` / `import`; `transactions` is
@@ -355,11 +389,11 @@ calls [`portfolio`](../../portfolio/docs/architecture.md), `data-store`, and
 | `GET /health` | `200 {"status": "ok"}`, unauthenticated, no dependency check (see "Key decisions") |
 | `GET /accounts` | `require_user`; lists the caller's accounts (`portfolio`'s `GET /accounts`) and available broker parsers (`GET /brokers`, for the create-account `<datalist>` hint) and renders the create-account form |
 | `POST /accounts` | CSRF-checked, calls `portfolio`'s `POST /accounts`, redirects to `/accounts` on success |
-| `GET /transactions/new` | `require_user`; required `account` query param (a bare 422 for a missing/blank value — reachable only via a hand-crafted URL, since every link that points here already includes it); renders the manual-entry form, with a confirmation banner if `?saved=1`. The instrument field is a ticker picker: a native `<datalist>` filled from `portfolio`'s `GET /instruments/tickers` (no script, so the strict CSP is untouched). If that call fails, the form still renders with an empty list and a notice; the picker is a convenience, and portfolio checks whatever is typed when it's saved. Also fetches `GET /accounts` (concurrently) for the account header: a label that isn't one of the visitor's accounts renders `account_not_found.html` with a 404, and a failed fetch degrades to a label-only header rather than a 404 |
-| `POST /transactions/new` | CSRF-checked, calls `portfolio`'s `POST /transactions` (an instrument, when given, is always sent as `instrument_identifier_kind = 'TICKER'`; a blank Amount is sent as `null`, for portfolio to derive on a BUY/SELL or reject as missing on anything else), redirects to `/transactions/new?account=<label>&saved=1` on success. An unknown ticker comes back as portfolio's 422, whose message is shown as-is like every other 422. The ticker list is re-fetched for the error re-render |
-| `GET /transactions/import` | `require_user`; required `account` query param; renders the upload form, with a confirmation banner (row count) if `?imported=<n>`. Fetches `GET /accounts` for the account header, with the same 404 and degrade rules as `GET /transactions/new` |
-| `POST /transactions/import` | CSRF-checked, multipart; size-capped at 20MB (matching `portfolio`'s own cap) before the bytes are forwarded; calls `portfolio`'s `POST /transactions/import`, redirects to `/transactions/import?account=<label>&imported=<rows_saved>` on success |
-| `GET /portfolio` | `require_user`; required `account` query param; fetches `portfolio`'s `GET /positions`, `GET /returns` and `GET /returns/latest` concurrently. Renders a "Prices as of" line and summary tiles (market value, cost basis, total return € and %, dividends; `portfolio_view.summarize_latest_returns`), a holdings table of open positions joined to their latest return row (quantity, average cost, market value, weight, unrealized return; `portfolio_view.build_holdings`), and a Chart.js chart of the per-ticker series aggregated into one portfolio-level series (`portfolio_view.aggregate_portfolio_returns`), with a total return / market value toggle and date ranges. `GET /accounts` is fetched concurrently for the account header. `AccountNotFound` on any call, or a label missing from a successfully loaded account list, renders `account_not_found.html` with a 404; any other failure degrades only the part that call feeds, mirroring `GET /accounts`'s own pattern. No writes, no rebuild trigger. |
+| `GET /transactions/new` | `require_user`; required `account` query param (a bare 422 for a missing/blank value — reachable only via a hand-crafted URL, since every link that points here already includes it); renders the manual-entry form, with a confirmation banner if `?saved=<n>` (plus the rebuild outcome from `positions`/`returns`; see "Key decisions"). The instrument field is a ticker picker: a native `<datalist>` filled from `portfolio`'s `GET /instruments/tickers` (no script, so the strict CSP is untouched). If that call fails, the form still renders with an empty list and a notice; the picker is a convenience, and portfolio checks whatever is typed when it's saved. Also fetches `GET /accounts` (concurrently) for the account header: a label that isn't one of the visitor's accounts renders `account_not_found.html` with a 404, and a failed fetch degrades to a label-only header rather than a 404 |
+| `POST /transactions/new` | CSRF-checked, calls `portfolio`'s `POST /transactions` (an instrument, when given, is always sent as `instrument_identifier_kind = 'TICKER'`; a blank Amount is sent as `null`, for portfolio to derive on a BUY/SELL or reject as missing on anything else), redirects to `/transactions/new?account=<label>&saved=<transactions_saved>&positions=<status>&returns=<status>` on success. An unknown ticker comes back as portfolio's 422, whose message is shown as-is like every other 422. The ticker list is re-fetched for the error re-render |
+| `GET /transactions/import` | `require_user`; required `account` query param; renders the upload form, with a confirmation banner (row count and rebuild outcome) if `?imported=<n>`. Fetches `GET /accounts` for the account header, with the same 404 and degrade rules as `GET /transactions/new` |
+| `POST /transactions/import` | CSRF-checked, multipart; size-capped at 20MB (matching `portfolio`'s own cap) before the bytes are forwarded; calls `portfolio`'s `POST /transactions/import`, redirects to `/transactions/import?account=<label>&imported=<rows_saved>&positions=<status>&returns=<status>` on success |
+| `GET /portfolio` | `require_user`; required `account` query param; fetches `portfolio`'s `GET /positions`, `GET /returns`, `GET /returns/latest` and `GET /instruments/unmapped` concurrently. Renders a "Prices as of" line and summary tiles (market value, cost basis, total return € and %, dividends; `portfolio_view.summarize_latest_returns`), a holdings table of open positions joined to their latest return row (quantity, average cost, market value, weight, unrealized return; `portfolio_view.build_holdings`), and a Chart.js chart of the per-ticker series aggregated into one portfolio-level series (`portfolio_view.aggregate_portfolio_returns`), with a total return / market value toggle and date ranges. `GET /accounts` is fetched concurrently for the account header. `AccountNotFound` on any call, or a label missing from a successfully loaded account list, renders `account_not_found.html` with a 404; any other failure degrades only the part that call feeds, mirroring `GET /accounts`'s own pattern. Pending states: "Waiting for prices" on a holding with no return row, and a notice listing the instruments waiting for a ticker mapping at this account's broker (UI-7). No writes, no rebuild trigger. |
 
 Every POST error (wrong credentials, a duplicate email, a tripped throttle, `auth`/`portfolio`
 being unreachable, a CSRF mismatch, or a `portfolio` validation failure) re-renders the form with
@@ -389,10 +423,17 @@ exists to close; no equivalent concern applies to the portfolio routes; see "Key
   `UnmappedInstrument`, `TickerMappingWriteResult`) and one error, `TickerMappingNotFound`: a 404
   from the mapping delete means the mapping is gone, not an account, so it can't reuse
   `AccountNotFound`. UI-6 added `list_latest_returns` (`GET /returns/latest`), parsed into the
-  same `Return` dataclass, since `portfolio` serves it with the same response model.
+  same `Return` dataclass, since `portfolio` serves it with the same response model. UI-7 added
+  `positions_rebuild`/`returns_rebuild` to `TransactionWriteResult`. They are `None` when an
+  older response lacks them, so a version skew degrades the banner rather than failing the
+  write. UI-7 also added `list_unmapped_instruments` (the per-user `GET /instruments/unmapped`),
+  which reuses `UnmappedInstrument`.
+- `rebuild_outcome.py` (UI-7) — pure. Turns the two rebuild statuses into the confirmation
+  banner's one sentence; see "Key decisions".
 - `portfolio_view.py` (task 12) — pure, I/O-free reshaping of what `routes.py` fetches for
   `GET /portfolio`: `filter_open_positions`, `aggregate_portfolio_returns`, and (UI-6)
-  `summarize_latest_returns` and `build_holdings` with its `HoldingRow` (see "Key decisions"). No FastAPI/httpx dependency, tested in isolation, mirroring how `portfolio`'s own
+  `summarize_latest_returns` and `build_holdings` with its `HoldingRow`, and (UI-7)
+  `unmapped_for_broker` (see "Key decisions"). No FastAPI/httpx dependency, tested in isolation, mirroring how `portfolio`'s own
   `returns/calculator.py` is a pure function.
 - `formatting.py` (UI-5) — pure display formatters (`money`, `signed_money`, `qty`, `pct`,
   `date`, and UI-6's `share` and `delta_class`) plus the `FILTERS` mapping `app.py` registers as Jinja filters; see "Key decisions".
@@ -444,8 +485,8 @@ one-time network creation. See `docs/smoke-test.md` for the full bring-up sequen
 - **`portfolio`** (tasks 11–12) — account creation, manual transaction entry, broker-file import,
   and (task 12) reading positions/returns, server-to-server, carrying
   `WEB_PORTFOLIO_INTERNAL_SECRET` as `X-Internal-Secret`. Rebuild triggers aren't called from
-  `web`: positions are rebuilt by `portfolio` itself on each transaction write, and
-  `rebuild-returns` stays CLI-only; see task 12's "Key decisions" entry.
+  `web`: `portfolio` rebuilds positions and returns itself on each transaction write, and
+  refreshes returns on a schedule. `web` only reports the write's rebuild statuses (UI-7).
 - **`data-store`** — turns out not to be needed directly. This line previously anticipated task 12
   calling `data-store` for market-data reads; in practice `portfolio`'s own `/positions`/`/returns`
   already return EUR-converted figures (computed against `data-store` on `portfolio`'s side, at
