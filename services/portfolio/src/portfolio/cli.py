@@ -73,8 +73,8 @@ def _account_list(args: argparse.Namespace) -> int:
 def _broker_list(_args: argparse.Namespace) -> int:
     result = jobs.run_list_available_brokers()
     for broker in result["brokers"]:
-        print(broker)
-    return _report(result, "broker parser(s) available", count_key="brokers_available")
+        print(f"{broker['broker']}\t{','.join(broker['imports'])}")
+    return _report(result, "broker(s) available", count_key="brokers_available")
 
 
 def _import_transactions(args: argparse.Namespace) -> int:

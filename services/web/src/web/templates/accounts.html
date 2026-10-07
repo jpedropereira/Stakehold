@@ -3,20 +3,27 @@
 {% block content %}
 <section class="card">
   <h1>New account</h1>
-  <form hx-post="/accounts" hx-target="#form-errors" hx-swap="innerHTML" method="post" action="/accounts">
+  <form class="account-form" hx-post="/accounts" hx-target="#form-errors" hx-swap="innerHTML" method="post" action="/accounts">
     <div id="form-errors">
       {% include "partials/_form_errors.html" %}
     </div>
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div class="field">
       <label for="broker">Broker</label>
-      <input type="text" id="broker" name="broker" list="brokers" required>
+      <select id="broker" name="broker" required>
+        {% for broker in brokers|default([]) %}
+        <option value="{{ broker.broker }}">{{ broker.broker }}</option>
+        {% endfor %}
+        {# "__custom__" must match routes.CUSTOM_BROKER. #}
+        <option value="__custom__"{% if not brokers|default([]) %} selected{% endif %}>Custom</option>
+      </select>
     </div>
-    <datalist id="brokers">
-      {% for broker in brokers|default([]) %}
-      <option value="{{ broker }}">
-      {% endfor %}
-    </datalist>
+    <div class="field field-custom-broker">
+      <label for="custom_broker">Custom broker name</label>
+      <input type="text" id="custom_broker" name="custom_broker" aria-describedby="custom-broker-hint">
+      <p class="field-hint" id="custom-broker-hint">For a broker not in the list. Its transactions are
+        added manually; files can't be imported.</p>
+    </div>
     <div class="field">
       <label for="account_label">Label</label>
       <input type="text" id="account_label" name="account_label" required>

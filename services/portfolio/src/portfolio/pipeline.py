@@ -60,8 +60,8 @@ logger = logging.getLogger(__name__)
 # A broken plugin installation must not take down every CLI command -- account creation and
 # manual entry need neither registry (see add_account's docstring), so a discovery failure is
 # caught here and re-raised lazily, only from the functions that actually read the affected
-# registry (list_available_brokers/import_transactions for BROKER_PARSERS,
-# import_cashflow for CASHFLOW_PARSERS).
+# registry (import_transactions for BROKER_PARSERS, import_cashflow for CASHFLOW_PARSERS, and
+# list_available_brokers for both).
 BROKER_PARSERS: dict[str, BrokerParser] = {}
 CASHFLOW_PARSERS: dict[str, CashflowParser] = {}
 _BROKER_DISCOVERY_ERROR: BrokerPluginError | None = None
@@ -80,11 +80,38 @@ except BrokerPluginError as exc:
     logger.error("cashflow-parser plugin discovery failed at import time -- %s", exc)
 
 
-def list_available_brokers() -> list[str]:
-    """The broker keys a parser is currently registered for. Pure, in-memory -- no connection."""
+# The two kinds of broker-file import, one per registry above -- import_transactions reads
+# BROKER_PARSERS, import_cashflow reads CASHFLOW_PARSERS. The strings are part of GET /brokers'
+# response, which web uses to offer an import page's choices.
+IMPORT_KIND_TRANSACTIONS = "transactions"
+IMPORT_KIND_CASHFLOW = "cashflow"
+
+
+@dataclass(frozen=True)
+class AvailableBroker:
+    broker: str
+    # Sorted. Never empty: a broker with no parser in either registry isn't listed at all.
+    imports: tuple[str, ...]
+
+
+def list_available_brokers() -> list[AvailableBroker]:
+    """Every broker key with a parser registered in either registry, and which import kinds it
+    supports. Pure, in-memory -- no connection. Reads both registries, so a stashed discovery
+    error from either one is raised rather than its brokers silently showing fewer imports."""
     if _BROKER_DISCOVERY_ERROR is not None:
         raise _BROKER_DISCOVERY_ERROR
-    return sorted(BROKER_PARSERS)
+    if _CASHFLOW_DISCOVERY_ERROR is not None:
+        raise _CASHFLOW_DISCOVERY_ERROR
+    registries = {IMPORT_KIND_TRANSACTIONS: BROKER_PARSERS, IMPORT_KIND_CASHFLOW: CASHFLOW_PARSERS}
+    return [
+        AvailableBroker(
+            broker=broker,
+            imports=tuple(
+                sorted(kind for kind, registry in registries.items() if broker in registry)
+            ),
+        )
+        for broker in sorted(set(BROKER_PARSERS) | set(CASHFLOW_PARSERS))
+    ]
 
 
 def _resolve_account(conn, *, user_id: UUID, account_label: str) -> Account:

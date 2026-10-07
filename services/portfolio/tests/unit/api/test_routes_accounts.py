@@ -118,13 +118,24 @@ def test_list_brokers_returns_the_jobs_own_list(monkeypatch, client):
     monkeypatch.setattr(
         jobs,
         "run_list_available_brokers",
-        lambda: {"status": "ok", "rows_saved": 0, "brokers_available": 2, "brokers": ["a", "b"]},
+        lambda: {
+            "status": "ok",
+            "rows_saved": 0,
+            "brokers_available": 2,
+            "brokers": [
+                {"broker": "a", "imports": ["cashflow", "transactions"]},
+                {"broker": "b", "imports": ["transactions"]},
+            ],
+        },
     )
 
     response = client.get("/brokers")
 
     assert response.status_code == 200
-    assert response.json() == ["a", "b"]
+    assert response.json() == [
+        {"broker": "a", "imports": ["cashflow", "transactions"]},
+        {"broker": "b", "imports": ["transactions"]},
+    ]
 
 
 def test_list_unmapped_instruments_returns_the_jobs_own_list(monkeypatch, client):

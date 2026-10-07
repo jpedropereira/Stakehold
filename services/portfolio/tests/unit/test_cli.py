@@ -247,13 +247,18 @@ def test_broker_list_prints_one_line_per_broker_then_the_count(monkeypatch, caps
             "status": "ok",
             "rows_saved": 0,
             "brokers_available": 2,
-            "brokers": ["acme", "globex"],
+            "brokers": [
+                {"broker": "acme", "imports": ["cashflow", "transactions"]},
+                {"broker": "globex", "imports": ["transactions"]},
+            ],
         },
     )
 
     cli.main(["broker", "list"])
 
-    assert capsys.readouterr().out == "acme\nglobex\n2 broker parser(s) available\n"
+    assert capsys.readouterr().out == (
+        "acme\tcashflow,transactions\nglobex\ttransactions\n2 broker(s) available\n"
+    )
 
 
 def test_broker_list_prints_only_the_count_when_empty(monkeypatch, capsys):
@@ -265,7 +270,7 @@ def test_broker_list_prints_only_the_count_when_empty(monkeypatch, capsys):
 
     cli.main(["broker", "list"])
 
-    assert capsys.readouterr().out == "0 broker parser(s) available\n"
+    assert capsys.readouterr().out == "0 broker(s) available\n"
 
 
 def test_broker_list_exits_zero_when_empty(monkeypatch):

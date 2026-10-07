@@ -241,18 +241,28 @@ async def test_add_transaction_for_unknown_account_surfaces_404(web_client):
     assert "doesn&#39;t exist" in response.text
 
 
-async def test_import_with_no_registered_parser_surfaces_broker_parser_not_found(web_client):
+@pytest.mark.parametrize(
+    "importer, message",
+    [("transactions", "no parser registered"), ("cashflow", "no cashflow parser registered")],
+)
+async def test_import_with_no_registered_parser_surfaces_broker_parser_not_found(
+    web_client_with_data_store, importer, message
+):
+    """The importer choice reaches the matching portfolio route: each one checks its own
+    registry and names it in the error. With data-store configured, since a cashflow import
+    refuses to start without one before it ever looks for a parser."""
+    web_client = web_client_with_data_store
     _create_account(web_client)
 
     token = _csrf_token(web_client, "/transactions/import", account="main")
     response = web_client.post(
         "/transactions/import",
-        data={"account_label": "main", "csrf_token": token},
+        data={"account_label": "main", "importer": importer, "csrf_token": token},
         files={"file": ("export.csv", b"a,b\n1,2\n", "text/csv")},
     )
 
     assert response.status_code == 422
-    assert "no parser registered" in response.text.lower()
+    assert message in response.text.lower()
 
 
 # --- portfolio view: GET /portfolio -------------------------------------------

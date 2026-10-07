@@ -352,14 +352,22 @@ def test_list_accounts_never_commits(repos, conn):
 # --- list_available_brokers ---
 
 
-def test_list_available_brokers_returns_sorted_registered_keys(monkeypatch):
+def test_list_available_brokers_reports_which_imports_each_broker_supports(monkeypatch):
+    """A broker key can sit in either registry or both -- each one is listed once, with every
+    import kind it supports, so a caller can offer exactly those and nothing else."""
     monkeypatch.setattr(pipeline, "BROKER_PARSERS", {"globex": object(), "acme": object()})
+    monkeypatch.setattr(pipeline, "CASHFLOW_PARSERS", {"initech": object(), "acme": object()})
 
-    assert pipeline.list_available_brokers() == ["acme", "globex"]
+    assert pipeline.list_available_brokers() == [
+        pipeline.AvailableBroker(broker="acme", imports=("cashflow", "transactions")),
+        pipeline.AvailableBroker(broker="globex", imports=("transactions",)),
+        pipeline.AvailableBroker(broker="initech", imports=("cashflow",)),
+    ]
 
 
 def test_list_available_brokers_returns_empty_list_with_no_plugins_installed(monkeypatch):
     monkeypatch.setattr(pipeline, "BROKER_PARSERS", {})
+    monkeypatch.setattr(pipeline, "CASHFLOW_PARSERS", {})
 
     assert pipeline.list_available_brokers() == []
 
@@ -368,6 +376,15 @@ def test_list_available_brokers_raises_a_stashed_discovery_error(monkeypatch):
     monkeypatch.setattr(pipeline, "_BROKER_DISCOVERY_ERROR", BrokerPluginError("boom"))
 
     with pytest.raises(BrokerPluginError, match="boom"):
+        pipeline.list_available_brokers()
+
+
+def test_list_available_brokers_raises_a_stashed_cashflow_discovery_error(monkeypatch):
+    """It reads both registries now, so a broken cashflow plugin is reported too, rather than
+    silently listing its brokers as having no cashflow import."""
+    monkeypatch.setattr(pipeline, "_CASHFLOW_DISCOVERY_ERROR", BrokerPluginError("bust"))
+
+    with pytest.raises(BrokerPluginError, match="bust"):
         pipeline.list_available_brokers()
 
 
