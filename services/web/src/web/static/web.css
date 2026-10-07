@@ -205,8 +205,8 @@ main:focus {
 }
 
 /* The current choice reads as selected text rather than a link. aria-pressed carries the state
-   for assistive tech; this only mirrors it visually. */
-.theme-toggle [aria-pressed="true"] {
+   for assistive tech; this only mirrors it visually. The chart's view and range buttons too. */
+:is(.theme-toggle, .chart-toggle) [aria-pressed="true"] {
   font-weight: 600;
   text-decoration: none;
 }
@@ -494,13 +494,77 @@ main:focus {
   font-weight: 600;
 }
 
-.returns-summary {
-  font: var(--text-body);
-  margin: 0 0 var(--space-4);
+/* Figures line up on their decimal side. Two classes, to outrank the left-aligned cell rule. */
+.holdings-table .num {
+  text-align: right;
+  white-space: nowrap;
 }
 
-.chart-wrap {
-  max-width: 720px;
+
+/* Rendered hidden: without the chart script the buttons would do nothing, so the script shows
+   them. An explicit rule, because a display value here would otherwise override [hidden]. */
+.chart-controls {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-5);
+  margin-bottom: var(--space-4);
+}
+
+.chart-controls[hidden] {
+  display: none;
+}
+
+.chart-toggle {
+  display: flex;
+  gap: var(--space-3);
+}
+
+/* ---- account summary (UI-6) ---- */
+
+.as-of {
+  width: 100%;
+  max-width: 880px;
+  margin: 0 0 var(--space-3);
+  font: var(--text-caption);
+  color: var(--text-muted);
+}
+
+/* Four headline figures, wrapping to two rows (or one column) as the width shrinks. */
+.summary-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--space-4);
+  width: 100%;
+  max-width: 880px;
+  margin-bottom: var(--space-5);
+}
+
+.tile {
+  background: var(--surface-raised);
+  border-radius: var(--radius-card);
+  padding: var(--space-4) var(--space-5);
+}
+
+.tile-label {
+  margin: 0 0 var(--space-1);
+  font: var(--text-caption);
+  color: var(--text-muted);
+}
+
+/* A headline figure: still the figure face, at a headline size (charter chapter V). */
+.tile-value {
+  margin: 0;
+}
+
+.tile-value .mono:first-child {
+  font-size: 22px;
+}
+
+/* A second figure (total return's percentage) sits under the first, at the ordinary size. */
+.tile-value .mono + .mono {
+  display: block;
+  margin-top: var(--space-1);
 }
 
 /* Tables on the admin page are wider than a phone; scroll them, not the page. */

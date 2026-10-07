@@ -1,11 +1,12 @@
 """Pure, web-side display logic over portfolio's raw /positions and /returns responses.
 
-Neither function here changes portfolio's own data -- they only reshape what routes.py already
-fetched for the /portfolio view: filtering closed positions out of a "current holdings" listing,
-and combining N per-ticker daily return series into one portfolio-level series for the chart
+Nothing here changes portfolio's own data -- it only reshapes what routes.py already fetched for
+the /portfolio view: filtering closed positions out of a "current holdings" listing, combining N
+per-ticker daily return series into one portfolio-level series for the chart
 (portfolio/docs/architecture.md's "Returns are served per ticker" note explicitly leaves this to
-task 12). No I/O, no FastAPI, no httpx -- mirrors how portfolio/returns/calculator.py is a pure
-function tested in isolation.
+task 12), and (UI-6) the summary tiles and the holdings table built from /returns/latest. No
+I/O, no FastAPI, no httpx -- mirrors how portfolio/returns/calculator.py is a pure function
+tested in isolation.
 """
 
 from collections.abc import Sequence
@@ -105,3 +106,61 @@ def aggregate_portfolio_returns(returns: Sequence[Return]) -> list[PortfolioRetu
         )
 
     return points
+
+
+def summarize_latest_returns(latest: Sequence[Return]) -> PortfolioReturnPoint | None:
+    """The account's headline figures from /returns/latest (one row per ticker), or None if
+    there is no row yet.
+
+    This is the last point of aggregate_portfolio_returns over those rows: forward-fill makes
+    every ticker contribute its own latest row, even one whose last price is older than another
+    ticker's, and the point's price_date is the newest of them -- the "prices as of" date.
+    Reusing it keeps one rule for the percentage (recomputed from summed euros, never averaged).
+    A closed ticker's row counts too: its dividends are still part of the account's return.
+    """
+    points = aggregate_portfolio_returns(latest)
+    return points[-1] if points else None
+
+
+@dataclass(frozen=True)
+class HoldingRow:
+    """One open position joined to its ticker's latest return row. The figures from that row
+    are None while the ticker has none yet (no price, or no ticker mapping)."""
+
+    canonical_ticker: str
+    quantity: Decimal
+    average_cost_eur: Decimal
+    market_value_eur: Decimal | None
+    weight: Decimal | None
+    unrealized_return_eur: Decimal | None
+    unrealized_return_pct: Decimal | None
+
+
+def build_holdings(
+    open_positions: Sequence[Position], latest: Sequence[Return]
+) -> list[HoldingRow]:
+    """One row per open position, in the positions' order, joined on canonical_ticker.
+
+    Quantity and average cost come from the position, the source of truth for what is held.
+    Weight is the row's share of the summed market value of the holdings that *have* a return
+    row: a holding with none yet is shown without a weight rather than counted as worth zero,
+    and a closed ticker's leftover return row isn't a holding at all. Weights stay at full
+    precision (rounding is the template's job), so they needn't sum to exactly 100% on screen.
+    If that sum is zero, there is nothing to divide and every weight is None.
+    """
+    latest_by_ticker = {row.canonical_ticker: row for row in latest}
+    joined = [(p, latest_by_ticker.get(p.canonical_ticker)) for p in open_positions]
+    total = sum((r.market_value_eur for _, r in joined if r is not None), _ZERO)
+
+    return [
+        HoldingRow(
+            canonical_ticker=position.canonical_ticker,
+            quantity=position.quantity,
+            average_cost_eur=position.average_cost_eur,
+            market_value_eur=None if row is None else row.market_value_eur,
+            weight=None if row is None or total == _ZERO else row.market_value_eur / total,
+            unrealized_return_eur=None if row is None else row.unrealized_return_eur,
+            unrealized_return_pct=None if row is None else row.unrealized_return_pct,
+        )
+        for position, row in joined
+    ]

@@ -286,6 +286,14 @@ class HttpPortfolioClient:
             _raise_for_status(response)
         return [_return(item) for item in _json_body(response)]
 
+    async def list_latest_returns(self, *, user_id: str, account_label: str) -> list[Return]:
+        response = await self._request(
+            "GET", "/returns/latest", params={"user_id": user_id, "account_label": account_label}
+        )
+        if response.status_code != 200:
+            _raise_for_status(response)
+        return [_return(item) for item in _json_body(response)]
+
     async def list_ticker_mappings(self) -> list[TickerMapping]:
         response = await self._request("GET", "/ticker-mappings")
         if response.status_code != 200:

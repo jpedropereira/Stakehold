@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from urllib.parse import quote
@@ -43,7 +44,12 @@ from web.portfolio_client.errors import (
     PortfolioClientError,
     TickerMappingNotFound,
 )
-from web.portfolio_view import aggregate_portfolio_returns, filter_open_positions
+from web.portfolio_view import (
+    aggregate_portfolio_returns,
+    build_holdings,
+    filter_open_positions,
+    summarize_latest_returns,
+)
 from web.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -1214,36 +1220,48 @@ _PORTFOLIO_VIEW_ERROR = (
 )
 
 
+@dataclass(frozen=True)
+class _PortfolioViewData:
+    positions: list[Position]
+    returns: list[Return]
+    latest_returns: list[Return]
+    error: str | None
+
+
 async def _load_portfolio_view(
     portfolio_client: PortfolioClient, user_id: str, account_label: str
-) -> tuple[list[Position], list[Return], str | None]:
-    """Fetches this account's positions and returns concurrently, tolerating either call failing
-    independently -- except AccountNotFound, which is re-raised rather than degraded: a bad
-    account_label has nothing partial to show for either call, so the caller renders a distinct
-    404 instead of the generic "service unavailable" banner."""
-    positions_result, returns_result = await asyncio.gather(
-        portfolio_client.list_positions(user_id=user_id, account_label=account_label),
-        portfolio_client.list_returns(user_id=user_id, account_label=account_label),
-        return_exceptions=True,
+) -> _PortfolioViewData:
+    """Fetches this account's positions, return history and latest returns concurrently,
+    tolerating any of them failing independently -- except AccountNotFound, which is re-raised
+    rather than degraded: a bad account_label has nothing partial to show for any call, so the
+    caller renders a distinct 404 instead of the generic "service unavailable" banner."""
+    calls = {
+        "positions": portfolio_client.list_positions(user_id=user_id, account_label=account_label),
+        "returns": portfolio_client.list_returns(user_id=user_id, account_label=account_label),
+        "latest returns": portfolio_client.list_latest_returns(
+            user_id=user_id, account_label=account_label
+        ),
+    }
+    results = dict(
+        zip(calls, await asyncio.gather(*calls.values(), return_exceptions=True), strict=True)
     )
-    for result in (positions_result, returns_result):
+    for result in results.values():
         if isinstance(result, AccountNotFound):
             raise result
 
     error = None
-    if isinstance(positions_result, PortfolioClientError):
-        logger.exception(
-            "portfolio service unavailable listing positions.", exc_info=positions_result
-        )
-        positions_result, error = [], _PORTFOLIO_VIEW_ERROR
-    elif isinstance(positions_result, BaseException):
-        raise positions_result
-    if isinstance(returns_result, PortfolioClientError):
-        logger.exception("portfolio service unavailable listing returns.", exc_info=returns_result)
-        returns_result, error = [], _PORTFOLIO_VIEW_ERROR
-    elif isinstance(returns_result, BaseException):
-        raise returns_result
-    return positions_result, returns_result, error
+    for name, result in results.items():
+        if isinstance(result, PortfolioClientError):
+            logger.exception("portfolio service unavailable listing %s.", name, exc_info=result)
+            results[name], error = [], _PORTFOLIO_VIEW_ERROR
+        elif isinstance(result, BaseException):
+            raise result
+    return _PortfolioViewData(
+        positions=results["positions"],
+        returns=results["returns"],
+        latest_returns=results["latest returns"],
+        error=error,
+    )
 
 
 @router.get("/portfolio")
@@ -1270,12 +1288,14 @@ async def portfolio_page(
         )
     if isinstance(view, BaseException):
         raise view
-    positions, returns, error = view
 
-    open_positions = filter_open_positions(positions)
-    return_points = aggregate_portfolio_returns(returns)
+    return_points = aggregate_portfolio_returns(view.returns)
     chart_payload = [
-        {"date": point.price_date.isoformat(), "total_return_eur": float(point.total_return_eur)}
+        {
+            "date": point.price_date.isoformat(),
+            "market_value_eur": float(point.market_value_eur),
+            "total_return_eur": float(point.total_return_eur),
+        }
         for point in return_points
     ]
     return _render(
@@ -1287,10 +1307,11 @@ async def portfolio_page(
             "user": user,
             "csrf_token": csrf_token,
             "account_label": account,
-            "positions": open_positions,
+            "summary": summarize_latest_returns(view.latest_returns),
+            "holdings": build_holdings(filter_open_positions(view.positions), view.latest_returns),
             "return_points": return_points,
             "chart_payload": chart_payload,
-            "error": error,
+            "error": view.error,
             **_account_page_context("holdings"),
             **header,
         },

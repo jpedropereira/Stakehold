@@ -339,6 +339,65 @@ async def test_list_returns_malformed_body_raises_portfolio_unavailable():
         await client.list_returns(user_id=USER_ID, account_label="main")
 
 
+async def test_list_latest_returns_calls_the_latest_endpoint_and_parses_fields():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["path"] = request.url.path
+        captured["params"] = dict(request.url.params)
+        captured["secret"] = request.headers.get("X-Internal-Secret")
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "account_id": 1,
+                    "canonical_ticker": "IWDA.AS",
+                    "price_date": "2026-10-06",
+                    "quantity": "12.5",
+                    "market_value_native": "1250",
+                    "market_value_eur": "1250",
+                    "cost_basis_eur": "1000",
+                    "unrealized_return_eur": "250",
+                    "unrealized_return_pct": "0.25",
+                    "dividends_received_eur": "0",
+                    "total_return_eur": "250",
+                    "total_return_pct": None,
+                }
+            ],
+        )
+
+    client = _client(handler)
+    returns = await client.list_latest_returns(user_id=USER_ID, account_label="main")
+
+    assert captured == {
+        "path": "/returns/latest",
+        "params": {"user_id": USER_ID, "account_label": "main"},
+        "secret": INTERNAL_SECRET,
+    }
+    assert len(returns) == 1
+    row = returns[0]
+    assert row.canonical_ticker == "IWDA.AS"
+    assert row.price_date == date(2026, 10, 6)
+    assert row.quantity == Decimal("12.5")
+    assert row.market_value_eur == Decimal("1250")
+    assert row.unrealized_return_pct == Decimal("0.25")
+    assert row.total_return_pct is None
+
+
+async def test_list_latest_returns_account_not_found_raises():
+    client = _client(lambda request: httpx.Response(404, json={"detail": "account not found"}))
+
+    with pytest.raises(AccountNotFound):
+        await client.list_latest_returns(user_id=USER_ID, account_label="missing")
+
+
+async def test_list_latest_returns_malformed_body_raises_portfolio_unavailable():
+    client = _client(lambda request: httpx.Response(200, json=[{"account_id": 1}]))
+
+    with pytest.raises(PortfolioUnavailable):
+        await client.list_latest_returns(user_id=USER_ID, account_label="main")
+
+
 async def test_unexpected_status_raises_portfolio_unavailable():
     client = _client(lambda request: httpx.Response(500, json={"detail": "boom"}))
 

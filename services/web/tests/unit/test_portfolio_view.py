@@ -3,9 +3,12 @@ from decimal import Decimal
 
 from web.portfolio_client.base import Position, Return
 from web.portfolio_view import (
+    HoldingRow,
     PortfolioReturnPoint,
     aggregate_portfolio_returns,
+    build_holdings,
     filter_open_positions,
+    summarize_latest_returns,
 )
 
 
@@ -388,3 +391,187 @@ def test_aggregate_sorts_out_of_order_input():
     result = aggregate_portfolio_returns(rows)
 
     assert [point.price_date for point in result] == [day1, day2]
+
+
+# --- summarize_latest_returns ---------------------------------------------------
+
+
+def test_summarize_empty_input_is_none():
+    assert summarize_latest_returns([]) is None
+
+
+def test_summarize_sums_every_ticker_and_dates_it_by_the_newest_price():
+    latest = [
+        _return(
+            ticker="AAPL",
+            price_date=date(2026, 10, 6),
+            market_value_eur="1600",
+            cost_basis_eur="1500",
+            dividends_received_eur="10",
+            total_return_eur="110",
+            total_return_pct="0.07333333",
+        ),
+        # Stale: its last price is older. It still counts, at its last known value.
+        _return(
+            ticker="MSFT",
+            price_date=date(2026, 10, 2),
+            market_value_eur="900",
+            cost_basis_eur="1000",
+            total_return_eur="-100",
+            total_return_pct="-0.1",
+        ),
+    ]
+
+    summary = summarize_latest_returns(latest)
+
+    assert summary == PortfolioReturnPoint(
+        price_date=date(2026, 10, 6),
+        market_value_eur=Decimal("2500"),
+        cost_basis_eur=Decimal("2500"),
+        dividends_received_eur=Decimal("10"),
+        total_return_eur=Decimal("10"),
+        total_return_pct=Decimal("10") / Decimal("2500"),
+    )
+
+
+def test_summarize_counts_a_closed_tickers_dividends():
+    latest = [
+        _return(
+            ticker="AAPL",
+            price_date=date(2026, 10, 6),
+            market_value_eur="1000",
+            cost_basis_eur="1000",
+            total_return_eur="0",
+            total_return_pct="0",
+        ),
+        _return(
+            ticker="MSFT",
+            price_date=date(2026, 5, 1),
+            market_value_eur="0",
+            cost_basis_eur="0",
+            dividends_received_eur="25",
+            total_return_eur="25",
+            total_return_pct=None,
+        ),
+    ]
+
+    summary = summarize_latest_returns(latest)
+
+    assert summary.dividends_received_eur == Decimal("25")
+    assert summary.total_return_eur == Decimal("25")
+    assert summary.total_return_pct == Decimal("0.025")
+
+
+def test_summarize_pct_is_none_when_cost_basis_is_zero():
+    latest = [
+        _return(
+            price_date=date(2026, 5, 1),
+            market_value_eur="0",
+            cost_basis_eur="0",
+            dividends_received_eur="5",
+            total_return_eur="5",
+            total_return_pct=None,
+        )
+    ]
+
+    assert summarize_latest_returns(latest).total_return_pct is None
+
+
+# --- build_holdings -------------------------------------------------------------
+
+
+def _latest(ticker: str, market_value_eur: str, cost_basis_eur: str) -> Return:
+    market_value, cost_basis = Decimal(market_value_eur), Decimal(cost_basis_eur)
+    return Return(
+        account_id=1,
+        canonical_ticker=ticker,
+        price_date=date(2026, 10, 6),
+        quantity=Decimal("10"),
+        market_value_native=market_value,
+        market_value_eur=market_value,
+        cost_basis_eur=cost_basis,
+        unrealized_return_eur=market_value - cost_basis,
+        unrealized_return_pct=None if cost_basis == 0 else (market_value - cost_basis) / cost_basis,
+        dividends_received_eur=Decimal("0"),
+        total_return_eur=market_value - cost_basis,
+        total_return_pct=None,
+    )
+
+
+def test_build_holdings_joins_each_position_to_its_latest_return():
+    positions = [_position(ticker="AAPL", quantity="10"), _position(ticker="MSFT", quantity="5")]
+    latest = [_latest("MSFT", "1000", "500"), _latest("AAPL", "3000", "1000")]
+
+    holdings = build_holdings(positions, latest)
+
+    assert holdings == [
+        HoldingRow(
+            canonical_ticker="AAPL",
+            quantity=Decimal("10"),
+            average_cost_eur=Decimal("100"),
+            market_value_eur=Decimal("3000"),
+            weight=Decimal("0.75"),
+            unrealized_return_eur=Decimal("2000"),
+            unrealized_return_pct=Decimal("2"),
+        ),
+        HoldingRow(
+            canonical_ticker="MSFT",
+            quantity=Decimal("5"),
+            average_cost_eur=Decimal("100"),
+            market_value_eur=Decimal("1000"),
+            weight=Decimal("0.25"),
+            unrealized_return_eur=Decimal("500"),
+            unrealized_return_pct=Decimal("1"),
+        ),
+    ]
+
+
+def test_build_holdings_leaves_a_position_with_no_return_row_blank_and_out_of_the_weights():
+    positions = [_position(ticker="AAPL"), _position(ticker="NEW")]
+    latest = [_latest("AAPL", "1000", "1000")]
+
+    aapl, new = build_holdings(positions, latest)
+
+    assert aapl.weight == Decimal("1")
+    assert new.canonical_ticker == "NEW"
+    assert new.quantity == Decimal("10")
+    assert new.average_cost_eur == Decimal("100")
+    assert new.market_value_eur is None
+    assert new.weight is None
+    assert new.unrealized_return_eur is None
+    assert new.unrealized_return_pct is None
+
+
+def test_build_holdings_ignores_return_rows_for_tickers_not_held():
+    # A closed ticker keeps a latest row; it isn't a holding and doesn't dilute the weights.
+    positions = [_position(ticker="AAPL")]
+    latest = [_latest("AAPL", "1000", "800"), _latest("SOLD", "0", "0")]
+
+    holdings = build_holdings(positions, latest)
+
+    assert [h.canonical_ticker for h in holdings] == ["AAPL"]
+    assert holdings[0].weight == Decimal("1")
+
+
+def test_build_holdings_weights_are_none_when_total_market_value_is_zero():
+    positions = [_position(ticker="AAPL"), _position(ticker="MSFT")]
+    latest = [_latest("AAPL", "0", "100"), _latest("MSFT", "0", "100")]
+
+    holdings = build_holdings(positions, latest)
+
+    assert [h.weight for h in holdings] == [None, None]
+    assert holdings[0].market_value_eur == Decimal("0")
+
+
+def test_build_holdings_keeps_full_precision_weights_for_display_rounding():
+    positions = [_position(ticker=t) for t in ("A", "B", "C")]
+    latest = [_latest(t, "100", "100") for t in ("A", "B", "C")]
+
+    weights = [h.weight for h in build_holdings(positions, latest)]
+
+    assert weights == [Decimal("100") / Decimal("300")] * 3
+
+
+def test_build_holdings_empty_inputs():
+    assert build_holdings([], []) == []
+    assert build_holdings([], [_latest("AAPL", "1", "1")]) == []
