@@ -63,3 +63,8 @@ services/data-store/config/macro_regions.yaml
 
 # Claude Code
 .claude/settings.local.json
+
+# Broker-parser plugin wheels -- installed into the portfolio image, never committed (see
+# services/portfolio/plugins/README.md)
+services/portfolio/plugins/*
+!services/portfolio/plugins/README.md
