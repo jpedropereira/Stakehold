@@ -64,6 +64,31 @@ def pct(value: Decimal | int | float | None) -> str:
     return f"{sign}{magnitude}%"
 
 
+def share(value: Decimal | int | float | None) -> str:
+    """A fraction as an unsigned percentage, for a part of a whole: `0.3333` → `33.33%`.
+    A negative value (a replay anomaly, never a real share) still gets its `−`."""
+    if value is None:
+        return MISSING
+    sign, magnitude = _two_places(_to_decimal(value) * 100)
+    return f"{MINUS if sign == MINUS else ''}{magnitude}%"
+
+
+def delta_class(value: Decimal | int | float | None, kind: str = "money") -> str:
+    """The CSS class for a delta: `gain`, `loss`, or `""` when it displays as zero (or `—`).
+
+    Decided from the sign *after* the display rounding of `signed_money` (`kind="money"`) or
+    `pct` (`kind="pct"`), so a figure's color never disagrees with its printed sign: `-0.004`
+    prints as `€0.00` and is neither a gain nor a loss.
+    """
+    if kind not in ("money", "pct"):
+        raise ValueError(f"unknown delta kind {kind!r}")
+    if value is None:
+        return ""
+    number = _to_decimal(value)
+    sign, _ = _two_places(number * 100 if kind == "pct" else number)
+    return {"+": "gain", MINUS: "loss"}.get(sign, "")
+
+
 def date_(value: date | datetime | None) -> str:
     """ISO `2026-10-06`; a datetime is shown by its date part. Registered as the `date` filter."""
     if value is None:
@@ -78,5 +103,7 @@ FILTERS: dict[str, Callable[..., str]] = {
     "signed_money": signed_money,
     "qty": qty,
     "pct": pct,
+    "share": share,
+    "delta_class": delta_class,
     "date": date_,
 }

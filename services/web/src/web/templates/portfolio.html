@@ -1,53 +1,88 @@
 {% extends "base.html" %}
 {% block title %}Portfolio — {{ account_label }} — Stakehold{% endblock %}
+{# A signed figure, colored by the sign it displays with: a zero delta is neither gain nor loss. #}
+{% macro delta(value, kind="money") -%}
+{%- set cls = value | delta_class(kind) -%}
+<span class="mono{% if cls %} {{ cls }}{% endif %}">{{ value | signed_money if kind == "money" else value | pct }}</span>
+{%- endmacro %}
 {% block content %}
 {% include "partials/_account_header.html" %}
 {% if error %}
 <p class="confirmation-banner">{{ error }}</p>
 {% endif %}
 
-<section class="card">
-  <h1>Positions</h1>
-  {% if positions %}
-  <table class="positions-table">
-    <thead>
-      <tr>
-        <th>Ticker</th>
-        <th>Quantity</th>
-        <th>Avg cost</th>
-        <th>Cost basis</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for position in positions %}
-      <tr>
-        <td>{{ position.canonical_ticker }}</td>
-        <td><span class="mono">{{ position.quantity | qty }}</span></td>
-        <td><span class="mono">{{ position.average_cost_eur | money }}</span></td>
-        <td><span class="mono">{{ position.cost_basis_eur | money }}</span></td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+{% if summary %}
+<p class="as-of">Prices as of <span class="mono">{{ summary.price_date | date }}</span></p>
+<section class="summary-tiles" aria-label="Account summary">
+  <div class="tile">
+    <p class="tile-label">Market value</p>
+    <p class="tile-value"><span class="mono">{{ summary.market_value_eur | money }}</span></p>
+  </div>
+  <div class="tile">
+    <p class="tile-label">Cost basis</p>
+    <p class="tile-value"><span class="mono">{{ summary.cost_basis_eur | money }}</span></p>
+  </div>
+  <div class="tile">
+    <p class="tile-label">Total return</p>
+    <p class="tile-value">{{ delta(summary.total_return_eur) }} {{ delta(summary.total_return_pct, "pct") }}</p>
+  </div>
+  <div class="tile">
+    <p class="tile-label">Dividends received</p>
+    <p class="tile-value"><span class="mono">{{ summary.dividends_received_eur | money }}</span></p>
+  </div>
+</section>
+{% endif %}
+
+<section class="card card-wide">
+  <h1>Holdings</h1>
+  {% if holdings %}
+  <div class="table-scroll">
+    <table class="positions-table holdings-table">
+      <thead>
+        <tr>
+          <th>Ticker</th>
+          <th class="num">Quantity</th>
+          <th class="num">Avg cost</th>
+          <th class="num">Market value</th>
+          <th class="num">Weight</th>
+          <th class="num" colspan="2">Unrealized return</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for holding in holdings %}
+        <tr>
+          <td><span class="mono">{{ holding.canonical_ticker }}</span></td>
+          <td class="num"><span class="mono">{{ holding.quantity | qty }}</span></td>
+          <td class="num"><span class="mono">{{ holding.average_cost_eur | money }}</span></td>
+          <td class="num"><span class="mono">{{ holding.market_value_eur | money }}</span></td>
+          <td class="num"><span class="mono">{{ holding.weight | share }}</span></td>
+          <td class="num">{{ delta(holding.unrealized_return_eur) }}</td>
+          <td class="num">{{ delta(holding.unrealized_return_pct, "pct") }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
   {% else %}
   <p class="entry-empty">No positions yet — they appear here as soon as you add a buy transaction.</p>
   {% endif %}
 </section>
 
-<section class="card">
+<section class="card card-wide">
   <h1>Returns over time</h1>
   {% if return_points %}
-  {% set latest = return_points[-1] %}
-  <p class="returns-summary">
-    Total return:
-    <span class="mono {{ 'gain' if latest.total_return_eur >= 0 else 'loss' }}">{{ latest.total_return_eur | signed_money }}</span>
-    {% if latest.total_return_pct is not none %}
-    (<span class="mono {{ 'gain' if latest.total_return_pct >= 0 else 'loss' }}">{{ latest.total_return_pct | pct }}</span>)
-    {% endif %}
-  </p>
-  <div class="chart-wrap">
-    <canvas id="returns-chart" role="img" aria-label="Portfolio total return over time"></canvas>
+  <div class="chart-controls" hidden>
+    <div class="chart-toggle" role="group" aria-label="Chart view">
+      <button type="button" class="btn btn-ghost" data-chart-view="total_return_eur" aria-pressed="true">Total return</button>
+      <button type="button" class="btn btn-ghost" data-chart-view="market_value_eur" aria-pressed="false">Market value</button>
+    </div>
+    <div class="chart-toggle" role="group" aria-label="Date range">
+      {% for months, label in [(1, "1M"), (6, "6M"), (12, "1Y"), (0, "All")] %}
+      <button type="button" class="btn btn-ghost" data-chart-range="{{ months }}" aria-pressed="{{ 'true' if months == 0 else 'false' }}">{{ label }}</button>
+      {% endfor %}
+    </div>
   </div>
+  <canvas id="returns-chart" role="img" aria-label="Portfolio total return over time"></canvas>
   <script id="returns-chart-data" type="application/json">{{ chart_payload | tojson }}</script>
   <script src="/static/vendor/chart.min.js" defer></script>
   <script src="/static/portfolio_chart.js" defer></script>

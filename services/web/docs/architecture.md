@@ -207,6 +207,20 @@ calls [`portfolio`](../../portfolio/docs/architecture.md), `data-store`, and
   `--border`, `--text-muted`), not brand tokens, so it follows the theme. A canvas doesn't
   restyle itself, so it re-reads them and redraws on `stakehold:themechange` (the header toggle)
   and on a `prefers-color-scheme` change.
+- **The chart's view toggle and date ranges (UI-6) work client-side over the one data island.**
+  The island carries `market_value_eur` and `total_return_eur` per day, so switching between
+  "Total return" and "Market value", or between 1M / 6M / 1Y / All, never makes a request. A range
+  counts back from the *last data point's* date, not from today, so an account whose prices
+  stopped updating still shows its final stretch rather than an empty chart. Total return is a
+  delta, so its line keeps the gain/loss segment colors. Market value is a level, so it's drawn in
+  `--text`, because forest and oxblood mean gains and losses only, and gold is kept for controls.
+  The buttons are in the template, not built by the script. They ship `hidden`, because without JS
+  they'd do nothing, and the script reveals them. Building them in JS would also put their classes
+  outside `test_templates.py`'s template/CSS class check. Only the first draw animates: morphing
+  one range into another, with a different point count, draws stray lines. Tooltip and y-axis
+  labels use a small formatter in `portfolio_chart.js` that mirrors `formatting.py`'s
+  `money`/`signed_money`. **Known sharp edge:** that is two copies of one convention, and no test
+  ties them together (there's no JS test runner). A change to the convention must touch both.
 - **Theme (UI-3): a cookie, applied on the server.** The choice (`light` / `dark` / `system`,
   default `system`) is stored in a `stakehold_theme` cookie, set by `POST /theme`
   (`api/theme.py`). A Jinja2Templates context processor (`theme_context`, registered in
@@ -253,15 +267,34 @@ calls [`portfolio`](../../portfolio/docs/architecture.md), `data-store`, and
   `return_snapshots` rows already exist. `web` never calls a rebuild itself: `portfolio` rebuilds
   an account's positions on every transaction write (see `portfolio/docs/architecture.md`, "Positions
   follow every transaction write"), and `rebuild-returns` stays CLI-only. An
-  `AccountNotFound` from either the positions or returns call is treated as fatal (a distinct 404,
-  "that account doesn't exist") rather than folded into the generic degrade-to-inline-error path
-  `_list_accounts_and_brokers` (task 11) established, since a bad `account_label` has nothing
-  partial to show either way; any other `PortfolioClientError` on either call degrades that half
-  of the page independently, mirroring `_list_accounts_and_brokers` exactly. An account with no
+  `AccountNotFound` from any of the positions, returns or latest-returns calls is treated as fatal
+  (a distinct 404, "that account doesn't exist") rather than folded into the generic
+  degrade-to-inline-error path `_list_accounts_and_brokers` (task 11) established, since a bad
+  `account_label` has nothing partial to show either way; any other `PortfolioClientError`
+  degrades only the part of the page that call feeds (holdings, chart, or tiles and table figures),
+  mirroring `_list_accounts_and_brokers` exactly. An account with no
   positions (no buy transactions yet, or only unmapped instruments) and/or no return history yet
   (nobody has run the CLI `rebuild-returns`) renders as an ordinary
   empty state, not an error — `web` has no way to distinguish "never rebuilt" from "rebuilt into
   zero rows" and doesn't need to.
+- **The summary tiles and holdings figures (UI-6) come from `GET /returns/latest`, not from the
+  chart's `GET /returns` history.** The latest row per ticker is also the history's last point,
+  so on this page the call is redundant: one extra concurrent request, and during a rebuild the
+  tiles can briefly disagree with the chart's last point. It's taken anyway because UI-11's
+  cross-account overview needs a cheap "current figures" read per account, and fetching every
+  account's full history for that would not be cheap. Built and tested here, the method is ready
+  for UI-11. `portfolio_view.summarize_latest_returns` is `aggregate_portfolio_returns`'s last point
+  over those rows. Forward-fill makes every ticker contribute its own latest row, including a
+  ticker whose prices stopped earlier, and the point's date is the newest one: the page's "Prices
+  as of" date. Reusing it keeps one rule for the percentage (recomputed, never averaged). A closed
+  ticker keeps a quantity-0 latest row (its returns run through its closing date), so its
+  dividends stay in the account's total return, matching the chart. `build_holdings` joins each
+  open position to its latest row by ticker. Quantity and average cost come from the position.
+  Market value and unrealized return come from the row. Weight is a share of the summed market
+  value of the holdings that *have* a row. A holding with no row yet (no price or no mapping;
+  UI-7 will say which) shows `—` rather than counting as worth zero, and a closed ticker's
+  leftover row isn't a holding at all. Weights keep full precision, so displayed weights needn't
+  sum to exactly 100%.
 - **App shell (UI-4): the current page is marked on the server, and the account pages share one
   header.** Each route passes `nav_active` (`overview` / `accounts` / `admin`) and, on the three
   account-scoped pages, `account_nav_active` (`holdings` / `add` / `import`; `transactions` is
@@ -287,7 +320,8 @@ calls [`portfolio`](../../portfolio/docs/architecture.md), `data-store`, and
   The Transactions sub-nav link ships ahead of its page and 404s until UI-8 builds
   `GET /transactions`.
 - **Display formatting (UI-5) is one fixed convention, applied by Jinja filters from a pure
-  module.** `formatting.py` defines `money`, `signed_money`, `qty`, `pct` and `date`, registered on
+  module.** `formatting.py` defines `money`, `signed_money`, `qty`, `pct` and `date` (plus UI-6's
+  `share`, an unsigned percentage for weights, and `delta_class`), registered on
   the templates environment in `app.py`'s lifespan. Templates never round or append units
   themselves. The convention: English digit grouping (`€1,234.50`), a `€` prefix because every
   aggregated figure `portfolio` returns is EUR, a true minus sign (U+2212) instead of a hyphen,
@@ -298,9 +332,12 @@ calls [`portfolio`](../../portfolio/docs/architecture.md), `data-store`, and
   no sign: a zero delta is neither a gain nor a loss, and `−€0.00` would be noise. `qty` trims
   trailing zeros but never falls into scientific notation (`Decimal.normalize()` alone renders 100
   as `1E+2`). Every filter renders `—` for `None`. Locale switching is out of scope; if it's ever
-  needed, Babel would replace the bodies of these five functions and nothing else. The module has
-  no Jinja or FastAPI import so it can be tested on its own, and so that UI-6 has a single,
-  readable reference when it mirrors the same rules in `portfolio_chart.js`.
+  needed, Babel would replace the bodies of these functions and nothing else. The module has
+  no Jinja or FastAPI import so it can be tested on its own, and so that `portfolio_chart.js` has
+  a single, readable reference for the rules it mirrors (UI-6). `delta_class` returns `gain` /
+  `loss` / nothing from the sign a figure *displays* with, after the same rounding as
+  `signed_money` or `pct`. A delta's color therefore can't disagree with its printed sign: `-0.004`
+  prints `€0.00` and is uncolored, where a `>= 0` test in the template would have colored it a gain.
 
 ## Endpoint surface
 
@@ -322,7 +359,7 @@ calls [`portfolio`](../../portfolio/docs/architecture.md), `data-store`, and
 | `POST /transactions/new` | CSRF-checked, calls `portfolio`'s `POST /transactions` (an instrument, when given, is always sent as `instrument_identifier_kind = 'TICKER'`; a blank Amount is sent as `null`, for portfolio to derive on a BUY/SELL or reject as missing on anything else), redirects to `/transactions/new?account=<label>&saved=1` on success. An unknown ticker comes back as portfolio's 422, whose message is shown as-is like every other 422. The ticker list is re-fetched for the error re-render |
 | `GET /transactions/import` | `require_user`; required `account` query param; renders the upload form, with a confirmation banner (row count) if `?imported=<n>`. Fetches `GET /accounts` for the account header, with the same 404 and degrade rules as `GET /transactions/new` |
 | `POST /transactions/import` | CSRF-checked, multipart; size-capped at 20MB (matching `portfolio`'s own cap) before the bytes are forwarded; calls `portfolio`'s `POST /transactions/import`, redirects to `/transactions/import?account=<label>&imported=<rows_saved>` on success |
-| `GET /portfolio` | `require_user`; required `account` query param; fetches `portfolio`'s `GET /positions`/`GET /returns` concurrently, aggregates the per-ticker return series into one portfolio-level series (`portfolio_view.aggregate_portfolio_returns`), and renders a positions table plus a Chart.js return-over-time chart. `GET /accounts` is fetched concurrently for the account header. `AccountNotFound` on either call, or a label missing from a successfully loaded account list, renders `account_not_found.html` with a 404; any other failure degrades that half of the page independently, mirroring `GET /accounts`'s own pattern. No writes, no rebuild trigger. |
+| `GET /portfolio` | `require_user`; required `account` query param; fetches `portfolio`'s `GET /positions`, `GET /returns` and `GET /returns/latest` concurrently. Renders a "Prices as of" line and summary tiles (market value, cost basis, total return € and %, dividends; `portfolio_view.summarize_latest_returns`), a holdings table of open positions joined to their latest return row (quantity, average cost, market value, weight, unrealized return; `portfolio_view.build_holdings`), and a Chart.js chart of the per-ticker series aggregated into one portfolio-level series (`portfolio_view.aggregate_portfolio_returns`), with a total return / market value toggle and date ranges. `GET /accounts` is fetched concurrently for the account header. `AccountNotFound` on any call, or a label missing from a successfully loaded account list, renders `account_not_found.html` with a 404; any other failure degrades only the part that call feeds, mirroring `GET /accounts`'s own pattern. No writes, no rebuild trigger. |
 
 Every POST error (wrong credentials, a duplicate email, a tripped throttle, `auth`/`portfolio`
 being unreachable, a CSRF mismatch, or a `portfolio` validation failure) re-renders the form with
@@ -351,13 +388,14 @@ exists to close; no equivalent concern applies to the portfolio routes; see "Key
   two reads can produce. Task 17 added the ticker-mapping calls (`TickerMapping`,
   `UnmappedInstrument`, `TickerMappingWriteResult`) and one error, `TickerMappingNotFound`: a 404
   from the mapping delete means the mapping is gone, not an account, so it can't reuse
-  `AccountNotFound`.
+  `AccountNotFound`. UI-6 added `list_latest_returns` (`GET /returns/latest`), parsed into the
+  same `Return` dataclass, since `portfolio` serves it with the same response model.
 - `portfolio_view.py` (task 12) — pure, I/O-free reshaping of what `routes.py` fetches for
-  `GET /portfolio`: `filter_open_positions` and `aggregate_portfolio_returns` (see "Key
-  decisions"). No FastAPI/httpx dependency, tested in isolation, mirroring how `portfolio`'s own
+  `GET /portfolio`: `filter_open_positions`, `aggregate_portfolio_returns`, and (UI-6)
+  `summarize_latest_returns` and `build_holdings` with its `HoldingRow` (see "Key decisions"). No FastAPI/httpx dependency, tested in isolation, mirroring how `portfolio`'s own
   `returns/calculator.py` is a pure function.
 - `formatting.py` (UI-5) — pure display formatters (`money`, `signed_money`, `qty`, `pct`,
-  `date`) plus the `FILTERS` mapping `app.py` registers as Jinja filters; see "Key decisions".
+  `date`, and UI-6's `share` and `delta_class`) plus the `FILTERS` mapping `app.py` registers as Jinja filters; see "Key decisions".
 - `api/theme.py` (UI-3) — the theme cookie, `POST /theme` on its own router, the
   `theme_context` context processor, and `safe_next`. It's a separate module because it's
   self-contained and needs neither upstream client.

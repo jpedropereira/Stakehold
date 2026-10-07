@@ -45,12 +45,12 @@ numbers. Code comments and docs throughout the repo say "task 9", "task 13", and
 | UI-3 | [Dark mode](#ui-3-dark-mode) | UI-1, UI-2 | done |
 | UI-4 | [App shell & navigation](#ui-4-app-shell--navigation) | UI-1 | done |
 | UI-5 | [Number & date formatting](#ui-5-number--date-formatting) | — | done |
-| UI-6 | [Account portfolio page redesign](#ui-6-account-portfolio-page-redesign) | UI-4, UI-5 | ready |
-| UI-7 | [Data freshness & rebuild feedback](#ui-7-data-freshness--rebuild-feedback) | UI-6 | blocked |
+| UI-6 | [Account portfolio page redesign](#ui-6-account-portfolio-page-redesign) | UI-4, UI-5 | done |
+| UI-7 | [Data freshness & rebuild feedback](#ui-7-data-freshness--rebuild-feedback) | UI-6 | ready |
 | UI-8 | [Transactions list](#ui-8-transactions-list) | UI-4, UI-5 | ready |
 | UI-9 | [Transaction entry form UX](#ui-9-transaction-entry-form-ux) | UI-1 | ready |
 | UI-10 | [Accounts & import pages](#ui-10-accounts--import-pages) | UI-4 | ready |
-| UI-11 | [Home dashboard](#ui-11-home-dashboard) | UI-6 | blocked |
+| UI-11 | [Home dashboard](#ui-11-home-dashboard) | UI-6 | ready |
 | UI-12 | [Feedback, loading & error states](#ui-12-feedback-loading--error-states) | UI-1, UI-2 | ready |
 | UI-13 | [Responsive & accessibility pass](#ui-13-responsive--accessibility-pass) | UI-3, UI-6, UI-7, UI-8, UI-9, UI-10, UI-11, UI-12 | blocked |
 
@@ -258,7 +258,7 @@ As built:
 
 ### UI-6. Account portfolio page redesign
 
-**Status:** ready
+**Status:** done
 
 Depends on UI-4 (account header and sub-nav) and UI-5 (formatting). `/portfolio?account=` shows
 only quantity, average cost and cost basis today, so a user can't see what the holding is
@@ -283,9 +283,33 @@ Tests: the new client method (happy path, 404, malformed body); the join/weight 
 `portfolio_view.py` (a position with no return row yet, zero total value, rounding); route tests
 for the tiles and the degrade-on-partial-failure behaviour UI-6 must keep.
 
+As built (decided with the user before implementation):
+- **`list_latest_returns` is called on this page too**, though the latest row per ticker is also
+  the chart history's last point: one extra concurrent request, built and tested here for UI-11.
+  The summary is `aggregate_portfolio_returns`'s last point over those rows
+  (`summarize_latest_returns`), so a closed ticker's dividends still count, and the percentage
+  is recomputed, never averaged. It returns a `PortfolioReturnPoint`, not a new dataclass.
+- **"Prices as of" is the newest `price_date`** across the latest rows, matching the chart's last
+  point. A stale ticker isn't called out; that's UI-7's freshness work.
+- **Weight** is a share of the summed market value of open holdings that have a return row. A
+  holding with none yet shows `—` for its market value, weight and return (UI-7 adds the reason).
+- **The market-value chart line uses `--text`**; total return keeps gain/loss segment colors.
+  Ranges count back from the last data point, not today. Both control groups ship `hidden` and
+  `portfolio_chart.js` reveals them, so a no-JS page shows no dead buttons.
+- **Zero deltas are uncolored**, via a new `delta_class` filter that reads the sign after display
+  rounding. A new `share` filter renders weights as an unsigned percentage. Tickers are mono now.
+- The JS formatter mirrors `formatting.py` by hand, and no test ties the two together (there's no
+  JS test runner). This is recorded as a sharp edge in `docs/architecture.md`.
+- Route tests moved to a new `tests/unit/test_portfolio_page.py`, with its own fakes, because
+  `test_routes.py` had grown past the 64KB limit (70KB, now 63KB).
+- Checked in Chromium (Playwright, fake upstreams): light and dark at 1280 and 360 px, every
+  range and both views, tooltip and axis formatting, the redraw on a theme switch, and controls
+  hidden with JS off. At 360 px the holdings table scrolls inside its card rather than reflowing,
+  which UI-13 owns.
+
 ### UI-7. Data freshness & rebuild feedback
 
-**Status:** blocked
+**Status:** ready
 
 Depends on UI-6.
 
@@ -379,7 +403,7 @@ Tests: route/template tests for the empty-state disclosure behaviour and the imp
 
 ### UI-11. Home dashboard
 
-**Status:** blocked
+**Status:** ready
 
 Depends on UI-6 (latest-returns client method and per-account aggregation). Home is a welcome card
 with one link today.

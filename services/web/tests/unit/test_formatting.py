@@ -2,12 +2,21 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 
 import pytest
-from web.formatting import FILTERS, date_, money, pct, qty, signed_money
+from web.formatting import (
+    FILTERS,
+    date_,
+    delta_class,
+    money,
+    pct,
+    qty,
+    share,
+    signed_money,
+)
 
 MINUS = "−"
 
 
-@pytest.mark.parametrize("fmt", [money, signed_money, qty, pct, date_])
+@pytest.mark.parametrize("fmt", [money, signed_money, qty, pct, share, date_])
 def test_none_renders_em_dash(fmt):
     assert fmt(None) == "—"
 
@@ -18,6 +27,8 @@ def test_filters_registry_names_every_filter():
         "signed_money": signed_money,
         "qty": qty,
         "pct": pct,
+        "share": share,
+        "delta_class": delta_class,
         "date": date_,
     }
 
@@ -106,6 +117,55 @@ def test_qty(value, expected):
 )
 def test_pct(value, expected):
     assert pct(value) == expected
+
+
+# --- share -------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (Decimal("0.3333"), "33.33%"),
+        (Decimal("1"), "100.00%"),
+        (Decimal("0"), "0.00%"),
+        (Decimal("0.00005"), "0.01%"),  # half-up
+        (Decimal("-0.05"), f"{MINUS}5.00%"),  # a negative-quantity anomaly stays visible
+    ],
+)
+def test_share_is_an_unsigned_percentage(value, expected):
+    assert share(value) == expected
+
+
+# --- delta_class ---------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("value", "kind", "expected"),
+    [
+        (Decimal("100"), "money", "gain"),
+        (Decimal("-100"), "money", "loss"),
+        (Decimal("0"), "money", ""),
+        (Decimal("-0.004"), "money", ""),  # shown as €0.00, so not a loss
+        (Decimal("0.005"), "money", "gain"),  # shown as +€0.01
+        (Decimal("0.0184"), "pct", "gain"),
+        (Decimal("-0.0184"), "pct", "loss"),
+        (Decimal("-0.00001"), "pct", ""),  # shown as 0.00%
+        (Decimal("0.004"), "pct", "gain"),  # +0.40%, though it would round to €0.00
+        (None, "money", ""),
+        (None, "pct", ""),
+    ],
+)
+def test_delta_class_follows_the_displayed_sign(value, kind, expected):
+    assert delta_class(value, kind) == expected
+
+
+def test_delta_class_defaults_to_money():
+    assert delta_class(Decimal("-0.004")) == ""
+
+
+def test_delta_class_rejects_an_unknown_kind():
+    with pytest.raises(ValueError):
+        delta_class(Decimal("1"), "qty")
 
 
 # --- date ----------------------------------------------------------------------
