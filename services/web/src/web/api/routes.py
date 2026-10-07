@@ -933,6 +933,63 @@ async def accounts_submit(
     )
 
 
+# --- transactions: list ------------------------------------------------------
+
+_TRANSACTIONS_UNAVAILABLE = (
+    "Can't reach the portfolio service right now — the transactions can't be shown."
+)
+
+
+@router.get("/transactions")
+async def transactions_page(
+    request: Request,
+    response: Response,
+    account: str = Query(..., min_length=1),
+    settings: Settings = Depends(get_settings),
+    templates=Depends(get_templates),
+    user: AuthUser = Depends(require_user),
+    portfolio_client: PortfolioClient = Depends(get_portfolio_client),
+):
+    """The account's transaction log, newest first (UI-8). portfolio returns it oldest first
+    and takes no paging or sort parameters, so the whole log is fetched and reversed here."""
+    csrf_token = ensure_csrf_cookie(request, response, cookie_secure=settings.cookie_secure)
+    header, transactions = await asyncio.gather(
+        _account_header_context(portfolio_client, user.user_id, account),
+        portfolio_client.list_transactions(user_id=user.user_id, account_label=account),
+        return_exceptions=True,
+    )
+    if isinstance(header, BaseException):
+        raise header
+    if isinstance(transactions, AccountNotFound) or header["account_known"] is False:
+        return _render_account_not_found(
+            request, response, templates, user=user, csrf_token=csrf_token
+        )
+    error = None
+    if isinstance(transactions, PortfolioClientError):
+        # None, not []: the template must not read an outage as "no transactions yet".
+        logger.exception(
+            "portfolio service unavailable listing transactions.", exc_info=transactions
+        )
+        transactions, error = None, _TRANSACTIONS_UNAVAILABLE
+    elif isinstance(transactions, BaseException):
+        raise transactions
+    return _render(
+        request,
+        response,
+        templates,
+        "transactions.html",
+        {
+            "user": user,
+            "csrf_token": csrf_token,
+            "account_label": account,
+            "transactions": None if transactions is None else transactions[::-1],
+            "error": error,
+            **_account_page_context("transactions"),
+            **header,
+        },
+    )
+
+
 # --- transactions: manual entry ----------------------------------------------
 
 _TRANSACTION_ERRORS: dict[type[PortfolioClientError], tuple[str, int]] = {

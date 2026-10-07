@@ -44,6 +44,26 @@ def signed_money(value: Decimal | int | float | None) -> str:
     return f"{sign}€{magnitude}"
 
 
+def native_money(value: Decimal | int | float | None, currency: str, places: int = 2) -> str:
+    """A figure in its own currency, code after: `-1503.5, "USD"` → `−1,503.50 USD`.
+
+    For a transaction's own amounts and prices, which aren't EUR, so `money`'s `€` would be
+    wrong. Signed like `money` (a `−` only), since the sign is a cash-flow direction, not a gain
+    or loss. Rounded half-up to `places`; zeros past the second decimal are trimmed, so a price
+    at `places=4` shows `112.34`, not `112.3400`.
+    """
+    if value is None:
+        return MISSING
+    rounded = _to_decimal(value).quantize(Decimal(1).scaleb(-places), rounding=ROUND_HALF_UP)
+    if rounded.is_zero():
+        rounded = abs(rounded)
+    text = f"{abs(rounded):,f}"
+    whole, _, fraction = text.partition(".")
+    fraction = fraction.rstrip("0").ljust(2, "0")
+    sign = MINUS if rounded < 0 else ""
+    return f"{sign}{whole}.{fraction} {currency}"
+
+
 def qty(value: Decimal | int | float | None) -> str:
     """Trailing zeros trimmed (`10.000000` → `10`), grouped, never scientific notation."""
     if value is None:
@@ -106,4 +126,5 @@ FILTERS: dict[str, Callable[..., str]] = {
     "share": share,
     "delta_class": delta_class,
     "date": date_,
+    "native_money": native_money,
 }

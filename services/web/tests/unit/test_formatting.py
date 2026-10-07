@@ -7,6 +7,7 @@ from web.formatting import (
     date_,
     delta_class,
     money,
+    native_money,
     pct,
     qty,
     share,
@@ -30,6 +31,7 @@ def test_filters_registry_names_every_filter():
         "share": share,
         "delta_class": delta_class,
         "date": date_,
+        "native_money": native_money,
     }
 
 
@@ -177,3 +179,41 @@ def test_date_formats_date_as_iso():
 
 def test_date_formats_datetime_by_its_date_part():
     assert date_(datetime(2026, 10, 6, 23, 59, tzinfo=timezone.utc)) == "2026-10-06"
+
+
+# --- native_money (UI-8) -------------------------------------------------------
+
+
+def test_native_money_renders_none_as_em_dash():
+    assert native_money(None, "USD") == "—"
+
+
+@pytest.mark.parametrize(
+    ("value", "currency", "expected"),
+    [
+        (Decimal("1234.5"), "USD", "1,234.50 USD"),
+        (Decimal("-1503.5"), "USD", f"{MINUS}1,503.50 USD"),
+        (Decimal("0"), "EUR", "0.00 EUR"),
+        (Decimal("-0.004"), "EUR", "0.00 EUR"),
+        (Decimal("0.005"), "GBP", "0.01 GBP"),
+        (Decimal("1234567.891"), "CHF", "1,234,567.89 CHF"),
+        (12.3, "USD", "12.30 USD"),
+    ],
+)
+def test_native_money_has_a_currency_code_suffix_and_no_plus_sign(value, currency, expected):
+    assert native_money(value, currency) == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (Decimal("112.3400"), "112.34 USD"),
+        (Decimal("112"), "112.00 USD"),
+        (Decimal("0.12345"), "0.1235 USD"),
+        (Decimal("0.12344"), "0.1234 USD"),
+        (Decimal("1234.567"), "1,234.567 USD"),
+        (Decimal("-5.1"), f"{MINUS}5.10 USD"),
+    ],
+)
+def test_native_money_with_more_places_trims_zeros_past_two(value, expected):
+    assert native_money(value, "USD", 4) == expected
