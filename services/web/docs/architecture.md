@@ -170,6 +170,29 @@ calls [`portfolio`](../../portfolio/docs/architecture.md), `data-store`, and
   instead of the query string.* It would be one more cookie, plus a CSRF-style read-once dance,
   just to hide two words from the URL. The admin mappings page already uses the query string
   (`rebuilt`, `failed`).
+- **A broker-file import names its importer explicitly; it isn't inferred.** `portfolio` has
+  two import routes, one per parser registry: a trades export (`POST /transactions/import`) and
+  an account statement / cash ledger, which needs live FX lookups while parsing
+  (`POST /cashflows/import`). A broker can have either or both: one has both today, so its
+  kind can't be inferred from the account. Guessing from the file would mean a new
+  "can you parse this?" method on the plugin Protocols. Instead the import page lists the kinds
+  `GET /brokers` reports for the account's own broker, and the visitor picks one. Another broker's
+  importers are never offered. Every transaction in an account then comes from that account's
+  broker, which broker-scoped ticker mappings rely on, and which `portfolio` enforces anyway by
+  looking the parser up from the account's `broker` column. Before this, the page only ever
+  called the transactions route, so a cashflow-only broker could only be imported through the
+  `portfolio` CLI.
+- **The account's broker is picked from a list, with "Custom" for anything else.** It used to
+  be a free-text field with a `<datalist>` hint. A broker typed in a different case from its
+  installed key (`Degiro` vs `degiro`) got no importer, and only failed later, at import. Now
+  the field is a `<select>` of installed brokers, plus "Custom" with a name field. A custom
+  broker is for manual entry only: its import page says so instead of showing a form. A custom
+  name equal to an installed broker ignoring case is refused, since it would recreate that same
+  trap. If brokers can't be listed it's let through, rather than blocking account creation on an
+  outage. The name field is hidden by a CSS `:has()` rule unless "Custom" is chosen: no JS is
+  needed, and a browser without `:has()` just always shows it. `portfolio` itself still accepts
+  any broker string (its CLI and manual entry must work with no plugin installed). The list is a
+  `web` form constraint, not a data rule, and existing accounts are untouched.
 - **`account_label` is always a query parameter or a hidden form field in `web` too, never a path
   segment** — the same reasoning `portfolio`'s own API documents (a label is free text that may
   contain `/`), applied here even though nothing forces `web`'s own routing to follow it.
@@ -387,12 +410,12 @@ calls [`portfolio`](../../portfolio/docs/architecture.md), `data-store`, and
 | `POST /theme` | No login needed. CSRF-checked: a mismatch changes nothing and redirects back (an `HX-Redirect` for htmx), like `POST /logout`, rather than re-rendering a form error. A value other than `light`/`dark`/`system` → `400`. Otherwise sets the `stakehold_theme` cookie (`HttpOnly`, `SameSite=Lax`, `Path=/`, one year, `Secure` per `WEB_COOKIE_SECURE`), then a 303 to the validated `next`, or for htmx a `200` with `HX-Trigger`. See "Theme" under "Key decisions" |
 | `POST /logout` | CSRF-checked, calls `auth` (best-effort — a failure is logged, not surfaced, since the user's intent to log out should not depend on `auth` being reachable), clears the session cookie locally, redirects to `/login` |
 | `GET /health` | `200 {"status": "ok"}`, unauthenticated, no dependency check (see "Key decisions") |
-| `GET /accounts` | `require_user`; lists the caller's accounts (`portfolio`'s `GET /accounts`) and available broker parsers (`GET /brokers`, for the create-account `<datalist>` hint) and renders the create-account form |
-| `POST /accounts` | CSRF-checked, calls `portfolio`'s `POST /accounts`, redirects to `/accounts` on success |
+| `GET /accounts` | `require_user`; lists the caller's accounts (`portfolio`'s `GET /accounts`) and installed brokers (`GET /brokers`) and renders the create-account form, whose broker field is a `<select>` of those brokers plus "Custom" (see "Key decisions") |
+| `POST /accounts` | CSRF-checked. With "Custom" chosen (`broker=__custom__`), sends the typed `custom_broker` name instead, after refusing a blank one or one matching an installed broker ignoring case (both 422, no `portfolio` write). Calls `portfolio`'s `POST /accounts`, redirects to `/accounts` on success |
 | `GET /transactions/new` | `require_user`; required `account` query param (a bare 422 for a missing/blank value — reachable only via a hand-crafted URL, since every link that points here already includes it); renders the manual-entry form, with a confirmation banner if `?saved=<n>` (plus the rebuild outcome from `positions`/`returns`; see "Key decisions"). The instrument field is a ticker picker: a native `<datalist>` filled from `portfolio`'s `GET /instruments/tickers` (no script, so the strict CSP is untouched). If that call fails, the form still renders with an empty list and a notice; the picker is a convenience, and portfolio checks whatever is typed when it's saved. Also fetches `GET /accounts` (concurrently) for the account header: a label that isn't one of the visitor's accounts renders `account_not_found.html` with a 404, and a failed fetch degrades to a label-only header rather than a 404 |
 | `POST /transactions/new` | CSRF-checked, calls `portfolio`'s `POST /transactions` (an instrument, when given, is always sent as `instrument_identifier_kind = 'TICKER'`; a blank Amount is sent as `null`, for portfolio to derive on a BUY/SELL or reject as missing on anything else), redirects to `/transactions/new?account=<label>&saved=<transactions_saved>&positions=<status>&returns=<status>` on success. An unknown ticker comes back as portfolio's 422, whose message is shown as-is like every other 422. The ticker list is re-fetched for the error re-render |
-| `GET /transactions/import` | `require_user`; required `account` query param; renders the upload form, with a confirmation banner (row count and rebuild outcome) if `?imported=<n>`. Fetches `GET /accounts` for the account header, with the same 404 and degrade rules as `GET /transactions/new` |
-| `POST /transactions/import` | CSRF-checked, multipart; size-capped at 20MB (matching `portfolio`'s own cap) before the bytes are forwarded; calls `portfolio`'s `POST /transactions/import`, redirects to `/transactions/import?account=<label>&imported=<rows_saved>&positions=<status>&returns=<status>` on success |
+| `GET /transactions/import` | `require_user`; required `account` query param; renders the upload form with an importer `<select>` listing the account's own broker's importers, with a confirmation banner (row count and rebuild outcome) if `?imported=<n>`. A broker with no importer gets a pointer to manual entry instead of a form; brokers that can't be listed get an inline notice, never the "no importer" text. Fetches `GET /accounts` (for the account header, with the same 404 and degrade rules as `GET /transactions/new`) and `GET /brokers` concurrently |
+| `POST /transactions/import` | CSRF-checked, multipart; `importer` must be `transactions` or `cashflow` (anything else is a 422 with no `portfolio` call); size-capped at 20MB (matching `portfolio`'s own cap) before the bytes are forwarded; calls `portfolio`'s `POST /transactions/import` or `POST /cashflows/import` to match, redirects to `/transactions/import?account=<label>&imported=<rows_saved>&positions=<status>&returns=<status>` on success |
 | `GET /portfolio` | `require_user`; required `account` query param; fetches `portfolio`'s `GET /positions`, `GET /returns`, `GET /returns/latest` and `GET /instruments/unmapped` concurrently. Renders a "Prices as of" line and summary tiles (market value, cost basis, total return € and %, dividends; `portfolio_view.summarize_latest_returns`), a holdings table of open positions joined to their latest return row (quantity, average cost, market value, weight, unrealized return; `portfolio_view.build_holdings`), and a Chart.js chart of the per-ticker series aggregated into one portfolio-level series (`portfolio_view.aggregate_portfolio_returns`), with a total return / market value toggle and date ranges. `GET /accounts` is fetched concurrently for the account header. `AccountNotFound` on any call, or a label missing from a successfully loaded account list, renders `account_not_found.html` with a 404; any other failure degrades only the part that call feeds, mirroring `GET /accounts`'s own pattern. Pending states: "Waiting for prices" on a holding with no return row, and a notice listing the instruments waiting for a ticker mapping at this account's broker (UI-7). No writes, no rebuild trigger. |
 
 Every POST error (wrong credentials, a duplicate email, a tripped throttle, `auth`/`portfolio`
@@ -427,7 +450,12 @@ exists to close; no equivalent concern applies to the portfolio routes; see "Key
   `positions_rebuild`/`returns_rebuild` to `TransactionWriteResult`. They are `None` when an
   older response lacks them, so a version skew degrades the banner rather than failing the
   write. UI-7 also added `list_unmapped_instruments` (the per-user `GET /instruments/unmapped`),
-  which reuses `UnmappedInstrument`.
+  which reuses `UnmappedInstrument`. UI-14 changed `list_brokers` to return `Broker`
+  dataclasses (a key plus its import kinds) and added `import_cashflow`, which shares
+  `import_transactions`' multipart upload helper. Unlike UI-7's optional fields, a `/brokers`
+  response in the old bare-string shape is raised as `PortfolioUnavailable` rather than
+  degraded. Guessing "no imports" would tell the visitor their broker has no importer when it
+  may have several.
 - `rebuild_outcome.py` (UI-7) — pure. Turns the two rebuild statuses into the confirmation
   banner's one sentence; see "Key decisions".
 - `portfolio_view.py` (task 12) — pure, I/O-free reshaping of what `routes.py` fetches for

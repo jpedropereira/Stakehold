@@ -369,14 +369,24 @@ def test_run_list_accounts_closes_the_connection(monkeypatch):
 
 
 def test_run_list_available_brokers_reports_ok_with_the_broker_payload(monkeypatch):
-    monkeypatch.setattr(jobs.pipeline, "list_available_brokers", lambda: ["acme", "globex"])
+    monkeypatch.setattr(
+        jobs.pipeline,
+        "list_available_brokers",
+        lambda: [
+            jobs.pipeline.AvailableBroker(broker="acme", imports=("cashflow", "transactions")),
+            jobs.pipeline.AvailableBroker(broker="globex", imports=("transactions",)),
+        ],
+    )
 
     result = jobs.run_list_available_brokers()
 
     assert result["status"] == "ok"
     assert result["rows_saved"] == 0
     assert result["brokers_available"] == 2
-    assert result["brokers"] == ["acme", "globex"]
+    assert result["brokers"] == [
+        {"broker": "acme", "imports": ["cashflow", "transactions"]},
+        {"broker": "globex", "imports": ["transactions"]},
+    ]
 
 
 def test_run_list_available_brokers_reports_nothing_to_do_when_empty(monkeypatch):

@@ -33,6 +33,7 @@ from portfolio.api.models import (
     AccountCreateRequest,
     AccountResponse,
     AccountWriteResponse,
+    BrokerResponse,
     PositionResponse,
     RebuildPositionsResponse,
     RebuildRequest,
@@ -167,8 +168,8 @@ def create_account(
     return result
 
 
-@router.get("/brokers", response_model=list[str])
-def list_brokers() -> list[str]:
+@router.get("/brokers", response_model=list[BrokerResponse])
+def list_brokers() -> list[dict]:
     result = jobs.run_list_available_brokers()
     return result["brokers"]
 

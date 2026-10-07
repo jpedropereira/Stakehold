@@ -11,7 +11,7 @@ from web.api.app import create_app
 from web.api.deps import get_auth_client, get_portfolio_client
 from web.auth_client.base import AuthResult, AuthUser
 from web.auth_client.errors import SessionInvalid
-from web.portfolio_client.base import Account, TransactionWriteResult
+from web.portfolio_client.base import Account, Broker, TransactionWriteResult
 from web.settings import Settings
 
 SESSION_COOKIE = "stakehold_session=tok; Path=/; HttpOnly; SameSite=lax"
@@ -39,10 +39,16 @@ class FakePortfolioClient:
     async def list_tickers(self):
         return []
 
+    async def list_brokers(self):
+        return [Broker(broker="acme", imports=("transactions",))]
+
     async def add_transaction(self, **kwargs):
         return self.write_result
 
     async def import_transactions(self, **kwargs):
+        return self.write_result
+
+    async def import_cashflow(self, **kwargs):
         return self.write_result
 
 
@@ -105,7 +111,7 @@ def _post_import(test_client):
     ]
     return test_client.post(
         "/transactions/import",
-        data={"account_label": "main", "csrf_token": token},
+        data={"account_label": "main", "importer": "transactions", "csrf_token": token},
         files={"file": ("export.csv", b"a,b\n1,2\n", "text/csv")},
         follow_redirects=False,
     )
