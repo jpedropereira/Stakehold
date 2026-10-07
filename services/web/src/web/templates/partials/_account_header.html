@@ -17,7 +17,7 @@
     {% endfor %}
   </nav>
   {% if accounts|length > 1 %}
-  {# A plain GET back to this same page: switching keeps the visitor on Holdings, Add or Import. #}
+  {# A plain GET back to this same page: switching keeps the visitor on Holdings, Transactions, Add or Import. #}
   <form class="account-switcher" method="get" action="{{ request.url.path }}">
     <label for="account-switch">Account</label>
     <select id="account-switch" name="account">

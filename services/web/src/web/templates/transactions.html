@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Transactions — {{ account_label }} — Stakehold{% endblock %}
+{% block content %}
+{% include "partials/_account_header.html" %}
+{% if error %}
+<p class="confirmation-banner">{{ error }}</p>
+{% endif %}
+
+<section class="card card-wide">
+  <h1>Transactions</h1>
+  {% if transactions %}
+  <div class="table-scroll">
+    <table class="positions-table transactions-table">
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Type</th>
+          <th>Instrument</th>
+          <th class="num">Quantity</th>
+          <th class="num">Price</th>
+          <th class="num">Amount</th>
+          <th class="num">Fees</th>
+          <th>Reference</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for txn in transactions %}
+        {% set currency = txn.native_currency %}
+        <tr>
+          <td class="date"><span class="mono">{{ txn.trade_datetime | date }}</span></td>
+          {# Neutral, never gain/loss colored: a SELL or a WITHDRAWAL isn't a loss. #}
+          <td><span class="badge">{{ txn.transaction_type }}</span></td>
+          {# A TICKER is already the ticker; an ISIN or SYMBOL is named by its kind. #}
+          <td>{% if txn.instrument_identifier %}<span class="mono">{% if txn.instrument_identifier_kind != "TICKER" %}{{ txn.instrument_identifier_kind }} {% endif %}{{ txn.instrument_identifier }}</span>{% else %}<span class="mono">—</span>{% endif %}</td>
+          <td class="num"><span class="mono">{{ txn.quantity | qty }}</span></td>
+          <td class="num"><span class="mono">{{ txn.price | native_money(currency, 4) }}</span></td>
+          {# The frozen EUR figure sits under a non-EUR amount; for a EUR row it would repeat it. #}
+          <td class="num"><span class="mono">{{ txn.native_amount | native_money(currency) }}</span>{% if currency != "EUR" %}
+            <span class="mono eur-amount">{{ txn.eur_amount | money }}</span>{% endif %}</td>
+          <td class="num"><span class="mono">{{ txn.fees_native | native_money(currency) }}</span></td>
+          {# Shortened by CSS; the full value stays selectable and is in the tooltip. #}
+          <td><span class="mono reference" title="{{ txn.broker_transaction_ref }}">{{ txn.broker_transaction_ref }}</span></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% elif transactions is not none %}
+  {% set account_query = "?account=" ~ (account_label | urlencode) %}
+  <p class="entry-empty" id="transactions-empty">No transactions yet. <a href="/transactions/new{{ account_query }}">Add one</a> or <a href="/transactions/import{{ account_query }}">import a broker file</a>.</p>
+  {% endif %}
+</section>
+{% endblock %}

@@ -9,6 +9,7 @@ from web.portfolio_client.base import (
     Return,
     TickerMapping,
     TickerMappingWriteResult,
+    Transaction,
     TransactionWriteResult,
     UnmappedInstrument,
 )
@@ -139,6 +140,28 @@ def _return(item: dict) -> Return:
             dividends_received_eur=Decimal(item["dividends_received_eur"]),
             total_return_eur=Decimal(item["total_return_eur"]),
             total_return_pct=_opt_decimal(item["total_return_pct"]),
+        )
+    except (KeyError, TypeError, ValueError, InvalidOperation) as exc:
+        raise PortfolioUnavailable(f"malformed portfolio response: {exc}") from exc
+
+
+def _transaction(item: dict) -> Transaction:
+    try:
+        return Transaction(
+            account_id=item["account_id"],
+            broker_transaction_ref=item["broker_transaction_ref"],
+            transaction_type=item["transaction_type"],
+            trade_datetime=datetime.fromisoformat(item["trade_datetime"]),
+            instrument_identifier=item["instrument_identifier"],
+            instrument_identifier_kind=item["instrument_identifier_kind"],
+            quantity=_opt_decimal(item["quantity"]),
+            price=_opt_decimal(item["price"]),
+            native_currency=item["native_currency"],
+            native_amount=Decimal(item["native_amount"]),
+            eur_amount=Decimal(item["eur_amount"]),
+            fx_rate=_opt_decimal(item["fx_rate"]),
+            fx_rate_source=item["fx_rate_source"],
+            fees_native=_opt_decimal(item["fees_native"]),
         )
     except (KeyError, TypeError, ValueError, InvalidOperation) as exc:
         raise PortfolioUnavailable(f"malformed portfolio response: {exc}") from exc
@@ -285,6 +308,14 @@ class HttpPortfolioClient:
         if response.status_code not in (200, 201):
             _raise_for_status(response)
         return _transaction_write_result(_json_body(response))
+
+    async def list_transactions(self, *, user_id: str, account_label: str) -> list[Transaction]:
+        response = await self._request(
+            "GET", "/transactions", params={"user_id": user_id, "account_label": account_label}
+        )
+        if response.status_code != 200:
+            _raise_for_status(response)
+        return [_transaction(item) for item in _json_body(response)]
 
     async def list_positions(self, *, user_id: str, account_label: str) -> list[Position]:
         response = await self._request(

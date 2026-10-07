@@ -47,7 +47,7 @@ numbers. Code comments and docs throughout the repo say "task 9", "task 13", and
 | UI-5 | [Number & date formatting](#ui-5-number--date-formatting) | — | done |
 | UI-6 | [Account portfolio page redesign](#ui-6-account-portfolio-page-redesign) | UI-4, UI-5 | done |
 | UI-7 | [Data freshness & rebuild feedback](#ui-7-data-freshness--rebuild-feedback) | UI-6 | done |
-| UI-8 | [Transactions list](#ui-8-transactions-list) | UI-4, UI-5 | ready |
+| UI-8 | [Transactions list](#ui-8-transactions-list) | UI-4, UI-5 | done |
 | UI-9 | [Transaction entry form UX](#ui-9-transaction-entry-form-ux) | UI-1 | ready |
 | UI-10 | [Accounts & import pages](#ui-10-accounts--import-pages) | UI-4 | ready |
 | UI-11 | [Home dashboard](#ui-11-home-dashboard) | UI-6 | ready |
@@ -359,7 +359,7 @@ As built (decided with the user before implementation):
 
 ### UI-8. Transactions list
 
-**Status:** ready
+**Status:** done
 
 Depends on UI-4 and UI-5. There's no way to see what has been entered for an account, although
 `portfolio` exposes `GET /transactions`.
@@ -376,6 +376,30 @@ Depends on UI-4 and UI-5. There's no way to see what has been entered for an acc
   before building.
 
 Tests: client method; route (login required, happy path, empty, unknown account → 404).
+
+As built (decided with the user before implementation):
+- **No pagination.** `portfolio`'s `GET /transactions` takes no paging, filter or sort
+  parameters and returns the log oldest first, so `web` fetches it all and reverses it. It stays
+  under [Deferred](#deferred), and `docs/architecture.md` records it as a known limitation.
+- **Native figures get a new `native_money` filter** (user's decision): the currency code after
+  the number (`−1,503.50 USD`), `money`'s `−`-only sign, never gain/loss colored. Prices use 4
+  places with zeros past the second trimmed (`112.34 USD`).
+- **Fees, Reference and the frozen EUR amount added beyond the spec** (user's decision). The
+  EUR amount was asked for as its own column, but with nine columns the table overflowed the
+  880px card at desktop width and squeezed Reference to two characters. So it's a muted second
+  line under a non-EUR amount instead (none on a EUR row, where it would repeat the amount).
+  A long reference (some brokers use 36-character UUIDs) is cut off at 14 characters with an
+  ellipsis, with the full value still in the page and in a `title` tooltip. The table uses a
+  13px figure size and tighter cells to fit.
+- An ISIN or SYMBOL instrument is shown with its kind (`ISIN IE00…`), as UI-7's unmapped notice
+  does; a TICKER is shown alone.
+- The type badge is the charter's neutral ink tag (mono, uppercase, hairline border).
+- **An outage isn't an empty account:** a failed `list_transactions` renders a banner and no
+  table, never the "No transactions yet" state.
+- The new table has its own `transactions-table` class and shares `.num` alignment with
+  `holdings-table`, rather than renaming the portfolio page's class.
+- Route tests are in a new `tests/unit/test_transactions_page.py`, because `test_routes.py` is at
+  the 64KB limit.
 
 ### UI-9. Transaction entry form UX
 

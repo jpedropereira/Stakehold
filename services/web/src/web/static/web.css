@@ -495,9 +495,60 @@ main:focus {
 }
 
 /* Figures line up on their decimal side. Two classes, to outrank the left-aligned cell rule. */
-.holdings-table .num {
+:is(.holdings-table, .transactions-table) .num {
   text-align: right;
   white-space: nowrap;
+}
+
+/* A transaction's type: the charter's neutral tag (chapter I's do/don't cards), in ink with a
+   hairline. Never gain/loss colored, since a SELL or a WITHDRAWAL isn't a loss. */
+.badge {
+  display: inline-block;
+  padding: 2px var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+/* Eight columns in the 880px card: a smaller figure size and tighter cells keep every column
+   in view at desktop width, where the default size would push Fees and Reference behind the
+   scroll. A date never breaks at its hyphens. Phone width scrolls inside the card (UI-13). */
+.transactions-table th,
+.transactions-table td {
+  padding-inline: var(--space-2);
+}
+
+.transactions-table .mono {
+  font-size: 13px;
+}
+
+.transactions-table .date {
+  white-space: nowrap;
+}
+
+/* A non-EUR amount's frozen EUR figure, on its own line under the native one. */
+.transactions-table .eur-amount {
+  display: block;
+  color: var(--text-muted);
+}
+
+/* The broker's reference: an identifier to match against a statement, not a figure to read.
+   Some brokers use 36-character UUIDs, so a long one is cut off with an ellipsis rather than
+   widening the table; the full value is still in the page and in its title tooltip. */
+.transactions-table .reference {
+  display: inline-block;
+  max-width: 14ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
+  color: var(--text-muted);
 }
 
 

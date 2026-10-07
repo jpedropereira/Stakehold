@@ -707,3 +707,120 @@ async def test_list_unmapped_instruments_raises_unavailable_on_a_malformed_body(
 
     with pytest.raises(PortfolioUnavailable, match="malformed"):
         await client.list_unmapped_instruments(user_id=USER_ID)
+
+
+# --- list_transactions (UI-8) -------------------------------------------------
+
+
+def _transaction_json(**overrides) -> dict:
+    item = {
+        "account_id": 1,
+        "broker_transaction_ref": "ref-1",
+        "transaction_type": "BUY",
+        "trade_datetime": "2026-01-05T09:30:00Z",
+        "instrument_identifier": "AAPL",
+        "instrument_identifier_kind": "TICKER",
+        "quantity": "10.000000",
+        "price": "150.2500",
+        "native_currency": "USD",
+        "native_amount": "-1503.5000",
+        "eur_amount": "-1400.1000",
+        "fx_rate": "1.073900",
+        "fx_rate_source": "ECB",
+        "fees_native": "1.0000",
+    }
+    item.update(overrides)
+    return item
+
+
+async def test_list_transactions_sends_expected_query_params_and_parses_fields():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["path"] = request.url.path
+        captured["params"] = dict(request.url.params)
+        captured["secret"] = request.headers.get("X-Internal-Secret")
+        return httpx.Response(200, json=[_transaction_json()])
+
+    transactions = await _client(handler).list_transactions(user_id=USER_ID, account_label="main")
+
+    assert captured == {
+        "path": "/transactions",
+        "params": {"user_id": USER_ID, "account_label": "main"},
+        "secret": INTERNAL_SECRET,
+    }
+    assert len(transactions) == 1
+    txn = transactions[0]
+    assert txn.account_id == 1
+    assert txn.broker_transaction_ref == "ref-1"
+    assert txn.transaction_type == "BUY"
+    assert txn.trade_datetime == datetime(2026, 1, 5, 9, 30, tzinfo=timezone.utc)
+    assert txn.instrument_identifier == "AAPL"
+    assert txn.instrument_identifier_kind == "TICKER"
+    assert txn.quantity == Decimal("10")
+    assert txn.price == Decimal("150.25")
+    assert txn.native_currency == "USD"
+    assert txn.native_amount == Decimal("-1503.5")
+    assert txn.eur_amount == Decimal("-1400.1")
+    assert txn.fx_rate == Decimal("1.0739")
+    assert txn.fx_rate_source == "ECB"
+    assert txn.fees_native == Decimal("1")
+
+
+async def test_list_transactions_parses_nulls_on_a_cash_only_row():
+    deposit = _transaction_json(
+        transaction_type="DEPOSIT",
+        instrument_identifier=None,
+        instrument_identifier_kind=None,
+        quantity=None,
+        price=None,
+        native_currency="EUR",
+        native_amount="2000.0000",
+        eur_amount="2000.0000",
+        fx_rate=None,
+        fx_rate_source=None,
+        fees_native=None,
+    )
+    client = _client(lambda request: httpx.Response(200, json=[deposit]))
+
+    [txn] = await client.list_transactions(user_id=USER_ID, account_label="main")
+
+    assert txn.instrument_identifier is None
+    assert txn.instrument_identifier_kind is None
+    assert txn.quantity is None
+    assert txn.price is None
+    assert txn.fx_rate is None
+    assert txn.fx_rate_source is None
+    assert txn.fees_native is None
+    assert txn.native_amount == Decimal("2000")
+
+
+async def test_list_transactions_keeps_portfolios_order():
+    rows = [_transaction_json(broker_transaction_ref=ref) for ref in ("a", "b", "c")]
+    client = _client(lambda request: httpx.Response(200, json=rows))
+
+    transactions = await client.list_transactions(user_id=USER_ID, account_label="main")
+
+    assert [txn.broker_transaction_ref for txn in transactions] == ["a", "b", "c"]
+
+
+async def test_list_transactions_account_not_found_raises():
+    client = _client(lambda request: httpx.Response(404, json={"detail": "account not found"}))
+
+    with pytest.raises(AccountNotFound):
+        await client.list_transactions(user_id=USER_ID, account_label="missing")
+
+
+@pytest.mark.parametrize(
+    "item",
+    [
+        _transaction_json(trade_datetime="not-a-datetime"),
+        _transaction_json(native_amount="not-a-number"),
+        {key: value for key, value in _transaction_json().items() if key != "eur_amount"},
+    ],
+)
+async def test_list_transactions_malformed_body_raises_portfolio_unavailable(item):
+    client = _client(lambda request: httpx.Response(200, json=[item]))
+
+    with pytest.raises(PortfolioUnavailable):
+        await client.list_transactions(user_id=USER_ID, account_label="main")

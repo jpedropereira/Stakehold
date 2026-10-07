@@ -51,6 +51,28 @@ class Return:
 
 
 @dataclass(frozen=True)
+class Transaction:
+    """One row of an account's transaction log, mirroring portfolio's TransactionResponse.
+    Amounts are signed cash flows (a BUY's is negative), quantity is signed (a SELL's is
+    negative), and every instrument field is None on a cash-only row."""
+
+    account_id: int
+    broker_transaction_ref: str
+    transaction_type: str
+    trade_datetime: datetime
+    instrument_identifier: str | None
+    instrument_identifier_kind: str | None
+    quantity: Decimal | None
+    price: Decimal | None
+    native_currency: str
+    native_amount: Decimal
+    eur_amount: Decimal
+    fx_rate: Decimal | None
+    fx_rate_source: str | None
+    fees_native: Decimal | None
+
+
+@dataclass(frozen=True)
 class AccountWriteResult:
     status: str
     rows_saved: int
@@ -132,6 +154,9 @@ class PortfolioClient(Protocol):
         content: bytes,
         content_type: str,
     ) -> TransactionWriteResult: ...
+
+    # Oldest first, as portfolio returns it.
+    async def list_transactions(self, *, user_id: str, account_label: str) -> list[Transaction]: ...
 
     async def list_positions(self, *, user_id: str, account_label: str) -> list[Position]: ...
 

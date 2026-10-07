@@ -330,9 +330,8 @@ calls [`portfolio`](../../portfolio/docs/architecture.md), `data-store`, and
     the refresh period is `portfolio`'s config (`PORTFOLIO_RETURNS_REFRESH_SECONDS`), not
     `web`'s.
 - **App shell (UI-4): the current page is marked on the server, and the account pages share one
-  header.** Each route passes `nav_active` (`overview` / `accounts` / `admin`) and, on the three
-  account-scoped pages, `account_nav_active` (`holdings` / `add` / `import`; `transactions` is
-  for UI-8's list page). The templates turn these into `aria-current="page"`, and `web.css` styles
+  header.** Each route passes `nav_active` (`overview` / `accounts` / `admin`) and, on the four
+  account-scoped pages, `account_nav_active` (`holdings` / `transactions` / `add` / `import`). The templates turn these into `aria-current="page"`, and `web.css` styles
   that attribute rather than a class. The mark a screen reader announces and the one a sighted
   visitor sees therefore come from one source and can't disagree, and no script works out "where
   am I" from the URL. `partials/_account_header.html` (label, broker, sub-nav, switcher) is fed by
@@ -345,14 +344,27 @@ calls [`portfolio`](../../portfolio/docs/architecture.md), `data-store`, and
   exist. POST routes load the header lazily (`extra_context_loader`), so only a full-page error
   re-render pays for that call, never a successful write.
 - **The account switcher is a plain GET form, with no htmx enhancement.** The form submits
-  `?account=` back to the current path, so switching keeps the visitor on Holdings, Add or
-  Import. An htmx `hx-get` swapping the response into `<body>` was planned and rejected. htmx
+  `?account=` back to the current path, so switching keeps the visitor on Holdings,
+  Transactions, Add or Import. An htmx `hx-get` swapping the response into `<body>` was planned and rejected. htmx
   1.9 does take a full document's `<body>` and update the title, but page scripts that start on
   `DOMContentLoaded` (`portfolio_chart.js`) never run after a swap, so `/portfolio` would lose its
   chart. A full navigation is also what an account switch is: every figure on the page changes.
   The cost is a visible "Switch" button, since the form can't submit on `change` without a script.
-  The Transactions sub-nav link ships ahead of its page and 404s until UI-8 builds
+  The Transactions sub-nav link shipped ahead of its page (UI-4) and 404ed until UI-8 built
   `GET /transactions`.
+- **The transactions list (UI-8) is the whole log, reversed in `web`.** `portfolio`'s
+  `GET /transactions` returns an account's log oldest first (its replay order) and takes no
+  paging, filter or sort parameters, so `web` fetches all of it and reverses it to show newest
+  first, rather than adding a parameter to `portfolio` (this UI chunk adds no `portfolio`
+  endpoints). **Known limitation:** a long-lived account renders every transaction it has ever
+  had in one table. The fix, server-side pagination, is listed under Deferred in `tasks.md`.
+  A failed call renders a banner and no table, never the "No transactions yet" empty state,
+  because an outage must not read as an empty account. The type is a neutral badge (the
+  charter's ink tag), never gain/loss colored, because a SELL or a WITHDRAWAL isn't a loss.
+  Native figures (price, amount, fees) go through `native_money`. The frozen `eur_amount` is a
+  muted second line under a non-EUR amount, rather than its own column: with a ninth column the
+  table overflowed the 880px card at desktop width. A long reference is cut off with an ellipsis
+  by CSS, its full value still in the page and in a `title` tooltip.
 - **Display formatting (UI-5) is one fixed convention, applied by Jinja filters from a pure
   module.** `formatting.py` defines `money`, `signed_money`, `qty`, `pct` and `date` (plus UI-6's
   `share`, an unsigned percentage for weights, and `delta_class`), registered on
@@ -372,6 +384,10 @@ calls [`portfolio`](../../portfolio/docs/architecture.md), `data-store`, and
   `loss` / nothing from the sign a figure *displays* with, after the same rounding as
   `signed_money` or `pct`. A delta's color therefore can't disagree with its printed sign: `-0.004`
   prints `€0.00` and is uncolored, where a `>= 0` test in the template would have colored it a gain.
+  UI-8 added `native_money(value, currency, places=2)` for a transaction's own figures, which
+  aren't EUR: the currency code follows the number (`−1,503.50 USD`), and the sign is `money`'s
+  (`−` only) because it's a cash-flow direction, not a delta. Prices use `places=4` and trim
+  zeros past the second decimal (`112.34 USD`, `0.1235 USD`).
 
 ## Endpoint surface
 
@@ -393,6 +409,7 @@ calls [`portfolio`](../../portfolio/docs/architecture.md), `data-store`, and
 | `POST /transactions/new` | CSRF-checked, calls `portfolio`'s `POST /transactions` (an instrument, when given, is always sent as `instrument_identifier_kind = 'TICKER'`; a blank Amount is sent as `null`, for portfolio to derive on a BUY/SELL or reject as missing on anything else), redirects to `/transactions/new?account=<label>&saved=<transactions_saved>&positions=<status>&returns=<status>` on success. An unknown ticker comes back as portfolio's 422, whose message is shown as-is like every other 422. The ticker list is re-fetched for the error re-render |
 | `GET /transactions/import` | `require_user`; required `account` query param; renders the upload form, with a confirmation banner (row count and rebuild outcome) if `?imported=<n>`. Fetches `GET /accounts` for the account header, with the same 404 and degrade rules as `GET /transactions/new` |
 | `POST /transactions/import` | CSRF-checked, multipart; size-capped at 20MB (matching `portfolio`'s own cap) before the bytes are forwarded; calls `portfolio`'s `POST /transactions/import`, redirects to `/transactions/import?account=<label>&imported=<rows_saved>&positions=<status>&returns=<status>` on success |
+| `GET /transactions` | `require_user`; required `account` query param; fetches `portfolio`'s `GET /transactions` and `GET /accounts` (for the account header) concurrently, and renders the log newest first (reversed in `web`; see "Key decisions"): date, type badge, instrument, quantity, price, amount (with the EUR amount under it on a non-EUR row), fees and reference. No pagination. An empty log shows links to Add and Import. `AccountNotFound`, or a label missing from a successfully loaded account list, renders `account_not_found.html` with a 404; any other failure renders a banner and no table, never the empty state; a failed account list degrades to a label-only header |
 | `GET /portfolio` | `require_user`; required `account` query param; fetches `portfolio`'s `GET /positions`, `GET /returns`, `GET /returns/latest` and `GET /instruments/unmapped` concurrently. Renders a "Prices as of" line and summary tiles (market value, cost basis, total return € and %, dividends; `portfolio_view.summarize_latest_returns`), a holdings table of open positions joined to their latest return row (quantity, average cost, market value, weight, unrealized return; `portfolio_view.build_holdings`), and a Chart.js chart of the per-ticker series aggregated into one portfolio-level series (`portfolio_view.aggregate_portfolio_returns`), with a total return / market value toggle and date ranges. `GET /accounts` is fetched concurrently for the account header. `AccountNotFound` on any call, or a label missing from a successfully loaded account list, renders `account_not_found.html` with a 404; any other failure degrades only the part that call feeds, mirroring `GET /accounts`'s own pattern. Pending states: "Waiting for prices" on a holding with no return row, and a notice listing the instruments waiting for a ticker mapping at this account's broker (UI-7). No writes, no rebuild trigger. |
 
 Every POST error (wrong credentials, a duplicate email, a tripped throttle, `auth`/`portfolio`
@@ -427,7 +444,9 @@ exists to close; no equivalent concern applies to the portfolio routes; see "Key
   `positions_rebuild`/`returns_rebuild` to `TransactionWriteResult`. They are `None` when an
   older response lacks them, so a version skew degrades the banner rather than failing the
   write. UI-7 also added `list_unmapped_instruments` (the per-user `GET /instruments/unmapped`),
-  which reuses `UnmappedInstrument`.
+  which reuses `UnmappedInstrument`. UI-8 added `list_transactions` (`GET /transactions`) and its
+  `Transaction` dataclass, mirroring `portfolio`'s `TransactionResponse`. It returns
+  `portfolio`'s order unchanged; the route reverses it.
 - `rebuild_outcome.py` (UI-7) — pure. Turns the two rebuild statuses into the confirmation
   banner's one sentence; see "Key decisions".
 - `portfolio_view.py` (task 12) — pure, I/O-free reshaping of what `routes.py` fetches for
@@ -436,7 +455,7 @@ exists to close; no equivalent concern applies to the portfolio routes; see "Key
   `unmapped_for_broker` (see "Key decisions"). No FastAPI/httpx dependency, tested in isolation, mirroring how `portfolio`'s own
   `returns/calculator.py` is a pure function.
 - `formatting.py` (UI-5) — pure display formatters (`money`, `signed_money`, `qty`, `pct`,
-  `date`, and UI-6's `share` and `delta_class`) plus the `FILTERS` mapping `app.py` registers as Jinja filters; see "Key decisions".
+  `date`, UI-6's `share` and `delta_class`, and UI-8's `native_money`) plus the `FILTERS` mapping `app.py` registers as Jinja filters; see "Key decisions".
 - `api/theme.py` (UI-3) — the theme cookie, `POST /theme` on its own router, the
   `theme_context` context processor, and `safe_next`. It's a separate module because it's
   self-contained and needs neither upstream client.
@@ -448,7 +467,7 @@ exists to close; no equivalent concern applies to the portfolio routes; see "Key
   handler, so every redirect in the app picks htmx-partial vs. full-navigation the same way).
 - `templates/`, `static/` — Jinja2 templates (`base.html`, which holds the skip link, the
   top nav and the theme toggle, plus one per page; `partials/_form_errors.html` for the htmx swap
-  target; `partials/_account_header.html`, included by the three account-scoped pages; and
+  target; `partials/_account_header.html`, included by the four account-scoped pages; and
   `account_not_found.html`, their shared 404) and `web.css` plus vendored `htmx.min.js`.
   Same-origin scripts: `htmx-error-swap.js`, `portfolio_chart.js`, and `theme.js` (UI-3, applies
   a theme switch in place).
