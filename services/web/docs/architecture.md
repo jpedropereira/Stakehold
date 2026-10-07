@@ -184,7 +184,7 @@ calls [`portfolio`](../../portfolio/docs/architecture.md), `data-store`, and
   `portfolio` CLI.
 - **The account's broker is picked from a list, with "Custom" for anything else.** It used to
   be a free-text field with a `<datalist>` hint. A broker typed in a different case from its
-  installed key (`Degiro` vs `degiro`) got no importer, and only failed later, at import. Now
+  installed key (`Acme` vs `acme`) got no importer, and only failed later, at import. Now
   the field is a `<select>` of installed brokers, plus "Custom" with a name field. A custom
   broker is for manual entry only: its import page says so instead of showing a form. A custom
   name equal to an installed broker ignoring case is refused, since it would recreate that same

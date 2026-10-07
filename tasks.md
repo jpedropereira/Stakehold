@@ -486,7 +486,7 @@ Last, once every page exists in its new form.
 Depends on UI-4. Added after the chunk was planned. A broker with only an account-statement
 (cashflow) parser couldn't be imported from `web` at all, because the import page only ever
 called `portfolio`'s transactions route. And a broker typed in the wrong case at account creation
-(`Degiro` vs the installed `degiro`) silently got no importer.
+(`Acme` vs the installed `acme`) silently got no importer.
 
 - **Accounts**: the broker field is a `<select>` of installed brokers plus "Custom" (a typed
   name, manual entry only). A custom name matching an installed broker ignoring case is refused.
