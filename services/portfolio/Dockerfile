@@ -23,6 +23,15 @@ COPY services/web services/web
 
 RUN uv sync --frozen
 
+# Broker-parser plugins: every wheel dropped into services/portfolio/plugins/ (gitignored, so this
+# repo never names one) is installed on top of the locked workspace. No wheels, no-op -- the image
+# still builds and serves, and imports fail with BrokerParserNotFound. See plugins/README.md.
+RUN if ls services/portfolio/plugins/*.whl >/dev/null 2>&1; then \
+        uv pip install services/portfolio/plugins/*.whl; \
+    else \
+        echo "no broker-parser plugin wheels in services/portfolio/plugins/ -- none installed"; \
+    fi
+
 EXPOSE 8002
 
 CMD ["uv", "run", "--frozen", "portfolio", "serve"]

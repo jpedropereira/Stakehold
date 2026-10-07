@@ -1076,6 +1076,28 @@ superuser for as long as the stock postgres image bootstraps it that way; the gu
 nothing beyond one `db init` bootstrap step ever holds that privilege, not that no superuser
 exists on the instance.
 
+**Broker-parser plugins get into the image as wheels dropped into `services/portfolio/plugins/`.**
+The Dockerfile's `uv sync --frozen` installs only the workspace, so a plugin installed into the
+host `.venv` (`uv pip install -e`) never reached the container. The API then reported "no parser
+registered … Currently registered: (none)" even though the same import worked from the host CLI.
+A follow-up `RUN` step installs every `*.whl` in that directory on top of the locked environment,
+and installs nothing when the directory holds only its README. The directory is gitignored apart
+from that README, so the repo still never names a plugin (see "Extension points"). Alternatives
+rejected:
+- An extra Compose build context pointing at the plugin's source checkout. Every
+  `docker-compose*.yml` that builds this image tag (`api`, `db-init`, and the `stakehold-net`
+  overlay's `returns-refresh`) would have to repeat it, and a build that missed it would silently
+  overwrite the shared tag with a plugin-less image.
+- An auto-loaded `docker-compose.override.yml`. The stack is started with explicit `-f` flags,
+  which skip auto-loading.
+
+Known sharp edges:
+- The wheel's own dependencies, unlike the workspace's, aren't pinned by `uv.lock`.
+- The wheel is a build-time snapshot, like the image's code. A plugin change needs `uv build`
+  then `docker compose build`.
+- Two versions of one plugin's wheel left side by side both install, so discovery fails on the
+  duplicate entry-point name (`BrokerPluginError`). That is loud, not silent.
+
 ## Cross-cutting decisions
 
 Each stated as a rule, with rationale and the rejected alternative, in data-store's
