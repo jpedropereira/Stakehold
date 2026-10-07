@@ -4,7 +4,11 @@
 {% include "partials/_account_header.html" %}
 <section class="card">
   <h1>Add transaction</h1>
-  {% if saved %}<p class="confirmation-banner">Transaction saved.</p>{% endif %}
+  {% if saved == 0 %}
+  <p class="confirmation-banner">Nothing new to save — that transaction was already recorded.</p>
+  {% elif saved %}
+  <p class="confirmation-banner">Transaction saved.{% if outcome %} {{ outcome }}{% endif %}</p>
+  {% endif %}
   <form hx-post="/transactions/new" hx-target="#form-errors" hx-swap="innerHTML" method="post" action="/transactions/new">
     <div id="form-errors">
       {% include "partials/_form_errors.html" %}

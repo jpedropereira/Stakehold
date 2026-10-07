@@ -201,6 +201,9 @@ class FakePortfolioClient:
             raise self.list_ticker_mappings_error
         return self.list_ticker_mappings_result
 
+    async def list_unmapped_instruments(self, *, user_id):
+        return []  # /portfolio's own tests (test_portfolio_page.py) cover this call
+
     async def list_all_unmapped_instruments(self):
         self.calls.append(("list_all_unmapped_instruments",))
         if self.list_unmapped_all_error:

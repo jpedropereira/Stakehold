@@ -668,10 +668,11 @@ ticker's rebuild (`positions_rebuild: partial`), but the transaction was still s
 
 **Known limitations:**
 
-- **`web` doesn't surface `positions_rebuild`/`returns_rebuild` yet.** A `partial` or `failed` rebuild is visible in
-  the API response and the portfolio service's logs, but the web form still just says
-  "Transaction saved." — an unmapped instrument therefore still shows up in the UI only as a
-  missing position.
+- **`web` surfaces `positions_rebuild`/`returns_rebuild` (UI-7)** as a one-line outcome on its
+  confirmation banners, and lists the account's unmapped instruments (from
+  `GET /instruments/unmapped`) on the holdings page. That list is per user and carries the broker
+  but not the account, so `web` can only filter it by broker. An exact per-account list would need
+  a new endpoint here; see `services/web/docs/architecture.md`.
 - **Accounts whose transactions predate this change** have no position snapshots until their next
   write or a manual `rebuild-positions`; nothing backfills them. (Returns do get backfilled, by
   the scheduled refresh below, for any account that has positions.)

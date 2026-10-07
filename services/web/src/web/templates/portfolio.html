@@ -5,6 +5,7 @@
 {%- set cls = value | delta_class(kind) -%}
 <span class="mono{% if cls %} {{ cls }}{% endif %}">{{ value | signed_money if kind == "money" else value | pct }}</span>
 {%- endmacro %}
+{% set freshness = "Prices update daily; returns are recalculated a few times a day." %}
 {% block content %}
 {% include "partials/_account_header.html" %}
 {% if error %}
@@ -12,7 +13,7 @@
 {% endif %}
 
 {% if summary %}
-<p class="as-of">Prices as of <span class="mono">{{ summary.price_date | date }}</span></p>
+<p class="as-of">Prices as of <span class="mono">{{ summary.price_date | date }}</span>. {{ freshness }}</p>
 <section class="summary-tiles" aria-label="Account summary">
   <div class="tile">
     <p class="tile-label">Market value</p>
@@ -35,6 +36,13 @@
 
 <section class="card card-wide">
   <h1>Holdings</h1>
+  {% if unmapped %}
+  {# An unmapped instrument has no position at all, so it can't be a row of the table below. #}
+  <p class="entry-subtitle" id="unmapped-notice">Waiting for a ticker mapping:
+    {% for instrument in unmapped %}<span class="mono">{{ instrument.kind }} {{ instrument.identifier }}</span>{% if not loop.last %}, {% endif %}{% endfor %}.
+    They appear as holdings once mapped.
+    {% if user.is_admin %}<a href="/admin/mappings">Map them</a>{% else %}An admin needs to map them.{% endif %}</p>
+  {% endif %}
   {% if holdings %}
   <div class="table-scroll">
     <table class="positions-table holdings-table">
@@ -54,10 +62,14 @@
           <td><span class="mono">{{ holding.canonical_ticker }}</span></td>
           <td class="num"><span class="mono">{{ holding.quantity | qty }}</span></td>
           <td class="num"><span class="mono">{{ holding.average_cost_eur | money }}</span></td>
+          {% if prices_known and holding.awaiting_prices %}
+          <td class="num" colspan="4"><span class="entry-empty">Waiting for prices</span></td>
+          {% else %}
           <td class="num"><span class="mono">{{ holding.market_value_eur | money }}</span></td>
           <td class="num"><span class="mono">{{ holding.weight | share }}</span></td>
           <td class="num">{{ delta(holding.unrealized_return_eur) }}</td>
           <td class="num">{{ delta(holding.unrealized_return_pct, "pct") }}</td>
+          {% endif %}
         </tr>
         {% endfor %}
       </tbody>
@@ -87,7 +99,7 @@
   <script src="/static/vendor/chart.min.js" defer></script>
   <script src="/static/portfolio_chart.js" defer></script>
   {% else %}
-  <p class="entry-empty">No return history yet — returns appear once Stakehold has prices for your holdings' dates.</p>
+  <p class="entry-empty">No return history yet — returns appear once Stakehold has prices for your holdings' dates. {{ freshness }}</p>
   {% endif %}
 </section>
 {% endblock %}

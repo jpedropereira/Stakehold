@@ -4,8 +4,10 @@
 {% include "partials/_account_header.html" %}
 <section class="card">
   <h1>Import broker file</h1>
-  {% if imported is not none %}
-  <p class="confirmation-banner">Imported <span class="mono">{{ imported | qty }}</span> transaction(s).</p>
+  {% if imported == 0 %}
+  <p class="confirmation-banner">Nothing new to import — every row was already recorded.</p>
+  {% elif imported is not none %}
+  <p class="confirmation-banner">Imported <span class="mono">{{ imported | qty }}</span> transaction(s).{% if outcome %} {{ outcome }}{% endif %}</p>
   {% endif %}
   <form hx-post="/transactions/import" hx-target="#form-errors" hx-swap="innerHTML" hx-encoding="multipart/form-data"
         method="post" action="/transactions/import" enctype="multipart/form-data">
