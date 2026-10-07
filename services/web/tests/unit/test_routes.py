@@ -21,6 +21,7 @@ from web.auth_client.errors import (
 from web.portfolio_client.base import (
     Account,
     AccountWriteResult,
+    Broker,
     TickerMapping,
     TickerMappingWriteResult,
     TransactionWriteResult,
@@ -85,8 +86,12 @@ class FakePortfolioClient:
         # header (UI-4) 404s a label the user doesn't own.
         self.list_accounts_result: list[Account] = [_account("main")]
         self.list_accounts_error: Exception | None = None
-        self.list_brokers_result: list[str] = []
+        # "main" (the default account) is at "acme", which can import trades exports only.
+        self.list_brokers_result: list[Broker] = [Broker(broker="acme", imports=("transactions",))]
         self.list_brokers_error: Exception | None = None
+        # Counted apart from `calls`, like tickers: the accounts and import pages fetch brokers
+        # on every render, and tests asserting `calls` are about the write.
+        self.list_brokers_calls = 0
         self.list_tickers_result: list[str] = []
         self.list_tickers_error: Exception | None = None
         # Logged apart from `calls`: the manual-entry form fetches tickers on every render, and
@@ -101,6 +106,8 @@ class FakePortfolioClient:
         self.last_add_transaction: dict | None = None
         self.import_transactions_result: TransactionWriteResult | None = None
         self.import_transactions_error: Exception | None = None
+        self.import_cashflow_result: TransactionWriteResult | None = None
+        self.import_cashflow_error: Exception | None = None
         self.list_positions_result: list = []
         self.list_positions_error: Exception | None = None
         self.list_returns_result: list = []
@@ -122,7 +129,7 @@ class FakePortfolioClient:
         return self.list_accounts_result
 
     async def list_brokers(self):
-        self.calls.append(("list_brokers",))
+        self.list_brokers_calls += 1
         if self.list_brokers_error:
             raise self.list_brokers_error
         return self.list_brokers_result
@@ -178,6 +185,12 @@ class FakePortfolioClient:
         if self.import_transactions_error:
             raise self.import_transactions_error
         return self.import_transactions_result
+
+    async def import_cashflow(self, *, user_id, account_label, filename, content, content_type):
+        self.calls.append(("import_cashflow", user_id, account_label, filename))
+        if self.import_cashflow_error:
+            raise self.import_cashflow_error
+        return self.import_cashflow_result
 
     async def list_positions(self, *, user_id, account_label):
         self.calls.append(("list_positions", user_id, account_label))
@@ -995,14 +1008,39 @@ def test_accounts_page_lists_accounts_and_brokers(client):
     fake_portfolio.list_accounts_result = [
         Account(id=1, account_label="main", broker="acme", created_at="2026-01-01T00:00:00Z")
     ]
-    fake_portfolio.list_brokers_result = ["acme", "globex"]
+    fake_portfolio.list_brokers_result = [
+        Broker(broker="acme", imports=("transactions",)),
+        Broker(broker="globex", imports=("cashflow",)),
+    ]
 
     response = test_client.get("/accounts")
 
     assert response.status_code == 200
     assert "main" in response.text
-    assert "acme" in response.text
+    assert '<option value="acme">acme</option>' in response.text
+    assert '<option value="globex">globex</option>' in response.text
     assert "stakehold_csrf" in response.cookies
+
+
+def test_accounts_page_offers_a_custom_broker_for_manual_entry_only(client):
+    test_client, _, fake_auth, _ = client
+    _logged_in(test_client, fake_auth)
+
+    response = test_client.get("/accounts")
+
+    assert '<option value="__custom__">Custom</option>' in response.text
+    assert 'name="custom_broker"' in response.text
+    assert "manual" in response.text.lower()
+
+
+def test_accounts_page_preselects_custom_when_no_broker_has_an_importer(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.list_brokers_result = []
+
+    response = test_client.get("/accounts")
+
+    assert '<option value="__custom__" selected>Custom</option>' in response.text
 
 
 def test_accounts_page_renders_even_when_portfolio_is_unavailable(client):
@@ -1040,7 +1078,6 @@ def test_create_account_success_redirects(client):
     test_client, _, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)
     token = _accounts_csrf_token(test_client)
-    fake_portfolio.calls = []  # drop the GET /accounts page's own list_brokers
     fake_portfolio.create_account_result = AccountWriteResult(
         status="ok", rows_saved=1, accounts_created=1
     )
@@ -1122,6 +1159,87 @@ def test_create_account_htmx_success_returns_hx_redirect(client):
 
     assert response.status_code == 200
     assert response.headers["hx-redirect"] == "/accounts"
+
+
+def _post_custom_broker(test_client, custom_broker, label="side"):
+    token = _accounts_csrf_token(test_client)
+    return test_client.post(
+        "/accounts",
+        data={
+            "broker": "__custom__",
+            "custom_broker": custom_broker,
+            "account_label": label,
+            "csrf_token": token,
+        },
+        follow_redirects=False,
+    )
+
+
+def test_create_account_with_a_custom_broker_sends_the_typed_name(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.create_account_result = AccountWriteResult(
+        status="ok", rows_saved=1, accounts_created=1
+    )
+
+    response = _post_custom_broker(test_client, "  Pension fund  ")
+
+    assert response.status_code == 303
+    assert fake_portfolio.calls == [
+        ("create_account", _logged_in_user().user_id, "Pension fund", "side")
+    ]
+
+
+def test_create_account_with_a_blank_custom_broker_is_rejected(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+
+    response = _post_custom_broker(test_client, "   ")
+
+    assert response.status_code == 422
+    assert "Enter a name for the custom broker." in response.text
+    assert fake_portfolio.calls == []
+
+
+def test_create_account_with_a_custom_broker_named_like_an_installed_one_is_rejected(client):
+    """Typing "ACME" as a custom broker would silently create an account with no importers,
+    next to the real "acme" that has them -- the trap this dropdown exists to close."""
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+
+    response = _post_custom_broker(test_client, "ACME")
+
+    assert response.status_code == 422
+    assert "acme is in the broker list" in response.text
+    assert fake_portfolio.calls == []
+
+
+def test_create_account_with_a_custom_broker_still_works_when_brokers_cannot_be_listed(client):
+    """The installed-broker check is a convenience, not a gate: a portfolio that can't list its
+    brokers can still create the account (and if it's down entirely, create_account says so)."""
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    token = _accounts_csrf_token(test_client)
+    fake_portfolio.list_brokers_error = PortfolioUnavailable("boom")
+    fake_portfolio.create_account_result = AccountWriteResult(
+        status="ok", rows_saved=1, accounts_created=1
+    )
+
+    response = test_client.post(
+        "/accounts",
+        data={
+            "broker": "__custom__",
+            "custom_broker": "Pension fund",
+            "account_label": "side",
+            "csrf_token": token,
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert fake_portfolio.calls == [
+        ("create_account", _logged_in_user().user_id, "Pension fund", "side")
+    ]
 
 
 # --- transactions/new: GET ---------------------------------------------------------------
@@ -1441,6 +1559,65 @@ def test_transaction_import_form_renders_with_account_and_csrf(client):
     assert "stakehold_csrf" in response.cookies
 
 
+def test_import_form_offers_every_importer_the_accounts_broker_has(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.list_brokers_result = [
+        Broker(broker="acme", imports=("cashflow", "transactions"))
+    ]
+
+    response = test_client.get("/transactions/import", params={"account": "main"})
+
+    assert response.status_code == 200
+    assert '<select id="importer" name="importer" required>' in response.text
+    assert '<option value="transactions">Trades export</option>' in response.text
+    assert '<option value="cashflow">Account statement</option>' in response.text
+    assert 'type="file"' in response.text
+
+
+def test_import_form_offers_only_the_importers_of_the_accounts_own_broker(client):
+    """Another broker's importer is never offered: an account's transactions all come from its
+    own broker, which broker-scoped ticker mappings rely on."""
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.list_brokers_result = [
+        Broker(broker="acme", imports=("transactions",)),
+        Broker(broker="globex", imports=("cashflow",)),
+    ]
+
+    response = test_client.get("/transactions/import", params={"account": "main"})
+
+    assert '<option value="transactions">Trades export</option>' in response.text
+    assert 'value="cashflow"' not in response.text
+
+
+def test_import_page_for_a_broker_without_importers_points_to_manual_entry(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.list_accounts_result = [_account("main", broker="Pension fund")]
+
+    response = test_client.get("/transactions/import", params={"account": "main"})
+
+    assert response.status_code == 200
+    assert 'type="file"' not in response.text
+    assert "No file importer is available for Pension fund" in response.text
+    assert 'href="/transactions/new?account=main"' in response.text
+
+
+def test_import_page_says_so_when_importers_cannot_be_loaded(client):
+    """An outage must not read as "this broker has no importer"."""
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.list_brokers_error = PortfolioUnavailable("boom")
+
+    response = test_client.get("/transactions/import", params={"account": "main"})
+
+    assert response.status_code == 200
+    assert 'type="file"' not in response.text
+    assert "Can't load the importers right now" in response.text
+    assert "No file importer" not in response.text
+
+
 def test_transaction_import_form_shows_confirmation_with_row_count(client):
     test_client, _, fake_auth, _ = client
     _logged_in(test_client, fake_auth)
@@ -1472,7 +1649,7 @@ def test_import_transactions_without_csrf_cookie_is_rejected(client):
 
     response = test_client.post(
         "/transactions/import",
-        data={"account_label": "main", "csrf_token": "anything"},
+        data={"account_label": "main", "importer": "transactions", "csrf_token": "anything"},
         files={"file": ("export.csv", b"a,b\n1,2\n", "text/csv")},
     )
 
@@ -1490,7 +1667,7 @@ def test_import_transactions_success_redirects_with_row_count(client):
 
     response = test_client.post(
         "/transactions/import",
-        data={"account_label": "main", "csrf_token": token},
+        data={"account_label": "main", "importer": "transactions", "csrf_token": token},
         files={"file": ("export.csv", b"a,b\n1,2\n", "text/csv")},
         follow_redirects=False,
     )
@@ -1512,7 +1689,7 @@ def test_import_transactions_broker_parser_not_found(client):
 
     response = test_client.post(
         "/transactions/import",
-        data={"account_label": "main", "csrf_token": token},
+        data={"account_label": "main", "importer": "transactions", "csrf_token": token},
         files={"file": ("export.csv", b"a,b\n1,2\n", "text/csv")},
     )
 
@@ -1528,7 +1705,7 @@ def test_import_transactions_account_not_found(client):
 
     response = test_client.post(
         "/transactions/import",
-        data={"account_label": "main", "csrf_token": token},
+        data={"account_label": "main", "importer": "transactions", "csrf_token": token},
         files={"file": ("export.csv", b"a,b\n1,2\n", "text/csv")},
     )
 
@@ -1537,6 +1714,65 @@ def test_import_transactions_account_not_found(client):
     # A full-page error re-render must not silently log the user out of the nav/logout chrome.
     assert "site-nav" in response.text
     assert "logout-form" in response.text
+
+
+def test_import_with_the_cashflow_importer_calls_the_cashflow_import(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    token = _transactions_import_csrf_token(test_client, "main")
+    fake_portfolio.import_cashflow_result = TransactionWriteResult(
+        status="ok", rows_saved=7, transactions_saved=7
+    )
+
+    response = test_client.post(
+        "/transactions/import",
+        data={"account_label": "main", "importer": "cashflow", "csrf_token": token},
+        files={"file": ("ledger.xlsx", b"x", "application/octet-stream")},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/transactions/import?account=main&imported=7"
+    assert fake_portfolio.calls == [
+        ("import_cashflow", _logged_in_user().user_id, "main", "ledger.xlsx")
+    ]
+
+
+@pytest.mark.parametrize("importer", ["", "everything", "list_accounts"])
+def test_import_with_an_unknown_importer_is_rejected(client, importer):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    token = _transactions_import_csrf_token(test_client, "main")
+
+    response = test_client.post(
+        "/transactions/import",
+        data={"account_label": "main", "importer": importer, "csrf_token": token},
+        files={"file": ("export.csv", b"a,b\n1,2\n", "text/csv")},
+    )
+
+    assert response.status_code == 422
+    assert "Choose an importer." in response.text
+    assert fake_portfolio.calls == []
+
+
+def test_cashflow_import_error_rerender_keeps_the_importer_choice(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.list_brokers_result = [
+        Broker(broker="acme", imports=("cashflow", "transactions"))
+    ]
+    token = _transactions_import_csrf_token(test_client, "main")
+    fake_portfolio.import_cashflow_error = InvalidPortfolioRequest("row 3: unparseable date")
+
+    response = test_client.post(
+        "/transactions/import",
+        data={"account_label": "main", "importer": "cashflow", "csrf_token": token},
+        files={"file": ("ledger.xlsx", b"x", "application/octet-stream")},
+    )
+
+    assert response.status_code == 422
+    assert "row 3: unparseable date" in response.text
+    assert '<option value="cashflow" selected>Account statement</option>' in response.text
 
 
 # --- accounts: per-account "View portfolio" link -----------------------------
@@ -1734,7 +1970,7 @@ def test_import_error_rerender_keeps_the_account_header(client):
 
     response = test_client.post(
         "/transactions/import",
-        data={"account_label": "main", "csrf_token": token},
+        data={"account_label": "main", "importer": "transactions", "csrf_token": token},
         files={"file": ("export.csv", b"a,b\n1,2\n", "text/csv")},
     )
 

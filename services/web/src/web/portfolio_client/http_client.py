@@ -5,6 +5,7 @@ import httpx
 from web.portfolio_client.base import (
     Account,
     AccountWriteResult,
+    Broker,
     Position,
     Return,
     TickerMapping,
@@ -70,6 +71,13 @@ def _account_write_result(body: dict) -> AccountWriteResult:
             rows_saved=body["rows_saved"],
             accounts_created=body["accounts_created"],
         )
+    except (KeyError, TypeError) as exc:
+        raise PortfolioUnavailable(f"malformed portfolio response: {exc}") from exc
+
+
+def _broker(body: dict) -> Broker:
+    try:
+        return Broker(broker=body["broker"], imports=tuple(body["imports"]))
     except (KeyError, TypeError) as exc:
         raise PortfolioUnavailable(f"malformed portfolio response: {exc}") from exc
 
@@ -229,11 +237,11 @@ class HttpPortfolioClient:
         except (KeyError, TypeError) as exc:
             raise PortfolioUnavailable(f"malformed portfolio response: {exc}") from exc
 
-    async def list_brokers(self) -> list[str]:
+    async def list_brokers(self) -> list[Broker]:
         response = await self._request("GET", "/brokers")
         if response.status_code != 200:
             _raise_for_status(response)
-        return _json_body(response)
+        return [_broker(item) for item in _json_body(response)]
 
     async def list_tickers(self) -> list[str]:
         response = await self._request("GET", "/instruments/tickers")
@@ -299,9 +307,48 @@ class HttpPortfolioClient:
         content: bytes,
         content_type: str,
     ) -> TransactionWriteResult:
+        return await self._upload(
+            "/transactions/import",
+            user_id=user_id,
+            account_label=account_label,
+            filename=filename,
+            content=content,
+            content_type=content_type,
+        )
+
+    async def import_cashflow(
+        self,
+        *,
+        user_id: str,
+        account_label: str,
+        filename: str,
+        content: bytes,
+        content_type: str,
+    ) -> TransactionWriteResult:
+        return await self._upload(
+            "/cashflows/import",
+            user_id=user_id,
+            account_label=account_label,
+            filename=filename,
+            content=content,
+            content_type=content_type,
+        )
+
+    async def _upload(
+        self,
+        path: str,
+        *,
+        user_id: str,
+        account_label: str,
+        filename: str,
+        content: bytes,
+        content_type: str,
+    ) -> TransactionWriteResult:
+        """The two broker-file imports share portfolio's multipart contract and differ only in
+        which route (and so which parser registry) they hit."""
         response = await self._request(
             "POST",
-            "/transactions/import",
+            path,
             data={"user_id": user_id, "account_label": account_label},
             files={"file": (filename, content, content_type)},
         )

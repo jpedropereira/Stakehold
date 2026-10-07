@@ -23,6 +23,15 @@ class Account:
 
 
 @dataclass(frozen=True)
+class Broker:
+    """A broker with at least one importer installed in portfolio, and which import kinds it
+    has: "transactions" (a trades export) and/or "cashflow" (an account statement)."""
+
+    broker: str
+    imports: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class Position:
     account_id: int
     canonical_ticker: str
@@ -119,7 +128,7 @@ class TickerMappingWriteResult:
 class PortfolioClient(Protocol):
     async def list_accounts(self, *, user_id: str) -> list[Account]: ...
 
-    async def list_brokers(self) -> list[str]: ...
+    async def list_brokers(self) -> list[Broker]: ...
 
     async def list_tickers(self) -> list[str]: ...
 
@@ -146,6 +155,16 @@ class PortfolioClient(Protocol):
     ) -> TransactionWriteResult: ...
 
     async def import_transactions(
+        self,
+        *,
+        user_id: str,
+        account_label: str,
+        filename: str,
+        content: bytes,
+        content_type: str,
+    ) -> TransactionWriteResult: ...
+
+    async def import_cashflow(
         self,
         *,
         user_id: str,

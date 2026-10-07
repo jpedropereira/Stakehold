@@ -179,8 +179,9 @@ def run_list_accounts(*, user_id: UUID, settings: Settings | None = None) -> dic
 
 
 def run_list_available_brokers() -> dict[str, int | str]:
-    """The broker keys a parser is currently registered for. Unlike every other job here, this
-    one loads no settings and opens no connection -- BROKER_PARSERS is an in-memory,
+    """Every broker with a registered parser, and which import kinds (transactions, cashflow)
+    each supports. Unlike every other job here, this one loads no settings and opens no
+    connection -- the two parser registries are an in-memory,
     process-local fact, not something a database or config file can answer. Still routed
     through jobs.py rather than read directly by cli.py, so the "cli.py is argument parsing plus
     one call into jobs.py" rule holds even for the one job with nothing to configure or connect.
@@ -195,7 +196,9 @@ def run_list_available_brokers() -> dict[str, int | str]:
     result = build_run_result(
         units_total=len(brokers), rows_saved=0, failed=0, brokers_available=len(brokers)
     )
-    result["brokers"] = brokers
+    result["brokers"] = [
+        {"broker": broker.broker, "imports": list(broker.imports)} for broker in brokers
+    ]
     return result
 
 

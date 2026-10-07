@@ -151,8 +151,8 @@ entry, a flow with no real dependency on any parser. `broker` is now a free-text
 creation, validated only for non-blank and within the column's length (`InvalidBroker`);
 `BROKER_PARSERS` is read only by
 `import_transactions` (and the parallel `import_cashflow`, below), the one place a parser is
-actually needed. `pipeline.list_available_brokers()` / `portfolio broker list` reports what's
-currently registered, for discoverability.
+actually needed. `pipeline.list_available_brokers()` / `portfolio broker list` / `GET /brokers`
+reports what's currently registered, and which import kinds each broker supports.
 
 **Revised again — broker code extracted.** `BROKER_PARSERS`/`CASHFLOW_PARSERS` are no longer
 hardcoded dicts; both are built once, at import time, by `broker_import/discovery.py` reading
@@ -172,8 +172,8 @@ Discovery for each of the two registries still runs once, at `pipeline.py` impor
 disagrees with its registered name, or a plugin that fails to load/instantiate at all) is now
 caught right there and stashed as `_BROKER_DISCOVERY_ERROR`/`_CASHFLOW_DISCOVERY_ERROR` instead
 of propagating out of the module import. It's re-raised lazily, only from the functions that
-actually read the affected registry (`list_available_brokers`/`import_transactions` for
-`BROKER_PARSERS`, `import_cashflow` for `CASHFLOW_PARSERS`) — so a broken broker-parser plugin
+actually read the affected registry (`import_transactions` for `BROKER_PARSERS`,
+`import_cashflow` for `CASHFLOW_PARSERS`, `list_available_brokers` for both) — so a broken broker-parser plugin
 still can't block `db init`, `account add`, `add-transaction`, or `list-unmapped-instruments`,
 none of which read either registry. The two registries fail independently of each other too: a
 broken cashflow-parser plugin doesn't stop `import-transactions` from working.
@@ -411,8 +411,14 @@ process picks up its installed metadata.
 the given key). **`CASHFLOW_PARSERS` is read the same way, exactly once, by `import_cashflow`.**
 `add_account` deliberately reads neither — see the "Revised after task 6" note above for why
 account creation and manual entry must work with both registries empty.
-`pipeline.list_available_brokers()` (`portfolio broker list`) reads `BROKER_PARSERS`, read-only,
-for discoverability; it does not currently also report `CASHFLOW_PARSERS` availability.
+`pipeline.list_available_brokers()` (`portfolio broker list`, `GET /brokers`) reads both
+registries, read-only, and returns one `AvailableBroker` per broker key found in either, with the
+import kinds it supports: `"transactions"` (in `BROKER_PARSERS`) and/or `"cashflow"` (in
+`CASHFLOW_PARSERS`). This is what `web`'s import page offers as its importer choice. Before
+that page existed, it reported `BROKER_PARSERS` keys alone, so a broker with only a cashflow
+parser (one exists today) was invisible to every caller and could only be imported through the
+CLI. Because it reads both registries, a stashed discovery error from either one is raised here,
+rather than that registry's brokers silently showing fewer imports than they have.
 
 **Worked example — adding a third broker** (e.g. Trading212): implement `BrokerParser` and
 register it under the `stakehold.broker_parsers` entry-point group as `trading212 = "...:
@@ -514,7 +520,7 @@ identity — not column-level DDL, which needs its own sign-off pass.
 |---|---|---|---|---|---|
 | Account setup | `account add --user <id> --broker <key> --label <label>` | `POST /accounts` | rare, manual | — | `accounts` |
 | Account listing | `account list --user <id>` | `GET /accounts` | manual, on demand | `accounts`, scoped by `user_id` | — (read-only report) |
-| Broker-plugin discovery | `broker list` | `GET /brokers` | manual, on demand | `BROKER_PARSERS` (in-memory) | — (read-only report) |
+| Broker-plugin discovery | `broker list` | `GET /brokers` | manual, on demand | `BROKER_PARSERS`, `CASHFLOW_PARSERS` (in-memory) | — (read-only report: each broker and its import kinds) |
 | Ticker mapping: set | `ticker-mapping set --kind ISIN\|SYMBOL --identifier <id> [--broker <b>] --ticker <t> --user <admin id>` | `PUT /ticker-mappings` | manual, by an admin, as unmapped instruments surface | data-store's `GET /tickers/{ticker}` (the ticker must exist), then `transactions` joined to `accounts` (every account, across users, using the instrument) | `ticker_mappings` (upsert), then `position_snapshots` for each affected account |
 | Ticker mapping: delete | `ticker-mapping delete --id <n> --user <admin id>` | `DELETE /ticker-mappings/{id}?updated_by=` | manual, by an admin | `transactions` joined to `accounts` (affected accounts) | `ticker_mappings` (delete), then `position_snapshots` for each affected account |
 | Ticker mapping listing | `ticker-mapping list` | `GET /ticker-mappings` | on demand | `ticker_mappings` | — (read-only report) |
@@ -1069,6 +1075,28 @@ with its own role name, and `db init` creates its role/schema the same way — n
 superuser for as long as the stock postgres image bootstraps it that way; the guarantee is that
 nothing beyond one `db init` bootstrap step ever holds that privilege, not that no superuser
 exists on the instance.
+
+**Broker-parser plugins get into the image as wheels dropped into `services/portfolio/plugins/`.**
+The Dockerfile's `uv sync --frozen` installs only the workspace, so a plugin installed into the
+host `.venv` (`uv pip install -e`) never reached the container. The API then reported "no parser
+registered … Currently registered: (none)" even though the same import worked from the host CLI.
+A follow-up `RUN` step installs every `*.whl` in that directory on top of the locked environment,
+and installs nothing when the directory holds only its README. The directory is gitignored apart
+from that README, so the repo still never names a plugin (see "Extension points"). Alternatives
+rejected:
+- An extra Compose build context pointing at the plugin's source checkout. Every
+  `docker-compose*.yml` that builds this image tag (`api`, `db-init`, and the `stakehold-net`
+  overlay's `returns-refresh`) would have to repeat it, and a build that missed it would silently
+  overwrite the shared tag with a plugin-less image.
+- An auto-loaded `docker-compose.override.yml`. The stack is started with explicit `-f` flags,
+  which skip auto-loading.
+
+Known sharp edges:
+- The wheel's own dependencies, unlike the workspace's, aren't pinned by `uv.lock`.
+- The wheel is a build-time snapshot, like the image's code. A plugin change needs `uv build`
+  then `docker compose build`.
+- Two versions of one plugin's wheel left side by side both install, so discovery fails on the
+  duplicate entry-point name (`BrokerPluginError`). That is loud, not silent.
 
 ## Cross-cutting decisions
 

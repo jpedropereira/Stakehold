@@ -331,6 +331,18 @@ main:focus {
   color: var(--text-muted);
 }
 
+.field-hint {
+  font: var(--text-caption);
+  color: var(--text-muted);
+  margin: 0;
+}
+
+/* The custom broker name only matters with "Custom" chosen. Hidden by CSS alone, so the form
+   still works without JS; a browser without :has() just always shows the field. */
+.account-form:not(:has(#broker option[value="__custom__"]:checked)) .field-custom-broker {
+  display: none;
+}
+
 .field input,
 .field select,
 .inline-form input {

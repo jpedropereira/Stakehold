@@ -4,6 +4,7 @@ from decimal import Decimal
 
 import httpx
 import pytest
+from web.portfolio_client.base import Broker
 from web.portfolio_client.errors import (
     AccountLabelConflict,
     AccountNotFound,
@@ -54,12 +55,32 @@ async def test_list_accounts_sends_internal_secret_and_parses_accounts():
     assert accounts[0].broker == "acme"
 
 
-async def test_list_brokers_returns_plain_list():
-    client = _client(lambda request: httpx.Response(200, json=["acme", "globex"]))
+async def test_list_brokers_returns_each_broker_with_its_import_kinds():
+    client = _client(
+        lambda request: httpx.Response(
+            200,
+            json=[
+                {"broker": "acme", "imports": ["cashflow", "transactions"]},
+                {"broker": "globex", "imports": ["transactions"]},
+            ],
+        )
+    )
 
     brokers = await client.list_brokers()
 
-    assert brokers == ["acme", "globex"]
+    assert brokers == [
+        Broker(broker="acme", imports=("cashflow", "transactions")),
+        Broker(broker="globex", imports=("transactions",)),
+    ]
+
+
+async def test_list_brokers_with_the_old_plain_string_shape_raises_portfolio_unavailable():
+    """A portfolio deployed behind web, still answering with bare broker keys, is a contract
+    mismatch -- reported as an outage, never guessed into brokers with no imports."""
+    client = _client(lambda request: httpx.Response(200, json=["acme", "globex"]))
+
+    with pytest.raises(PortfolioUnavailable):
+        await client.list_brokers()
 
 
 async def test_list_tickers_returns_plain_list_from_the_tickers_endpoint():
@@ -210,6 +231,49 @@ async def test_import_transactions_422_broker_parser_not_found():
             filename="export.csv",
             content=b"x",
             content_type="text/csv",
+        )
+
+
+async def test_import_cashflow_sends_multipart_file_to_the_cashflow_endpoint():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["path"] = request.url.path
+        captured["content_type"] = request.headers["content-type"]
+        captured["body"] = request.read()
+        return httpx.Response(201, json={"status": "ok", "rows_saved": 4, "transactions_saved": 4})
+
+    client = _client(handler)
+    result = await client.import_cashflow(
+        user_id=USER_ID,
+        account_label="main",
+        filename="ledger.xlsx",
+        content=b"ledger-bytes",
+        content_type="application/octet-stream",
+    )
+
+    assert result.rows_saved == 4
+    assert captured["path"] == "/cashflows/import"
+    assert "multipart/form-data" in captured["content_type"]
+    assert b"ledger.xlsx" in captured["body"]
+    assert b"ledger-bytes" in captured["body"]
+    assert b"main" in captured["body"]
+
+
+async def test_import_cashflow_422_raises_invalid_portfolio_request():
+    client = _client(
+        lambda request: httpx.Response(
+            422, json={"detail": "no cashflow parser registered for broker 'acme'"}
+        )
+    )
+
+    with pytest.raises(InvalidPortfolioRequest, match="no cashflow parser registered"):
+        await client.import_cashflow(
+            user_id=USER_ID,
+            account_label="main",
+            filename="ledger.xlsx",
+            content=b"x",
+            content_type="application/octet-stream",
         )
 
 

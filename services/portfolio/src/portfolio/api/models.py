@@ -109,6 +109,13 @@ class ReturnResponse(BaseModel):
     total_return_pct: Decimal | None
 
 
+class BrokerResponse(BaseModel):
+    broker: str
+    # Which import routes this broker has a parser for: "transactions" (POST
+    # /transactions/import) and/or "cashflow" (POST /cashflows/import).
+    imports: list[str]
+
+
 class UnmappedInstrumentResponse(BaseModel):
     kind: str
     identifier: str

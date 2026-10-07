@@ -801,6 +801,33 @@ def _render_account_not_found(
     )
 
 
+# The broker dropdown's "Custom" option: a broker with no importer installed, whose name the
+# visitor types instead. Not a broker key itself -- accounts_submit swaps in the typed name.
+# Dunder-wrapped so no installed plugin's key can collide with it.
+CUSTOM_BROKER = "__custom__"
+
+
+async def _custom_broker_error(portfolio_client: PortfolioClient, name: str) -> str | None:
+    """Why a typed custom broker name can't be used, or None if it can.
+
+    A name matching an installed broker (ignoring case) is refused: the account would get a
+    broker that differs from the installed key only in case, so none of that broker's importers
+    would apply to it. If the installed brokers can't be listed, the name is let through rather
+    than blocking account creation on an outage -- the worst case is an account with no
+    importers, which its import page then says plainly."""
+    if not name:
+        return "Enter a name for the custom broker."
+    try:
+        brokers = await portfolio_client.list_brokers()
+    except PortfolioClientError as exc:
+        logger.warning("create_account: couldn't list brokers to check a custom name -- %s", exc)
+        return None
+    match = next((b.broker for b in brokers if b.broker.casefold() == name.casefold()), None)
+    if match is not None:
+        return f"{match} is in the broker list — choose it there so its files can be imported."
+    return None
+
+
 @router.get("/accounts")
 async def accounts_page(
     request: Request,
@@ -838,6 +865,7 @@ async def accounts_submit(
     # blank-broker/blank-label validation (InvalidBroker/InvalidPortfolioRequest) that are meant
     # to render a proper error page for exactly this case.
     broker: str = Form(default=""),
+    custom_broker: str = Form(default=""),
     account_label: str = Form(default=""),
     csrf_token: str = Form(default=""),
     settings: Settings = Depends(get_settings),
@@ -869,6 +897,23 @@ async def accounts_submit(
     )
     if csrf_error is not None:
         return csrf_error
+
+    if broker == CUSTOM_BROKER:
+        broker = custom_broker.strip()
+        custom_error = await _custom_broker_error(portfolio_client, broker)
+        if custom_error is not None:
+            return await _render_form_error(
+                request,
+                response,
+                settings,
+                templates,
+                "accounts.html",
+                custom_error,
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                user=user,
+                nav_active="accounts",
+                extra_context_loader=load_error_context,
+            )
 
     return await _submit_portfolio_form(
         request,
@@ -1206,6 +1251,44 @@ async def transaction_new_submit(
 
 # --- transactions: broker file import -----------------------------------------
 
+# The import kinds web can send a file to, in the order the importer dropdown lists them, with
+# each one's label. Keys are portfolio's GET /brokers `imports` values; a kind portfolio reports
+# that isn't here is never offered, since web has no route to send it to.
+_IMPORTERS: dict[str, str] = {
+    "transactions": "Trades export",
+    "cashflow": "Account statement",
+}
+
+
+async def _load_brokers(portfolio_client: PortfolioClient) -> list | None:
+    """The installed brokers, or None when portfolio can't list them -- kept distinct from an
+    empty list, which means "nothing installed" rather than "unknown"."""
+    try:
+        return await portfolio_client.list_brokers()
+    except PortfolioClientError as exc:
+        logger.exception("portfolio service unavailable listing brokers.", exc_info=exc)
+        return None
+
+
+async def _import_page_context(
+    portfolio_client: PortfolioClient, user_id: str, account_label: str
+) -> dict:
+    """The account header plus `importers`: (kind, label) pairs for the importers the account's
+    own broker has -- never another broker's, so an account only ever holds its own broker's
+    transactions, which broker-scoped ticker mappings rely on. An empty list means the broker
+    has none (a custom broker, or a plugin not installed); None means they couldn't be loaded,
+    which the page must not present as "none"."""
+    header, brokers = await asyncio.gather(
+        _account_header_context(portfolio_client, user_id, account_label),
+        _load_brokers(portfolio_client),
+    )
+    account = header["account"]
+    if account is None or brokers is None:
+        return {**header, "importers": None}
+    imports = next((b.imports for b in brokers if b.broker == account.broker), ())
+    importers = [(kind, label) for kind, label in _IMPORTERS.items() if kind in imports]
+    return {**header, "importers": importers}
+
 
 @router.get("/transactions/import")
 async def transaction_import_form(
@@ -1218,8 +1301,8 @@ async def transaction_import_form(
     portfolio_client: PortfolioClient = Depends(get_portfolio_client),
 ):
     csrf_token = ensure_csrf_cookie(request, response, cookie_secure=settings.cookie_secure)
-    header = await _account_header_context(portfolio_client, user.user_id, account)
-    if header["account_known"] is False:
+    page_context = await _import_page_context(portfolio_client, user.user_id, account)
+    if page_context["account_known"] is False:
         return _render_account_not_found(
             request, response, templates, user=user, csrf_token=csrf_token
         )
@@ -1235,8 +1318,9 @@ async def transaction_import_form(
             "error": None,
             "imported": _query_int(request, "imported"),
             "outcome": _write_outcome(request),
+            "importer": None,
             **_account_page_context("import"),
-            **header,
+            **page_context,
         },
     )
 
@@ -1246,6 +1330,7 @@ async def transaction_import_submit(
     request: Request,
     response: Response,
     account_label: str = Form(default=""),
+    importer: str = Form(default=""),
     file: UploadFile = File(...),
     csrf_token: str = Form(default=""),
     settings: Settings = Depends(get_settings),
@@ -1258,11 +1343,12 @@ async def transaction_import_submit(
         "account_label": account_label,
         "imported": None,
         "outcome": "",
+        "importer": importer,
         **_account_page_context("import"),
     }
 
     async def load_account_header() -> dict:
-        return await _account_header_context(portfolio_client, user.user_id, account_label)
+        return await _import_page_context(portfolio_client, user.user_id, account_label)
 
     csrf_error = await _check_csrf(
         request,
@@ -1277,6 +1363,26 @@ async def transaction_import_submit(
     )
     if csrf_error is not None:
         return csrf_error
+
+    # Checked against web's own list only: whether the account's broker has this importer is
+    # portfolio's call, and it answers with BrokerParserNotFound (a 422, shown as-is) if not.
+    import_calls = {
+        "transactions": portfolio_client.import_transactions,
+        "cashflow": portfolio_client.import_cashflow,
+    }
+    if importer not in _IMPORTERS:
+        return await _render_form_error(
+            request,
+            response,
+            settings,
+            templates,
+            "transactions_import.html",
+            "Choose an importer.",
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            extra_context_loader=load_account_header,
+            **form_context,
+        )
+    import_call = import_calls[importer]
 
     content = await file.read(_MAX_UPLOAD_BYTES + 1)
     if len(content) > _MAX_UPLOAD_BYTES:
@@ -1301,8 +1407,8 @@ async def transaction_import_submit(
         settings,
         templates,
         template_name="transactions_import.html",
-        action_name="import_transactions",
-        call=lambda: portfolio_client.import_transactions(
+        action_name=f"import ({importer})",
+        call=lambda: import_call(
             user_id=user.user_id,
             account_label=account_label,
             filename=filename,

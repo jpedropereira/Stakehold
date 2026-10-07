@@ -52,7 +52,8 @@ numbers. Code comments and docs throughout the repo say "task 9", "task 13", and
 | UI-10 | [Accounts & import pages](#ui-10-accounts--import-pages) | UI-4 | ready |
 | UI-11 | [Home dashboard](#ui-11-home-dashboard) | UI-6 | ready |
 | UI-12 | [Feedback, loading & error states](#ui-12-feedback-loading--error-states) | UI-1, UI-2 | ready |
-| UI-13 | [Responsive & accessibility pass](#ui-13-responsive--accessibility-pass) | UI-3, UI-6, UI-7, UI-8, UI-9, UI-10, UI-11, UI-12 | blocked |
+| UI-13 | [Responsive & accessibility pass](#ui-13-responsive--accessibility-pass) | UI-3, UI-6, UI-7, UI-8, UI-9, UI-10, UI-11, UI-12, UI-14 | blocked |
+| UI-14 | [Broker dropdown & importer choice](#ui-14-broker-dropdown--importer-choice) | UI-4 | done |
 
 UI-1, UI-2 and UI-5 have no dependencies and can be done in any order. UI-2 is mostly a proposal
 and a decision, not code. UI-3 (dark mode) is the first task to need both UI-1 and UI-2.
@@ -501,6 +502,30 @@ Last, once every page exists in its new form.
 - A Playwright screenshot script under `services/web/` (Playwright is already a workspace
   dependency, used by `data-store`) that captures every page in light and dark at desktop and
   phone width, for review rather than as a pixel-diff gate.
+
+### UI-14. Broker dropdown & importer choice
+
+**Status:** done
+
+Depends on UI-4. Added after the chunk was planned. A broker with only an account-statement
+(cashflow) parser couldn't be imported from `web` at all, because the import page only ever
+called `portfolio`'s transactions route. And a broker typed in the wrong case at account creation
+(`Acme` vs the installed `acme`) silently got no importer.
+
+- **Accounts**: the broker field is a `<select>` of installed brokers plus "Custom" (a typed
+  name, manual entry only). A custom name matching an installed broker ignoring case is refused.
+- **Import**: an importer `<select>` lists the account's own broker's importers ("Trades export"
+  → `POST /transactions/import`, "Account statement" → `POST /cashflows/import`). A broker with
+  none points to manual entry instead of showing a form.
+- **`portfolio`**: `GET /brokers` (and `portfolio broker list`) now reports each broker with its
+  import kinds, read from both parser registries. That is a changed response shape on an existing
+  endpoint, not a new endpoint, so it stays within this chunk's constraint.
+
+Files: `portfolio`'s `pipeline.py` (`AvailableBroker`), `jobs.py`, `cli.py`, `api/{models,routes}.py`;
+`web`'s `portfolio_client/{base,http_client}.py`, `api/routes.py`, `accounts.html`,
+`transactions_import.html`, `web.css`; both services' `docs/architecture.md`.
+
+UI-10 (accounts & import page redesign) builds on this form rather than the old free-text one.
 
 ## Deferred
 
