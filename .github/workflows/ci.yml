@@ -24,11 +24,13 @@ jobs:
       # Pinned to an exact patch, not a floating major: setup-uv moved to immutable
       # releases in v8 and no longer publishes `v10`-style tags (that ref 404s).
       #
-      # No `python-version:` here on purpose. The version lives in `.python-version` and
-      # `requires-python`, and uv reads them -- duplicating it into the workflow is the
-      # same drift trap this repo already avoids for flake8 config. (It was previously
-      # passed to setup-uv@v3, which has no such input and silently ignored it, so CI has
-      # in fact been getting its Python from `.python-version` all along.)
+      # No `python-version:` here on purpose. The version lives in the committed
+      # `.python-version` (the minor, 3.14, matching the Dockerfiles' python:3.14-slim), and
+      # uv reads it -- duplicating it into the workflow is the same drift trap this repo
+      # already avoids for flake8 config. `requires-python` alone isn't enough: it's an open
+      # `>=3.14`, so uv picks the newest CPython available, and the day 3.15 shipped CI broke
+      # on psycopg-binary, which had no cp315 wheel yet. `.python-version` used to be
+      # gitignored, so CI never actually had one until that failure surfaced it.
       - name: Install uv
         uses: astral-sh/setup-uv@v10.0.1
 

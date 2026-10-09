@@ -8,7 +8,6 @@ __pycache__/
 *.pyc
 .venv/
 *.egg-info/
-.python-version
 requirements.txt
 build/
 dist/

@@ -48,7 +48,7 @@ numbers. Code comments and docs throughout the repo say "task 9", "task 13", and
 | UI-6 | [Account portfolio page redesign](#ui-6-account-portfolio-page-redesign) | UI-4, UI-5 | done |
 | UI-7 | [Data freshness & rebuild feedback](#ui-7-data-freshness--rebuild-feedback) | UI-6 | done |
 | UI-8 | [Transactions list](#ui-8-transactions-list) | UI-4, UI-5 | done |
-| UI-9 | [Transaction entry form UX](#ui-9-transaction-entry-form-ux) | UI-1 | ready |
+| UI-9 | [Transaction entry form UX](#ui-9-transaction-entry-form-ux) | UI-1 | done |
 | UI-10 | [Accounts & import pages](#ui-10-accounts--import-pages) | UI-4 | done |
 | UI-11 | [Home dashboard](#ui-11-home-dashboard) | UI-6 | ready |
 | UI-12 | [Feedback, loading & error states](#ui-12-feedback-loading--error-states) | UI-1, UI-2 | ready |
@@ -404,7 +404,7 @@ As built (decided with the user before implementation):
 
 ### UI-9. Transaction entry form UX
 
-**Status:** ready
+**Status:** done
 
 Depends on UI-1. Partly done on main since this was planned: the instrument is now picked from
 `data-store`'s tickers (a `<datalist>`), the identifier-kind field is gone, and buys and sells
@@ -429,6 +429,33 @@ text, and shows the FX field even for EUR.
 
 Tests: the generated reference is present and unique per render; the form still posts every
 field without JS (template test); existing submit tests unchanged.
+
+As built (decided with the user before implementation):
+- **Type → fields**, checked against `validate()` and `pipeline.py`'s `_manual_amount`. BUY/SELL
+  show and require instrument, quantity and price, with fees optional. **The amount is hidden for
+  them**, since `portfolio` derives it and only accepts a typed one that matches. A note says it's
+  calculated. Every other type requires an amount, ADJUSTMENT included (`_manual_amount` asks for
+  one). DIVIDEND also offers the instrument, which is how returns attribute it to a holding.
+  **Fees show for BUY/SELL only**, since they only feed the derived amount. ADJUSTMENT shows every
+  field. FX rate shows, and is required, whenever the currency isn't EUR.
+- **The mapping lives in `routes.py`** (`_FIELD_TYPES`, `_FIELD_REQUIRED_FOR`), rendered as
+  `data-types` / `data-required-for` attributes, which `transaction_form.js` reads. No mapping is
+  duplicated in JS. A fieldset left with nothing to show (Instrument, for a deposit) is hidden too.
+- **Hidden fields are disabled, not cleared.** They still aren't submitted, and a value comes back
+  if the user switches type again. Without JS no field is hidden and no type-dependent field is
+  `required`.
+- **Currency is an input plus a datalist** of EUR, USD, GBP, CHF and PLN, defaulting to EUR, and
+  still accepts any code. Nothing exposes `data-store`'s own currency list, so the suggestions
+  are a constant in `web`. The endpoint that would fix this is under [Deferred](#deferred).
+- Help text uses the `.field-hint` class UI-14 already added, so UI-1's planned `.field-help` is
+  dropped rather than defined as a duplicate. The date defaults to now in UTC, to the minute.
+- Tests are in a new `tests/unit/test_transaction_form.py`, because `test_routes.py` is at the 64KB
+  limit. One existing test checks the copy "leave blank for buys and sells", so the amount's
+  help text keeps that wording.
+- Checked in Chromium (Playwright, fake upstreams): every type's visible and required fields, FX
+  appearing for USD, htmx BUY and DEPOSIT submits (hidden fields not posted), a no-JS submit, light
+  and dark, and no horizontal scroll at 360 px. The console shows only htmx's known inline-style
+  CSP violation (see UI-3).
 
 ### UI-10. Accounts & import pages
 
@@ -558,5 +585,7 @@ per `.claude/rules/data-schema.md`), which this chunk deliberately excludes:
 - Renaming or deleting an account.
 - A server-side cross-account return-over-time series (UI-11 shows the current snapshot only).
 - Pagination or filtering of transactions, if `GET /transactions` doesn't already support it.
+- A list of the currencies `data-store` tracks (its `currencies.yaml`), so manual entry can
+  suggest exactly those (UI-9 suggests a fixed list instead).
 - Unmapped instruments per account, not per user (UI-7 filters by broker, so two accounts at one
   broker share a list).

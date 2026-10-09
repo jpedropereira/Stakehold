@@ -408,6 +408,24 @@ calls [`portfolio`](../../portfolio/docs/architecture.md), `data-store`, and
   muted second line under a non-EUR amount, rather than its own column: with a ninth column the
   table overflowed the 880px card at desktop width. A long reference is cut off with an ellipsis
   by CSS, its full value still in the page and in a `title` tooltip.
+- **The manual-entry form shows only the fields a type uses, and the mapping lives on the
+  server (UI-9).** `routes.py`'s `_FIELD_TYPES` / `_FIELD_REQUIRED_FOR` say which types each
+  type-dependent field applies to and requires. They mirror `portfolio`'s `validate()` and
+  `_manual_amount`, with a comment there, the same way `_TRANSACTION_TYPES` mirrors its type
+  list. The template renders them as `data-types` / `data-required-for` attributes, and
+  `static/transaction_form.js` only reads them, so the mapping isn't duplicated in JS. A hidden
+  field's controls are *disabled*, not cleared: a disabled control isn't submitted, and a value
+  typed before a type switch comes back on the way back. The server renders the form with no
+  field hidden and no type-dependent `required`, so without JS it is today's form, and
+  `portfolio`'s validation stays the only gate either way. The amount is hidden for BUY/SELL,
+  because `portfolio` derives it and accepts a typed one only if it matches. The reference is
+  prefilled with a fresh `manual-<uuid4>` per render. It's the idempotency key, so a
+  double-submitted form saves once, and it stays editable for a known broker reference. The
+  date defaults to now (UTC) through a `_utcnow()` seam for tests. **Known limitation:** the
+  currency suggestions (`_SUGGESTED_CURRENCIES`) are a constant in `web`, because nothing
+  exposes `data-store`'s `currencies.yaml` and this chunk adds no endpoints. The field still
+  accepts any code, so drift only makes the suggestions less useful. The fix, an endpoint
+  listing supported currencies, is under Deferred in `tasks.md`.
 - **Display formatting (UI-5) is one fixed convention, applied by Jinja filters from a pure
   module.** `formatting.py` defines `money`, `signed_money`, `qty`, `pct` and `date` (plus UI-6's
   `share`, an unsigned percentage for weights, and `delta_class`), registered on
@@ -448,7 +466,7 @@ calls [`portfolio`](../../portfolio/docs/architecture.md), `data-store`, and
 | `GET /health` | `200 {"status": "ok"}`, unauthenticated, no dependency check (see "Key decisions") |
 | `GET /accounts` | `require_user`; lists the caller's accounts (`portfolio`'s `GET /accounts`) and installed brokers (`GET /brokers`) and renders them as a list (the name links to holdings; Transactions / Add / Import beside it), with the create-account form in a `<details>` below it, open on first run or after a create error (see "Key decisions"). Its broker field is a `<select>` of those brokers plus "Custom". A failed list shows a notice above the list, never the first-run steps |
 | `POST /accounts` | CSRF-checked. With "Custom" chosen (`broker=__custom__`), sends the typed `custom_broker` name instead, after refusing a blank one or one matching an installed broker ignoring case (both 422, no `portfolio` write). Calls `portfolio`'s `POST /accounts`, redirects to `/accounts` on success |
-| `GET /transactions/new` | `require_user`; required `account` query param (a bare 422 for a missing/blank value — reachable only via a hand-crafted URL, since every link that points here already includes it); renders the manual-entry form, with a confirmation banner if `?saved=<n>` (plus the rebuild outcome from `positions`/`returns`; see "Key decisions"). The instrument field is a ticker picker: a native `<datalist>` filled from `portfolio`'s `GET /instruments/tickers` (no script, so the strict CSP is untouched). If that call fails, the form still renders with an empty list and a notice; the picker is a convenience, and portfolio checks whatever is typed when it's saved. Also fetches `GET /accounts` (concurrently) for the account header: a label that isn't one of the visitor's accounts renders `account_not_found.html` with a 404, and a failed fetch degrades to a label-only header rather than a 404 |
+| `GET /transactions/new` | `require_user`; required `account` query param (a bare 422 for a missing/blank value — reachable only via a hand-crafted URL, since every link that points here already includes it); renders the manual-entry form, with a confirmation banner if `?saved=<n>` (plus the rebuild outcome from `positions`/`returns`; see "Key decisions"). Fields are grouped into What / When / Amount / Instrument fieldsets; the reference is prefilled with a fresh `manual-<uuid4>`, the date with now (UTC) and the currency with EUR (a datalist suggests others), and `transaction_form.js` hides the fields the chosen type doesn't use (see "Key decisions"). The instrument field is a ticker picker: a native `<datalist>` filled from `portfolio`'s `GET /instruments/tickers` (no script, so the strict CSP is untouched). If that call fails, the form still renders with an empty list and a notice; the picker is a convenience, and portfolio checks whatever is typed when it's saved. Also fetches `GET /accounts` (concurrently) for the account header: a label that isn't one of the visitor's accounts renders `account_not_found.html` with a 404, and a failed fetch degrades to a label-only header rather than a 404 |
 | `POST /transactions/new` | CSRF-checked, calls `portfolio`'s `POST /transactions` (an instrument, when given, is always sent as `instrument_identifier_kind = 'TICKER'`; a blank Amount is sent as `null`, for portfolio to derive on a BUY/SELL or reject as missing on anything else), redirects to `/transactions/new?account=<label>&saved=<transactions_saved>&positions=<status>&returns=<status>` on success. An unknown ticker comes back as portfolio's 422, whose message is shown as-is like every other 422. The ticker list is re-fetched for the error re-render |
 | `GET /transactions/import` | `require_user`; required `account` query param; renders the upload form with an importer `<select>` listing the account's own broker's importers and the file input styled as a drop zone, with the 20 MB limit stated. With `?imported=<n>` it adds an import summary (count and rebuild outcome) and links to the account's holdings and transactions, with the form below as "Import another file". A broker with no importer gets a pointer to manual entry instead of a form; brokers that can't be listed get an inline notice, never the "no importer" text. Fetches `GET /accounts` (for the account header, with the same 404 and degrade rules as `GET /transactions/new`) and `GET /brokers` concurrently |
 | `POST /transactions/import` | CSRF-checked, multipart; `importer` must be `transactions` or `cashflow` (anything else is a 422 with no `portfolio` call); size-capped at 20MB (matching `portfolio`'s own cap) before the bytes are forwarded; calls `portfolio`'s `POST /transactions/import` or `POST /cashflows/import` to match, redirects to `/transactions/import?account=<label>&imported=<rows_saved>&positions=<status>&returns=<status>` on success |
@@ -517,8 +535,9 @@ exists to close; no equivalent concern applies to the portfolio routes; see "Key
   top nav and the theme toggle, plus one per page; `partials/_form_errors.html` for the htmx swap
   target; `partials/_account_header.html`, included by the four account-scoped pages; and
   `account_not_found.html`, their shared 404) and `web.css` plus vendored `htmx.min.js`.
-  Same-origin scripts: `htmx-error-swap.js`, `portfolio_chart.js`, and `theme.js` (UI-3, applies
-  a theme switch in place).
+  Same-origin scripts: `htmx-error-swap.js`, `portfolio_chart.js`, `theme.js` (UI-3, applies
+  a theme switch in place), and `transaction_form.js` (UI-9, shows the manual-entry fields the
+  chosen type and currency need).
 - `cli.py` — `web serve` only, mirroring `auth serve`'s lazy-import-uvicorn shape.
 
 ## Deployment
