@@ -78,7 +78,8 @@ _MANUAL_IDENTIFIER_KIND = "TICKER"
 # Matches portfolio's own cap (portfolio/api/routes.py's _MAX_UPLOAD_BYTES) -- read here, before
 # the bytes are ever forwarded, so an oversized upload doesn't sit fully buffered in web's memory
 # only to be rejected one hop later.
-_MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+_MAX_UPLOAD_MB = 20
+_MAX_UPLOAD_BYTES = _MAX_UPLOAD_MB * 1024 * 1024
 
 # Must match auth/api/cookies.py's COOKIE_NAME and cookie flags. Not imported directly: web and
 # auth share no code beyond the `shared` infrastructure package -- they communicate only through
@@ -850,7 +851,11 @@ async def accounts_page(
             "nav_active": "accounts",
             "accounts": accounts,
             "brokers": brokers,
-            "error": list_error,
+            # Apart from `error`, which is the create form's own: the form sits in a disclosure
+            # that is collapsed once the visitor has accounts, and an outage notice must never
+            # be hidden in it.
+            "list_error": list_error,
+            "error": None,
         },
     )
 
@@ -878,10 +883,10 @@ async def accounts_submit(
         # error -- needs the visitor's existing accounts/brokers, the same as the GET route, or
         # the page falsely claims the account list is empty. Loaded lazily (only when an error is
         # actually being rendered), so the success path never pays for a fetch it throws away.
-        accounts, brokers, _list_error = await _list_accounts_and_brokers(
+        accounts, brokers, list_error = await _list_accounts_and_brokers(
             portfolio_client, user.user_id
         )
-        return {"accounts": accounts, "brokers": brokers}
+        return {"accounts": accounts, "brokers": brokers, "list_error": list_error}
 
     csrf_error = await _check_csrf(
         request,
@@ -1319,6 +1324,7 @@ async def transaction_import_form(
             "imported": _query_int(request, "imported"),
             "outcome": _write_outcome(request),
             "importer": None,
+            "max_upload_mb": _MAX_UPLOAD_MB,
             **_account_page_context("import"),
             **page_context,
         },
@@ -1344,6 +1350,7 @@ async def transaction_import_submit(
         "imported": None,
         "outcome": "",
         "importer": importer,
+        "max_upload_mb": _MAX_UPLOAD_MB,
         **_account_page_context("import"),
     }
 
@@ -1392,7 +1399,7 @@ async def transaction_import_submit(
             settings,
             templates,
             "transactions_import.html",
-            "That file is too large (20MB limit).",
+            f"That file is too large ({_MAX_UPLOAD_MB} MB limit).",
             status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             extra_context_loader=load_account_header,
             **form_context,
