@@ -1,13 +1,15 @@
 from datetime import date
 from decimal import Decimal
 
-from web.portfolio_client.base import Position, Return, UnmappedInstrument
+from web.portfolio_client.base import Account, Position, Return, UnmappedInstrument
 from web.portfolio_view import (
+    AccountOverview,
     HoldingRow,
     PortfolioReturnPoint,
     aggregate_portfolio_returns,
     build_holdings,
     filter_open_positions,
+    summarize_accounts,
     summarize_latest_returns,
     unmapped_for_broker,
 )
@@ -607,3 +609,137 @@ def test_unmapped_for_broker_with_nothing_unmapped():
 def test_unmapped_for_broker_with_no_known_broker_shows_nothing():
     # The account header degraded and the broker isn't known: no guess across brokers.
     assert unmapped_for_broker([_unmapped("IE00B4L5Y983", "acme")], None) == []
+
+
+# --- summarize_accounts (UI-11) ----------------------------------------------------------
+
+
+def _account(label: str, account_id: int = 1) -> Account:
+    return Account(
+        id=account_id, account_label=label, broker="acme", created_at="2026-01-01T00:00:00Z"
+    )
+
+
+def _account_latest(
+    *,
+    ticker: str = "AAPL",
+    price_date: date = date(2026, 10, 6),
+    market_value_eur: str,
+    cost_basis_eur: str,
+    dividends_received_eur: str = "0",
+) -> Return:
+    total = Decimal(market_value_eur) - Decimal(cost_basis_eur) + Decimal(dividends_received_eur)
+    return _return(
+        ticker=ticker,
+        price_date=price_date,
+        market_value_eur=market_value_eur,
+        cost_basis_eur=cost_basis_eur,
+        dividends_received_eur=dividends_received_eur,
+        total_return_eur=str(total),
+        total_return_pct=None,
+    )
+
+
+def test_summarize_accounts_no_accounts():
+    assert summarize_accounts([]) == ([], None)
+
+
+def test_summarize_accounts_sums_each_accounts_summary():
+    isa, pension = _account("isa", 1), _account("pension", 2)
+    isa_rows = [
+        _account_latest(ticker="AAPL", market_value_eur="1500", cost_basis_eur="1000"),
+        _account_latest(
+            ticker="MSFT", market_value_eur="500", cost_basis_eur="500", dividends_received_eur="20"
+        ),
+    ]
+    pension_rows = [_account_latest(ticker="VWCE", market_value_eur="800", cost_basis_eur="1000")]
+
+    rows, totals = summarize_accounts([(isa, isa_rows), (pension, pension_rows)])
+
+    assert rows == [
+        AccountOverview(account=isa, summary=summarize_latest_returns(isa_rows), failed=False),
+        AccountOverview(
+            account=pension, summary=summarize_latest_returns(pension_rows), failed=False
+        ),
+    ]
+    assert totals == PortfolioReturnPoint(
+        price_date=date(2026, 10, 6),
+        market_value_eur=Decimal("2800"),
+        cost_basis_eur=Decimal("2500"),
+        dividends_received_eur=Decimal("20"),
+        total_return_eur=Decimal("320"),
+        total_return_pct=Decimal("320") / Decimal("2500"),
+    )
+
+
+def test_summarize_accounts_recomputes_the_percentage_rather_than_averaging():
+    # +50% on 100 and -10% on 1000: the average would be +20%, the real return is -4.55%.
+    small = [_account_latest(market_value_eur="150", cost_basis_eur="100")]
+    large = [_account_latest(market_value_eur="900", cost_basis_eur="1000")]
+
+    _, totals = summarize_accounts([(_account("a", 1), small), (_account("b", 2), large)])
+
+    assert totals.total_return_eur == Decimal("-50")
+    assert totals.total_return_pct == Decimal("-50") / Decimal("1100")
+
+
+def test_summarize_accounts_counts_the_same_ticker_in_two_accounts_twice():
+    # Both accounts hold AAPL: each account's own row counts, not one merged series.
+    first = [_account_latest(ticker="AAPL", market_value_eur="1000", cost_basis_eur="800")]
+    second = [_account_latest(ticker="AAPL", market_value_eur="3000", cost_basis_eur="2000")]
+
+    _, totals = summarize_accounts([(_account("a", 1), first), (_account("b", 2), second)])
+
+    assert totals.market_value_eur == Decimal("4000")
+    assert totals.cost_basis_eur == Decimal("2800")
+
+
+def test_summarize_accounts_an_account_waiting_for_prices_has_no_summary_and_isnt_failed():
+    priced = [_account_latest(market_value_eur="1200", cost_basis_eur="1000")]
+    waiting = _account("new", 2)
+
+    rows, totals = summarize_accounts([(_account("isa", 1), priced), (waiting, [])])
+
+    assert rows[1] == AccountOverview(account=waiting, summary=None, failed=False)
+    assert totals.market_value_eur == Decimal("1200")
+
+
+def test_summarize_accounts_a_failed_account_is_flagged_and_left_out_of_the_totals():
+    priced = [_account_latest(market_value_eur="1200", cost_basis_eur="1000")]
+    broken = _account("broken", 2)
+
+    rows, totals = summarize_accounts([(_account("isa", 1), priced), (broken, None)])
+
+    assert rows[1] == AccountOverview(account=broken, summary=None, failed=True)
+    assert totals.market_value_eur == Decimal("1200")
+    assert totals.cost_basis_eur == Decimal("1000")
+
+
+def test_summarize_accounts_totals_are_none_when_no_account_has_figures():
+    rows, totals = summarize_accounts([(_account("new", 1), []), (_account("broken", 2), None)])
+
+    assert totals is None
+    assert [r.failed for r in rows] == [False, True]
+
+
+def test_summarize_accounts_percentage_is_none_on_zero_total_cost_basis():
+    # Only dividends left on fully sold positions: there is nothing to divide by.
+    sold = [_account_latest(market_value_eur="0", cost_basis_eur="0", dividends_received_eur="5")]
+
+    _, totals = summarize_accounts([(_account("a", 1), sold)])
+
+    assert totals.total_return_eur == Decimal("5")
+    assert totals.total_return_pct is None
+
+
+def test_summarize_accounts_prices_as_of_is_the_newest_accounts_date():
+    older = [
+        _account_latest(price_date=date(2026, 10, 2), market_value_eur="1", cost_basis_eur="1")
+    ]
+    newer = [
+        _account_latest(price_date=date(2026, 10, 6), market_value_eur="1", cost_basis_eur="1")
+    ]
+
+    _, totals = summarize_accounts([(_account("a", 1), older), (_account("b", 2), newer)])
+
+    assert totals.price_date == date(2026, 10, 6)

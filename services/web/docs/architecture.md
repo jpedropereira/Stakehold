@@ -328,6 +328,17 @@ calls [`portfolio`](../../portfolio/docs/architecture.md), `data-store`, and
   mirroring `_list_accounts_and_brokers` exactly. An account with no
   positions and/or no return history yet renders as an ordinary empty state, not an error. Since
   UI-7 the page also says why figures are missing (see the next-but-one entry).
+- **The overview's totals (UI-11) sum each account's own summary.** `GET /` fetches the
+  account list, then one `GET /returns/latest` per account, concurrently. Each account is reduced
+  with `summarize_latest_returns`, and `portfolio_view.summarize_accounts` adds those summaries
+  up, recomputing the percentage from the summed euros. Running `aggregate_portfolio_returns`
+  over every account's rows at once would be wrong: it groups by ticker alone, so one ticker held
+  in two accounts would merge into one series and only one account's row would count. Each
+  account's call degrades on its own, `AccountNotFound` included (an account deleted since it was
+  listed). A failed account is left out of the totals, and a notice says how many were. That row
+  reads "Couldn't load figures", never "Waiting for prices", which is for an account with no
+  return row yet. A failed account list shows a notice, never the first-run state. The route
+  lives in its own `api/overview.py` because `routes.py` is near the 64KB file limit.
 - **The summary tiles and holdings figures (UI-6) come from `GET /returns/latest`, not from the
   chart's `GET /returns` history.** The latest row per ticker is also the history's last point,
   so on this page the call is redundant: one extra concurrent request, and during a rebuild the
@@ -454,7 +465,7 @@ calls [`portfolio`](../../portfolio/docs/architecture.md), `data-store`, and
 
 | Route | Behaviour |
 |---|---|
-| `GET /` | `require_user` dependency: logged in → the placeholder home page (the nav's "Overview"); no valid session → redirected to `/login` (an `AuthRequired` exception mapped to a 303 by an app-level handler) |
+| `GET /` | `require_user` dependency (no valid session → redirected to `/login`, an `AuthRequired` exception mapped to a 303 by an app-level handler); the nav's "Overview" (UI-11, `api/overview.py`). Fetches `portfolio`'s `GET /accounts`, then `GET /returns/latest` per account concurrently, and renders a "Prices as of" line, the same four tiles as `GET /portfolio` totalled across accounts, and one row per account (label linking to its holdings, broker, market value, total return € and %). A row whose call failed says so and is left out of the totals, with a notice; an account with no return row yet is "Waiting for prices". No accounts → a first-run card linking to `/accounts`; a failed account list → a notice, never the first-run card (see "Key decisions") |
 | `GET /admin` | `require_admin` dependency: an admin → the admin page (a link to ticker mappings), linked from the nav only for admins; a logged-in non-admin → a 403 page (`AdminRequired`, mapped by an app-level handler); no valid session → redirected to `/login`, like every `require_user` route |
 | `GET /admin/mappings` | `require_admin`; fetches `portfolio`'s `GET /ticker-mappings`, `GET /instruments/unmapped/all` and `GET /instruments/tickers`, and renders three things: the instruments still waiting for a mapping (each with an inline "map to ticker" form), the existing mappings (each with a delete button), and a form to add or re-point one. Each list degrades on its own to a notice rather than an empty table, so an outage never reads as "nothing to map". After a save or delete, the redirect's query string (`saved`/`deleted`, `rebuilt`, `failed`) drives a one-line outcome banner |
 | `POST /admin/mappings` | `require_admin`, CSRF-checked; calls `portfolio`'s `PUT /ticker-mappings` with the admin's own `user_id` as `updated_by` (a blank broker is sent as `null`, which an ISIN needs; portfolio enforces which kind needs one and its 422 message is shown as-is). Redirects to `/admin/mappings?saved=1&rebuilt=<n>&failed=<m>` |
@@ -518,10 +529,14 @@ exists to close; no equivalent concern applies to the portfolio routes; see "Key
 - `portfolio_view.py` (task 12) — pure, I/O-free reshaping of what `routes.py` fetches for
   `GET /portfolio`: `filter_open_positions`, `aggregate_portfolio_returns`, and (UI-6)
   `summarize_latest_returns` and `build_holdings` with its `HoldingRow`, and (UI-7)
-  `unmapped_for_broker` (see "Key decisions"). No FastAPI/httpx dependency, tested in isolation, mirroring how `portfolio`'s own
+  `unmapped_for_broker` (see "Key decisions"), and (UI-11) `summarize_accounts` with its
+  `AccountOverview`, for `GET /`. No FastAPI/httpx dependency, tested in isolation, mirroring how `portfolio`'s own
   `returns/calculator.py` is a pure function.
 - `formatting.py` (UI-5) — pure display formatters (`money`, `signed_money`, `qty`, `pct`,
   `date`, UI-6's `share` and `delta_class`, and UI-8's `native_money`) plus the `FILTERS` mapping `app.py` registers as Jinja filters; see "Key decisions".
+- `api/overview.py` (UI-11) — `GET /`, on its own router (like `api/theme.py`) because
+  `routes.py` is near the 64KB file limit. It renders through `routes._render`, so the
+  `_finish` header merge stays in one place.
 - `api/theme.py` (UI-3) — the theme cookie, `POST /theme` on its own router, the
   `theme_context` context processor, and `safe_next`. It's a separate module because it's
   self-contained and needs neither upstream client.
@@ -533,7 +548,8 @@ exists to close; no equivalent concern applies to the portfolio routes; see "Key
   handler, so every redirect in the app picks htmx-partial vs. full-navigation the same way).
 - `templates/`, `static/` — Jinja2 templates (`base.html`, which holds the skip link, the
   top nav and the theme toggle, plus one per page; `partials/_form_errors.html` for the htmx swap
-  target; `partials/_account_header.html`, included by the four account-scoped pages; and
+  target; `partials/_account_header.html`, included by the four account-scoped pages;
+  `partials/_delta.html`, the gain/loss-colored figure macro shared by home and portfolio; and
   `account_not_found.html`, their shared 404) and `web.css` plus vendored `htmx.min.js`.
   Same-origin scripts: `htmx-error-swap.js`, `portfolio_chart.js`, `theme.js` (UI-3, applies
   a theme switch in place), and `transaction_form.js` (UI-9, shows the manual-entry fields the

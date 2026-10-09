@@ -50,7 +50,7 @@ numbers. Code comments and docs throughout the repo say "task 9", "task 13", and
 | UI-8 | [Transactions list](#ui-8-transactions-list) | UI-4, UI-5 | done |
 | UI-9 | [Transaction entry form UX](#ui-9-transaction-entry-form-ux) | UI-1 | done |
 | UI-10 | [Accounts & import pages](#ui-10-accounts--import-pages) | UI-4 | done |
-| UI-11 | [Home dashboard](#ui-11-home-dashboard) | UI-6 | ready |
+| UI-11 | [Home dashboard](#ui-11-home-dashboard) | UI-6 | done |
 | UI-12 | [Feedback, loading & error states](#ui-12-feedback-loading--error-states) | UI-1, UI-2 | ready |
 | UI-13 | [Responsive & accessibility pass](#ui-13-responsive--accessibility-pass) | UI-3, UI-6, UI-7, UI-8, UI-9, UI-10, UI-11, UI-12, UI-14 | blocked |
 | UI-14 | [Broker dropdown & importer choice](#ui-14-broker-dropdown--importer-choice) | UI-4 | done |
@@ -498,7 +498,7 @@ As built (decided with the user before implementation):
 
 ### UI-11. Home dashboard
 
-**Status:** ready
+**Status:** done
 
 Depends on UI-6 (latest-returns client method and per-account aggregation). Home is a welcome card
 with one link today.
@@ -515,6 +515,23 @@ with one link today.
 
 Tests: the aggregation function (no accounts, an account with no returns yet, mixed
 gains/losses); route tests for the overview, the empty state and a single failing account.
+
+As built (decided with the user before implementation):
+- **Totals sum each account's summary**, not every row through `aggregate_portfolio_returns`,
+  because that function groups by ticker alone: one ticker in two accounts would merge, and only
+  one account's row would count. A test covers this case. `summarize_accounts` returns
+  `AccountOverview` rows and reuses `PortfolioReturnPoint` for the totals.
+- **A failed account doesn't hide the totals** (user's decision). They cover the accounts that
+  loaded, with a notice ("Totals leave out 1 account that couldn't be loaded.") and "Couldn't
+  load figures" on that row. An account with no return row yet reads "Waiting for prices" and
+  isn't a failure. With no figures at all, no tiles are shown.
+- **The same four tiles as UI-6** (user's decision), dividends included, plus the "Prices as of"
+  line (the newest date across accounts). The gain/loss `delta` macro moved to
+  `partials/_delta.html`, shared with `portfolio.html`.
+- **A failed account list** shows its own notice, never the first-run card. First run is a card
+  with a "Create an account" button to `/accounts`.
+- **`GET /` moved to a new `api/overview.py` router**, because `routes.py` is near the 64KB
+  limit. Tests are in a new `tests/unit/test_home_page.py`.
 
 ### UI-12. Feedback, loading & error states
 

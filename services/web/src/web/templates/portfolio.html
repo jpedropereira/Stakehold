@@ -1,10 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Portfolio — {{ account_label }} — Stakehold{% endblock %}
-{# A signed figure, colored by the sign it displays with: a zero delta is neither gain nor loss. #}
-{% macro delta(value, kind="money") -%}
-{%- set cls = value | delta_class(kind) -%}
-<span class="mono{% if cls %} {{ cls }}{% endif %}">{{ value | signed_money if kind == "money" else value | pct }}</span>
-{%- endmacro %}
+{% from "partials/_delta.html" import delta %}
 {% set freshness = "Prices update daily; returns are recalculated a few times a day." %}
 {% block content %}
 {% include "partials/_account_header.html" %}

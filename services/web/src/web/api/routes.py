@@ -351,22 +351,7 @@ async def _submit_portfolio_form(
     return on_success(result)
 
 
-@router.get("/")
-async def home(
-    request: Request,
-    response: Response,
-    settings: Settings = Depends(get_settings),
-    templates=Depends(get_templates),
-    user: AuthUser = Depends(require_user),
-):
-    csrf_token = ensure_csrf_cookie(request, response, cookie_secure=settings.cookie_secure)
-    return _render(
-        request,
-        response,
-        templates,
-        "home.html",
-        {"user": user, "csrf_token": csrf_token, "nav_active": "overview"},
-    )
+# GET / (the overview) lives in overview.py.
 
 
 @router.get("/admin")

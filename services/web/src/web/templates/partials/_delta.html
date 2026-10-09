@@ -1,0 +1,5 @@
+{# A signed figure, colored by the sign it displays with: a zero delta is neither gain nor loss. #}
+{% macro delta(value, kind="money") -%}
+{%- set cls = value | delta_class(kind) -%}
+<span class="mono{% if cls %} {{ cls }}{% endif %}">{{ value | signed_money if kind == "money" else value | pct }}</span>
+{%- endmacro %}
