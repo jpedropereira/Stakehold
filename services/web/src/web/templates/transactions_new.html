@@ -1,5 +1,12 @@
 {% extends "base.html" %}
 {% block title %}Add transaction — Stakehold{% endblock %}
+{#- Marks a field with the types it applies to (and requires it for), from routes.py's
+    _FIELD_TYPES. static/transaction_form.js hides the field for any other type; without JS it
+    always shows. -#}
+{% macro shown_for(name) -%}
+data-types="{{ field_types[name] | join(' ') }}"
+{%- if field_required_for[name] %} data-required-for="{{ field_required_for[name] | join(' ') }}"{% endif %}
+{%- endmacro %}
 {% block content %}
 {% include "partials/_account_header.html" %}
 <section class="card">
@@ -9,74 +16,97 @@
   {% elif saved %}
   <p class="confirmation-banner">Transaction saved.{% if outcome %} {{ outcome }}{% endif %}</p>
   {% endif %}
-  <form hx-post="/transactions/new" hx-target="#form-errors" hx-swap="innerHTML" method="post" action="/transactions/new">
+  <form class="transaction-form" hx-post="/transactions/new" hx-target="#form-errors" hx-swap="innerHTML" method="post" action="/transactions/new">
     <div id="form-errors">
       {% include "partials/_form_errors.html" %}
     </div>
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <input type="hidden" name="account_label" value="{{ account_label }}">
 
-    <div class="field">
-      <label for="broker_transaction_ref">Reference</label>
-      <input type="text" id="broker_transaction_ref" name="broker_transaction_ref" required>
-    </div>
+    <fieldset>
+      <legend>What</legend>
+      <div class="field">
+        <label for="transaction_type">Type</label>
+        <select id="transaction_type" name="transaction_type" required>
+          {% for t in transaction_types %}
+          <option value="{{ t }}">{{ t }}</option>
+          {% endfor %}
+        </select>
+      </div>
 
-    <div class="field">
-      <label for="transaction_type">Type</label>
-      <select id="transaction_type" name="transaction_type" required>
-        {% for t in transaction_types %}
-        <option value="{{ t }}">{{ t }}</option>
+      <div class="field">
+        <label for="broker_transaction_ref">Reference</label>
+        <input type="text" id="broker_transaction_ref" name="broker_transaction_ref" value="{{ reference }}" required class="mono" aria-describedby="broker_transaction_ref-hint">
+        <p class="field-hint" id="broker_transaction_ref-hint">Filled in for you. Replace it with your broker's reference if you have one. A reference already saved is not saved again.</p>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>When</legend>
+      <div class="field">
+        <label for="trade_datetime">Date &amp; time (UTC)</label>
+        <input type="datetime-local" id="trade_datetime" name="trade_datetime" value="{{ default_datetime }}" required>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Amount</legend>
+      <div class="field" {{ shown_for("native_amount") }}>
+        <label for="native_amount">Amount</label>
+        <input type="text" inputmode="decimal" id="native_amount" name="native_amount" class="mono" aria-describedby="native_amount-hint">
+        <p class="field-hint" id="native_amount-hint">Money into the account is positive, money out is negative; leave blank for buys and sells: it's calculated as price × quantity + fees.</p>
+      </div>
+      <p class="field-hint" {{ shown_for("amount_derived") }}>The amount is calculated from price × quantity + fees.</p>
+
+      <div class="field">
+        <label for="native_currency">Currency</label>
+        <input type="text" id="native_currency" name="native_currency" value="EUR" list="currency-options" maxlength="3" autocomplete="off" required class="mono">
+      </div>
+      <datalist id="currency-options">
+        {% for currency in currencies %}
+        <option value="{{ currency }}">
         {% endfor %}
-      </select>
-    </div>
+      </datalist>
 
-    <div class="field">
-      <label for="trade_datetime">Date &amp; time (UTC)</label>
-      <input type="datetime-local" id="trade_datetime" name="trade_datetime" required>
-    </div>
+      <div class="field" data-hide-for-currency="EUR">
+        <label for="fx_rate">FX rate</label>
+        <input type="text" inputmode="decimal" id="fx_rate" name="fx_rate" class="mono" aria-describedby="fx_rate-hint">
+        <p class="field-hint" id="fx_rate-hint">Units of the currency per 1 EUR, for example 1.0850 for USD. Leave blank for EUR.</p>
+      </div>
 
-    <div class="field">
-      <label for="native_amount">Amount (leave blank for buys and sells: calculated as price × quantity + fees)</label>
-      <input type="text" inputmode="decimal" id="native_amount" name="native_amount" class="mono">
-    </div>
+      <div class="field" {{ shown_for("fees_native") }}>
+        <label for="fees_native">Fees</label>
+        <input type="text" inputmode="decimal" id="fees_native" name="fees_native" class="mono">
+      </div>
+    </fieldset>
 
-    <div class="field">
-      <label for="native_currency">Currency</label>
-      <input type="text" id="native_currency" name="native_currency" maxlength="3" required>
-    </div>
+    <fieldset>
+      <legend>Instrument</legend>
+      <div class="field" {{ shown_for("instrument_identifier") }}>
+        <label for="instrument_identifier">Ticker</label>
+        <input type="text" id="instrument_identifier" name="instrument_identifier" list="ticker-options" autocomplete="off" class="mono">
+        {% if tickers_notice %}<p class="entry-empty">{{ tickers_notice }}</p>{% endif %}
+      </div>
+      <datalist id="ticker-options">
+        {% for ticker in tickers %}
+        <option value="{{ ticker }}">
+        {% endfor %}
+      </datalist>
 
-    <div class="field">
-      <label for="instrument_identifier">Instrument (ticker)</label>
-      <input type="text" id="instrument_identifier" name="instrument_identifier" list="ticker-options" autocomplete="off" class="mono">
-    </div>
-    <datalist id="ticker-options">
-      {% for ticker in tickers %}
-      <option value="{{ ticker }}">
-      {% endfor %}
-    </datalist>
-    {% if tickers_notice %}<p class="entry-empty">{{ tickers_notice }}</p>{% endif %}
+      <div class="field" {{ shown_for("quantity") }}>
+        <label for="quantity">Quantity</label>
+        <input type="text" inputmode="decimal" id="quantity" name="quantity" class="mono" aria-describedby="quantity-hint">
+        <p class="field-hint" id="quantity-hint">Negative for a sell.</p>
+      </div>
 
-    <div class="field">
-      <label for="quantity">Quantity</label>
-      <input type="text" inputmode="decimal" id="quantity" name="quantity" class="mono">
-    </div>
-
-    <div class="field">
-      <label for="price">Price</label>
-      <input type="text" inputmode="decimal" id="price" name="price" class="mono">
-    </div>
-
-    <div class="field">
-      <label for="fx_rate">FX rate (native units per 1 EUR)</label>
-      <input type="text" inputmode="decimal" id="fx_rate" name="fx_rate" class="mono">
-    </div>
-
-    <div class="field">
-      <label for="fees_native">Fees</label>
-      <input type="text" inputmode="decimal" id="fees_native" name="fees_native" class="mono">
-    </div>
+      <div class="field" {{ shown_for("price") }}>
+        <label for="price">Price</label>
+        <input type="text" inputmode="decimal" id="price" name="price" class="mono">
+      </div>
+    </fieldset>
 
     <button type="submit" class="btn btn-primary">Save transaction</button>
   </form>
 </section>
+<script src="/static/transaction_form.js" defer></script>
 {% endblock %}

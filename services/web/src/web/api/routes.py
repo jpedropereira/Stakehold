@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from urllib.parse import quote, urlencode
+from uuid import uuid4
 
 from fastapi import (
     APIRouter,
@@ -74,6 +75,42 @@ _TRANSACTION_TYPES = ("BUY", "SELL", "DEPOSIT", "WITHDRAWAL", "DIVIDEND", "FX", 
 # Manual entry only ever submits a data-store ticker picked from the list, never an ISIN/SYMBOL
 # -- those need a ticker mapping, which is for broker imports. See portfolio/docs/schema.md.
 _MANUAL_IDENTIFIER_KIND = "TICKER"
+
+# Which transaction types each type-dependent manual-entry field applies to, and which of those
+# require it -- read by static/transaction_form.js from the data-types/data-required-for
+# attributes the template renders, so this is the one place the mapping lives. Mirrors
+# portfolio's transactions/base.py validate() and pipeline.py _manual_amount (UI-9):
+# - a BUY/SELL needs an instrument, a quantity and a price, and its amount is derived, so the
+#   amount field is hidden for one rather than offered as a figure that can only match;
+# - every other type is a cash event whose amount is the only figure there is;
+# - fees only feed a BUY/SELL's derived amount;
+# - a DIVIDEND may name its instrument, which is how returns attributes it to a holding;
+# - ADJUSTMENT is unconstrained by validate(), so it shows every field.
+# A field not listed here (type, reference, date, currency) is shown for every type, and FX rate
+# follows the currency instead (the template's data-hide-for-currency). Without JS every field
+# shows and none is required by the browser: portfolio's validation is the source of truth.
+_TRADE_TYPES = ("BUY", "SELL")
+_CASH_TYPES = tuple(t for t in _TRANSACTION_TYPES if t not in _TRADE_TYPES)
+_FIELD_TYPES: dict[str, tuple[str, ...]] = {
+    "native_amount": _CASH_TYPES,
+    "amount_derived": _TRADE_TYPES,
+    "fees_native": (*_TRADE_TYPES, "ADJUSTMENT"),
+    "instrument_identifier": (*_TRADE_TYPES, "DIVIDEND", "ADJUSTMENT"),
+    "quantity": (*_TRADE_TYPES, "ADJUSTMENT"),
+    "price": (*_TRADE_TYPES, "ADJUSTMENT"),
+}
+_FIELD_REQUIRED_FOR: dict[str, tuple[str, ...]] = {
+    "native_amount": _CASH_TYPES,
+    "instrument_identifier": _TRADE_TYPES,
+    "quantity": _TRADE_TYPES,
+    "price": _TRADE_TYPES,
+}
+# The currency field's suggestions, EUR first as the default. A web-side constant because
+# nothing exposes data-store's own list (its config/currencies.yaml): neither data-store nor
+# portfolio has an endpoint for it, and this chunk adds none. Suggestions only -- the field
+# still takes any code, and portfolio accepts any ISO 4217 currency given an FX rate -- so a
+# deployment tracking a different set only gets a less useful list, never a blocked entry.
+_SUGGESTED_CURRENCIES = ("EUR", "USD", "GBP", "CHF", "PLN")
 
 # Matches portfolio's own cap (portfolio/api/routes.py's _MAX_UPLOAD_BYTES) -- read here, before
 # the bytes are ever forwarded, so an oversized upload doesn't sit fully buffered in web's memory
@@ -1040,6 +1077,11 @@ def _write_outcome(request: Request) -> str:
     )
 
 
+def _utcnow() -> datetime:
+    """A seam for tests to fix the form's default date."""
+    return datetime.now(timezone.utc)
+
+
 async def _transaction_new_context(
     portfolio_client: PortfolioClient,
     account_label: str,
@@ -1051,6 +1093,16 @@ async def _transaction_new_context(
     return {
         "account_label": account_label,
         "transaction_types": _TRANSACTION_TYPES,
+        # A fresh idempotency key per render: a double-submitted form saves once, while the next
+        # form (after the redirect) gets a new one. Editable, so a known broker reference can
+        # still be typed in. An error re-render gets a new one too, which is harmless: nothing
+        # was saved under the old one.
+        "reference": f"manual-{uuid4()}",
+        # datetime-local's own format, to the minute; the field is labelled UTC.
+        "default_datetime": _utcnow().strftime("%Y-%m-%dT%H:%M"),
+        "currencies": _SUGGESTED_CURRENCIES,
+        "field_types": _FIELD_TYPES,
+        "field_required_for": _FIELD_REQUIRED_FOR,
         "tickers": tickers,
         "tickers_notice": tickers_notice,
         "saved": saved,

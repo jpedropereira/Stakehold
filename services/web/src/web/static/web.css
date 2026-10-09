@@ -337,6 +337,32 @@ main:focus {
   margin: 0;
 }
 
+/* transaction_form.js hides the fields a transaction type doesn't use. An explicit rule, because
+   .field's display: flex would otherwise override [hidden]. */
+.field[hidden],
+.field-hint[hidden] {
+  display: none;
+}
+
+/* The manual-entry form's groups (UI-9): a hairline between groups and a small caption heading
+   for each, rather than a box around each one. */
+.transaction-form fieldset {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: var(--space-5) 0 0;
+  padding: var(--space-3) 0 0;
+  min-width: 0;
+}
+
+.transaction-form legend {
+  padding: 0 var(--space-2) 0 0;
+  font: var(--text-caption);
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+
 /* The custom broker name only matters with "Custom" chosen. Hidden by CSS alone, so the form
    still works without JS; a browser without :has() just always shows the field. */
 .account-form:not(:has(#broker option[value="__custom__"]:checked)) .field-custom-broker {
