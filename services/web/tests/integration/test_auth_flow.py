@@ -103,8 +103,10 @@ async def test_signup_then_home_then_logout_round_trip(web_client):
     assert "stakehold_session" in signup_response.headers.get("set-cookie", "")
 
     home_response = web_client.get("/")
+    # No portfolio service in this suite, so the overview shows its outage notice; what matters
+    # here is that the page renders for the signed-in user.
     assert home_response.status_code == 200
-    assert "Welcome, Ann." in home_response.text
+    assert '<span class="user-name">Ann</span>' in home_response.text
 
     logout_csrf = _csrf_token(web_client)
     logout_response = web_client.post(

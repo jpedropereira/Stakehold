@@ -1,12 +1,12 @@
 """Pure, web-side display logic over portfolio's raw /positions and /returns responses.
 
-Nothing here changes portfolio's own data -- it only reshapes what routes.py already fetched for
+Nothing here changes portfolio's own data -- it only reshapes what the routes already fetched for
 the /portfolio view: filtering closed positions out of a "current holdings" listing, combining N
 per-ticker daily return series into one portfolio-level series for the chart
 (portfolio/docs/architecture.md's "Returns are served per ticker" note explicitly leaves this to
-task 12), and (UI-6) the summary tiles and the holdings table built from /returns/latest. No
-I/O, no FastAPI, no httpx -- mirrors how portfolio/returns/calculator.py is a pure function
-tested in isolation.
+task 12), (UI-6) the summary tiles and the holdings table built from /returns/latest, and
+(UI-11) the home overview's per-account rows and cross-account totals. No I/O, no FastAPI, no
+httpx -- mirrors how portfolio/returns/calculator.py is a pure function tested in isolation.
 """
 
 from collections.abc import Sequence
@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 
-from web.portfolio_client.base import Position, Return, UnmappedInstrument
+from web.portfolio_client.base import Account, Position, Return, UnmappedInstrument
 
 _ZERO = Decimal("0")
 
@@ -120,6 +120,55 @@ def summarize_latest_returns(latest: Sequence[Return]) -> PortfolioReturnPoint |
     """
     points = aggregate_portfolio_returns(latest)
     return points[-1] if points else None
+
+
+@dataclass(frozen=True)
+class AccountOverview:
+    """One account's row on the home overview. `summary` is None both while the account has no
+    return row yet (waiting for prices) and when its figures couldn't be loaded; `failed` tells
+    the two apart, since they must never look the same."""
+
+    account: Account
+    summary: PortfolioReturnPoint | None
+    failed: bool
+
+
+def summarize_accounts(
+    accounts: Sequence[tuple[Account, Sequence[Return] | None]],
+) -> tuple[list[AccountOverview], PortfolioReturnPoint | None]:
+    """One row per account, in the given order, plus the totals across them (None if no account
+    has figures). Each account comes with its /returns/latest rows, or None if that call failed.
+
+    The totals sum each account's own summary rather than running aggregate_portfolio_returns
+    over every account's rows at once: that function groups by ticker alone, so the same ticker
+    held in two accounts would merge into one series and only one account's row would count.
+    The percentage is recomputed from the summed euros, never averaged, and price_date is the
+    newest across accounts, the same rule summarize_latest_returns applies within one. A failed
+    account or one waiting for prices contributes nothing; the page says which.
+    """
+    rows = [
+        AccountOverview(
+            account=account,
+            summary=None if latest is None else summarize_latest_returns(latest),
+            failed=latest is None,
+        )
+        for account, latest in accounts
+    ]
+    summaries = [row.summary for row in rows if row.summary is not None]
+    if not summaries:
+        return rows, None
+
+    cost_basis_eur = sum((s.cost_basis_eur for s in summaries), _ZERO)
+    total_return_eur = sum((s.total_return_eur for s in summaries), _ZERO)
+    totals = PortfolioReturnPoint(
+        price_date=max(s.price_date for s in summaries),
+        market_value_eur=sum((s.market_value_eur for s in summaries), _ZERO),
+        cost_basis_eur=cost_basis_eur,
+        dividends_received_eur=sum((s.dividends_received_eur for s in summaries), _ZERO),
+        total_return_eur=total_return_eur,
+        total_return_pct=None if cost_basis_eur == _ZERO else total_return_eur / cost_basis_eur,
+    )
+    return rows, totals
 
 
 @dataclass(frozen=True)

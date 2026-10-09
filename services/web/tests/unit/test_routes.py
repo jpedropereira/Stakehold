@@ -363,7 +363,7 @@ def test_root_renders_when_logged_in(client):
     response = test_client.get("/")
 
     assert response.status_code == 200
-    assert "Welcome, Ann." in response.text
+    assert "<h1>Accounts</h1>" in response.text
 
 
 def test_root_proxies_renewed_session_cookie(client):

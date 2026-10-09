@@ -9,6 +9,7 @@ from fastapi.templating import Jinja2Templates
 from shared.logging_config import configure_logging
 from web.api.deps import AdminRequired, AuthRequired
 from web.api.htmx import htmx_or_redirect
+from web.api.overview import router as overview_router
 from web.api.routes import health_router, router
 from web.api.security_headers import SecurityHeadersMiddleware
 from web.api.theme import router as theme_router
@@ -66,6 +67,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.mount("/brand", StaticFiles(directory=settings.brand_dir), name="brand")
 
     app.include_router(health_router)
+    app.include_router(overview_router)
     app.include_router(router)
     app.include_router(theme_router)
 

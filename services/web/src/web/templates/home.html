@@ -1,9 +1,63 @@
 {% extends "base.html" %}
-{% block title %}Stakehold{% endblock %}
+{% from "partials/_delta.html" import delta %}
+{% block title %}Overview — Stakehold{% endblock %}
 {% block content %}
+{# First run only when the list actually loaded: an outage must never read as "no accounts". #}
+{% if list_error %}
+<p class="confirmation-banner">{{ list_error }}</p>
+{% elif not rows %}
 <section class="card card-narrow">
   <h1>Welcome, {{ user.display_name }}.</h1>
-  <p>Add an account to start recording transactions.</p>
-  <a href="/accounts" class="btn btn-primary">Go to your accounts</a>
+  <p class="entry-subtitle">No accounts yet. Create one for each broker account you hold, then
+    add or import its transactions. Your holdings and returns appear here.</p>
+  <a href="/accounts" class="btn btn-primary">Create an account</a>
 </section>
+{% else %}
+{% if totals %}
+<p class="as-of">Prices as of <span class="mono">{{ totals.price_date | date }}</span>. Prices update daily; returns are recalculated a few times a day.</p>
+<section class="summary-tiles" aria-label="All accounts">
+  <div class="tile">
+    <p class="tile-label">Market value</p>
+    <p class="tile-value"><span class="mono">{{ totals.market_value_eur | money }}</span></p>
+  </div>
+  <div class="tile">
+    <p class="tile-label">Cost basis</p>
+    <p class="tile-value"><span class="mono">{{ totals.cost_basis_eur | money }}</span></p>
+  </div>
+  <div class="tile">
+    <p class="tile-label">Total return</p>
+    <p class="tile-value">{{ delta(totals.total_return_eur) }} {{ delta(totals.total_return_pct, "pct") }}</p>
+  </div>
+  <div class="tile">
+    <p class="tile-label">Dividends received</p>
+    <p class="tile-value"><span class="mono">{{ totals.dividends_received_eur | money }}</span></p>
+  </div>
+</section>
+{% endif %}
+{% if failed_count %}
+<p class="confirmation-banner">Totals leave out {{ failed_count }} account{{ "s" if failed_count != 1 }} that couldn't be loaded.</p>
+{% endif %}
+<section class="card card-wide">
+  <h1>Accounts</h1>
+  <ul class="account-list">
+    {% for row in rows %}
+    <li class="account-row">
+      <a class="account-label" href="/portfolio?account={{ row.account.account_label | urlencode }}">{{ row.account.account_label }}<span class="visually-hidden"> holdings</span></a>
+      <span class="account-broker">{{ row.account.broker }}</span>
+      <span class="account-figures">
+        {% if row.summary %}
+        <span class="mono">{{ row.summary.market_value_eur | money }}</span>
+        {{ delta(row.summary.total_return_eur) }}
+        {{ delta(row.summary.total_return_pct, "pct") }}
+        {% elif row.failed %}
+        <span class="entry-empty">Couldn't load figures</span>
+        {% else %}
+        <span class="entry-empty">Waiting for prices</span>
+        {% endif %}
+      </span>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
 {% endblock %}

@@ -534,6 +534,16 @@ main:focus {
   margin-left: auto;
 }
 
+/* The overview's figures (UI-11): right-aligned like the actions above, wrapping under the
+   account as one group at phone width. */
+.account-figures {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-3);
+  margin-left: auto;
+}
+
 .account-actions a {
   font: var(--text-caption);
 }
