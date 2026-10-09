@@ -49,7 +49,7 @@ numbers. Code comments and docs throughout the repo say "task 9", "task 13", and
 | UI-7 | [Data freshness & rebuild feedback](#ui-7-data-freshness--rebuild-feedback) | UI-6 | done |
 | UI-8 | [Transactions list](#ui-8-transactions-list) | UI-4, UI-5 | done |
 | UI-9 | [Transaction entry form UX](#ui-9-transaction-entry-form-ux) | UI-1 | ready |
-| UI-10 | [Accounts & import pages](#ui-10-accounts--import-pages) | UI-4 | ready |
+| UI-10 | [Accounts & import pages](#ui-10-accounts--import-pages) | UI-4 | done |
 | UI-11 | [Home dashboard](#ui-11-home-dashboard) | UI-6 | ready |
 | UI-12 | [Feedback, loading & error states](#ui-12-feedback-loading--error-states) | UI-1, UI-2 | ready |
 | UI-13 | [Responsive & accessibility pass](#ui-13-responsive--accessibility-pass) | UI-3, UI-6, UI-7, UI-8, UI-9, UI-10, UI-11, UI-12, UI-14 | blocked |
@@ -432,7 +432,7 @@ field without JS (template test); existing submit tests unchanged.
 
 ### UI-10. Accounts & import pages
 
-**Status:** ready
+**Status:** done
 
 Depends on UI-4.
 
@@ -446,6 +446,28 @@ Depends on UI-4.
   and next steps (view holdings, view transactions).
 
 Tests: route/template tests for the empty-state disclosure behaviour and the import summary.
+
+As built (decided with the user before implementation):
+- **The account name is the row's primary action**, a link to its holdings. Transactions, Add
+  and Import are `.btn-secondary` buttons (defined now, as UI-1 planned), not a gold button per
+  row competing with the one accent.
+- **The disclosure also opens on any create-form error re-render**, not only on first run: a
+  no-JS post that fails lands back on the page, and its message is inside the form. The list
+  outage notice moved out of the form into its own `list_error`, so it is never hidden. A
+  failed list is not a first run: the steps aren't shown and the form stays collapsed.
+- **The drop zone is CSS only**: the file input itself, enlarged and dashed. Browsers accept a
+  dropped file on it natively and its own text names the file, so no script and no CSP change.
+  There's no highlight while dragging. The 20 MB in the copy and the error message both come
+  from one constant, `_MAX_UPLOAD_MB`.
+- **The summary keeps "transaction(s)"** for `imported`. Both import kinds report `rows_saved`
+  equal to `transactions_saved` in `portfolio`'s `jobs.py`, so the count is transactions, and
+  the redirect URL is unchanged. The form stays below the summary as "Import another file".
+- Tests are in a new `tests/unit/test_accounts_import_pages.py`, because `test_routes.py` is
+  past the 64KB limit. Its "View portfolio" link test moved there in its new form.
+- Checked in Chromium (Playwright, fake upstreams): both pages, first-run and populated accounts,
+  before and after an import, in light and dark at 1280 and 360 px, with and without JS. No
+  horizontal scroll. Dropping a file onto the zone was not exercised (Playwright can't simulate
+  a native OS file drop); it relies on the browser's built-in file-input drop handling.
 
 ### UI-11. Home dashboard
 

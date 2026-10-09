@@ -4,10 +4,16 @@
 {% include "partials/_account_header.html" %}
 <section class="card">
   <h1>Import broker file</h1>
-  {% if imported == 0 %}
-  <p class="confirmation-banner">Nothing new to import — every row was already recorded.</p>
-  {% elif imported is not none %}
-  <p class="confirmation-banner">Imported <span class="mono">{{ imported | qty }}</span> transaction(s).{% if outcome %} {{ outcome }}{% endif %}</p>
+  {% if imported is not none %}
+  {% set account_query = "?account=" ~ (account_label | urlencode) %}
+  <div class="import-summary">
+    {% if imported == 0 %}
+    <p class="confirmation-banner">Nothing new to import — every row was already recorded.</p>
+    {% else %}
+    <p class="confirmation-banner">Imported <span class="mono">{{ imported | qty }}</span> transaction(s).{% if outcome %} {{ outcome }}{% endif %}</p>
+    {% endif %}
+    <p class="next-steps"><a href="/portfolio{{ account_query }}">View holdings</a> <a href="/transactions{{ account_query }}">View transactions</a></p>
+  </div>
   {% endif %}
   {# Outside the form: a full-page error re-render must show its message even when the form
      itself isn't rendered (importers couldn't be loaded). #}
@@ -20,6 +26,7 @@
   <p class="entry-empty">No file importer is available for {{ account.broker }}. Add its transactions
     manually instead: <a href="/transactions/new?account={{ account_label | urlencode }}">add a transaction</a>.</p>
   {% else %}
+  {% if imported is not none %}<h2>Import another file</h2>{% endif %}
   <form hx-post="/transactions/import" hx-target="#form-errors" hx-swap="innerHTML" hx-encoding="multipart/form-data"
         method="post" action="/transactions/import" enctype="multipart/form-data">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -32,9 +39,13 @@
         {% endfor %}
       </select>
     </div>
+    {# The file input itself is the drop zone: browsers accept a dropped file on a file input
+       natively, and its own text names the chosen file, so this needs no script. #}
     <div class="field">
       <label for="file">Export file</label>
-      <input type="file" id="file" name="file" required>
+      <input type="file" id="file" name="file" class="drop-zone" aria-describedby="file-hint" required>
+      <p class="field-hint" id="file-hint">Drop the file on the box, or choose it. Up to
+        <span class="mono">{{ max_upload_mb }}</span> MB.</p>
     </div>
     <button type="submit" class="btn btn-primary">Upload</button>
   </form>

@@ -1775,22 +1775,6 @@ def test_cashflow_import_error_rerender_keeps_the_importer_choice(client):
     assert '<option value="cashflow" selected>Account statement</option>' in response.text
 
 
-# --- accounts: per-account "View portfolio" link -----------------------------
-
-
-def test_accounts_page_links_to_portfolio_view(client):
-    test_client, _, fake_auth, fake_portfolio = client
-    _logged_in(test_client, fake_auth)
-    fake_portfolio.list_accounts_result = [
-        Account(id=1, account_label="main", broker="acme", created_at="2026-01-01T00:00:00Z")
-    ]
-
-    response = test_client.get("/accounts")
-
-    assert response.status_code == 200
-    assert '/portfolio?account=main">View portfolio</a>' in response.text
-
-
 # --- app shell: nav, skip link, account header (UI-4) ---------------------------
 
 _SITE_NAV = re.compile(r'<nav class="site-nav"[^>]*>(.*?)</nav>', re.DOTALL)
