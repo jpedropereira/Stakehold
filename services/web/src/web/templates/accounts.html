@@ -1,55 +1,65 @@
 {% extends "base.html" %}
 {% block title %}Accounts — Stakehold{% endblock %}
 {% block content %}
-<section class="card">
-  <h1>New account</h1>
-  <form class="account-form" hx-post="/accounts" hx-target="#form-errors" hx-swap="innerHTML" method="post" action="/accounts">
-    <div id="form-errors">
-      {% include "partials/_form_errors.html" %}
-    </div>
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <div class="field">
-      <label for="broker">Broker</label>
-      <select id="broker" name="broker" required>
-        {% for broker in brokers|default([]) %}
-        <option value="{{ broker.broker }}">{{ broker.broker }}</option>
-        {% endfor %}
-        {# "__custom__" must match routes.CUSTOM_BROKER. #}
-        <option value="__custom__"{% if not brokers|default([]) %} selected{% endif %}>Custom</option>
-      </select>
-    </div>
-    <div class="field field-custom-broker">
-      <label for="custom_broker">Custom broker name</label>
-      <input type="text" id="custom_broker" name="custom_broker" aria-describedby="custom-broker-hint">
-      <p class="field-hint" id="custom-broker-hint">For a broker not in the list. Its transactions are
-        added manually; files can't be imported.</p>
-    </div>
-    <div class="field">
-      <label for="account_label">Label</label>
-      <input type="text" id="account_label" name="account_label" required>
-    </div>
-    <button type="submit" class="btn btn-primary">Create account</button>
-  </form>
-</section>
-
+{# First run only when the list actually loaded: an outage must never read as "no accounts". #}
+{% set first_run = not accounts|default([]) and not list_error %}
 <section class="card">
   <h1>Your accounts</h1>
+  {% if list_error %}<p class="form-error">{{ list_error }}</p>{% endif %}
   {% if accounts|default([]) %}
   <ul class="account-list">
     {% for account in accounts %}
+    {% set account_query = "?account=" ~ (account.account_label | urlencode) %}
     <li class="account-row">
-      <span class="account-label">{{ account.account_label }}</span>
+      <a class="account-label" href="/portfolio{{ account_query }}">{{ account.account_label }}<span class="visually-hidden"> holdings</span></a>
       <span class="account-broker">{{ account.broker }}</span>
       <span class="account-actions">
-        <a href="/transactions/new?account={{ account.account_label | urlencode }}">Add transaction</a>
-        <a href="/transactions/import?account={{ account.account_label | urlencode }}">Import file</a>
-        <a href="/portfolio?account={{ account.account_label | urlencode }}">View portfolio</a>
+        <a class="btn btn-secondary" href="/transactions{{ account_query }}">Transactions</a>
+        <a class="btn btn-secondary" href="/transactions/new{{ account_query }}">Add</a>
+        <a class="btn btn-secondary" href="/transactions/import{{ account_query }}">Import</a>
       </span>
     </li>
     {% endfor %}
   </ul>
-  {% else %}
-  <p class="entry-empty">No accounts yet — create one above.</p>
+  {% elif first_run %}
+  <p class="entry-subtitle">No accounts yet. To get started:</p>
+  <ol class="first-run-steps">
+    <li>Create an account below, one for each broker account you hold.</li>
+    <li>Add its transactions by hand, or import your broker's export file.</li>
+  </ol>
   {% endif %}
+
+  {# Collapsed once the visitor has accounts. Open on first run, and on any re-render with an
+     error, since a no-JS post that failed lands back here and the message is inside. #}
+  <details class="new-account"{% if first_run or error %} open{% endif %}>
+    <summary>New account</summary>
+    <form class="account-form" hx-post="/accounts" hx-target="#form-errors" hx-swap="innerHTML" method="post" action="/accounts">
+      <div id="form-errors">
+        {% include "partials/_form_errors.html" %}
+      </div>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="field">
+        <label for="broker">Broker</label>
+        <select id="broker" name="broker" required>
+          {% for broker in brokers|default([]) %}
+          <option value="{{ broker.broker }}">{{ broker.broker }}</option>
+          {% endfor %}
+          {# "__custom__" must match routes.CUSTOM_BROKER. #}
+          <option value="__custom__"{% if not brokers|default([]) %} selected{% endif %}>Custom</option>
+        </select>
+      </div>
+      <div class="field field-custom-broker">
+        <label for="custom_broker">Custom broker name</label>
+        <input type="text" id="custom_broker" name="custom_broker" aria-describedby="custom-broker-hint">
+        <p class="field-hint" id="custom-broker-hint">For a broker not in the list. Its transactions are
+          added manually; files can't be imported.</p>
+      </div>
+      <div class="field">
+        <label for="account_label">Label</label>
+        <input type="text" id="account_label" name="account_label" required>
+      </div>
+      <button type="submit" class="btn btn-primary">Create account</button>
+    </form>
+  </details>
 </section>
 {% endblock %}
