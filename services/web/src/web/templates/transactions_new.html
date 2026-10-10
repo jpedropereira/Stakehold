@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "partials/_banner.html" import banner %}
 {% block title %}Add transaction — Stakehold{% endblock %}
 {#- Marks a field with the types it applies to (and requires it for), from routes.py's
     _FIELD_TYPES. static/transaction_form.js hides the field for any other type; without JS it
@@ -12,12 +13,12 @@ data-types="{{ field_types[name] | join(' ') }}"
 <section class="card">
   <h1>Add transaction</h1>
   {% if saved == 0 %}
-  <p class="confirmation-banner">Nothing new to save — that transaction was already recorded.</p>
+  {% call banner("success") %}<strong>Nothing new to save</strong> — that transaction was already recorded.{% endcall %}
   {% elif saved %}
-  <p class="confirmation-banner">Transaction saved.{% if outcome %} {{ outcome }}{% endif %}</p>
+  {% call banner("success") %}<strong>Transaction saved.</strong>{% if outcome %} {{ outcome }}{% endif %}{% endcall %}
   {% endif %}
-  <form class="transaction-form" hx-post="/transactions/new" hx-target="#form-errors" hx-swap="innerHTML" method="post" action="/transactions/new">
-    <div id="form-errors">
+  <form class="transaction-form" hx-post="/transactions/new" hx-target="#form-errors" hx-swap="innerHTML" hx-disabled-elt="find button[type='submit']" method="post" action="/transactions/new">
+    <div id="form-errors" aria-live="polite">
       {% include "partials/_form_errors.html" %}
     </div>
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -106,6 +107,7 @@ data-types="{{ field_types[name] | join(' ') }}"
     </fieldset>
 
     <button type="submit" class="btn btn-primary">Save transaction</button>
+    <span class="htmx-indicator busy" role="status">Saving…</span>
   </form>
 </section>
 <script src="/static/transaction_form.js" defer></script>

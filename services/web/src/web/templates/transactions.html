@@ -1,9 +1,10 @@
 {% extends "base.html" %}
+{% from "partials/_banner.html" import banner %}
 {% block title %}Transactions — {{ account_label }} — Stakehold{% endblock %}
 {% block content %}
 {% include "partials/_account_header.html" %}
 {% if error %}
-<p class="confirmation-banner">{{ error }}</p>
+{% call banner("error") %}<strong>Couldn't load the transactions.</strong> {{ error }}{% endcall %}
 {% endif %}
 
 <section class="card card-wide">

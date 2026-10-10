@@ -118,8 +118,10 @@ def _post_import(test_client):
 
 
 def _banner(response) -> str:
-    start = response.text.index('<p class="confirmation-banner">')
-    return response.text[start : response.text.index("</p>", start)]
+    """The success banner's text, its bold lead unwrapped so a sentence reads as one string."""
+    start = response.text.index("<p>", response.text.index('data-kind="success"'))
+    text = response.text[start + len("<p>") : response.text.index("</p>", start)]
+    return text.replace("<strong>", "").replace("</strong>", "")
 
 
 # --- the redirect carries the statuses -------------------------------------------------------
@@ -225,7 +227,7 @@ def test_no_banner_without_a_saved_param(client):
 
     response = _new_page(test_client, positions="ok", returns="ok")
 
-    assert "confirmation-banner" not in response.text
+    assert 'data-kind="success"' not in response.text
 
 
 def test_imported_with_some_holdings_waiting_for_a_mapping(client):

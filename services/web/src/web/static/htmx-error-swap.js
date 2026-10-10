@@ -12,3 +12,20 @@ document.body.addEventListener("htmx:beforeSwap", function (event) {
     event.detail.isError = false;
   }
 });
+
+// That normal error handling shows nothing on screen, though. So a request that failed in a way
+// the app didn't render itself -- a crash, a branded error page, a lost connection -- gets a
+// generic banner in its form's error slot (UI-12). The copy is base.html's
+// #request-failed-banner template, server-rendered, so no message lives in this file. Requests
+// that target anything other than a form's #form-errors (the theme toggle) are left alone.
+function showRequestFailed(event) {
+  const target = event.detail.target;
+  const template = document.getElementById("request-failed-banner");
+  if (!target || target.id !== "form-errors" || !template) {
+    return;
+  }
+  target.replaceChildren(template.content.cloneNode(true));
+}
+
+document.body.addEventListener("htmx:responseError", showRequestFailed);
+document.body.addEventListener("htmx:sendError", showRequestFailed);

@@ -1,11 +1,12 @@
 {% extends "base.html" %}
+{% from "partials/_banner.html" import banner %}
 {% block title %}Accounts — Stakehold{% endblock %}
 {% block content %}
 {# First run only when the list actually loaded: an outage must never read as "no accounts". #}
 {% set first_run = not accounts|default([]) and not list_error %}
 <section class="card">
   <h1>Your accounts</h1>
-  {% if list_error %}<p class="form-error">{{ list_error }}</p>{% endif %}
+  {% if list_error %}{% call banner("error") %}<strong>Couldn't load your accounts.</strong> {{ list_error }}{% endcall %}{% endif %}
   {% if accounts|default([]) %}
   <ul class="account-list">
     {% for account in accounts %}
@@ -33,8 +34,8 @@
      error, since a no-JS post that failed lands back here and the message is inside. #}
   <details class="new-account"{% if first_run or error %} open{% endif %}>
     <summary>New account</summary>
-    <form class="account-form" hx-post="/accounts" hx-target="#form-errors" hx-swap="innerHTML" method="post" action="/accounts">
-      <div id="form-errors">
+    <form class="account-form" hx-post="/accounts" hx-target="#form-errors" hx-swap="innerHTML" hx-disabled-elt="find button[type='submit']" method="post" action="/accounts">
+      <div id="form-errors" aria-live="polite">
         {% include "partials/_form_errors.html" %}
       </div>
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -59,6 +60,7 @@
         <input type="text" id="account_label" name="account_label" required>
       </div>
       <button type="submit" class="btn btn-primary">Create account</button>
+      <span class="htmx-indicator busy" role="status">Creating…</span>
     </form>
   </details>
 </section>

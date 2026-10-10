@@ -1,10 +1,14 @@
 {% extends "base.html" %}
 {% block title %}Log in — Stakehold{% endblock %}
+{% block header_mark %}{% endblock %}
 {% block content %}
-<section class="card card-narrow">
+<section class="card card-narrow card-auth">
+  <div class="auth-mark">
+    {% include "partials/_logo.html" %}
+  </div>
   <h1>Log in</h1>
-  <form hx-post="/login" hx-target="#form-errors" hx-swap="innerHTML" method="post" action="/login">
-    <div id="form-errors">
+  <form hx-post="/login" hx-target="#form-errors" hx-swap="innerHTML" hx-disabled-elt="find button[type='submit']" method="post" action="/login">
+    <div id="form-errors" aria-live="polite">
       {% include "partials/_form_errors.html" %}
     </div>
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -14,10 +18,16 @@
     </div>
     <div class="field">
       <label for="password">Password</label>
-      <input type="password" id="password" name="password" required autocomplete="current-password">
+      {# The toggle ships hidden: password_toggle.js reveals it, so a no-JS page shows no dead button. #}
+      <div class="password-row">
+        <input type="password" id="password" name="password" required autocomplete="current-password">
+        <button type="button" class="btn btn-ghost password-toggle" aria-controls="password" aria-pressed="false" hidden>Show</button>
+      </div>
     </div>
     <button type="submit" class="btn btn-primary">Log in</button>
+    <span class="htmx-indicator busy" role="status">Logging in…</span>
   </form>
   <p class="auth-switch">No account yet? <a href="/signup">Sign up</a></p>
 </section>
+<script src="/static/password_toggle.js" defer></script>
 {% endblock %}

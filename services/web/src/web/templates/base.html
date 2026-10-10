@@ -1,3 +1,4 @@
+{% from "partials/_banner.html" import banner -%}
 <!doctype html>
 <html lang="en"{% if theme != "system" %} data-theme="{{ theme }}"{% endif %}>
 <head>
@@ -7,6 +8,9 @@
   <link rel="icon" href="/brand/logos/app-icon.svg">
   <link rel="stylesheet" href="/brand/tokens.css">
   <link rel="stylesheet" href="/static/web.css">
+  {# htmx otherwise injects an inline <style> for its indicators, which the strict CSP blocks;
+     web.css carries those rules instead. Read by htmx itself, so no inline script. #}
+  <meta name="htmx-config" content='{"includeIndicatorStyles": false}'>
   <script src="/static/vendor/htmx.min.js" defer></script>
   <script src="/static/htmx-error-swap.js" defer></script>
   <script src="/static/theme.js" defer></script>
@@ -15,10 +19,12 @@
   <a class="skip-link" href="#main">Skip to content</a>
   <header class="site-header">
     <div class="site-header-inner">
+      {# The login and signup cards carry the mark themselves, so those pages empty this. #}
+      {% block header_mark %}
       <a href="/" class="brand-mark">
-        <img class="logo-on-light" src="/brand/logos/logo-stone.svg" alt="Stakehold">
-        <img class="logo-on-dark" src="/brand/logos/logo-gold.svg" alt="Stakehold">
+        {% include "partials/_logo.html" %}
       </a>
+      {% endblock %}
       {% if user %}
         {# Each route sets nav_active; the current section is marked for screen readers and styled
            off the same attribute, so the two can't disagree. #}
@@ -37,7 +43,7 @@
         {# A plain POST that redirects back without JS; htmx swaps the theme in place instead
            (static/theme.js). Pages rendered without a CSRF token (the 403 page) show no toggle. #}
         <form action="/theme" method="post" class="theme-toggle" hx-post="/theme" hx-swap="none"
-              aria-label="Theme">
+              hx-disabled-elt="find button[type='submit']" aria-label="Theme">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <input type="hidden" name="next" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}">
           {% for value, label in [("light", "Light"), ("dark", "Dark"), ("system", "System")] %}
@@ -50,5 +56,10 @@
   <main id="main" class="page" tabindex="-1">
     {% block content %}{% endblock %}
   </main>
+  {# Shown in a form's #form-errors by htmx-error-swap.js when an htmx request fails in a way
+     the app didn't render itself (a crash, a lost connection). The copy lives here, not in JS. #}
+  <template id="request-failed-banner">
+    {% call banner("error") %}<strong>Something went wrong.</strong> Try again in a moment.{% endcall %}
+  </template>
 </body>
 </html>

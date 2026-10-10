@@ -1,12 +1,13 @@
 {% extends "base.html" %}
+{% from "partials/_banner.html" import banner %}
 {% block title %}Ticker mappings — Stakehold{% endblock %}
 {% block content %}
 <section class="card card-wide">
   <h1>Ticker mappings</h1>
   <p class="entry-subtitle">Broker exports name an instrument by ISIN or symbol. A mapping says which Stakehold ticker that is, for every user. Saving one rebuilds the positions it affects.</p>
-  {% if outcome %}<p class="confirmation-banner">{{ outcome }}</p>{% endif %}
+  {% if outcome %}{% call banner("success") %}<strong>{{ outcome[0] }}</strong> {{ outcome[1] }}{% endcall %}{% endif %}
   {% include "partials/_form_errors.html" %}
-  {% if list_error %}<p class="form-error">{{ list_error }}</p>{% endif %}
+  {% if list_error %}{% call banner("error") %}<strong>Couldn't load everything.</strong> {{ list_error }}{% endcall %}{% endif %}
   {% if tickers_notice %}<p class="entry-empty">{{ tickers_notice }}</p>{% endif %}
   <datalist id="ticker-options">
     {% for ticker in tickers %}

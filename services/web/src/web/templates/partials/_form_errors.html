@@ -1,1 +1,3 @@
-{% if error %}<p class="form-error">{{ error }}</p>{% endif %}
+{% from "partials/_banner.html" import banner %}
+{#- error_lead comes from routes.py's _ERROR_LEADS, by the form the error belongs to. -#}
+{% if error %}{% call banner("error") %}<strong>{{ error_lead }}</strong> {{ error }}{% endcall %}{% endif %}

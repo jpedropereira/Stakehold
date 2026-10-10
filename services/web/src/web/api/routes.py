@@ -176,6 +176,20 @@ def _redirect(request: Request, response: Response, url: str) -> Response:
     return _finish(response, htmx_or_redirect(request, url))
 
 
+# The bold lead word of each form's error banner (the charter's ink rule, chapter II), by the
+# template the form lives on. The messages themselves are full sentences, kept as they are; the
+# lead says which action failed. Keyed by template rather than passed by each caller because
+# _render_form_error is the one path every form error takes, CSRF failures included.
+_ERROR_LEADS = {
+    "login.html": "Couldn't log in.",
+    "signup.html": "Couldn't sign up.",
+    "accounts.html": "Couldn't create the account.",
+    "transactions_new.html": "Couldn't save.",
+    "transactions_import.html": "Couldn't import.",
+    "admin_mappings.html": "Couldn't change the mapping.",
+}
+
+
 async def _render_form_error(
     request: Request,
     response: Response,
@@ -206,7 +220,7 @@ async def _render_form_error(
             response,
             templates,
             "partials/_form_errors.html",
-            {"error": message},
+            {"error": message, "error_lead": _ERROR_LEADS[template_name]},
             status_code=status_code,
         )
         # Marks this 4xx/5xx as the app's own deliberate error partial, not a server crash --
@@ -216,7 +230,12 @@ async def _render_form_error(
         built.headers["X-Form-Error"] = "true"
         return built
     token = ensure_csrf_cookie(request, response, cookie_secure=settings.cookie_secure)
-    context = {"csrf_token": token, "error": message, **extra_context}
+    context = {
+        "csrf_token": token,
+        "error": message,
+        "error_lead": _ERROR_LEADS[template_name],
+        **extra_context,
+    }
     if extra_context_loader is not None:
         context.update(await extra_context_loader())
     return _render(
@@ -384,22 +403,23 @@ def _query_count(request: Request, name: str) -> int:
     return int(raw) if raw.isdigit() else 0
 
 
-def _mapping_outcome(request: Request) -> str | None:
-    """The banner after a redirect back from a save or delete, read from its query string."""
+def _mapping_outcome(request: Request) -> tuple[str, str] | None:
+    """The banner after a redirect back from a save or delete, read from its query string: its
+    bold lead, then the detail."""
     if request.query_params.get("saved") == "1":
         done = "Mapping saved."
     elif request.query_params.get("deleted") == "1":
         done = "Mapping deleted."
     else:
         return None
-    outcome = f"{done} Positions rebuilt for {_query_count(request, 'rebuilt')} account(s)."
+    detail = f"Positions rebuilt for {_query_count(request, 'rebuilt')} account(s)."
     failed = _query_count(request, "failed")
     if failed:
-        outcome += (
+        detail += (
             f" {failed} rebuild(s) failed — the mapping is saved; rebuild those accounts' "
             "positions to retry."
         )
-    return outcome
+    return done, detail
 
 
 async def _mappings_context(portfolio_client: PortfolioClient) -> dict:

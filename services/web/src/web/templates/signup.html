@@ -1,10 +1,14 @@
 {% extends "base.html" %}
 {% block title %}Sign up — Stakehold{% endblock %}
+{% block header_mark %}{% endblock %}
 {% block content %}
-<section class="card card-narrow">
+<section class="card card-narrow card-auth">
+  <div class="auth-mark">
+    {% include "partials/_logo.html" %}
+  </div>
   <h1>Create your account</h1>
-  <form hx-post="/signup" hx-target="#form-errors" hx-swap="innerHTML" method="post" action="/signup">
-    <div id="form-errors">
+  <form hx-post="/signup" hx-target="#form-errors" hx-swap="innerHTML" hx-disabled-elt="find button[type='submit']" method="post" action="/signup">
+    <div id="form-errors" aria-live="polite">
       {% include "partials/_form_errors.html" %}
     </div>
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -18,10 +22,18 @@
     </div>
     <div class="field">
       <label for="password">Password</label>
-      <input type="password" id="password" name="password" required minlength="12" autocomplete="new-password">
+      {# The toggle ships hidden: password_toggle.js reveals it, so a no-JS page shows no dead button. #}
+      <div class="password-row">
+        {# 12 matches auth's own minimum (auth/api/schemas.py). #}
+        <input type="password" id="password" name="password" required minlength="12" autocomplete="new-password" aria-describedby="password-hint">
+        <button type="button" class="btn btn-ghost password-toggle" aria-controls="password" aria-pressed="false" hidden>Show</button>
+      </div>
+      <p class="field-hint" id="password-hint">At least 12 characters.</p>
     </div>
     <button type="submit" class="btn btn-primary">Sign up</button>
+    <span class="htmx-indicator busy" role="status">Signing up…</span>
   </form>
   <p class="auth-switch">Already have an account? <a href="/login">Log in</a></p>
 </section>
+<script src="/static/password_toggle.js" defer></script>
 {% endblock %}

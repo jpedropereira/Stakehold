@@ -205,6 +205,12 @@ def test_color_scheme_follows_the_theme():
     assert actual == expected
 
 
+# Classes htmx itself puts on elements at runtime, so no template can contain them: htmx-request
+# marks a form while its request is in flight, and web.css shows the form's busy text by it
+# (UI-12; htmx's own injected rule for it is blocked by the CSP).
+_RUNTIME_CLASSES = {"htmx-request"}
+
+
 def test_web_css_has_no_unused_class_selectors():
     """A class renamed in the templates but left behind in web.css is dead CSS that the next
     reader has to puzzle over. A plain word search also finds classes chosen inside a Jinja
@@ -213,7 +219,7 @@ def test_web_css_has_no_unused_class_selectors():
 
     unused = sorted(
         name
-        for name in _css_class_names(_css_without_comments())
+        for name in _css_class_names(_css_without_comments()) - _RUNTIME_CLASSES
         if not re.search(rf"(?<![\w-]){re.escape(name)}(?![\w-])", templates)
     )
 

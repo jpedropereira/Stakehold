@@ -294,8 +294,9 @@ def test_no_drop_zone_when_the_broker_has_no_importer(client):
 
 
 def _summary(html: str) -> str:
+    """From the summary's start to the end of its next-steps links, its last line."""
     start = html.index('<div class="import-summary">')
-    return html[start : html.index("</div>", start)]
+    return html[start : html.index("</p>", html.index('<p class="next-steps">', start))]
 
 
 def test_import_summary_reports_the_count_and_the_rebuild_outcome(client):
