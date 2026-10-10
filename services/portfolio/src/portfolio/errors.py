@@ -71,6 +71,15 @@ class AccountLabelConflict(PortfolioError):
     status_code = 409
 
 
+class TransactionNotFound(PortfolioError):
+    """No transaction with that reference in the given account -- already deleted, most likely.
+    Only raised once the account itself resolved for the caller; an account that doesn't is
+    AccountNotFound, so another user's transactions are never distinguishable from missing ones.
+    """
+
+    status_code = 404
+
+
 class InvalidTransaction(PortfolioError):
     """A CanonicalTransaction failed transactions/base.py's validation rules."""
 
@@ -80,7 +89,7 @@ class InvalidTransaction(PortfolioError):
 class BrokerFileError(PortfolioError):
     """A broker export file could not be parsed -- malformed header, unrecognized transaction
     type, or a row missing data its own type requires. Raised by broker_import/ parsers; never
-    silently skipped, per docs/architecture.md's "unrecognized type is a parse error" rule."""
+    silently skipped, per docs/broker-import.md's "unrecognized type is a parse error" rule."""
 
     status_code = 422
 

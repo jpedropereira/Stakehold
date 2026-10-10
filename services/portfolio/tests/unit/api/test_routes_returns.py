@@ -100,6 +100,7 @@ def test_rebuild_returns_returns_200_even_when_partial(monkeypatch, client):
             "status": "partial",
             "rows_saved": 0,
             "tickers_rebuilt": 0,
+            "tickers_removed": 0,
             "tickers_blocked": 1,
             "pairs_failed": 0,
             "blocked_tickers": [{"account_label": "m", "ticker": "IWDA.AS"}],
@@ -123,6 +124,7 @@ def test_rebuild_returns_returns_201_when_ok(monkeypatch, client):
             "status": "ok",
             "rows_saved": 3,
             "tickers_rebuilt": 1,
+            "tickers_removed": 2,
             "tickers_blocked": 0,
             "pairs_failed": 0,
             "blocked_tickers": [],
@@ -135,3 +137,4 @@ def test_rebuild_returns_returns_201_when_ok(monkeypatch, client):
     )
 
     assert response.status_code == 201
+    assert response.json()["tickers_removed"] == 2

@@ -32,6 +32,7 @@ from portfolio.errors import (
     InvalidTickerMapping,
     InvalidTransaction,
     TickerMappingNotFound,
+    TransactionNotFound,
     UnknownTicker,
 )
 from portfolio.positions import repository as positions_repository
@@ -55,7 +56,7 @@ logger = logging.getLogger(__name__)
 # Same pattern as data-store's SCRAPERS / MARKET_DATA_SOURCES -- a Protocol plus a registry dict,
 # no branching in flow functions. Populated once, at import time, by discovering whatever
 # implementations are installed under the two entry-point groups -- pipeline.py itself never
-# imports a concrete parser. See docs/architecture.md's "Extension points" section.
+# imports a concrete parser. See docs/broker-import.md section.
 #
 # A broken plugin installation must not take down every CLI command -- account creation and
 # manual entry need neither registry (see add_account's docstring), so a discovery failure is
@@ -221,6 +222,24 @@ def list_transactions(conn, *, user_id: UUID, account_label: str) -> list[Canoni
     through."""
     account = _resolve_account(conn, user_id=user_id, account_label=account_label)
     return transactions_repository.list_by_account(conn, account.id)
+
+
+def delete_transaction(
+    conn, *, user_id: UUID, account_label: str, broker_transaction_ref: str
+) -> None:
+    """Remove one transaction from this user's account, in its own transaction. Raises
+    AccountNotFound if the label doesn't resolve for this user, and TransactionNotFound if the
+    account has no transaction with that reference. Rebuilding the snapshots derived from it is
+    jobs.run_delete_transaction's job, as it is for every write."""
+    account = _resolve_account(conn, user_id=user_id, account_label=account_label)
+    with transaction(conn):
+        deleted = transactions_repository.delete_one(
+            conn, account_id=account.id, broker_transaction_ref=broker_transaction_ref
+        )
+    if not deleted:
+        raise TransactionNotFound(
+            f"no transaction {broker_transaction_ref!r} in account {account_label!r}"
+        )
 
 
 def list_positions(conn, *, user_id: UUID, account_label: str) -> list[PositionSnapshot]:
@@ -447,7 +466,7 @@ def list_unmapped_instruments(
     conn, *, user_id: UUID, mappings: TickerMappings
 ) -> list[tuple[str, str, str]]:
     """Every (kind, identifier, broker) this user's transactions reference that `mappings` can't
-    resolve to a canonical_ticker -- see docs/architecture.md's "unmapped instrument blocks its
+    resolve to a canonical_ticker -- see docs/flows.md's "unmapped instrument blocks its
     own rebuild, loudly" rule. Read-only; diffed through TickerMappings.resolve, the same check a
     rebuild applies."""
     instruments = transactions_repository.list_distinct_instruments(conn, user_id)
@@ -555,7 +574,7 @@ def delete_ticker_mapping(conn, *, mapping_id: int) -> TickerMappingRow:
 
     The instrument goes back to being unmapped: its next rebuild blocks it, and -- per "blocked
     means don't touch" -- leaves the snapshots the old mapping produced in place. See
-    docs/architecture.md's known limitations."""
+    docs/flows.md's known limitations."""
     with transaction(conn):
         deleted = ticker_mapping_repository.delete(conn, mapping_id)
     if deleted is None:
@@ -641,7 +660,7 @@ def rebuild_positions(
     """Replay every relevant account's transaction log into position_snapshots.
 
     Needs no price or FX data -- quantity and average cost are pure functions of the transaction
-    log (docs/architecture.md). Scoped per account: an --account rebuilds only that account
+    log (docs/flows.md). Scoped per account: an --account rebuilds only that account
     (raising AccountNotFound if it doesn't resolve for this user, the isolation chokepoint);
     omitting it rebuilds every account this user owns. Every account's transaction log is fetched
     in one batched read (transactions_repository.list_by_accounts) rather than one query per
@@ -741,7 +760,7 @@ def rebuild_positions(
         # only safe when nothing in this account is currently blocked -- a blocked instrument's
         # old canonical_ticker (from before its mapping was removed) is indistinguishable from a
         # genuinely stale one here, and "blocked means don't touch, not delete"
-        # (docs/architecture.md) means the ambiguous case must not delete.
+        # (docs/flows.md) means the ambiguous case must not delete.
         if not account_blocked:
             stale_tickers = set(positions_repository.list_tickers(conn, account.id)) - set(
                 by_ticker
@@ -792,6 +811,8 @@ class ReturnsRebuildOutcome:
     tickers_rebuilt: int
     blocked: list[tuple[str, str]]  # (account_label, canonical_ticker) -- not tracked by data-store
     failed_pairs: list[tuple[str, str, str]]  # (account_label, canonical_ticker, error message)
+    # Pairs whose return rows were removed because no position snapshots back them any more.
+    tickers_removed: int = 0
 
 
 def rebuild_returns(
@@ -804,8 +825,13 @@ def rebuild_returns(
 ) -> ReturnsRebuildOutcome:
     """Compute return_snapshots for every (account, ticker) pair that ever had a position,
     from position_snapshots plus data-store's price/FX series plus this pair's own DIVIDEND
-    transactions (docs/architecture.md's cross-service prerequisite; docs/schema.md's
+    transactions (docs/flows.md's cross-service prerequisite; docs/schema.md's
     return_snapshots columns).
+
+    Each pair's rows are replaced, not merged, so rows from before a window start that moved
+    later (an earlier BUY deleted) go. A ticker with return rows but no position snapshots left
+    has its rows removed, counted in `tickers_removed`. See docs/schema.md's loading strategy
+    for return_snapshots.
 
     Scoped per account, same as rebuild_positions: an --account rebuilds only that account
     (raising AccountNotFound if it doesn't resolve for this user), omitting it rebuilds every
@@ -850,6 +876,7 @@ def rebuild_returns(
     failed_pairs: list[tuple[str, str, str]] = []
     snapshots_saved = 0
     tickers_rebuilt = 0
+    tickers_removed = 0
     ticker_info_cache: dict[str, TickerInfo] = {}
 
     for account in accounts:
@@ -872,7 +899,8 @@ def rebuild_returns(
                 )
             )
 
-        for ticker in positions_repository.list_tickers(conn, account.id):
+        position_tickers = positions_repository.list_tickers(conn, account.id)
+        for ticker in position_tickers:
             if ticker not in ticker_info_cache:
                 try:
                     ticker_info_cache[ticker] = datastore_client.get_ticker_info(ticker)
@@ -937,7 +965,12 @@ def rebuild_returns(
                     dividends_by_ticker.get(ticker, []),
                 )
                 with transaction(conn):
-                    saved = returns_repository.upsert_snapshots(conn, return_snapshots)
+                    saved = returns_repository.replace_snapshots(
+                        conn,
+                        account_id=account.id,
+                        canonical_ticker=ticker,
+                        snapshots=return_snapshots,
+                    )
             except Exception as exc:
                 failed_pairs.append((account.account_label, ticker, str(exc)))
                 logger.error(
@@ -959,9 +992,41 @@ def rebuild_returns(
                 saved,
             )
 
+        # Return rows for a ticker with no position snapshots left (its only BUY deleted, or its
+        # mapping re-pointed and the positions rebuild pruned it) back nothing any more. A
+        # blocked ticker still has position snapshots, so it's never pruned here: "blocked means
+        # don't touch" carries over from rebuild_positions without a check of its own.
+        stale_tickers = set(returns_repository.list_tickers(conn, account.id)) - set(
+            position_tickers
+        )
+        for ticker in sorted(stale_tickers):
+            try:
+                with transaction(conn):
+                    returns_repository.delete_snapshots(
+                        conn, account_id=account.id, canonical_ticker=ticker
+                    )
+            except Exception as exc:
+                failed_pairs.append((account.account_label, ticker, str(exc)))
+                logger.error(
+                    "rebuild-returns: account %r ticker %s -- failed to remove stale return "
+                    "snapshots -- %s",
+                    account.account_label,
+                    ticker,
+                    exc,
+                    exc_info=True,
+                )
+                continue
+            tickers_removed += 1
+            logger.info(
+                "rebuild-returns: account %r ticker %s -- stale return snapshot(s) removed.",
+                account.account_label,
+                ticker,
+            )
+
     return ReturnsRebuildOutcome(
         snapshots_saved=snapshots_saved,
         tickers_rebuilt=tickers_rebuilt,
         blocked=sorted(set(blocked)),
         failed_pairs=failed_pairs,
+        tickers_removed=tickers_removed,
     )

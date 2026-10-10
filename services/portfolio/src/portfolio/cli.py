@@ -103,6 +103,13 @@ def _print_failed_pairs(pairs: list[dict[str, str]]) -> None:
         print(f"{pair['account_label']}\t{pair['ticker']}\t{pair['error']}")
 
 
+def _delete_transaction(args: argparse.Namespace) -> int:
+    result = jobs.run_delete_transaction(
+        user_id=args.user, account_label=args.account, broker_transaction_ref=args.ref
+    )
+    return _report(result, "transaction(s) deleted", count_key="transactions_deleted")
+
+
 def _rebuild_positions(args: argparse.Namespace) -> int:
     result = jobs.run_rebuild_positions(user_id=args.user, account_label=args.account)
     _print_instrument_rows(result["blocked_instruments"])
@@ -300,6 +307,20 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     txn_parser.add_argument("--fees", type=_decimal, help="Native currency")
     txn_parser.set_defaults(handler=_add_transaction)
+
+    delete_txn_parser = subparsers.add_parser(
+        "delete-transaction", help="Delete one transaction, then rebuild the account"
+    )
+    delete_txn_parser.add_argument(
+        "--user", required=True, type=_uuid, help="The auth-issued user id"
+    )
+    delete_txn_parser.add_argument(
+        "--account", required=True, help="The --label of an existing account"
+    )
+    delete_txn_parser.add_argument(
+        "--ref", required=True, help="The transaction's reference (its --ref, or the broker's)"
+    )
+    delete_txn_parser.set_defaults(handler=_delete_transaction)
 
     import_parser = subparsers.add_parser("import-transactions", help="Import a broker export file")
     import_parser.add_argument("--user", required=True, type=_uuid, help="The auth-issued user id")

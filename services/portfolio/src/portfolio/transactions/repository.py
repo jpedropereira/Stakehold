@@ -1,4 +1,4 @@
-"""Persistence for the immutable transaction ledger.
+"""Persistence for the transaction ledger: append-only except for an explicit delete by its owner.
 
 The one write path both manual entry (pipeline.py) and, later, broker import (task 6) share --
 splitting persistence into broker_import/ would let the two paths drift. See
@@ -47,6 +47,8 @@ _LIST_BY_ACCOUNTS_SQL = """
     FROM transactions
     WHERE account_id = ANY(%s)
 """
+
+_DELETE_ONE_SQL = "DELETE FROM transactions WHERE account_id = %s AND broker_transaction_ref = %s"
 
 _INSERT_SQL = """
     INSERT INTO transactions (
@@ -173,3 +175,13 @@ def list_by_account(
     return list_by_accounts(conn, [account_id], transaction_types=transaction_types).get(
         account_id, []
     )
+
+
+def delete_one(conn, *, account_id: int, broker_transaction_ref: str) -> int:
+    """Removes one transaction, addressed by the same (account_id, broker_transaction_ref) key
+    imports are idempotent on. Returns the row count removed (0 or 1). Unscoped by user_id, like
+    insert_transactions: the caller resolves account_id through accounts/repository.py, the
+    isolation chokepoint. Does not commit."""
+    with conn.cursor() as cur:
+        cur.execute(_DELETE_ONE_SQL, (account_id, broker_transaction_ref))
+        return cur.rowcount

@@ -110,7 +110,7 @@ In a browser at `http://localhost:8000`:
    (`/transactions/import?account=<label>`).
 
 **Positions and returns rebuild automatically** when step 3 saves a transaction (see
-`services/portfolio/docs/architecture.md`, "Positions and returns follow every transaction
+`services/portfolio/docs/flows.md`, "Positions and returns follow every transaction
 write"), and the `portfolio-returns-refresh` container rebuilds every user's returns every six
 hours to pick up new prices. `portfolio-returns-refresh-ready` rebuilds, every five minutes, the
 accounts holding a ticker data-store has just finished loading (a ticker a user added). A ticker-mapping change on the admin page (`/admin/mappings`)

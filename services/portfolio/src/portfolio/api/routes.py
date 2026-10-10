@@ -51,6 +51,7 @@ from portfolio.api.models import (
     TrackedTickerResponse,
     TrackedTickerUpdateRequest,
     TransactionCreateRequest,
+    TransactionDeleteResponse,
     TransactionResponse,
     TransactionsWriteResponse,
     UnmappedInstrumentAnyBrokerResponse,
@@ -117,7 +118,7 @@ def _write_status_code(result: dict) -> int:
     """201 for a genuine write, 200 otherwise. Every write route uses this: for
     create/add/import, "otherwise" only ever means `nothing_to_do` -- those jobs can no longer
     return `partial` themselves, since jobs.py lets a domain error propagate instead of catching
-    it (see docs/architecture.md's "HTTP API" section), and a domain error reaches this API as an
+    it (see docs/flows.md's "HTTP API" section), and a domain error reaches this API as an
     exception, mapped to its own status code by app.py's handlers, not through this dict. For the
     two rebuild routes, "otherwise" can also mean a genuine `partial` -- a real half-succeeded
     run, still reported as 200 with the blocked/failed detail in the body, not as an error."""
@@ -326,6 +327,23 @@ def create_transaction(
     )
     response.status_code = _write_status_code(result)
     return result
+
+
+@router.delete("/transactions", response_model=TransactionDeleteResponse)
+def delete_transaction(
+    user_id: UUID = Query(...),
+    account_label: str = Query(...),
+    broker_transaction_ref: str = Query(...),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    """200, not 204: the body carries the follow-on rebuilds' statuses. An unknown account or
+    reference is a 404 via app.py's handlers."""
+    return jobs.run_delete_transaction(
+        user_id=user_id,
+        account_label=account_label,
+        broker_transaction_ref=broker_transaction_ref,
+        settings=settings,
+    )
 
 
 async def _handle_import(

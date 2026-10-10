@@ -2,7 +2,7 @@ import uuid
 
 import pytest
 from portfolio import jobs
-from portfolio.errors import AccountNotFound
+from portfolio.errors import AccountNotFound, TransactionNotFound
 
 
 def test_list_transactions_returns_the_jobs_own_list(monkeypatch, client):
@@ -339,3 +339,64 @@ def test_create_transaction_reports_the_returns_rebuild_beside_the_positions_one
     )
 
     assert response.json()["returns_rebuild"] == "failed"
+
+
+# --- DELETE /transactions ---
+
+
+def _delete_params(**overrides):
+    params = {"user_id": str(uuid.uuid4()), "account_label": "m", "broker_transaction_ref": "r-1"}
+    params.update(overrides)
+    return params
+
+
+def test_delete_transaction_passes_the_triple_to_the_job_and_returns_200(monkeypatch, client):
+    captured = {}
+
+    def fake_run(**kw):
+        captured.update(kw)
+        return {
+            "status": "ok",
+            "rows_saved": 0,
+            "transactions_deleted": 1,
+            "positions_rebuild": "ok",
+            "returns_rebuild": "skipped",
+        }
+
+    monkeypatch.setattr(jobs, "run_delete_transaction", fake_run)
+    params = _delete_params(broker_transaction_ref="manual-1 / with spaces")
+
+    response = client.delete("/transactions", params=params)
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ok",
+        "transactions_deleted": 1,
+        "positions_rebuild": "ok",
+        "returns_rebuild": "skipped",
+    }
+    assert str(captured["user_id"]) == params["user_id"]
+    assert captured["account_label"] == "m"
+    assert captured["broker_transaction_ref"] == "manual-1 / with spaces"
+
+
+@pytest.mark.parametrize("missing", ["user_id", "account_label", "broker_transaction_ref"])
+def test_delete_transaction_requires_every_part_of_the_key(client, missing):
+    params = _delete_params()
+    del params[missing]
+
+    assert client.delete("/transactions", params=params).status_code == 422
+
+
+def test_delete_transaction_lets_a_missing_transaction_reach_the_404_handler(monkeypatch, client):
+    """app.py maps TransactionNotFound to its status_code (404); this bare test app has no
+    handlers, so the route's part is only to let it through."""
+
+    def boom(**kw):
+        raise TransactionNotFound("no such transaction")
+
+    monkeypatch.setattr(jobs, "run_delete_transaction", boom)
+
+    with pytest.raises(TransactionNotFound):
+        client.delete("/transactions", params=_delete_params())
+    assert TransactionNotFound.status_code == 404

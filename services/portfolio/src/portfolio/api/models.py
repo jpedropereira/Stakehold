@@ -223,6 +223,15 @@ class AccountWriteResponse(BaseModel):
     accounts_created: int
 
 
+class TransactionDeleteResponse(BaseModel):
+    status: str
+    transactions_deleted: int
+    # Reported the same way as TransactionsWriteResponse's: the follow-on rebuilds' own statuses,
+    # kept apart from `status`, which describes only the delete.
+    positions_rebuild: str
+    returns_rebuild: str
+
+
 class TransactionsWriteResponse(BaseModel):
     status: str
     rows_saved: int
@@ -252,6 +261,7 @@ class RebuildReturnsResponse(BaseModel):
     status: str
     rows_saved: int
     tickers_rebuilt: int
+    tickers_removed: int
     tickers_blocked: int
     pairs_failed: int
     blocked_tickers: list[BlockedTickerResponse]

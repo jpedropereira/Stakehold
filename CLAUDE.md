@@ -63,6 +63,15 @@ database on a server started with `stakehold.purpose=integration-test`. It also 
 loading for the run, so no service's dev settings can leak in. Never add a `load_dotenv` call or
 a fallback database URL to a test.
 
+**Never add an `__init__.py` under a service's `tests/`.** Tests run with
+`--import-mode=importlib`, which names each test module after its package path. When several
+services had `tests/unit/__init__.py`, all of them were the package `unit`, so portfolio's
+`test_cli.py` and auth's were the same module `unit.test_cli`: pytest silently ran auth's tests
+in place of portfolio's, and about 145 tests never ran in a workspace run. Without packages each
+module is named after its own path. The root `conftest.py` stops any run where a test file's
+tests came from a different file. A consequence: test files can't import shared helpers from a
+sibling module. Share fixtures through a `conftest.py`, or repeat small helpers per file.
+
 ### Lint/format
 
 ```bash
