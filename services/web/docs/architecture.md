@@ -283,6 +283,16 @@ this file for size. It counts as part of this document under `.claude/rules/arch
     read as "none yet". *Not split* into "data-store doesn't track this ticker" versus "not priced
     yet" (user's decision). That would cost one more call (`list_tickers`) for a case an admin
     fixes upstream anyway.
+
+    **Ticker onboarding (TK-9) splits out the one case a user causes:** a ticker they added that
+    data-store is still loading, or gave up on.
+    - For holdings with no return row only, the page asks `portfolio`'s
+      `GET /instruments/tracked-tickers?ticker=…` for their status. That's one extra call, made
+      only when such a holding exists.
+    - The row reads "Prices loading" (`pending`/`backfilling`), "Prices couldn't be loaded"
+      (`failed`), or still "Waiting for prices" for anything else.
+    - The decision above stands for those other cases. A failed status call leaves every such
+      row at "Waiting for prices", which is true either way (`ticker_status.load_statuses`).
   - *Waiting for a ticker mapping.* An unmapped instrument never becomes a position, because
     `portfolio`'s positions rebuild drops it before it has a ticker. So it can't be a holdings
     row, and is shown as a notice under the Holdings heading instead. The notice shows even with
@@ -321,6 +331,10 @@ this file for size. It counts as part of this document under `.claude/rules/arch
 | `GET /admin` | `require_admin` dependency: an admin → the admin page (a link to ticker mappings), linked from the nav only for admins; a logged-in non-admin → a 403 page (`AdminRequired`, mapped by an app-level handler); no valid session → redirected to `/login`, like every `require_user` route |
 | `GET /admin/mappings` | `require_admin`; fetches `portfolio`'s `GET /ticker-mappings`, `GET /instruments/unmapped/all` and `GET /instruments/tickers`, and renders three things: the instruments still waiting for a mapping (each with an inline "map to ticker" form), the existing mappings (each with a delete button), and a form to add or re-point one. Each list degrades on its own to a notice rather than an empty table, so an outage never reads as "nothing to map". After a save or delete, the redirect's query string (`saved`/`deleted`, `rebuilt`, `failed`) drives a one-line outcome banner |
 | `POST /admin/mappings` | `require_admin`, CSRF-checked; calls `portfolio`'s `PUT /ticker-mappings` with the admin's own `user_id` as `updated_by` (a blank broker is sent as `null`, which an ISIN needs; portfolio enforces which kind needs one and its 422 message is shown as-is). Redirects to `/admin/mappings?saved=1&rebuilt=<n>&failed=<m>` |
+| `GET /tickers` | `require_user`; ticker onboarding (TK-8, `api/tickers.py`). Lists `portfolio`'s `GET /instruments/tracked-tickers`, narrowed to `requested_by=<user>` for a user and unfiltered for an admin, with each ticker's status as a neutral badge (Queued, Loading, Ready, Couldn't load). An admin also sees each one's source (default list or a user) and its last error, with Retry for a failed ticker and Disable/Enable for a user-added one; a default-list ticker is turned on and off in `tracked_tickers.yaml`, so it gets no such control. A failed list call shows a notice, never "none added". `added`, `already` or `changed`+`change` in the query string drive the outcome banner, and only a ticker-shaped value is echoed |
+| `GET /tickers/new` | `require_user`. A GET lookup form (`symbol`): a lookup changes nothing, works without JS, and can be bookmarked. With a symbol, it calls `GET /instruments/tickers/{t}/lookup` and shows what adding would do: for an `available` symbol, its name, exchange and currency plus an "Add" confirmation; otherwise where it already stands (`tracked`) or why it can't be added (`unsupported`, `not_found`, `unavailable`). A symbol quoted in minor units (`GBp`, `ZAc`, `ILA`) carries a warning that its values will read 100 times too high, the known limitation in `tasks.md` |
+| `POST /tickers` | `require_user`, CSRF-checked; calls `POST /instruments/tracked-tickers` with the user's id and `enforce_limit = not user.is_admin`. This is the one place web decides who skips the daily limit. Redirects to `/tickers?added=<t>` or `?already=<t>`. Each refusal re-renders the add page with its own sentence: not on Yahoo (404), can't be added (422), daily limit reached (429), Yahoo didn't answer (503) |
+| `POST /tickers/{ticker}/{retry,disable,enable}` | `require_admin`, CSRF-checked; calls `PATCH /instruments/tracked-tickers/{t}`. POST because a plain form can't send PATCH. A 404 or 409 (a default-list ticker's on/off, or retrying one that hasn't failed) re-renders the list with the reason |
 | `POST /admin/mappings/{id}/delete` | `require_admin`, CSRF-checked; calls `DELETE /ticker-mappings/{id}`. POST rather than DELETE because a plain HTML form can't send DELETE and the page has no script. An already-deleted mapping (portfolio's 404, mapped to `TickerMappingNotFound` on this route only) re-renders with "That mapping was already deleted." |
 | `GET /login`, `GET /signup` | `optional_user` dependency: already logged in → redirected to `/`; otherwise renders the form with a fresh or existing CSRF cookie |
 | `POST /login`, `POST /signup` | CSRF-checked, calls `auth`, proxies the `Set-Cookie` `auth` returned, then redirects to `/` — a 303 for a plain form post, or an `HX-Redirect` response header for an `hx-post` (htmx's own XHR follows a 303 by swapping the *content* of the request's own response into the target element, which would drop a full HTML document into a form's error slot; `HX-Redirect` instead triggers a real browser navigation) |
@@ -393,6 +407,11 @@ branded page with its own status, and an unhandled exception a branded 500 (UI-1
 - `api/overview.py` (UI-11) — `GET /`, on its own router (like `api/theme.py`) because
   `routes.py` is near the 64KB file limit. It renders through `routes._render`, so the
   `_finish` header merge stays in one place.
+- `api/tickers.py` (TK-8) — the Tickers pages, on their own router for the same file-size
+  reason, rendering through `routes.py`'s helpers so CSRF and cookie handling stay identical.
+- `ticker_status.py` (TK-8/TK-9) — how a tracked ticker's status reads (labels, a holding's
+  price note) and the degrading status lookup the portfolio page uses. Its own module so
+  `routes.py` and `api/tickers.py` share it without importing each other.
 - `api/theme.py` (UI-3) — the theme cookie, `POST /theme` on its own router, the
   `theme_context` context processor, and `safe_next`. It's a separate module because it's
   self-contained and needs neither upstream client.
@@ -451,6 +470,8 @@ one-time network creation. See `docs/smoke-test.md` for the full bring-up sequen
   `WEB_PORTFOLIO_INTERNAL_SECRET` as `X-Internal-Secret`. Rebuild triggers aren't called from
   `web`: `portfolio` rebuilds positions and returns itself on each transaction write, and
   refreshes returns on a schedule. `web` only reports the write's rebuild statuses (UI-7).
+  Ticker onboarding (TK-8) goes through `portfolio` too: its `/instruments/tickers/{t}/lookup`
+  and `/instruments/tracked-tickers` routes pass straight through to `data-store`.
 - **`data-store`** — turns out not to be needed directly. This line previously anticipated task 12
   calling `data-store` for market-data reads; in practice `portfolio`'s own `/positions`/`/returns`
   already return EUR-converted figures (computed against `data-store` on `portfolio`'s side, at

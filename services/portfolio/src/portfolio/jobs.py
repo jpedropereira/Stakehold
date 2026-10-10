@@ -13,7 +13,7 @@ rather than every route but `/health` silently falling back to the environment.
 
 import logging
 from dataclasses import asdict
-from datetime import date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from uuid import UUID
@@ -890,6 +890,82 @@ def run_rebuild_returns_all(*, settings: Settings | None = None) -> dict[str, in
     )
 
 
+def run_refresh_ready_tickers(
+    *, window_minutes: int, now: datetime | None = None, settings: Settings | None = None
+) -> dict[str, int | str]:
+    """Rebuild returns for every account holding a ticker data-store finished loading in the
+    last `window_minutes` -- so a holding recorded while its ticker was loading gets returns
+    within minutes, not at the next 6-hourly `rebuild-returns --all`.
+
+    Stateless on purpose: a time window, not a "last seen" checkpoint, so it needs no table of
+    its own. The returns-refresh-ready container runs it more often than the window is long, so
+    every ticker falls inside at least one run; a ticker caught twice is rebuilt twice, which is
+    a harmless re-upsert. If the sweep is down for longer than the window, the 6-hourly refresh
+    still catches the ticker up. Each account is isolated, as in run_rebuild_returns_all.
+    """
+    configure_logging()
+    settings = settings or load_settings()
+    client = _require_datastore_client(settings, command="refresh-ready-tickers")
+    now = now or datetime.now(UTC)
+    since = now - timedelta(minutes=window_minutes)
+
+    tickers = sorted(
+        row.ticker
+        for row in client.list_tracked_tickers(statuses=["ready"])
+        if row.ready_at is not None and datetime.fromisoformat(row.ready_at) >= since
+    )
+    if not tickers:
+        logger.info(
+            "refresh-ready-tickers: no tickers became ready in the last %d minute(s), "
+            "nothing to do.",
+            window_minutes,
+        )
+        return build_run_result(
+            units_total=0, rows_saved=0, failed=0, accounts_rebuilt=0, accounts_failed=0
+        )
+    logger.info("refresh-ready-tickers: newly ready: %s.", ", ".join(tickers))
+
+    conn = get_connection(settings.database_url)
+    try:
+        accounts = pipeline.list_accounts_holding(conn, tickers=tickers)
+    finally:
+        conn.close()
+    if not accounts:
+        logger.info("refresh-ready-tickers: no account holds those tickers, nothing to do.")
+
+    rows_saved = failed = 0
+    for user_id, account_label in accounts:
+        try:
+            result = run_rebuild_returns(
+                user_id=user_id, account_label=account_label, settings=settings
+            )
+        except Exception:
+            logger.exception(
+                "refresh-ready-tickers: account %r (user %s) failed -- carrying on; the next "
+                "rebuild-returns --all retries it.",
+                account_label,
+                user_id,
+            )
+            failed += 1
+            continue
+        rows_saved += result["rows_saved"]
+
+    logger.info(
+        "refresh-ready-tickers: done, %d account(s) rebuilt, %d failed, %d return snapshot(s) "
+        "saved.",
+        len(accounts) - failed,
+        failed,
+        rows_saved,
+    )
+    return build_run_result(
+        units_total=len(accounts),
+        rows_saved=rows_saved,
+        failed=failed,
+        accounts_rebuilt=len(accounts) - failed,
+        accounts_failed=failed,
+    )
+
+
 def get_tickers(*, settings: Settings | None = None) -> list[str]:
     """Every ticker data-store prices, for manual entry's picker. A read job like the other
     `get_*` here: returns data, not a run result."""
@@ -900,6 +976,73 @@ def get_tickers(*, settings: Settings | None = None) -> list[str]:
     tickers = pipeline.list_tickers(datastore_client=datastore_client)
     logger.info("get-tickers: done, %d ticker(s) found.", len(tickers))
     return tickers
+
+
+# --- tracked tickers: passed through to data-store ------------------------------------------------
+#
+# portfolio adds nothing here but the route, so web only ever talks to portfolio. data-store owns
+# every rule (symbol, limit, provider), and its refusals arrive as TickerRequestRefused carrying
+# its own status code.
+
+
+def get_ticker_lookup(*, ticker: str, settings: Settings | None = None) -> dict:
+    """What adding `ticker` would do -- already tracked, available, or why not."""
+    configure_logging()
+    settings = settings or load_settings()
+    client = _require_datastore_client(settings, command="a ticker lookup")
+    result = asdict(client.lookup_ticker(ticker))
+    logger.info("ticker lookup: %r -> %s.", ticker, result["outcome"])
+    return result
+
+
+def run_add_tracked_ticker(
+    *, ticker: str, requested_by: UUID, enforce_limit: bool, settings: Settings | None = None
+) -> dict:
+    """Ask data-store to add `ticker` for onboarding. Returns the row plus `created`."""
+    configure_logging()
+    settings = settings or load_settings()
+    client = _require_datastore_client(settings, command="adding a ticker")
+    logger.info(
+        "add-ticker: %r for user %s (limit %s).",
+        ticker,
+        requested_by,
+        "applies" if enforce_limit else "waived",
+    )
+    row, created = client.add_tracked_ticker(
+        ticker, requested_by=requested_by, enforce_limit=enforce_limit
+    )
+    logger.info(
+        "add-ticker: %s %s (%s).", row.ticker, "added" if created else "already tracked", row.status
+    )
+    return {**asdict(row), "created": created}
+
+
+def get_tracked_tickers(
+    *,
+    requested_by: UUID | None = None,
+    statuses: list[str] | None = None,
+    tickers: list[str] | None = None,
+    settings: Settings | None = None,
+) -> list[dict]:
+    """data-store's tracked tickers, narrowed by any filters given."""
+    configure_logging()
+    settings = settings or load_settings()
+    client = _require_datastore_client(settings, command="the tracked-ticker list")
+    rows = client.list_tracked_tickers(
+        requested_by=requested_by, statuses=statuses, tickers=tickers
+    )
+    return [asdict(row) for row in rows]
+
+
+def run_update_tracked_ticker(
+    *, ticker: str, enabled: bool | None, retry: bool, settings: Settings | None = None
+) -> dict:
+    """An admin's change to one tracked ticker (the admin check is web's)."""
+    configure_logging()
+    settings = settings or load_settings()
+    client = _require_datastore_client(settings, command="changing a tracked ticker")
+    logger.info("update-ticker: %s enabled=%s retry=%s.", ticker, enabled, retry)
+    return asdict(client.update_tracked_ticker(ticker, enabled=enabled, retry=retry))
 
 
 def get_transactions(

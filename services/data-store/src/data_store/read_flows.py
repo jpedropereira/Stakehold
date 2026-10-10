@@ -15,6 +15,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from data_store.config_loader import CurrenciesConfig
 from data_store.fx import repository as fx_repository
 from data_store.returns import repository as returns_repository
+from data_store.tracked_tickers import repository as tracked_tickers_repository
 
 logger = logging.getLogger(__name__)
 
@@ -57,14 +58,19 @@ def price_series(conn, ticker: str, source: str, start: date, end: date) -> dict
 
 
 def ticker_info(conn, ticker: str, source: str) -> dict:
+    """`status` is the ticker's onboarding status when it's in tracked_tickers, else None (a
+    ticker priced only through a fund's holdings, or not at all). It is reported alongside
+    `exists`, not folded into it: a `pending` ticker is tracked but has no stored rows yet."""
     exists = returns_repository.ticker_exists(conn, ticker, source)
     first_date, last_date = returns_repository.get_returns_date_range(conn, ticker, source)
+    tracked = tracked_tickers_repository.get_tracked_ticker(conn, ticker, source)
     return {
         "ticker": ticker,
         "exists": exists,
         "has_returns": first_date is not None,
         "first_date": first_date,
         "last_date": last_date,
+        "status": tracked.status if tracked else None,
     }
 
 

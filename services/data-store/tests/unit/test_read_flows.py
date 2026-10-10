@@ -94,6 +94,25 @@ def test_price_series_empty_range_returns_empty_points_not_an_error(monkeypatch)
 # --- ticker_info ---------------------------------------------------------------------------
 
 
+class FakeTrackedRepo:
+    def __init__(self, status=None):
+        self.status = status
+
+    def get_tracked_ticker(self, conn, ticker, source):
+        if self.status is None:
+            return None
+        from types import SimpleNamespace
+
+        return SimpleNamespace(status=self.status)
+
+
+@pytest.fixture(autouse=True)
+def untracked(monkeypatch):
+    import data_store.read_flows as read_flows
+
+    monkeypatch.setattr(read_flows, "tracked_tickers_repository", FakeTrackedRepo())
+
+
 def test_ticker_info_not_tracked(monkeypatch):
     import data_store.read_flows as read_flows
 
@@ -109,7 +128,22 @@ def test_ticker_info_not_tracked(monkeypatch):
         "has_returns": False,
         "first_date": None,
         "last_date": None,
+        "status": None,
     }
+
+
+def test_ticker_info_reports_the_onboarding_status_of_a_tracked_ticker(monkeypatch):
+    # A ticker can be tracked before it has a single stored row: that's what "pending" is.
+    import data_store.read_flows as read_flows
+
+    monkeypatch.setattr(
+        read_flows, "returns_repository", FakeReturnsRepo(exists=False, date_range=(None, None))
+    )
+    monkeypatch.setattr(read_flows, "tracked_tickers_repository", FakeTrackedRepo("pending"))
+
+    result = ticker_info(None, "ASML.AS", "yfinance")
+
+    assert (result["exists"], result["status"]) == (False, "pending")
 
 
 def test_ticker_info_tracked_without_returns_computed_yet(monkeypatch):

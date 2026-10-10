@@ -119,3 +119,20 @@ class DataStoreApiError(PortfolioError):
     unreachable host, or a malformed one."""
 
     status_code = 502
+
+
+class TickerRequestRefused(PortfolioError):
+    """data-store refused a tracked-ticker request for a reason the user has to be told: the
+    symbol isn't on the provider (404), can't be held (422), is over the requester's daily limit
+    (429), the provider didn't answer (503), or an admin change isn't allowed (409).
+
+    Keeps data-store's own status code, so web can tell these apart from a status code alone,
+    rather than all becoming the 502 a DataStoreApiError is. The class-level 502 is only the
+    fallback for one raised without a code."""
+
+    status_code = 502
+
+    def __init__(self, detail: str, status_code: int | None = None):
+        super().__init__(detail)
+        if status_code is not None:
+            self.status_code = status_code

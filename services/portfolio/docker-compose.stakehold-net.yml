@@ -59,6 +59,41 @@ services:
       - default
       - stakehold-net
 
+  # Every five minutes, rebuilds returns for the accounts holding a ticker data-store finished
+  # loading in the last ten (ticker onboarding), so a holding recorded while its ticker was
+  # loading gets returns within minutes rather than at the next six-hourly refresh above. The
+  # window is twice the interval, so every ticker falls inside at least one run. See
+  # docs/architecture.md's "Returns follow new prices".
+  returns-refresh-ready:
+    build:
+      context: ../..
+      dockerfile: services/portfolio/Dockerfile
+    image: ${PORTFOLIO_API_IMAGE_NAME:-stakehold-portfolio-api:local}
+    container_name: portfolio-returns-refresh-ready
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      PORTFOLIO_DATABASE_URL: postgresql://${APP_POSTGRES_USER}:${APP_POSTGRES_PASSWORD}@postgres:5432/${APP_POSTGRES_DB}
+      APP_POSTGRES_ADMIN_DATABASE_URL: postgresql://${APP_POSTGRES_ADMIN_USER}:${APP_POSTGRES_ADMIN_PASSWORD}@postgres:5432/${APP_POSTGRES_DB}
+      DATASTORE_API_URL: http://data-store-api:8000
+    command:
+      - sh
+      - -c
+      - >-
+        while true;
+        do uv run --frozen portfolio refresh-ready-tickers --window-minutes 10;
+        sleep 300;
+        done
+    depends_on:
+      postgres:
+        condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
+    networks:
+      - default
+      - stakehold-net
+
 networks:
   stakehold-net:
     external: true

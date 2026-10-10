@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 from typing import Protocol
+from uuid import UUID
 
 
 @dataclass(frozen=True)
@@ -25,6 +26,43 @@ class FxPoint:
 class TickerInfo:
     exists: bool
     has_returns: bool
+    # data-store's onboarding status when the ticker is tracked ("pending", "backfilling",
+    # "ready", "failed"); None when it's priced only through a fund's holdings, or not at all.
+    status: str | None = None
+
+
+@dataclass(frozen=True)
+class TickerLookup:
+    """What adding a ticker would do -- see data-store's GET /tickers/{ticker}/lookup."""
+
+    ticker: str
+    # "tracked" (see status), "available", "unsupported", "not_found" or "unavailable".
+    outcome: str
+    status: str | None
+    display_name: str | None
+    currency: str | None
+    exchange: str | None
+    asset_type: str | None
+
+
+@dataclass(frozen=True)
+class TrackedTicker:
+    """One row of data-store's tracked_tickers, as its API reports it. Timestamps stay ISO
+    strings: portfolio only passes them on, it never computes with them."""
+
+    ticker: str
+    display_name: str
+    asset_type: str
+    currency: str | None
+    exchange: str | None
+    origin: str
+    status: str
+    enabled: bool
+    attempts: int
+    last_error: str | None
+    requested_by: str | None
+    requested_at: str
+    ready_at: str | None
 
 
 class DataStoreClient(Protocol):
@@ -57,6 +95,34 @@ class DataStoreClient(Protocol):
     def list_tickers(self) -> list[str]:
         """Every ticker data-store has ingested, sorted -- the set manual entry offers to pick
         from."""
+        ...
+
+    def lookup_ticker(self, ticker: str) -> TickerLookup:
+        """What adding `ticker` would do. Raises TickerRequestRefused for a symbol that can't
+        be one."""
+        ...
+
+    def add_tracked_ticker(
+        self, ticker: str, *, requested_by: UUID, enforce_limit: bool
+    ) -> tuple[TrackedTicker, bool]:
+        """Add a ticker for data-store to onboard. Returns the row and whether this call added
+        it. Raises TickerRequestRefused when data-store refuses (not found, can't be held, over
+        the limit, provider down)."""
+        ...
+
+    def list_tracked_tickers(
+        self,
+        *,
+        requested_by: UUID | None = None,
+        statuses: list[str] | None = None,
+        tickers: list[str] | None = None,
+    ) -> list[TrackedTicker]: ...
+
+    def update_tracked_ticker(
+        self, ticker: str, *, enabled: bool | None, retry: bool
+    ) -> TrackedTicker:
+        """An admin's change. Raises TickerRequestRefused for an unknown ticker (404) or a change
+        data-store won't make (409)."""
         ...
 
     def get_ticker_info(self, ticker: str) -> TickerInfo:

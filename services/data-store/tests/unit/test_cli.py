@@ -32,6 +32,8 @@ def calls(monkeypatch):
         "run_backfill_fx_rates",
         "run_ingest_macro_indicators",
         "run_calculate_macro_indicator_rates",
+        "run_sync_tracked_tickers",
+        "run_process_ticker_requests",
     ):
         monkeypatch.setattr(cli.jobs, name, record(name))
 
@@ -363,3 +365,46 @@ def test_calculate_macro_indicator_rates_reports_the_row_count_it_saved(monkeypa
     cli.main(["calculate-macro-indicator-rates"])
 
     assert "4 macro indicator rate rows" in capsys.readouterr().out
+
+
+# --- sync-tracked-tickers -----------------------------------------------------------------------
+
+
+def test_sync_tracked_tickers_dispatches_to_its_job(calls):
+    assert cli.main(["sync-tracked-tickers"]) == 0
+    assert calls["run_sync_tracked_tickers"] == {}
+
+
+def test_sync_tracked_tickers_reports_rows_saved(monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli.jobs, "run_sync_tracked_tickers", lambda: {"status": "ok", "rows_saved": 3}
+    )
+
+    cli.main(["sync-tracked-tickers"])
+
+    assert "3 tracked ticker rows" in capsys.readouterr().out
+
+
+def test_sync_tracked_tickers_exits_nonzero_on_a_partial_run(monkeypatch):
+    monkeypatch.setattr(
+        cli.jobs, "run_sync_tracked_tickers", lambda: {"status": "partial", "rows_saved": 0}
+    )
+
+    assert cli.main(["sync-tracked-tickers"]) == 1
+
+
+# --- process-ticker-requests ---------------------------------------------------------------------
+
+
+def test_process_ticker_requests_dispatches_to_its_job(calls):
+    assert cli.main(["process-ticker-requests"]) == 0
+    assert calls["run_process_ticker_requests"] == {}
+
+
+def test_process_ticker_requests_reports_rows_and_exits_nonzero_on_partial(monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli.jobs, "run_process_ticker_requests", lambda: {"status": "partial", "rows_saved": 7}
+    )
+
+    assert cli.main(["process-ticker-requests"]) == 1
+    assert "7 market data rows" in capsys.readouterr().out

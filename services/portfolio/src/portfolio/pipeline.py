@@ -205,6 +205,12 @@ def list_user_ids(conn) -> list[UUID]:
     return accounts_repository.list_user_ids(conn)
 
 
+def list_accounts_holding(conn, *, tickers: list[str]) -> list[tuple[UUID, str]]:
+    """(user_id, account_label) of every account holding one of `tickers` -- for the sweep
+    that rebuilds returns once data-store finishes loading a ticker."""
+    return positions_repository.list_accounts_holding(conn, tickers)
+
+
 def list_accounts(conn, *, user_id: UUID) -> list[Account]:
     return accounts_repository.list_by_user(conn, user_id)
 
@@ -348,11 +354,7 @@ def add_manual_transaction(
     if instrument_identifier_kind == "TICKER":
         if datastore_client is None:
             raise ValueError("a TICKER instrument needs a datastore_client to check it against")
-        if not datastore_client.get_ticker_info(instrument_identifier).exists:
-            raise UnknownTicker(
-                f"{instrument_identifier} isn't in Stakehold's market data -- "
-                "pick a ticker from the list."
-            )
+        _require_usable_ticker(datastore_client, instrument_identifier)
 
     if native_currency == "EUR":
         if fx_rate is not None:
@@ -383,6 +385,28 @@ def add_manual_transaction(
 
     with transaction(conn):
         return transactions_repository.insert_transactions(conn, [txn])
+
+
+# data-store's onboarding statuses for a ticker it has accepted but not finished loading. A
+# holding or mapping can point at one now; its returns wait for prices, like any blocked ticker.
+_LOADING_STATUSES = frozenset({"pending", "backfilling"})
+
+
+def _require_usable_ticker(datastore_client: DataStoreClient, ticker: str) -> None:
+    """A ticker can be recorded if data-store has prices for it, or is loading them. A ticker
+    whose loading failed, or that data-store doesn't follow at all, can't. The messages are shown
+    to the user as-is."""
+    info = datastore_client.get_ticker_info(ticker)
+    if info.exists or info.status in _LOADING_STATUSES:
+        return
+    if info.status == "failed":
+        raise UnknownTicker(
+            f"{ticker}'s prices couldn't be loaded into Stakehold's market data. An admin can "
+            "retry it from the Tickers page."
+        )
+    raise UnknownTicker(
+        f"{ticker} isn't in Stakehold's market data -- pick a ticker from the list, or add it."
+    )
 
 
 def list_tickers(*, datastore_client: DataStoreClient) -> list[str]:
@@ -513,10 +537,7 @@ def set_ticker_mapping(
             "A SYMBOL mapping needs a broker -- the same symbol can mean different instruments "
             "at different brokers."
         )
-    if not datastore_client.get_ticker_info(canonical_ticker).exists:
-        raise UnknownTicker(
-            f"{canonical_ticker} isn't in Stakehold's market data -- pick a ticker from the list."
-        )
+    _require_usable_ticker(datastore_client, canonical_ticker)
 
     with transaction(conn):
         return ticker_mapping_repository.upsert(

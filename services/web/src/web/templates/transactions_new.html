@@ -85,7 +85,8 @@ data-types="{{ field_types[name] | join(' ') }}"
       <legend>Instrument</legend>
       <div class="field" {{ shown_for("instrument_identifier") }}>
         <label for="instrument_identifier">Ticker</label>
-        <input type="text" id="instrument_identifier" name="instrument_identifier" list="ticker-options" autocomplete="off" class="mono">
+        <input type="text" id="instrument_identifier" name="instrument_identifier" list="ticker-options" autocomplete="off" class="mono" aria-describedby="instrument_identifier-hint">
+        <p class="field-hint" id="instrument_identifier-hint">Not in the list? <a href="/tickers/new">Add a ticker</a>.</p>
         {% if tickers_notice %}<p class="entry-empty">{{ tickers_notice }}</p>{% endif %}
       </div>
       <datalist id="ticker-options">

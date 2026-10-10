@@ -9,6 +9,7 @@ import json
 import re
 from datetime import date
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -55,6 +56,9 @@ class FakePortfolioClient:
         self.list_unmapped_instruments_result: list = []
         self.list_unmapped_instruments_error: Exception | None = None
         self.list_accounts_error: Exception | None = None
+        # {ticker: status} data-store reports for tickers it tracks directly (TK-9).
+        self.tracked_statuses: dict[str, str] = {}
+        self.list_tracked_tickers_error: Exception | None = None
         self.calls: list[tuple] = []
 
     async def list_accounts(self, *, user_id):
@@ -79,6 +83,16 @@ class FakePortfolioClient:
         if self.list_returns_error:
             raise self.list_returns_error
         return self.list_returns_result
+
+    async def list_tracked_tickers(self, *, requested_by=None, statuses=None, tickers=None):
+        self.calls.append(("list_tracked_tickers", tuple(tickers or ())))
+        if self.list_tracked_tickers_error:
+            raise self.list_tracked_tickers_error
+        return [
+            SimpleNamespace(ticker=ticker, status=self.tracked_statuses[ticker])
+            for ticker in tickers or ()
+            if ticker in self.tracked_statuses
+        ]
 
     async def list_latest_returns(self, *, user_id, account_label):
         self.calls.append(("list_latest_returns", user_id, account_label))
@@ -664,3 +678,54 @@ def test_the_empty_returns_state_says_prices_refresh_automatically(client):
 
     assert "No return history yet" in response.text
     assert _FRESHNESS in response.text
+
+
+# --- a holding whose ticker is still loading (ticker onboarding, TK-9) --------------------------
+
+
+@pytest.mark.parametrize(
+    "status, note",
+    [
+        ("pending", "Prices loading"),
+        ("backfilling", "Prices loading"),
+        ("failed", "Prices couldn&#39;t be loaded"),
+        ("ready", "Waiting for prices"),
+    ],
+)
+def test_a_holding_without_prices_says_where_its_ticker_stands(client, status, note):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.list_positions_result = [_position(ticker="AAPL"), _position(ticker="NEW")]
+    fake_portfolio.list_latest_returns_result = [_return_row(ticker="AAPL")]
+    fake_portfolio.tracked_statuses = {"NEW": status}
+
+    response = test_client.get("/portfolio", params={"account": "main"})
+
+    assert _holding_cells(response.text, "NEW")[3:] == [f'<span class="entry-empty">{note}</span>']
+    # Only the holdings without prices are asked about.
+    assert ("list_tracked_tickers", ("NEW",)) in fake_portfolio.calls
+
+
+def test_every_holding_priced_asks_nothing_about_loading(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.list_positions_result = [_position(ticker="AAPL")]
+    fake_portfolio.list_latest_returns_result = [_return_row(ticker="AAPL")]
+
+    test_client.get("/portfolio", params={"account": "main"})
+
+    assert not [c for c in fake_portfolio.calls if c[0] == "list_tracked_tickers"]
+
+
+def test_an_unanswered_status_call_still_says_waiting_for_prices(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.list_positions_result = [_position(ticker="NEW")]
+    fake_portfolio.list_tracked_tickers_error = PortfolioUnavailable("down")
+
+    response = test_client.get("/portfolio", params={"account": "main"})
+
+    assert response.status_code == 200
+    assert _holding_cells(response.text, "NEW")[3:] == [
+        '<span class="entry-empty">Waiting for prices</span>'
+    ]

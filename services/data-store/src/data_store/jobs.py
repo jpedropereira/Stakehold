@@ -15,9 +15,11 @@ rather than at each caller keeps that conversion in one place instead of two.
 """
 
 import logging
-from datetime import date, timedelta
+from dataclasses import asdict
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
+from data_store import ticker_onboarding
 from data_store.config_loader import (
     FundConfig,
     TickerConfig,
@@ -41,6 +43,13 @@ from data_store.pipeline import (
 from data_store.read_flows import fx_rate_series, price_series, ticker_info, ticker_list
 from data_store.run_result import build_run_result
 from data_store.settings import SettingsError, load_settings
+from data_store.ticker_onboarding import (
+    currencies_with_tracked_tickers,
+    process_ticker_requests,
+    sync_config_tickers,
+    tracked_ticker_configs,
+)
+from data_store.tracked_tickers.yfinance_source import YFinanceTickerLookupSource
 from shared.db.connection import apply_schema, get_connection
 from shared.logging_config import configure_logging
 
@@ -60,6 +69,46 @@ def run_db_init() -> dict[str, int | str]:
         conn.close()
     logger.info("db init: schema applied.")
     return build_run_result(units_total=1, rows_saved=0, failed=0)
+
+
+def run_sync_tracked_tickers() -> dict[str, int | str]:
+    """Bring the tracked_tickers table in line with tracked_tickers.yaml.
+
+    Every YAML entry is passed, disabled ones included: `enabled: false` is how the YAML turns a
+    config row off. A missing file is no entries, not an error -- the YAML is optional, the same
+    as for the pricing flows.
+    """
+    configure_logging()
+    settings = load_settings()
+    config_tickers = _load_config_tickers(settings.tracked_tickers_path)
+    conn = get_connection(settings.database_url)
+    try:
+        return sync_config_tickers(conn, config_tickers)
+    finally:
+        conn.close()
+
+
+def run_process_ticker_requests() -> dict[str, int | str]:
+    """One onboarding run: sync the YAML in, then take each due `pending` tracked ticker
+    through backfill, FX and returns to `ready` -- see ticker_onboarding.process_ticker_requests.
+    What the `ticker_onboarding` DAG runs every few minutes."""
+    configure_logging()
+    settings = load_settings()
+    config_tickers = _load_config_tickers(settings.tracked_tickers_path)
+    currencies_config = load_currencies(settings.currencies_path)
+    conn = get_connection(settings.database_url)
+    try:
+        # Synced first, so a ticker just added to the YAML is onboarded in this same run.
+        sync_config_tickers(conn, config_tickers)
+        return process_ticker_requests(
+            conn,
+            currencies=currencies_config,
+            lookup_source=YFinanceTickerLookupSource(),
+            now=datetime.now(timezone.utc),
+            today=date.today(),
+        )
+    finally:
+        conn.close()
 
 
 def run_ingest_holdings(*, fund: str | None = None) -> dict[str, int | str]:
@@ -123,6 +172,7 @@ def run_ingest_market_data(
         ingest_market_data,
         fund=fund,
         tickers=tickers,
+        ready_only=True,
         positional=(end_date - timedelta(days=days), end_date),
     )
 
@@ -143,6 +193,7 @@ def run_backfill_market_data(
         backfill_market_data,
         fund=fund,
         tickers=tickers,
+        ready_only=False,
         positional=(_parse_earliest_date(earliest_date), date.today(), delay_seconds),
         extra_kwargs={"force_refresh": force_refresh},
     )
@@ -167,8 +218,8 @@ def run_calculate_returns(*, tickers: list[str] | None = None) -> dict[str, int 
 def run_ingest_fx_rates(
     *, days: int = 7, currencies: list[str] | None = None
 ) -> dict[str, int | str]:
-    """Currency-conversion rates for every enabled currency in config/currencies.yaml against
-    its base_currency, over a rolling window."""
+    """Currency-conversion rates for every enabled currency in config/currencies.yaml, plus every
+    enabled tracked ticker's currency, against base_currency, over a rolling window."""
     configure_logging()
     settings = load_settings()
     currencies_config = load_currencies(settings.currencies_path)
@@ -177,7 +228,7 @@ def run_ingest_fx_rates(
     try:
         return ingest_fx_rates(
             conn,
-            currencies_config,
+            currencies_with_tracked_tickers(conn, currencies_config),
             end_date - timedelta(days=days),
             end_date,
             only_currencies=set(currencies) if currencies else None,
@@ -203,7 +254,7 @@ def run_backfill_fx_rates(
     try:
         return backfill_fx_rates(
             conn,
-            currencies_config,
+            currencies_with_tracked_tickers(conn, currencies_config),
             _parse_earliest_date(earliest_date),
             date.today(),
             delay_seconds,
@@ -302,18 +353,99 @@ def get_ticker_list(*, source: str) -> dict:
         conn.close()
 
 
+def get_ticker_lookup(*, ticker: str, source: str) -> dict:
+    """What adding `ticker` would do, for the read API: already tracked (with its status), or
+    the provider's answer. Raises `ticker_onboarding.InvalidSymbol` or `UnknownLookupSource`."""
+    configure_logging()
+    settings = load_settings()
+    lookup_source = ticker_onboarding.lookup_source_for(source)
+    conn = get_connection(settings.database_url)
+    try:
+        return ticker_onboarding.lookup_ticker(
+            conn, ticker, lookup_source, ticker_onboarding.LOOKUP_CACHE
+        )
+    finally:
+        conn.close()
+
+
+def run_add_tracked_ticker(*, ticker: str, requested_by, enforce_limit: bool, source: str) -> dict:
+    """Add a user's ticker for onboarding, for the read API. Returns the row plus `created`.
+    Raises the `ticker_onboarding` request exceptions the API maps to status codes."""
+    configure_logging()
+    settings = load_settings()
+    lookup_source = ticker_onboarding.lookup_source_for(source)
+    conn = get_connection(settings.database_url)
+    try:
+        row, created = ticker_onboarding.add_tracked_ticker(
+            conn,
+            ticker,
+            requested_by=requested_by,
+            enforce_limit=enforce_limit,
+            limit_per_day=settings.ticker_requests_per_day,
+            lookup_source=lookup_source,
+            cache=ticker_onboarding.LOOKUP_CACHE,
+            now=datetime.now(timezone.utc),
+        )
+    finally:
+        conn.close()
+    return {**asdict(row), "created": created}
+
+
+def get_tracked_tickers(
+    *,
+    source: str,
+    requested_by=None,
+    statuses: list[str] | None = None,
+    tickers: list[str] | None = None,
+) -> dict:
+    """Tracked tickers, narrowed by any filters given, for the read API."""
+    configure_logging()
+    settings = load_settings()
+    conn = get_connection(settings.database_url)
+    try:
+        rows = ticker_onboarding.list_tracked(
+            conn, source=source, requested_by=requested_by, statuses=statuses, tickers=tickers
+        )
+    finally:
+        conn.close()
+    return {"tracked_tickers": [asdict(row) for row in rows]}
+
+
+def run_update_tracked_ticker(
+    *, ticker: str, source: str, enabled: bool | None, retry: bool
+) -> dict:
+    """An admin's change to one tracked ticker, for the read API."""
+    configure_logging()
+    settings = load_settings()
+    conn = get_connection(settings.database_url)
+    try:
+        row = ticker_onboarding.update_tracked(conn, ticker, source, enabled=enabled, retry=retry)
+    finally:
+        conn.close()
+    return asdict(row)
+
+
 def get_fx_series(*, base: str, quote: str, source: str, start: date, end: date) -> dict:
     """FX rate series for a currency pair, for the read API. Loads currencies.yaml the same way
     run_ingest_fx_rates does, since fx_rate_series needs the configured base currency to derive
-    an inverse or triangulated rate. Raises `CurrencyNotTracked` for a currency outside that
-    file's enabled list; the API layer turns that into a 404.
+    an inverse or triangulated rate, widened with tracked tickers' currencies the same way the
+    FX flows are. Raises `CurrencyNotTracked` for a currency outside that list; the API layer
+    turns that into a 404.
     """
     configure_logging()
     settings = load_settings()
     currencies_config = load_currencies(settings.currencies_path)
     conn = get_connection(settings.database_url)
     try:
-        return fx_rate_series(conn, currencies_config, base, quote, source, start, end)
+        return fx_rate_series(
+            conn,
+            currencies_with_tracked_tickers(conn, currencies_config),
+            base,
+            quote,
+            source,
+            start,
+            end,
+        )
     finally:
         conn.close()
 
@@ -323,6 +455,7 @@ def _run_priced_flow(
     *,
     fund: str | None,
     tickers: list[str] | None,
+    ready_only: bool,
     positional: tuple,
     extra_kwargs: dict | None = None,
 ) -> dict[str, int | str]:
@@ -333,13 +466,20 @@ def _run_priced_flow(
     ticker resolution, the --ticker filter, the connection lifecycle -- is identical, and was
     copy-pasted four times before this. `extra_kwargs` carries the options only one flow has
     (currently backfill's `force_refresh`), keeping them out of the shared positional tuple.
+
+    Tracked tickers come from the tracked_tickers table, after syncing the YAML into it.
+    `ready_only` is the one difference between the flows there -- see
+    `ticker_onboarding.tracked_ticker_configs` for why the daily ingest needs it.
     """
     settings = load_settings()
     funds = _select_funds(load_funds(settings.config_path), fund)
-    tracked_tickers = _load_enabled_tracked_tickers(settings.tracked_tickers_path)
+    config_tickers = _load_config_tickers(settings.tracked_tickers_path)
     resolution = load_ticker_resolution(settings.exchange_suffixes_path)
     conn = get_connection(settings.database_url)
     try:
+        # Synced first, so a ticker just added to the YAML is in the table before it's read.
+        sync_config_tickers(conn, config_tickers)
+        tracked_tickers = tracked_ticker_configs(conn, ready_only=ready_only)
         return flow(
             conn,
             funds,
@@ -367,14 +507,17 @@ def _select_funds(funds: list[FundConfig], fund_key: str | None) -> list[FundCon
     return [fund for fund in funds if fund.enabled]
 
 
-def _load_enabled_tracked_tickers(path: Path) -> list[TickerConfig]:
-    # tracked_tickers.yaml is optional — a setup with only fund-holdings-based pricing
-    # shouldn't need to create it just to run ingest-market-data. "Copied the template but
-    # haven't filled it in yet" is the same situation as "never created it", so an empty file is
-    # tolerated too rather than failing the ingest/backfill commands.
+def _load_config_tickers(path: Path) -> list[TickerConfig]:
+    """Every tracked_tickers.yaml entry, disabled ones included -- the sync needs those to turn
+    a config row off.
+
+    The file is optional: a setup with only fund-holdings-based pricing shouldn't need to create
+    it. "Copied the template but haven't filled it in yet" is the same situation as "never
+    created it", so an empty file is tolerated too (load_tracked_tickers returns [] for it).
+    """
     if not path.is_file():
         return []
-    return [tt for tt in load_tracked_tickers(path) if tt.enabled]
+    return load_tracked_tickers(path)
 
 
 def _load_enabled_macro_regions(path: Path) -> list[str]:

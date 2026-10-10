@@ -23,6 +23,16 @@ def _db_init(_args: argparse.Namespace) -> int:
     return _exit_code(jobs.run_db_init())
 
 
+def _sync_tracked_tickers(_args: argparse.Namespace) -> int:
+    result = jobs.run_sync_tracked_tickers()
+    return _report(result, "tracked ticker rows")
+
+
+def _process_ticker_requests(_args: argparse.Namespace) -> int:
+    result = jobs.run_process_ticker_requests()
+    return _report(result, "market data rows")
+
+
 def _ingest_holdings(args: argparse.Namespace) -> int:
     return _exit_code(jobs.run_ingest_holdings(fund=args.fund))
 
@@ -86,6 +96,26 @@ def _build_parser() -> argparse.ArgumentParser:
     db_subparsers = db_parser.add_subparsers(dest="db_command", required=True)
     init_parser = db_subparsers.add_parser("init", help="Apply the database schema")
     init_parser.set_defaults(handler=_db_init)
+
+    sync_tracked_tickers_parser = subparsers.add_parser(
+        "sync-tracked-tickers",
+        help=(
+            "Bring the tracked_tickers table in line with tracked_tickers.yaml: add new "
+            "tickers as pending, apply YAML changes, and warn about config rows the YAML no "
+            "longer names (they're left as they are)."
+        ),
+    )
+    sync_tracked_tickers_parser.set_defaults(handler=_sync_tracked_tickers)
+
+    process_ticker_requests_parser = subparsers.add_parser(
+        "process-ticker-requests",
+        help=(
+            "Onboard every due pending tracked ticker: backfill its full history and its "
+            "currency's FX rates, calculate its returns, and mark it ready. Failures are "
+            "retried with a growing delay, up to 3 attempts."
+        ),
+    )
+    process_ticker_requests_parser.set_defaults(handler=_process_ticker_requests)
 
     ingest_holdings_parser = subparsers.add_parser(
         "ingest-holdings", help="Scrape and load ETF holdings"

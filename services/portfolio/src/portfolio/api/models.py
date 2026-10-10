@@ -162,6 +162,50 @@ class TickerMappingWriteResponse(BaseModel):
     mapping: TickerMappingResponse
 
 
+class TickerLookupResponse(BaseModel):
+    ticker: str
+    # "tracked" (see status), "available", "unsupported", "not_found" or "unavailable".
+    outcome: str
+    status: str | None
+    display_name: str | None
+    currency: str | None
+    exchange: str | None
+    asset_type: str | None
+
+
+class TrackedTickerAddRequest(BaseModel):
+    ticker: str
+    requested_by: UUID
+    # Required, no default: whether the daily limit applies (it doesn't for an admin) is the
+    # caller's decision, never one an omitted field makes quietly.
+    enforce_limit: bool
+
+
+class TrackedTickerUpdateRequest(BaseModel):
+    enabled: bool | None = None
+    retry: bool = False
+
+
+class TrackedTickerResponse(BaseModel):
+    ticker: str
+    display_name: str
+    asset_type: str
+    currency: str | None
+    exchange: str | None
+    origin: str
+    status: str
+    enabled: bool
+    attempts: int
+    last_error: str | None
+    requested_by: UUID | None
+    requested_at: datetime
+    ready_at: datetime | None
+
+
+class TrackedTickerAddResponse(TrackedTickerResponse):
+    created: bool
+
+
 class FailedPairResponse(BaseModel):
     account_label: str
     ticker: str

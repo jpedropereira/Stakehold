@@ -2508,3 +2508,86 @@ def test_list_user_ids_returns_each_account_owner_once(repos, conn):
     pipeline.add_account(conn, user_id=bea, broker="acme", account_label="a")
 
     assert sorted(pipeline.list_user_ids(conn), key=str) == sorted([ann, bea], key=str)
+
+
+# --- a ticker that's still loading (ticker onboarding, TK-7) --------------------------------------
+
+
+@pytest.mark.parametrize("status", ["pending", "backfilling"])
+def test_add_manual_transaction_accepts_a_ticker_whose_prices_are_still_loading(
+    repos, conn, status
+):
+    # Added but not backfilled yet: no stored rows, but data-store is getting them. Recording the
+    # holding now is the point; its returns wait for prices the same way any blocked ticker's do.
+    _, transactions_repo, _ = repos
+    user_id = uuid.uuid4()
+    pipeline.add_account(conn, user_id=user_id, broker="acme", account_label="m")
+    client = FakeDataStoreClient(
+        ticker_info={"ASML.AS": TickerInfo(exists=False, has_returns=False, status=status)}
+    )
+
+    saved = _add_txn(
+        conn,
+        user_id,
+        "m",
+        instrument_identifier="ASML.AS",
+        instrument_identifier_kind="TICKER",
+        datastore_client=client,
+    )
+
+    assert saved == 1
+    assert transactions_repo.saved[0].instrument_identifier == "ASML.AS"
+
+
+def test_add_manual_transaction_refuses_a_ticker_whose_onboarding_failed(repos, conn):
+    _, transactions_repo, _ = repos
+    user_id = uuid.uuid4()
+    pipeline.add_account(conn, user_id=user_id, broker="acme", account_label="m")
+    client = FakeDataStoreClient(
+        ticker_info={"GHOST": TickerInfo(exists=False, has_returns=False, status="failed")}
+    )
+
+    with pytest.raises(UnknownTicker, match="GHOST.*couldn't be loaded"):
+        _add_txn(
+            conn,
+            user_id,
+            "m",
+            instrument_identifier="GHOST",
+            instrument_identifier_kind="TICKER",
+            datastore_client=client,
+        )
+
+    assert transactions_repo.saved == []
+
+
+def test_set_ticker_mapping_accepts_a_ticker_whose_prices_are_still_loading(mapping_repo, conn):
+    client = FakeDataStoreClient(
+        ticker_info={"ASML.AS": TickerInfo(exists=False, has_returns=False, status="pending")}
+    )
+
+    _set_mapping(conn, canonical_ticker="ASML.AS", datastore_client=client)
+
+    assert len(mapping_repo.rows) == 1
+
+
+def test_set_ticker_mapping_refuses_a_ticker_whose_onboarding_failed(mapping_repo, conn):
+    client = FakeDataStoreClient(
+        ticker_info={"GHOST": TickerInfo(exists=False, has_returns=False, status="failed")}
+    )
+
+    with pytest.raises(UnknownTicker, match="couldn't be loaded"):
+        _set_mapping(conn, canonical_ticker="GHOST", datastore_client=client)
+
+    assert mapping_repo.rows == {}
+
+
+def test_a_ready_ticker_with_prices_is_accepted_whatever_its_status(mapping_repo, conn):
+    # exists wins: a ticker with stored prices is usable even if a later onboarding step (say
+    # its FX) failed, since the holding can still be recorded and priced.
+    client = FakeDataStoreClient(
+        ticker_info={"SPY": TickerInfo(exists=True, has_returns=True, status="failed")}
+    )
+
+    _set_mapping(conn, canonical_ticker="SPY", datastore_client=client)
+
+    assert len(mapping_repo.rows) == 1

@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% from "partials/_banner.html" import banner %}
+{% block title %}Tickers — Stakehold{% endblock %}
+{% block content %}
+<section class="card card-wide">
+  <h1>{% if user.is_admin %}Tickers{% else %}Your tickers{% endif %}</h1>
+  <p class="entry-subtitle">{% if user.is_admin %}Every ticker Stakehold prices directly: the default list from tracked_tickers.yaml, and those users added.{% else %}Tickers you added, and whether their prices have loaded.{% endif %}</p>
+  {% if outcome %}{% call banner("success") %}<strong>{{ outcome }}</strong>{% endcall %}{% endif %}
+  {% include "partials/_form_errors.html" %}
+  {% if list_error %}{% call banner("error") %}<strong>Couldn't load everything.</strong> {{ list_error }}{% endcall %}{% endif %}
+  <p><a href="/tickers/new" class="btn btn-primary">Add a ticker</a></p>
+  {% if tickers is none %}
+  {% elif tickers %}
+  {# Focusable, so a keyboard can scroll a table wider than the screen; named for screen readers. #}
+  <div class="table-scroll" tabindex="0" role="region" aria-label="Tickers">
+    <table class="positions-table">
+      <thead>
+        <tr>
+          <th>Ticker</th><th>Name</th><th>Exchange</th><th>Currency</th><th>Status</th>
+          {% if user.is_admin %}<th>Source</th><th>Actions</th>{% endif %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for t in tickers %}
+        <tr>
+          <td class="mono">{{ t.ticker }}</td>
+          <td>{{ t.display_name }}</td>
+          <td>{{ t.exchange or "—" }}</td>
+          <td class="mono">{{ t.currency or "—" }}</td>
+          <td>
+            <span class="badge">{{ status_label(t.status) }}</span>
+            {% if not t.enabled %} <span class="badge">Off</span>{% endif %}
+            {% if t.status == "failed" %}
+              {% if user.is_admin %}{% if t.last_error %}<p class="field-hint">{{ t.last_error }}</p>{% endif %}{% else %}<p class="field-hint">An admin can retry it.</p>{% endif %}
+            {% endif %}
+          </td>
+          {% if user.is_admin %}
+          <td>{% if t.origin == "config" %}Default list{% else %}Added by a user{% endif %}</td>
+          <td>
+            {% if t.status == "failed" %}
+            <form method="post" action="/tickers/{{ t.ticker }}/retry" class="inline-form">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button type="submit" class="btn btn-ghost">Retry</button>
+            </form>
+            {% endif %}
+            {% if t.origin != "config" %}
+            <form method="post" action="/tickers/{{ t.ticker }}/{{ 'disable' if t.enabled else 'enable' }}" class="inline-form">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button type="submit" class="btn btn-ghost">{{ "Disable" if t.enabled else "Enable" }}</button>
+            </form>
+            {% endif %}
+          </td>
+          {% endif %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% elif user.is_admin %}
+  <p class="entry-empty">No tickers are tracked directly yet.</p>
+  {% else %}
+  <p class="entry-empty">You haven't added any tickers. Add one when the ticker you need isn't in the list on the transaction form.</p>
+  {% endif %}
+</section>
+{% endblock %}

@@ -79,6 +79,9 @@ class FakePortfolioClient:
     async def list_returns(self, *, user_id, account_label):
         return []
 
+    async def list_tracked_tickers(self, *, requested_by=None, statuses=None, tickers=None):
+        return []
+
     async def list_latest_returns(self, *, user_id, account_label):
         return self.latest_returns
 
