@@ -107,7 +107,7 @@ The immutable ledger. One row per broker-reported line item or manually entered 
 |---|---|---|
 | `id` | `BIGSERIAL PRIMARY KEY` | |
 | `account_id` | `BIGINT NOT NULL REFERENCES accounts(id)` | |
-| `broker_transaction_ref` | `VARCHAR(128) NOT NULL` | **Corrected at task 6, against a real export**: Acme's `Order ID` is *not* row-unique on its own — a partial fill of one order produces multiple rows sharing it — so the stored value is `<order_id>:<12-char content hash>:<occurrence index>`. For Globex, which carries no broker-issued id at all, it's `<12-char content hash>:<occurrence index>`, hashed over (date, symbol, type, quantity, price, price currency, gross amount, commission, net amount). See `architecture.md`'s "Extension points" section for both parsers' exact ref construction. |
+| `broker_transaction_ref` | `VARCHAR(128) NOT NULL` | **Corrected at task 6, against a real export**: Acme's `Order ID` is *not* row-unique on its own — a partial fill of one order produces multiple rows sharing it — so the stored value is `<order_id>:<12-char content hash>:<occurrence index>`. For Globex, which carries no broker-issued id at all, it's `<12-char content hash>:<occurrence index>`, hashed over (date, symbol, type, quantity, price, price currency, gross amount, commission, net amount). See [`broker-import.md`](broker-import.md) for both parsers' exact ref construction. |
 | `transaction_type` | `VARCHAR(20) NOT NULL` | `BUY` \| `SELL` \| `DEPOSIT` \| `WITHDRAWAL` \| `DIVIDEND` \| `FX` \| `FEE` \| `ADJUSTMENT`. App-layer validated, not a DB `CHECK` — an unrecognized broker transaction type is meant to be a parser-level error (per `architecture.md`), not something that reaches this table at all. |
 | `trade_datetime` | `TIMESTAMPTZ NOT NULL` | |
 | `instrument_identifier` | `VARCHAR(50)` | `NULL` for cash-only rows (deposits, adjustments). |
@@ -115,7 +115,7 @@ The immutable ledger. One row per broker-reported line item or manually entered 
 | `quantity` | `NUMERIC(20,6)` | Signed: `+` buy, `-` sell. `NULL` for cash-only rows. Six fractional digits to accommodate fractional-share brokers. |
 | `price` | `NUMERIC(18,6)` | Per unit, native currency. `NULL` for cash-only rows. |
 | `native_currency` | `VARCHAR(10) NOT NULL` | ISO 4217, exactly as the broker reports it — same column width as `etf_holdings.currency`. |
-| `native_amount` | `NUMERIC(20,4) NOT NULL` | Signed cash-flow, the broker's own figure — the immutable source of truth (see `architecture.md`'s currency decision). For a manually entered BUY/SELL it's derived as `-(quantity * price) - fees_native` unless given, and a given one must agree with that to within 0.01 (see `architecture.md`'s "Manual transaction entry"). |
+| `native_amount` | `NUMERIC(20,4) NOT NULL` | Signed cash-flow, the broker's own figure — the immutable source of truth (see `architecture.md`'s currency decision). For a manually entered BUY/SELL it's derived as `-(quantity * price) - fees_native` unless given, and a given one must agree with that to within 0.01 (see [`flows.md`](flows.md)'s "Manual transaction entry"). |
 | `eur_amount` | `NUMERIC(20,4) NOT NULL` | Signed, frozen at transaction time — never recomputed later even if an FX source is subsequently revised. |
 | `fx_rate` | `NUMERIC(18,8)` | Nullable — absent when `native_currency = 'EUR'`, required otherwise. |
 | `fx_rate_source` | `VARCHAR(20)` | `'broker_reported'` \| `'companion_row'` \| `'datastore_series'` \| `'manual'`, nullable alongside `fx_rate`. **`'manual'` added at task 5** for a rate the user typed in on `add-transaction` — none of the three broker-derived sources fit one, and leaving `fx_rate_source` `NULL` for a manual rate would collide with `NULL`'s other meaning ("EUR, no rate needed"). App-layer vocabulary only, no DDL change — the column was already `VARCHAR(20)` with no `CHECK` constraint. **`'companion_row'` turned out unused at task 6**: it was reserved for matching Globex's `Forex Trade Component` rows to their parent trade, but a real Globex export shows `Gross Amount`/`Net Amount` are already EUR-denominated, so both parsers only ever write `'broker_reported'` — kept in the vocabulary rather than removed, in case a future broker genuinely needs it. **`'datastore_series'` got its first real writer at task 14**: `broker_import/acme_cashflow.py` (Acme's cash-ledger import) resolves a non-EUR row's rate via `datastore_client.get_fx_rate` — the daily FX series read from `data-store` this value was always meant to name, realized well before `returns/` (task 8), which is where it was originally expected to first appear. |
@@ -194,7 +194,7 @@ keyed by `(account_id, canonical_ticker)` instead of `(fund_key, as_of_date)`.
 **Each `(account_id, canonical_ticker)`'s delete-then-insert runs inside one transaction**, so a
 concurrent reader — `rebuild-returns`, or a future HTTP API — never observes that key with zero rows;
 it sees either the pre-rebuild snapshot set or the post-rebuild one, never a transient gap. Rebuild
-scope is still per account (per `architecture.md`'s "Both rebuilds are full rebuilds" note), so
+scope is still per account (per [`flows.md`](flows.md)'s "Both rebuilds are full rebuilds" note), so
 different accounts' rebuilds aren't serialized against each other — only the delete+insert for a
 single `(account_id, canonical_ticker)` is atomic, not the whole rebuild run.
 
@@ -215,14 +215,14 @@ Derived, materialized, rebuildable.
 | `price_date` | `DATE NOT NULL` | Part of PK. Daily grain, unlike `position_snapshots` — a return changes every priced day even with zero transactions, mirroring `market_returns`'s own daily grain in data-store. |
 | `quantity` | `NUMERIC(20,6) NOT NULL` | Carried from the latest `position_snapshots` row matching `(account_id, canonical_ticker)` with `as_of_date <= price_date`, denormalized so a reader needs no join back to reconstruct it. |
 | `market_value_native` | `NUMERIC(20,4) NOT NULL` | `quantity` times the `data-store` price on `price_date`, in the instrument's trading currency. |
-| `market_value_eur` | `NUMERIC(20,4) NOT NULL` | Converted using `data-store`'s FX rate series for `price_date` — see `architecture.md`'s cross-service prerequisite. |
+| `market_value_eur` | `NUMERIC(20,4) NOT NULL` | Converted using `data-store`'s FX rate series for `price_date` — see [`flows.md`](flows.md)'s cross-service prerequisite. |
 | `cost_basis_eur` | `NUMERIC(20,4) NOT NULL` | Carried from `position_snapshots.cost_basis_eur`. |
 | `unrealized_return_eur` | `NUMERIC(20,4) NOT NULL` | `market_value_eur - cost_basis_eur`. |
 | `unrealized_return_pct` | `NUMERIC(18,8)` | `unrealized_return_eur / cost_basis_eur`. Nullable — undefined (not zero) when `cost_basis_eur = 0`, i.e. the row for the trading day a position sells down to zero quantity. That row is still written (the position was open that day), but no further rows follow it — see `architecture.md`'s bounded-grain note on `ReturnSnapshot`. |
 | `dividends_received_eur` | `NUMERIC(20,4) NOT NULL DEFAULT 0` | **Added at task 8, amending this table's original sign-off.** Cumulative signed sum of this `(account_id, canonical_ticker)`'s `DIVIDEND`-type `transactions.eur_amount` with `trade_datetime` (date, UTC) `<= price_date`. Needs no FX arithmetic at all — `eur_amount` is already frozen in EUR at transaction time (this table's own "immutable source of truth" convention, same as `transactions`), so this is a running sum over already-stored data, never a `datastore_client` call. A signed sum also nets out withholding tax automatically **if** the broker plugin types that tax as its own negative `DIVIDEND` row; if a plugin instead types it as a `FEE`, it isn't captured here — `FEE`/`ADJUSTMENT` still feed nothing, the same open gap as the missing `realized_gains` table below. |
 | `total_return_eur` | `NUMERIC(20,4) NOT NULL DEFAULT 0` | **Added at task 8.** `unrealized_return_eur + dividends_received_eur` — price change plus the income the position produced. `unrealized_return_eur` deliberately stays price-only; this is the separate "what did this holding actually return" figure, mirroring how `market_returns` keeps `price_return` and `simple_return` (price+dividend) as separate columns rather than merging them. |
 | `total_return_pct` | `NUMERIC(18,8)` | **Added at task 8.** `total_return_eur / cost_basis_eur`. Nullable on exactly the same rule as `unrealized_return_pct`: undefined, not zero, when `cost_basis_eur = 0`. |
-| `calculated_at` | `TIMESTAMPTZ NOT NULL DEFAULT now()` | Bumped on every upsert, same convention as `market_returns.calculated_at` — reflects the last rebuild, not the first. |
+| `calculated_at` | `TIMESTAMPTZ NOT NULL DEFAULT now()` | Stamped when the row is written. Every rebuild rewrites a pair's rows (see the loading strategy below), so it reflects the last rebuild, not the first, the same as `market_returns.calculated_at`. |
 
 **The three dividend columns above are a schema amendment made mid-task 8, not part of the
 original sign-off.** The table as originally designed computed only mark-to-market return
@@ -241,14 +241,32 @@ columns never actually backfills a real row: `return_snapshots` had no writer at
 
 `PRIMARY KEY (account_id, canonical_ticker, price_date)`.
 
-**Loading strategy: true upsert (`INSERT ... ON CONFLICT ... DO UPDATE`), matching
-`market_returns` exactly** — unlike `position_snapshots`, the trading-day calendar itself comes from
-`data-store`'s external price series, not something `rebuild-returns` invents, so the *values* at an
-already-written date are only ever overwritten, never shifted to a different date. This is a stable
-grid, not a fixed one, though: which dates get a row for a given `(account_id, canonical_ticker)` is
-still bounded by the open-window rule in `architecture.md`'s `ReturnSnapshot` note — `rebuild-returns`
-stops adding new dates for a position once it closes to zero, even as `data-store`'s calendar keeps
-extending past that point.
+**Loading strategy: delete-then-insert per `(account_id, canonical_ticker)`, plus pruning — the
+same as `position_snapshots`.** Each `rebuild-returns` run computes a pair's whole window (its
+first position snapshot through today, or through its closing date), then replaces that pair's
+rows with it in one transaction. A ticker whose position snapshots are all gone loses its return
+rows too, in a transaction of its own. Which dates get a row is still bounded by the open-window
+rule in `architecture.md`'s `ReturnSnapshot` note: `rebuild-returns` stops adding new dates for a
+position once it closes to zero, even as `data-store`'s calendar keeps extending past that point.
+
+*Amended 2026-10-10 (signed off by the user), replacing a true upsert
+(`INSERT ... ON CONFLICT ... DO UPDATE`, matching `market_returns`).* The upsert's reasoning was
+that the trading-day calendar comes from data-store's price series, so a rebuild only overwrites
+the values at an already-written date. That holds while the transaction log only grows, and
+stops holding once a transaction can be deleted (a one-off spike, not a tracked task): deleting an
+earlier BUY moves a pair's window start later, and deleting a ticker's only BUY leaves it no
+position snapshots, so the rebuild never visits it again. Either way an upsert leaves rows no
+transaction supports. The same gap already existed for a re-pointed ticker mapping, whose old
+ticker's return rows outlived its pruned position snapshots and still showed on the account and
+home pages. Replacing a pair loses nothing a current transaction supports, since the whole window
+is recomputed. The one exception: if data-store ever lost price history it once served, the rows
+for those dates would go too rather than be kept. No DDL changed.
+
+What stays untouched: a pair whose data-store fetch or compute fails keeps its previous rows (the
+replacement only runs once the new rows exist), and so does a ticker data-store doesn't track.
+A ticker is only pruned once it has no position snapshots, and `rebuild-positions` never prunes in
+an account with a blocked instrument ([`flows.md`](flows.md)'s "Pruning a ticker"), so "blocked
+means don't touch" carries over unchanged.
 
 ## Open items, carried forward rather than resolved here
 
@@ -259,7 +277,7 @@ extending past that point.
   a violation at all (see the `native_currency`/`average_cost_eur` notes above). Still not verified
   against a real multi-currency same-ticker case in a single account — only exercised by tests.
 - **The `data-store` read API** this schema's `return_snapshots` rebuild depends on now exists
-  (walking-skeleton task 3, [`walking-skeleton.md`](../../../docs/roadmap-archive/walking-skeleton.md)) — see `architecture.md`'s cross-service prerequisite.
+  (walking-skeleton task 3, [`walking-skeleton.md`](../../../docs/roadmap-archive/walking-skeleton.md)) — see [`flows.md`](flows.md)'s cross-service prerequisite.
   **Built as of task 8**: `datastore_client/http_client.py`'s `get_price_series`,
   `get_fx_rate_series`, and `get_ticker_info`, alongside `get_fx_rate` (task 14). `accounts`,
   `transactions`, and `position_snapshots` need nothing from it either way.
@@ -267,9 +285,9 @@ extending past that point.
   withholding tax** (task 8): a tax row typed as `DIVIDEND` (even negative) nets out correctly; one
   typed as `FEE` doesn't get captured at all, since `FEE`/`ADJUSTMENT` still feed nothing. Worth
   checking against each installed plugin's own row classification, documented in that plugin's own
-  repo (see `architecture.md`'s "Extension points" section), not assumed here.
+  repo (see [`broker-import.md`](broker-import.md)), not assumed here.
 - **A `DIVIDEND` transaction's instrument can fail to resolve to the same `canonical_ticker` its
-  `BUY`/`SELL` rows did** (task 8), the identical sharp edge `architecture.md` already documents
+  `BUY`/`SELL` rows did** (task 8), the identical sharp edge [`flows.md`](flows.md) already documents
   for `position_snapshots`: if one account's dividend rows for a holding arrive under a different,
   unmapped identifier kind than its trade rows, that dividend is silently excluded from
   `dividends_received_eur` rather than blocking the ticker's rebuild. Fixed the same way — map
@@ -280,7 +298,7 @@ extending past that point.
   instruments that need one. A one-off importer wasn't worth building for the handful of entries
   the only deployment had.
 - **Deleting a mapping leaves the positions it produced.** The instrument goes back to being
-  unmapped, and a blocked instrument's existing snapshots are left untouched (`architecture.md`'s
+  unmapped, and a blocked instrument's existing snapshots are left untouched ([`flows.md`](flows.md)'s
   "blocked means don't touch"), so they stay until the instrument is mapped again. Re-pointing a
   mapping prunes the old ticker's snapshots, except in an account that still holds some other
   unmapped instrument: pruning is skipped for any account with a blocked instrument.

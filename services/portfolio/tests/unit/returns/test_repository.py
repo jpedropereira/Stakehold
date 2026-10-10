@@ -3,9 +3,11 @@ from decimal import Decimal
 
 from portfolio.returns.calculator import ReturnSnapshot
 from portfolio.returns.repository import (
+    delete_snapshots,
     list_latest_snapshots,
     list_snapshots,
-    upsert_snapshots,
+    list_tickers,
+    replace_snapshots,
 )
 
 
@@ -29,8 +31,9 @@ def _snapshot(**overrides):
 
 
 class FakeCursor:
-    def __init__(self):
+    def __init__(self, rowcount=0):
         self.executed = []
+        self.rowcount = rowcount
 
     def execute(self, sql, params=None):
         self.executed.append((sql, params))
@@ -46,8 +49,8 @@ class FakeCursor:
 
 
 class FakeConnection:
-    def __init__(self):
-        self._cursor = FakeCursor()
+    def __init__(self, rowcount=0):
+        self._cursor = FakeCursor(rowcount=rowcount)
         self.committed = False
 
     def cursor(self):
@@ -83,51 +86,63 @@ class FakeReadConnection:
         return self._cursor
 
 
-def test_upsert_snapshots_is_a_true_upsert_not_delete_then_insert():
+# --- replace_snapshots ---
+
+
+def _replace(conn, snapshots):
+    return replace_snapshots(conn, account_id=1, canonical_ticker="IWDA.AS", snapshots=snapshots)
+
+
+def test_replace_snapshots_deletes_the_pairs_rows_before_inserting():
+    """Delete-then-insert, not upsert: a rebuild whose window shrank (an earlier BUY deleted)
+    must not leave rows from before the new start behind."""
     conn = FakeConnection()
 
-    upsert_snapshots(conn, [_snapshot(), _snapshot(price_date=date(2026, 1, 7))])
+    _replace(conn, [_snapshot(), _snapshot(price_date=date(2026, 1, 7))])
 
     executed = conn._cursor.executed
-    assert len(executed) == 1  # one batched upsert, no separate delete
-    sql, params_list = executed[0]
-    assert "INSERT INTO return_snapshots" in sql
-    assert "ON CONFLICT (account_id, canonical_ticker, price_date) DO UPDATE SET" in sql
+    assert len(executed) == 2  # one delete, one batched insert
+    delete_sql, delete_params = executed[0]
+    assert "DELETE FROM return_snapshots" in delete_sql
+    assert delete_params == (1, "IWDA.AS")
+    insert_sql, params_list = executed[1]
+    assert "INSERT INTO return_snapshots" in insert_sql
     assert len(params_list) == 2
 
 
-def test_upsert_snapshots_returns_the_count_upserted():
+def test_replace_snapshots_deletes_even_with_an_empty_replacement_set():
     conn = FakeConnection()
 
-    saved = upsert_snapshots(conn, [_snapshot(), _snapshot(price_date=date(2026, 1, 7))])
+    saved = _replace(conn, [])
+
+    assert saved == 0
+    assert len(conn._cursor.executed) == 1
+    assert "DELETE FROM return_snapshots" in conn._cursor.executed[0][0]
+
+
+def test_replace_snapshots_returns_the_count_inserted():
+    conn = FakeConnection()
+
+    saved = _replace(conn, [_snapshot(), _snapshot(price_date=date(2026, 1, 7))])
 
     assert saved == 2
 
 
-def test_upsert_snapshots_with_an_empty_sequence_does_nothing():
+def test_replace_snapshots_does_not_commit():
     conn = FakeConnection()
 
-    saved = upsert_snapshots(conn, [])
-
-    assert saved == 0
-    assert conn._cursor.executed == []
-
-
-def test_upsert_snapshots_does_not_commit():
-    conn = FakeConnection()
-
-    upsert_snapshots(conn, [_snapshot()])
+    _replace(conn, [_snapshot()])
 
     assert conn.committed is False
 
 
-def test_upsert_snapshots_passes_the_snapshots_own_fields_including_dividends():
+def test_replace_snapshots_inserts_the_snapshots_own_fields_including_dividends():
     conn = FakeConnection()
     snapshot = _snapshot()
 
-    upsert_snapshots(conn, [snapshot])
+    _replace(conn, [snapshot])
 
-    _, params_list = conn._cursor.executed[0]
+    _, params_list = conn._cursor.executed[1]
     assert params_list == [
         (
             snapshot.account_id,
@@ -146,7 +161,7 @@ def test_upsert_snapshots_passes_the_snapshots_own_fields_including_dividends():
     ]
 
 
-def test_upsert_snapshots_handles_a_null_pct_for_a_zero_cost_basis_position():
+def test_replace_snapshots_handles_a_null_pct_for_a_zero_cost_basis_position():
     conn = FakeConnection()
     snapshot = _snapshot(
         cost_basis_eur=Decimal("0.0000"),
@@ -154,11 +169,55 @@ def test_upsert_snapshots_handles_a_null_pct_for_a_zero_cost_basis_position():
         total_return_pct=None,
     )
 
-    upsert_snapshots(conn, [snapshot])
+    _replace(conn, [snapshot])
 
-    _, params_list = conn._cursor.executed[0]
+    _, params_list = conn._cursor.executed[1]
     assert params_list[0][8] is None  # unrealized_return_pct
     assert params_list[0][11] is None  # total_return_pct
+
+
+# --- list_tickers ---
+
+
+def test_list_tickers_returns_every_ticker_with_return_rows_for_the_account():
+    conn = FakeReadConnection(rows=[("IWDA.AS",), ("VUSA.AS",)])
+
+    result = list_tickers(conn, account_id=1)
+
+    assert result == ["IWDA.AS", "VUSA.AS"]
+
+
+def test_list_tickers_scopes_by_account_id():
+    conn = FakeReadConnection(rows=[])
+
+    list_tickers(conn, account_id=7)
+
+    sql, params = conn._cursor.executed[0]
+    assert "FROM return_snapshots" in sql
+    assert "WHERE account_id = %s" in sql
+    assert params == (7,)
+
+
+# --- delete_snapshots ---
+
+
+def test_delete_snapshots_executes_a_scoped_delete():
+    conn = FakeConnection(rowcount=4)
+
+    removed = delete_snapshots(conn, account_id=1, canonical_ticker="IWDA.AS")
+
+    sql, params = conn._cursor.executed[0]
+    assert "DELETE FROM return_snapshots" in sql
+    assert params == (1, "IWDA.AS")
+    assert removed == 4
+
+
+def test_delete_snapshots_does_not_commit():
+    conn = FakeConnection(rowcount=1)
+
+    delete_snapshots(conn, account_id=1, canonical_ticker="IWDA.AS")
+
+    assert conn.committed is False
 
 
 def _row(**overrides):

@@ -72,8 +72,8 @@ def _add_buy(
 
 def _clear_position_snapshots(pg_connect):
     """`add-transaction` now rebuilds its own account's positions as soon as it saves (see
-    docs/architecture.md's "Positions follow every transaction write"), so seeding through it no
-    longer leaves `position_snapshots` empty. Tests about what `rebuild-positions` itself writes
+    docs/flows.md's "Positions and returns follow every transaction write"), so seeding through it
+    no longer leaves `position_snapshots` empty. Tests about what `rebuild-positions` itself writes
     -- and which accounts/users it scopes to -- call this after seeding, so their assertions can
     only be satisfied by the rebuild under test, never by the write's own follow-on one."""
     with pg_connect() as conn, conn.cursor() as cur:

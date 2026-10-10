@@ -1,6 +1,7 @@
-"""rebuild-returns against live Postgres: the true-upsert contract a fake repository can't prove
-(a re-run overwrites the values at an already-written date rather than duplicating rows), the
-bounded-window rule for a closed position, and the DIVIDEND transactions -> mappings ->
+"""rebuild-returns against live Postgres: the replace-and-prune contract a fake repository can't
+prove (a re-run replaces a pair's rows rather than duplicating them, rows outside a shrunk window
+go, and a ticker with no position snapshots left loses its rows), the bounded-window rule for a
+closed position, and the DIVIDEND transactions -> mappings ->
 compute_returns path end to end -- see docs/architecture.md's testing section.
 
 Seeds accounts/transactions and position_snapshots through the real CLI stack (add-transaction,
@@ -209,7 +210,7 @@ def test_rebuild_returns_writes_snapshots_for_an_open_position(monkeypatch, pg_c
 
 
 def test_rebuilding_returns_twice_overwrites_rather_than_duplicating(monkeypatch, pg_connect):
-    """The behaviour a fake repository can't prove: a true upsert, not delete-then-insert."""
+    """A re-run replaces the pair's rows: one date, one row, with the new value."""
     user_id = uuid.uuid4()
     _add_account(user_id)
     _add_buy(user_id, account_label="m", ref="t1")
@@ -232,8 +233,122 @@ def test_rebuilding_returns_twice_overwrites_rather_than_duplicating(monkeypatch
     with pg_connect() as conn, conn.cursor() as cur:
         cur.execute("SELECT COUNT(*), MAX(market_value_native) FROM return_snapshots")
         count, max_value = cur.fetchone()
-    assert count == 1  # one date, one row -- overwritten in place, not a second row
+    assert count == 1  # one date, one row -- replaced, not a second row
     assert max_value == 1100
+
+
+def _delete_transaction_row(pg_connect, ref):
+    """Removes a transaction straight from the table -- this suite is about what the rebuilds do
+    once a transaction is gone, not about the delete path itself."""
+    with pg_connect() as conn, conn.cursor() as cur:
+        cur.execute("DELETE FROM transactions WHERE broker_transaction_ref = %s", (ref,))
+        assert cur.rowcount == 1
+
+
+def _return_rows(pg_connect):
+    with pg_connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT canonical_ticker, price_date FROM return_snapshots "
+            "ORDER BY canonical_ticker, price_date"
+        )
+        return cur.fetchall()
+
+
+def _prices(*days):
+    return {
+        "IWDA.AS": [
+            PricePoint(date=date(2026, 1, day), split_adjusted_close=Decimal("100.00"))
+            for day in days
+        ]
+    }
+
+
+def test_rows_before_a_shrunk_window_are_removed(monkeypatch, pg_connect):
+    """Deleting the earlier of two BUYs moves the window's start later. The rows from before it
+    have no transaction behind them any more, and an upsert would have kept them."""
+    user_id = uuid.uuid4()
+    _add_account(user_id)
+    _add_buy(user_id, account_label="m", ref="early", trade_date="2026-01-02")
+    _add_buy(user_id, account_label="m", ref="late", trade_date="2026-01-05")
+    _rebuild_positions(user_id)
+    client = StubDataStoreClient(price_series=_prices(2, 5, 6))
+    assert _rebuild_returns(monkeypatch, user_id, client=client) == 0
+    assert [row[1] for row in _return_rows(pg_connect)] == [
+        date(2026, 1, 2),
+        date(2026, 1, 5),
+        date(2026, 1, 6),
+    ]
+
+    _delete_transaction_row(pg_connect, "early")
+    _rebuild_positions(user_id)
+    assert _rebuild_returns(monkeypatch, user_id, client=client) == 0
+
+    assert [row[1] for row in _return_rows(pg_connect)] == [date(2026, 1, 5), date(2026, 1, 6)]
+
+
+def test_a_ticker_whose_only_buy_is_gone_loses_its_return_rows(monkeypatch, pg_connect, capsys):
+    user_id = uuid.uuid4()
+    _add_account(user_id)
+    _add_buy(user_id, account_label="m", ref="t1")
+    _rebuild_positions(user_id)
+    client = StubDataStoreClient(price_series=_prices(6))
+    assert _rebuild_returns(monkeypatch, user_id, client=client) == 0
+    assert _return_rows(pg_connect) == [("IWDA.AS", date(2026, 1, 6))]
+
+    _delete_transaction_row(pg_connect, "t1")
+    _rebuild_positions(user_id)
+    capsys.readouterr()
+    exit_code = _rebuild_returns(monkeypatch, user_id, client=client)
+
+    assert exit_code == 0
+    assert _return_rows(pg_connect) == []
+    with pg_connect() as conn, conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM position_snapshots")
+        assert cur.fetchone() == (0,)
+
+
+def test_a_re_pointed_mapping_leaves_no_return_rows_under_the_old_ticker(monkeypatch, pg_connect):
+    """Before return_snapshots was pruned, this left the old ticker's rows behind, so the
+    account and home pages showed a holding the account no longer had under that name."""
+    user_id = uuid.uuid4()
+    _add_account(user_id)
+    _add_buy(user_id, account_label="m", ref="t1")
+    _rebuild_positions(user_id)
+    prices = _prices(6)
+    prices["SWDA.L"] = prices["IWDA.AS"]
+    client = StubDataStoreClient(price_series=prices)
+    assert _rebuild_returns(monkeypatch, user_id, client=client) == 0
+
+    with pg_connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE ticker_mappings SET canonical_ticker = 'SWDA.L' WHERE identifier = %s",
+            (_ISIN,),
+        )
+    _rebuild_positions(user_id)
+    assert _rebuild_returns(monkeypatch, user_id, client=client) == 0
+
+    assert _return_rows(pg_connect) == [("SWDA.L", date(2026, 1, 6))]
+
+
+def test_pruning_leaves_another_accounts_rows_alone(monkeypatch, pg_connect):
+    user_id = uuid.uuid4()
+    _add_account(user_id, label="a")
+    _add_account(user_id, label="b")
+    _add_buy(user_id, account_label="a", ref="t-a")
+    _add_buy(user_id, account_label="b", ref="t-b")
+    _rebuild_positions(user_id)
+    client = StubDataStoreClient(price_series=_prices(6))
+    assert _rebuild_returns(monkeypatch, user_id, client=client) == 0
+
+    _delete_transaction_row(pg_connect, "t-a")
+    _rebuild_positions(user_id)
+    assert _rebuild_returns(monkeypatch, user_id, client=client) == 0
+
+    with pg_connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT a.account_label FROM return_snapshots r JOIN accounts a ON a.id = r.account_id"
+        )
+        assert cur.fetchall() == [("b",)]
 
 
 def test_a_closed_positions_window_stops_at_the_closing_date(monkeypatch, pg_connect):

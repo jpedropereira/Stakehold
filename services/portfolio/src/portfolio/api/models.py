@@ -208,6 +208,7 @@ class RebuildReturnsResponse(BaseModel):
     status: str
     rows_saved: int
     tickers_rebuilt: int
+    tickers_removed: int
     tickers_blocked: int
     pairs_failed: int
     blocked_tickers: list[BlockedTickerResponse]

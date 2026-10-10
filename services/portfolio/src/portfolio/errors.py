@@ -80,7 +80,7 @@ class InvalidTransaction(PortfolioError):
 class BrokerFileError(PortfolioError):
     """A broker export file could not be parsed -- malformed header, unrecognized transaction
     type, or a row missing data its own type requires. Raised by broker_import/ parsers; never
-    silently skipped, per docs/architecture.md's "unrecognized type is a parse error" rule."""
+    silently skipped, per docs/broker-import.md's "unrecognized type is a parse error" rule."""
 
     status_code = 422
 

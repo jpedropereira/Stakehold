@@ -2,7 +2,7 @@
 BrokerParser (one implementation per broker export-file format) and CashflowParser (one
 implementation per cash-ledger export format that needs a live FX-rate lookup mid-parse).
 Implementations are discovered via entry points (broker_import/discovery.py), not hand-registered
-here -- see docs/architecture.md's "Extension points" section.
+here -- see docs/broker-import.md.
 """
 
 from collections.abc import Callable

@@ -109,7 +109,7 @@ def _write_status_code(result: dict) -> int:
     """201 for a genuine write, 200 otherwise. Every write route uses this: for
     create/add/import, "otherwise" only ever means `nothing_to_do` -- those jobs can no longer
     return `partial` themselves, since jobs.py lets a domain error propagate instead of catching
-    it (see docs/architecture.md's "HTTP API" section), and a domain error reaches this API as an
+    it (see docs/flows.md's "HTTP API" section), and a domain error reaches this API as an
     exception, mapped to its own status code by app.py's handlers, not through this dict. For the
     two rebuild routes, "otherwise" can also mean a genuine `partial` -- a real half-succeeded
     run, still reported as 200 with the blocked/failed detail in the body, not as an error."""

@@ -1,7 +1,7 @@
 """Pure replay of one account's transaction log into position snapshots.
 
 No I/O, no Postgres, no datastore_client -- quantity and average cost are pure functions of the
-transaction log (docs/architecture.md's "everything except returns/ can be built before
+transaction log (docs/flows.md's "everything except returns/ can be built before
 data-store's read API exists"). Only BUY/SELL move a position: every other transaction_type is a
 cash event that validate() doesn't even guarantee carries a quantity or price, so DIVIDEND/FEE/
 ADJUSTMENT rows are left entirely to returns (task 8).

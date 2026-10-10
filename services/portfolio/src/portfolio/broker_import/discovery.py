@@ -1,6 +1,6 @@
 """Loads BrokerParser/CashflowParser implementations from the entry-point groups any installed
 distribution registers under -- portfolio's own, during this repo's transition, and later a
-separate plugin package. See docs/architecture.md's "Extension points" section.
+separate plugin package. See docs/broker-import.md.
 """
 
 import logging

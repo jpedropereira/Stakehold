@@ -18,7 +18,7 @@ services:
   # reach the chart without anyone touching their account. Polls rather than being called by
   # data-store when its DAG finishes: portfolio depends on data-store, never the reverse, and
   # Airflow isn't on stakehold-net. Lives in this overlay, not docker-compose.yml, because it's
-  # useless without data-store reachable. See docs/architecture.md's "Returns follow new prices".
+  # useless without data-store reachable. See docs/flows.md's "Returns follow new prices".
   returns-refresh:
     # Same build and tag as docker-compose.yml's x-portfolio-image anchor, which this file can't
     # reference -- a build block rather than only `image:`, so `up` builds the local tag instead
@@ -38,7 +38,7 @@ services:
       APP_POSTGRES_ADMIN_DATABASE_URL: postgresql://${APP_POSTGRES_ADMIN_USER}:${APP_POSTGRES_ADMIN_PASSWORD}@postgres:5432/${APP_POSTGRES_DB}
       DATASTORE_API_URL: http://data-store-api:8000
       # Six hours: at most that long after a daily close lands before it shows. A run when
-      # nothing changed only re-upserts the same rows.
+      # nothing changed rewrites the same rows.
       PORTFOLIO_RETURNS_REFRESH_SECONDS: ${PORTFOLIO_RETURNS_REFRESH_SECONDS:-21600}
     # $$ so compose leaves the variable for the container's shell to expand. A failed run only
     # logs its own failure and exits non-zero; the loop still sleeps and tries again.

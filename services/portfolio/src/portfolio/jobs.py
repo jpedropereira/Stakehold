@@ -7,7 +7,7 @@ by construction, untested by the other. See docs/architecture.md's layering sect
 Every job takes an optional `settings: Settings | None = None`, defaulting to a fresh
 `load_settings()` -- `cli.py` never passes one, so its behaviour is unchanged. `api/routes.py`
 passes `create_app()`'s own injected `Settings` instead, so a test app built with a known
-`Settings` (docs/architecture.md's "HTTP API" section) actually reaches the database it names,
+`Settings` (docs/flows.md's "HTTP API" section) actually reaches the database it names,
 rather than every route but `/health` silently falling back to the environment.
 """
 
@@ -238,7 +238,7 @@ def _rebuild_after_write(
     saved transaction into an error response, and a caller retrying on that would be acting on
     a false signal. Deliberately reported alongside the write's own `status`, never folded into
     it: an unmapped instrument blocking its own ticker is a fact about the rebuild, not about
-    whether the transaction was saved. See docs/architecture.md's "Positions and returns follow
+    whether the transaction was saved. See docs/flows.md's "Positions and returns follow
     every transaction write".
     """
     if not saved:
@@ -631,18 +631,25 @@ def run_rebuild_returns(
     # (pipeline.rebuild_returns), so this is only the completion tally, not a re-log.
 
     logger.info(
-        "rebuild-returns: done, %d return snapshot(s) saved across %d ticker(s), %d blocked, "
-        "%d pair(s) failed.",
+        "rebuild-returns: done, %d return snapshot(s) saved across %d ticker(s), %d removed, "
+        "%d blocked, %d pair(s) failed.",
         outcome.snapshots_saved,
         outcome.tickers_rebuilt,
+        outcome.tickers_removed,
         len(outcome.blocked),
         len(outcome.failed_pairs),
     )
     result = build_run_result(
-        units_total=outcome.tickers_rebuilt + len(outcome.blocked) + len(outcome.failed_pairs),
+        units_total=(
+            outcome.tickers_rebuilt
+            + outcome.tickers_removed
+            + len(outcome.blocked)
+            + len(outcome.failed_pairs)
+        ),
         rows_saved=outcome.snapshots_saved,
         failed=len(outcome.blocked) + len(outcome.failed_pairs),
         tickers_rebuilt=outcome.tickers_rebuilt,
+        tickers_removed=outcome.tickers_removed,
         tickers_blocked=len(outcome.blocked),
         pairs_failed=len(outcome.failed_pairs),
     )
@@ -831,7 +838,7 @@ def run_list_all_unmapped_instruments(*, settings: Settings | None = None) -> di
 def run_rebuild_returns_all(*, settings: Settings | None = None) -> dict[str, int | str]:
     """run_rebuild_returns for every user with an account -- what the returns-refresh container
     runs on a schedule, so new prices from data-store's daily ingestion reach every holder's
-    returns without anyone touching their account. See docs/architecture.md's "Returns follow
+    returns without anyone touching their account. See docs/flows.md's "Returns follow
     new prices".
 
     Each user's rebuild is isolated: one raising is logged with its traceback and counted in
