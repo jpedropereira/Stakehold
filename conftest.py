@@ -1,4 +1,6 @@
-"""Workspace-wide pytest setup: keeps the integration suite on disposable test databases.
+"""Workspace-wide pytest setup: keeps the integration suite on disposable test databases, and
+refuses a run in which one test file was silently replaced by another (see the end of this
+docstring).
 
 Integration fixtures TRUNCATE tables (users, sessions, accounts, transactions, ...). Locally they
 used to read the services' own `.env` files, i.e. the dev stack's real databases, and twice
@@ -18,9 +20,17 @@ A unit-only run (the default, `-m 'not integration'`) is untouched: it never con
 
 It lives at the repo root, not in one service, so it covers every service's tests whichever
 path pytest is given. Its own tests: services/shared/tests/unit/test_integration_db_guard.py.
+
+Shadowed test files: under `--import-mode=importlib` a test file's module name comes from its
+package path, so two services' `tests/unit/__init__.py` once made both `unit`, and portfolio's
+`tests/unit/test_cli.py` silently ran auth's tests in its place. Every run now checks that each
+collected test's module was loaded from that test's own file, and stops (exit code 4) if not.
+That's why no service's `tests/` holds an `__init__.py`. Its own tests:
+services/shared/tests/unit/test_shadowed_module_guard.py.
 """
 
 import os
+from pathlib import Path
 
 import pytest
 
@@ -134,9 +144,36 @@ def prepare_integration_environment(environ) -> None:
     environ["PYTHON_DOTENV_DISABLED"] = "1"
 
 
+def find_shadowed_test_files(items) -> list[str]:
+    """One line per test file whose tests came from a different file's module: a same-named
+    module imported earlier was reused in its place. Items with no Python module (doctests,
+    other plugins' items) can't be shadowed this way and are skipped."""
+    shadowed = {}
+    for item in items:
+        module = getattr(item, "module", None)
+        module_file = getattr(module, "__file__", None)
+        if module_file is None:
+            continue
+        item_file, loaded_from = item.path.resolve(), Path(module_file).resolve()
+        if item_file != loaded_from:
+            shadowed[item_file] = loaded_from
+    return [
+        f"{item_file} ran the tests of {loaded}" for item_file, loaded in sorted(shadowed.items())
+    ]
+
+
 def pytest_collection_finish(session):
     # After -m deselection, so session.items is exactly what will run; before any test or
     # fixture, so a refused run touches nothing.
+    shadowed = find_shadowed_test_files(session.items)
+    if shadowed:
+        pytest.exit(
+            "Refusing to run: test files were replaced by same-named modules:\n  - "
+            + "\n  - ".join(shadowed)
+            + "\nGive each its own module name: with --import-mode=importlib, don't add an "
+            "__init__.py under a service's tests/.",
+            returncode=pytest.ExitCode.USAGE_ERROR,
+        )
     if not any(_is_integration(item) for item in session.items):
         return
     prepare_integration_environment(os.environ)
