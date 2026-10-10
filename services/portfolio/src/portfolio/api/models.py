@@ -179,6 +179,13 @@ class AccountWriteResponse(BaseModel):
     accounts_created: int
 
 
+class AccountDeleteResponse(BaseModel):
+    status: str
+    accounts_deleted: int
+    # What went with the account, so a caller can say so without having counted beforehand.
+    transactions_deleted: int
+
+
 class TransactionDeleteResponse(BaseModel):
     status: str
     transactions_deleted: int

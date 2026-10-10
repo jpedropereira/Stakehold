@@ -50,6 +50,8 @@ _LIST_BY_ACCOUNTS_SQL = """
 
 _DELETE_ONE_SQL = "DELETE FROM transactions WHERE account_id = %s AND broker_transaction_ref = %s"
 
+_DELETE_BY_ACCOUNT_SQL = "DELETE FROM transactions WHERE account_id = %s"
+
 _INSERT_SQL = """
     INSERT INTO transactions (
         account_id, broker_transaction_ref, transaction_type, trade_datetime,
@@ -184,4 +186,13 @@ def delete_one(conn, *, account_id: int, broker_transaction_ref: str) -> int:
     isolation chokepoint. Does not commit."""
     with conn.cursor() as cur:
         cur.execute(_DELETE_ONE_SQL, (account_id, broker_transaction_ref))
+        return cur.rowcount
+
+
+def delete_by_account(conn, account_id: int) -> int:
+    """Removes every transaction in one account, ahead of deleting the account itself (the
+    foreign key has no ON DELETE). Returns the row count removed. Unscoped by user_id, like
+    delete_one. Does not commit."""
+    with conn.cursor() as cur:
+        cur.execute(_DELETE_BY_ACCOUNT_SQL, (account_id,))
         return cur.rowcount

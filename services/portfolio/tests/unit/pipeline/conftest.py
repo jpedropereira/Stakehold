@@ -64,6 +64,13 @@ class FakeAccountsRepo:
     def get_by_id(self, account_id):
         return next((a for a in self.by_key.values() if a.id == account_id), None)
 
+    def delete_account(self, conn, *, user_id, account_id):
+        for key, account in list(self.by_key.items()):
+            if account.id == account_id and account.user_id == user_id:
+                del self.by_key[key]
+                return 1
+        return 0
+
 
 class FakeTransactionsRepo:
     """Standing in for the real repository's SQL join to `accounts` -- given a reference to the
@@ -144,6 +151,11 @@ class FakeTransactionsRepo:
         ]
         return before - len(self.saved)
 
+    def delete_by_account(self, conn, account_id):
+        before = len(self.saved)
+        self.saved = [t for t in self.saved if t.account_id != account_id]
+        return before - len(self.saved)
+
     def list_by_account(self, conn, account_id, *, transaction_types=None):
         return self.list_by_accounts(conn, [account_id], transaction_types=transaction_types).get(
             account_id, []
@@ -179,6 +191,10 @@ class FakePositionsRepo:
             raise RuntimeError(f"simulated failure for {canonical_ticker}")
         existing = self.snapshots.pop((account_id, canonical_ticker), None)
         return len(existing) if existing else 0
+
+    def delete_by_account(self, conn, account_id):
+        removed = [key for key in self.snapshots if key[0] == account_id]
+        return sum(len(self.snapshots.pop(key)) for key in removed)
 
     def list_snapshots(self, conn, *, account_id, canonical_ticker):
         return list(self.snapshots.get((account_id, canonical_ticker), []))
@@ -221,6 +237,10 @@ class FakeReturnsRepo:
             raise RuntimeError(f"simulated failure for {canonical_ticker}")
         existing = self.snapshots.pop(key, None)
         return len(existing) if existing else 0
+
+    def delete_by_account(self, conn, account_id):
+        removed = [key for key in self.snapshots if key[0] == account_id]
+        return sum(len(self.snapshots.pop(key)) for key in removed)
 
     def list_snapshots(self, conn, *, account_id, canonical_ticker=None, start=None, end=None):
         rows = []

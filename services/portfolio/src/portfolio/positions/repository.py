@@ -18,6 +18,8 @@ from portfolio.positions.calculator import PositionSnapshot
 
 _DELETE_SQL = "DELETE FROM position_snapshots WHERE account_id = %s AND canonical_ticker = %s"
 
+_DELETE_BY_ACCOUNT_SQL = "DELETE FROM position_snapshots WHERE account_id = %s"
+
 _INSERT_SQL = """
     INSERT INTO position_snapshots (
         account_id, canonical_ticker, as_of_date, quantity, average_cost_native,
@@ -87,6 +89,14 @@ def delete_snapshots(conn, *, account_id: int, canonical_ticker: str) -> int:
     reinsert. Returns the row count removed. Does not commit -- same as replace_snapshots."""
     with conn.cursor() as cur:
         cur.execute(_DELETE_SQL, (account_id, canonical_ticker))
+        return cur.rowcount
+
+
+def delete_by_account(conn, account_id: int) -> int:
+    """Removes every position snapshot in one account, whatever its ticker, ahead of deleting the
+    account itself. Returns the row count removed. Does not commit."""
+    with conn.cursor() as cur:
+        cur.execute(_DELETE_BY_ACCOUNT_SQL, (account_id,))
         return cur.rowcount
 
 
