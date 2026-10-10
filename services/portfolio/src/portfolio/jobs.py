@@ -631,18 +631,25 @@ def run_rebuild_returns(
     # (pipeline.rebuild_returns), so this is only the completion tally, not a re-log.
 
     logger.info(
-        "rebuild-returns: done, %d return snapshot(s) saved across %d ticker(s), %d blocked, "
-        "%d pair(s) failed.",
+        "rebuild-returns: done, %d return snapshot(s) saved across %d ticker(s), %d removed, "
+        "%d blocked, %d pair(s) failed.",
         outcome.snapshots_saved,
         outcome.tickers_rebuilt,
+        outcome.tickers_removed,
         len(outcome.blocked),
         len(outcome.failed_pairs),
     )
     result = build_run_result(
-        units_total=outcome.tickers_rebuilt + len(outcome.blocked) + len(outcome.failed_pairs),
+        units_total=(
+            outcome.tickers_rebuilt
+            + outcome.tickers_removed
+            + len(outcome.blocked)
+            + len(outcome.failed_pairs)
+        ),
         rows_saved=outcome.snapshots_saved,
         failed=len(outcome.blocked) + len(outcome.failed_pairs),
         tickers_rebuilt=outcome.tickers_rebuilt,
+        tickers_removed=outcome.tickers_removed,
         tickers_blocked=len(outcome.blocked),
         pairs_failed=len(outcome.failed_pairs),
     )

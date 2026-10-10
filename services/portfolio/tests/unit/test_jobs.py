@@ -1294,6 +1294,7 @@ def test_run_rebuild_returns_reports_ok_with_the_payload(monkeypatch):
         "status": "ok",
         "rows_saved": 5,
         "tickers_rebuilt": 1,
+        "tickers_removed": 0,
         "tickers_blocked": 0,
         "pairs_failed": 0,
         "blocked_tickers": [],
@@ -1312,6 +1313,23 @@ def test_run_rebuild_returns_reports_nothing_to_do_with_no_tickers(monkeypatch):
     result = jobs.run_rebuild_returns(user_id=uuid.uuid4())
 
     assert result["status"] == "nothing_to_do"
+
+
+def test_run_rebuild_returns_reports_ok_when_only_pruning_occurred(monkeypatch, caplog):
+    """A run that only removed a gone ticker's rows did work -- the same rule
+    run_rebuild_positions follows for positions_removed, never `nothing_to_do`."""
+    _patch_returns_job_common(monkeypatch)
+    outcome = ReturnsRebuildOutcome(
+        snapshots_saved=0, tickers_rebuilt=0, blocked=[], failed_pairs=[], tickers_removed=1
+    )
+    monkeypatch.setattr(jobs.pipeline, "rebuild_returns", lambda conn, **kw: outcome)
+
+    with caplog.at_level("INFO", logger="portfolio.jobs"):
+        result = jobs.run_rebuild_returns(user_id=uuid.uuid4())
+
+    assert result["status"] == "ok"
+    assert result["tickers_removed"] == 1
+    assert "0 ticker(s), 1 removed" in caplog.text
 
 
 def test_run_rebuild_returns_reports_partial_with_blocked_tickers(monkeypatch):

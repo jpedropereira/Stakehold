@@ -222,7 +222,7 @@ Derived, materialized, rebuildable.
 | `dividends_received_eur` | `NUMERIC(20,4) NOT NULL DEFAULT 0` | **Added at task 8, amending this table's original sign-off.** Cumulative signed sum of this `(account_id, canonical_ticker)`'s `DIVIDEND`-type `transactions.eur_amount` with `trade_datetime` (date, UTC) `<= price_date`. Needs no FX arithmetic at all — `eur_amount` is already frozen in EUR at transaction time (this table's own "immutable source of truth" convention, same as `transactions`), so this is a running sum over already-stored data, never a `datastore_client` call. A signed sum also nets out withholding tax automatically **if** the broker plugin types that tax as its own negative `DIVIDEND` row; if a plugin instead types it as a `FEE`, it isn't captured here — `FEE`/`ADJUSTMENT` still feed nothing, the same open gap as the missing `realized_gains` table below. |
 | `total_return_eur` | `NUMERIC(20,4) NOT NULL DEFAULT 0` | **Added at task 8.** `unrealized_return_eur + dividends_received_eur` — price change plus the income the position produced. `unrealized_return_eur` deliberately stays price-only; this is the separate "what did this holding actually return" figure, mirroring how `market_returns` keeps `price_return` and `simple_return` (price+dividend) as separate columns rather than merging them. |
 | `total_return_pct` | `NUMERIC(18,8)` | **Added at task 8.** `total_return_eur / cost_basis_eur`. Nullable on exactly the same rule as `unrealized_return_pct`: undefined, not zero, when `cost_basis_eur = 0`. |
-| `calculated_at` | `TIMESTAMPTZ NOT NULL DEFAULT now()` | Bumped on every upsert, same convention as `market_returns.calculated_at` — reflects the last rebuild, not the first. |
+| `calculated_at` | `TIMESTAMPTZ NOT NULL DEFAULT now()` | Stamped when the row is written. Every rebuild rewrites a pair's rows (see the loading strategy below), so it reflects the last rebuild, not the first, the same as `market_returns.calculated_at`. |
 
 **The three dividend columns above are a schema amendment made mid-task 8, not part of the
 original sign-off.** The table as originally designed computed only mark-to-market return
@@ -241,14 +241,32 @@ columns never actually backfills a real row: `return_snapshots` had no writer at
 
 `PRIMARY KEY (account_id, canonical_ticker, price_date)`.
 
-**Loading strategy: true upsert (`INSERT ... ON CONFLICT ... DO UPDATE`), matching
-`market_returns` exactly** — unlike `position_snapshots`, the trading-day calendar itself comes from
-`data-store`'s external price series, not something `rebuild-returns` invents, so the *values* at an
-already-written date are only ever overwritten, never shifted to a different date. This is a stable
-grid, not a fixed one, though: which dates get a row for a given `(account_id, canonical_ticker)` is
-still bounded by the open-window rule in `architecture.md`'s `ReturnSnapshot` note — `rebuild-returns`
-stops adding new dates for a position once it closes to zero, even as `data-store`'s calendar keeps
-extending past that point.
+**Loading strategy: delete-then-insert per `(account_id, canonical_ticker)`, plus pruning — the
+same as `position_snapshots`.** Each `rebuild-returns` run computes a pair's whole window (its
+first position snapshot through today, or through its closing date), then replaces that pair's
+rows with it in one transaction. A ticker whose position snapshots are all gone loses its return
+rows too, in a transaction of its own. Which dates get a row is still bounded by the open-window
+rule in `architecture.md`'s `ReturnSnapshot` note: `rebuild-returns` stops adding new dates for a
+position once it closes to zero, even as `data-store`'s calendar keeps extending past that point.
+
+*Amended 2026-10-10 (signed off by the user), replacing a true upsert
+(`INSERT ... ON CONFLICT ... DO UPDATE`, matching `market_returns`).* The upsert's reasoning was
+that the trading-day calendar comes from data-store's price series, so a rebuild only overwrites
+the values at an already-written date. That holds while the transaction log only grows, and
+stops holding once a transaction can be deleted (a one-off spike, not a tracked task): deleting an
+earlier BUY moves a pair's window start later, and deleting a ticker's only BUY leaves it no
+position snapshots, so the rebuild never visits it again. Either way an upsert leaves rows no
+transaction supports. The same gap already existed for a re-pointed ticker mapping, whose old
+ticker's return rows outlived its pruned position snapshots and still showed on the account and
+home pages. Replacing a pair loses nothing a current transaction supports, since the whole window
+is recomputed. The one exception: if data-store ever lost price history it once served, the rows
+for those dates would go too rather than be kept. No DDL changed.
+
+What stays untouched: a pair whose data-store fetch or compute fails keeps its previous rows (the
+replacement only runs once the new rows exist), and so does a ticker data-store doesn't track.
+A ticker is only pruned once it has no position snapshots, and `rebuild-positions` never prunes in
+an account with a blocked instrument ([`flows.md`](flows.md)'s "Pruning a ticker"), so "blocked
+means don't touch" carries over unchanged.
 
 ## Open items, carried forward rather than resolved here
 

@@ -111,6 +111,12 @@ that account currently has **zero** blocked instruments. A blocked instrument's 
 stale one at rebuild time, and "blocked means don't touch, not delete" means the ambiguous case
 must never delete. An account with any blocked instrument simply skips pruning for that run.
 
+`rebuild-returns` follows: a ticker with return rows but no position snapshots left loses its
+rows (`tickers_removed`), so it inherits the rule above rather than needing its own blocked
+check. Before 2026-10-10 it never pruned, so a re-pointed mapping's old ticker kept showing
+returns on the account and home pages. See `schema.md`'s loading strategy for
+`return_snapshots`.
+
 ### Positions and returns follow every transaction write
 
 `run_add_transaction`, `run_import_transactions` and `run_import_cashflow` each end by calling
@@ -186,7 +192,7 @@ whether or not they touched their account. The `returns-refresh` container
 `PORTFOLIO_RETURNS_REFRESH_SECONDS` (default six hours). `jobs.run_rebuild_returns_all` runs
 `run_rebuild_returns` for each user with an account, isolated per user: one raising is logged and
 counted in `users_failed`, and the rest still run. Blocked tickers and failed pairs are summed and
-make the run `partial`. A run when nothing changed only re-upserts the same rows.
+make the run `partial`. A run when nothing changed rewrites the same rows.
 
 *Why portfolio polls instead of data-store calling it when the DAG finishes:* portfolio depends on
 data-store and never the reverse, and Airflow isn't even on `stakehold-net`. A DAG step would

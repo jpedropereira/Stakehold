@@ -38,7 +38,7 @@ services:
       APP_POSTGRES_ADMIN_DATABASE_URL: postgresql://${APP_POSTGRES_ADMIN_USER}:${APP_POSTGRES_ADMIN_PASSWORD}@postgres:5432/${APP_POSTGRES_DB}
       DATASTORE_API_URL: http://data-store-api:8000
       # Six hours: at most that long after a daily close lands before it shows. A run when
-      # nothing changed only re-upserts the same rows.
+      # nothing changed rewrites the same rows.
       PORTFOLIO_RETURNS_REFRESH_SECONDS: ${PORTFOLIO_RETURNS_REFRESH_SECONDS:-21600}
     # $$ so compose leaves the variable for the container's shell to expand. A failed run only
     # logs its own failure and exits non-zero; the loop still sleeps and tries again.

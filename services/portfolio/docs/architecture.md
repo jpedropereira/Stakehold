@@ -219,7 +219,7 @@ bounded, not open-ended: from `position_snapshots`' first stored row (always the
 opening date) through today if the latest snapshot is still open, or through its closing date if
 not — `compute_returns` itself never invents a date outside what `get_price_series` actually
 returns for that window. Every pair's compute-and-save (`get_price_series`, `get_fx_rate_series`
-per distinct non-EUR currency, `compute_returns`, `returns_repository.upsert_snapshots` inside its
+per distinct non-EUR currency, `compute_returns`, `returns_repository.replace_snapshots` inside its
 own `with transaction(conn):`) is wrapped in one `try/except Exception`, deliberately *broader*
 than `rebuild_positions`' own per-pair catch (which only wraps driver-level exceptions, since
 repositories never raise `PortfolioError`): this is the first rebuild flow with an HTTP
@@ -350,8 +350,12 @@ identity — not column-level DDL, which needs its own sign-off pass.
   not open-ended**: "was open" means from the position's first non-zero `PositionSnapshot` through
   the trading day it closes to zero, inclusive — `rebuild-returns` stops generating new rows for a
   ticker once the latest `PositionSnapshot` shows zero quantity with no later re-opening
-  transaction. Rows already written for the open window are never deleted, so they remain available
-  for historical charting; the grain just doesn't grow forever for a position nobody still holds.
+  transaction. A closed position's rows stay available for historical charting, because every
+  rebuild recomputes its whole window and replaces its rows with the result; the grain just
+  doesn't grow forever for a position nobody still holds. Rows that no current transaction
+  supports (before a window start that moved later, or for a ticker with no position snapshots
+  left) are removed: see `schema.md`'s loading strategy for `return_snapshots`, amended
+  2026-10-10 when transactions became deletable.
 
 ## The flows
 

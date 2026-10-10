@@ -992,26 +992,35 @@ class FakeDataStoreClient:
 
 
 class FakeReturnsRepo:
-    """Records every upsert_snapshots call, keyed by (account_id, canonical_ticker) -- mirrors
-    FakePositionsRepo's shape, but merges by price_date rather than replacing wholesale, since
-    upsert_snapshots is a true upsert, not delete-then-insert."""
+    """Records every replace_snapshots/delete_snapshots call, keyed by (account_id,
+    canonical_ticker) -- mirrors FakePositionsRepo. Rows are held per pair by price_date, and
+    replace_snapshots swaps a pair's whole set, since the real one deletes before inserting."""
 
     def __init__(self):
         self.snapshots: dict[tuple[int, str], dict] = {}
-        self.upsert_calls: list[tuple[int, str]] = []
+        self.replace_calls: list[tuple[int, str]] = []
+        self.delete_calls: list[tuple[int, str]] = []
+        # Pairs that should raise instead of writing, to simulate a driver-level failure.
         self.failing_pairs: set[tuple[int, str]] = set()
 
-    def upsert_snapshots(self, conn, snapshots):
-        if not snapshots:
-            return 0
-        key = (snapshots[0].account_id, snapshots[0].canonical_ticker)
-        self.upsert_calls.append(key)
+    def replace_snapshots(self, conn, *, account_id, canonical_ticker, snapshots):
+        key = (account_id, canonical_ticker)
+        self.replace_calls.append(key)
         if key in self.failing_pairs:
-            raise RuntimeError(f"simulated failure for {key[1]}")
-        by_date = self.snapshots.setdefault(key, {})
-        for snapshot in snapshots:
-            by_date[snapshot.price_date] = snapshot
+            raise RuntimeError(f"simulated failure for {canonical_ticker}")
+        self.snapshots[key] = {snapshot.price_date: snapshot for snapshot in snapshots}
         return len(snapshots)
+
+    def list_tickers(self, conn, account_id):
+        return [ticker for (aid, ticker) in self.snapshots if aid == account_id]
+
+    def delete_snapshots(self, conn, *, account_id, canonical_ticker):
+        key = (account_id, canonical_ticker)
+        self.delete_calls.append(key)
+        if key in self.failing_pairs:
+            raise RuntimeError(f"simulated failure for {canonical_ticker}")
+        existing = self.snapshots.pop(key, None)
+        return len(existing) if existing else 0
 
     def list_snapshots(self, conn, *, account_id, canonical_ticker=None, start=None, end=None):
         rows = []
@@ -2060,6 +2069,161 @@ def test_rebuild_returns_with_no_tracked_tickers_reports_nothing(repos, returns_
     assert outcome.snapshots_saved == 0
     assert outcome.blocked == []
     assert outcome.failed_pairs == []
+
+
+def test_rebuild_returns_replaces_a_pairs_rows_rather_than_merging_them(repos, returns_repo, conn):
+    """An earlier BUY deleted moves the window's start later, so rows from before it must go --
+    an upsert would keep them and the chart would still show the deleted holding's days."""
+    accounts_repo, transactions_repo, positions_repo = repos
+    user_id = uuid.uuid4()
+    account = _seed_account(accounts_repo, user_id=user_id)
+    stale_date = date(2026, 1, 2)
+    returns_repo.snapshots[(account.id, "IWDA.AS")] = {
+        stale_date: _return_snapshot(account_id=account.id, price_date=stale_date)
+    }
+    positions_repo.snapshots[(account.id, "IWDA.AS")] = [
+        _position_snapshot(account_id=account.id, as_of_date=date(2026, 1, 5))
+    ]
+    client = FakeDataStoreClient(
+        price_series={
+            "IWDA.AS": [PricePoint(date=date(2026, 1, 6), split_adjusted_close=Decimal("100.00"))]
+        }
+    )
+
+    outcome = pipeline.rebuild_returns(
+        conn, user_id=user_id, mappings=TickerMappings(isin={}, symbol={}), datastore_client=client
+    )
+
+    assert outcome.tickers_rebuilt == 1
+    assert list(returns_repo.snapshots[(account.id, "IWDA.AS")]) == [date(2026, 1, 6)]
+
+
+def test_rebuild_returns_leaves_a_pairs_rows_alone_when_its_price_fetch_fails(
+    repos, returns_repo, conn
+):
+    """The replacement happens only once the new rows are computed, so a data-store failure
+    leaves the previous rows in place rather than an empty chart."""
+    accounts_repo, transactions_repo, positions_repo = repos
+    user_id = uuid.uuid4()
+    account = _seed_account(accounts_repo, user_id=user_id)
+    kept = _return_snapshot(account_id=account.id, price_date=date(2026, 1, 6))
+    returns_repo.snapshots[(account.id, "IWDA.AS")] = {kept.price_date: kept}
+    positions_repo.snapshots[(account.id, "IWDA.AS")] = [_position_snapshot(account_id=account.id)]
+    client = FakeDataStoreClient(price_series_errors={"IWDA.AS": RuntimeError("data-store down")})
+
+    outcome = pipeline.rebuild_returns(
+        conn, user_id=user_id, mappings=TickerMappings(isin={}, symbol={}), datastore_client=client
+    )
+
+    assert [pair[1] for pair in outcome.failed_pairs] == ["IWDA.AS"]
+    assert returns_repo.replace_calls == []
+    assert returns_repo.snapshots[(account.id, "IWDA.AS")] == {kept.price_date: kept}
+
+
+def test_rebuild_returns_prunes_a_ticker_with_no_position_snapshots_left(
+    repos, returns_repo, conn, caplog
+):
+    """Deleting a ticker's only BUY (or re-pointing its mapping) removes its position snapshots;
+    its return rows must follow, or the account and home pages show a holding that's gone."""
+    accounts_repo, transactions_repo, positions_repo = repos
+    user_id = uuid.uuid4()
+    account = _seed_account(accounts_repo, user_id=user_id)
+    positions_repo.snapshots[(account.id, "IWDA.AS")] = [_position_snapshot(account_id=account.id)]
+    returns_repo.snapshots[(account.id, "GONE.AS")] = {
+        date(2026, 1, 6): _return_snapshot(
+            account_id=account.id, canonical_ticker="GONE.AS", price_date=date(2026, 1, 6)
+        )
+    }
+    client = FakeDataStoreClient(
+        price_series={
+            "IWDA.AS": [PricePoint(date=date(2026, 1, 6), split_adjusted_close=Decimal("100.00"))]
+        }
+    )
+
+    with caplog.at_level("INFO", logger="portfolio.pipeline"):
+        outcome = pipeline.rebuild_returns(
+            conn,
+            user_id=user_id,
+            mappings=TickerMappings(isin={}, symbol={}),
+            datastore_client=client,
+        )
+
+    assert outcome.tickers_removed == 1
+    assert (account.id, "GONE.AS") not in returns_repo.snapshots
+    assert (account.id, "IWDA.AS") in returns_repo.snapshots
+    assert "ticker GONE.AS -- stale return snapshot(s) removed" in caplog.text
+
+
+def test_rebuild_returns_keeps_a_blocked_tickers_rows(repos, returns_repo, conn):
+    """A ticker data-store doesn't track still has position snapshots, so it isn't stale: its
+    rows stay, the same "blocked means don't touch" the positions rebuild follows."""
+    accounts_repo, transactions_repo, positions_repo = repos
+    user_id = uuid.uuid4()
+    account = _seed_account(accounts_repo, user_id=user_id)
+    positions_repo.snapshots[(account.id, "IWDA.AS")] = [_position_snapshot(account_id=account.id)]
+    kept = _return_snapshot(account_id=account.id, price_date=date(2026, 1, 6))
+    returns_repo.snapshots[(account.id, "IWDA.AS")] = {kept.price_date: kept}
+    client = FakeDataStoreClient(
+        ticker_info={"IWDA.AS": TickerInfo(exists=False, has_returns=False)}
+    )
+
+    outcome = pipeline.rebuild_returns(
+        conn, user_id=user_id, mappings=TickerMappings(isin={}, symbol={}), datastore_client=client
+    )
+
+    assert outcome.tickers_removed == 0
+    assert returns_repo.delete_calls == []
+    assert returns_repo.snapshots[(account.id, "IWDA.AS")] == {kept.price_date: kept}
+
+
+def test_rebuild_returns_isolates_a_failed_prune_and_continues(repos, returns_repo, conn):
+    accounts_repo, transactions_repo, positions_repo = repos
+    user_id = uuid.uuid4()
+    account = _seed_account(accounts_repo, user_id=user_id)
+    for ticker in ("OLD.AS", "GONE.AS"):
+        returns_repo.snapshots[(account.id, ticker)] = {
+            date(2026, 1, 6): _return_snapshot(
+                account_id=account.id, canonical_ticker=ticker, price_date=date(2026, 1, 6)
+            )
+        }
+    returns_repo.failing_pairs.add((account.id, "OLD.AS"))
+
+    outcome = pipeline.rebuild_returns(
+        conn,
+        user_id=user_id,
+        mappings=TickerMappings(isin={}, symbol={}),
+        datastore_client=FakeDataStoreClient(),
+    )
+
+    assert outcome.tickers_removed == 1
+    assert [pair[1] for pair in outcome.failed_pairs] == ["OLD.AS"]
+    assert (account.id, "OLD.AS") in returns_repo.snapshots
+    assert (account.id, "GONE.AS") not in returns_repo.snapshots
+
+
+def test_rebuild_returns_prunes_only_the_rebuilt_accounts_rows(repos, returns_repo, conn):
+    accounts_repo, transactions_repo, positions_repo = repos
+    user_id = uuid.uuid4()
+    account_a = _seed_account(accounts_repo, user_id=user_id, label="a")
+    account_b = _seed_account(accounts_repo, user_id=user_id, label="b")
+    for account in (account_a, account_b):
+        returns_repo.snapshots[(account.id, "GONE.AS")] = {
+            date(2026, 1, 6): _return_snapshot(
+                account_id=account.id, canonical_ticker="GONE.AS", price_date=date(2026, 1, 6)
+            )
+        }
+
+    outcome = pipeline.rebuild_returns(
+        conn,
+        user_id=user_id,
+        mappings=TickerMappings(isin={}, symbol={}),
+        datastore_client=FakeDataStoreClient(),
+        account_label="a",
+    )
+
+    assert outcome.tickers_removed == 1
+    assert (account_a.id, "GONE.AS") not in returns_repo.snapshots
+    assert (account_b.id, "GONE.AS") in returns_repo.snapshots
 
 
 # --- list_transactions ---
