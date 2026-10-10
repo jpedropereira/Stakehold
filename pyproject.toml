@@ -32,6 +32,8 @@ dev = [
     "hatchling",
     "httpx",
     "isort",
+    # services/web/scripts/review_pages.py drives Chromium; data-store depends on it at runtime.
+    "playwright",
     "pre-commit",
     "pycln",
     "pytest",

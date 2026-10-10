@@ -1,0 +1,470 @@
+"""Screenshot every web page in both themes at desktop and phone width, and check each one (UI-13).
+
+    uv run python services/web/scripts/review_pages.py [--out DIR] [--only NAME ...]
+
+For a person to review, not a pixel-diff gate: the screenshots land in services/web/screenshots/
+(gitignored). Alongside them, every page and variant gets the checks a screenshot can't show:
+
+- no sideways scroll at phone width;
+- WCAG AA contrast for every piece of visible text against what's actually behind it;
+- a visible focus indicator on everything Tab reaches, and Tab never getting stuck;
+- no console errors, CSP violations included.
+
+The run exits non-zero if any check fails.
+
+The app runs in-process against fake auth and portfolio clients, so the run needs no stack and
+never touches a database, and the pages show the same data every run. The data is chosen to
+exercise every state worth seeing: a gain, a loss, a holding waiting for prices, a non-EUR
+transaction, a long broker reference, an instrument waiting for a mapping, and return history
+for the chart.
+"""
+
+import argparse
+import math
+import socket
+import sys
+import threading
+import time
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
+from pathlib import Path
+
+_WEB_DIR = Path(__file__).resolve().parents[1]
+_DEFAULT_OUT = _WEB_DIR / "screenshots"
+
+THEMES = ("light", "dark")
+WIDTHS = {"desktop": 1280, "phone": 360}
+
+
+@dataclass(frozen=True)
+class Page:
+    name: str
+    path: str
+    # "anon", "user" or "admin": who is logged in when the page is opened.
+    viewer: str
+
+
+PAGES = [
+    Page("login", "/login", "anon"),
+    Page("signup", "/signup", "anon"),
+    Page("overview", "/", "admin"),
+    Page("accounts", "/accounts", "admin"),
+    Page("portfolio", "/portfolio?account=main", "admin"),
+    Page("transactions", "/transactions?account=main", "admin"),
+    Page("transactions-new", "/transactions/new?account=main", "admin"),
+    Page("transactions-import", "/transactions/import?account=main", "admin"),
+    Page("admin", "/admin", "admin"),
+    Page("admin-mappings", "/admin/mappings", "admin"),
+    Page("forbidden", "/admin", "user"),
+    Page("account-not-found", "/portfolio?account=nope", "admin"),
+    Page("not-found", "/no-such-page", "anon"),
+]
+
+# Run in the page. For each visible element with text of its own (and each form control), its
+# text color against the first opaque background found walking up its ancestors, translucent
+# ones composited on the way. Returns one entry per failure.
+_CONTRAST_JS = """
+() => {
+  const parse = (value) => {
+    const m = value.match(/rgba?\\(([^)]+)\\)/);
+    if (!m) return null;
+    const parts = m[1].split(/[ ,\\/]+/).filter(Boolean).map(Number);
+    return [parts[0], parts[1], parts[2], parts.length > 3 ? parts[3] : 1];
+  };
+  const over = (top, bottom) => {
+    const a = top[3];
+    return [0, 1, 2].map((i) => a * top[i] + (1 - a) * bottom[i]).concat(1);
+  };
+  const luminance = (rgb) => {
+    const c = rgb.slice(0, 3).map((v) => {
+      v /= 255;
+      return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+  };
+  const ratio = (a, b) => {
+    const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+    return (hi + 0.05) / (lo + 0.05);
+  };
+  const background = (el) => {
+    const layers = [];
+    for (let node = el; node; node = node.parentElement) {
+      const style = getComputedStyle(node);
+      if (style.backgroundImage !== "none" && node !== el) return { image: true };
+      const color = parse(style.backgroundColor);
+      if (color && color[3] > 0) {
+        layers.push(color);
+        if (color[3] === 1) break;
+      }
+    }
+    // Under every layer, the canvas: html's own background or white.
+    let result = [255, 255, 255, 1];
+    for (const layer of layers.reverse()) result = over(layer, result);
+    return { color: result };
+  };
+  const describe = (el) => {
+    const id = el.id ? "#" + el.id : "";
+    const cls = typeof el.className === "string" && el.className.trim()
+      ? "." + el.className.trim().split(/\\s+/).join(".") : "";
+    return el.tagName.toLowerCase() + id + cls;
+  };
+  const failures = [];
+  for (const el of document.body.querySelectorAll("*")) {
+    if (el.closest("template, script, style, option, [aria-hidden=true]")) continue;
+    const control = el.matches("input:not([type=hidden]), select, textarea");
+    const ownText = [...el.childNodes].some(
+      (n) => n.nodeType === Node.TEXT_NODE && n.textContent.trim());
+    if (!control && !ownText) continue;
+    const rect = el.getBoundingClientRect();
+    const style = getComputedStyle(el);
+    if (rect.width <= 1 || rect.height <= 1 || style.visibility !== "visible") continue;
+    const fg = parse(style.color);
+    const bg = background(el);
+    if (!fg || bg.image) continue;
+    const size = parseFloat(style.fontSize);
+    const large = size >= 24 || (size >= 18.66 && Number(style.fontWeight) >= 700);
+    const needed = large ? 3 : 4.5;
+    const measured = ratio(over(fg, bg.color), bg.color);
+    if (measured < needed) {
+      const text = (control ? el.value || el.name : el.textContent).trim().slice(0, 40);
+      failures.push(`${describe(el)} "${text}": ${measured.toFixed(2)}:1, needs ${needed}:1`);
+    }
+  }
+  return failures;
+}
+"""
+
+# Run in the page after each Tab: what has focus, and whether it shows that it does.
+_FOCUS_JS = """
+() => {
+  const el = document.activeElement;
+  if (!el || el === document.body) return null;
+  const style = getComputedStyle(el);
+  const rect = el.getBoundingClientRect();
+  const id = el.id ? "#" + el.id : "";
+  const text = (el.textContent || el.value || el.name || "").trim().slice(0, 30);
+  return {
+    // The element's place in the document keeps two same-named buttons (a Delete per row) apart.
+    position: [...document.querySelectorAll("*")].indexOf(el),
+    key: el.tagName.toLowerCase() + id + " " + JSON.stringify(text),
+    marked: (style.outlineStyle !== "none" && parseFloat(style.outlineWidth) > 0)
+      || style.boxShadow !== "none",
+    visible: rect.width > 0 && rect.height > 0 && style.visibility === "visible",
+  };
+}
+"""
+
+_MAX_TABS = 120
+# A date/time input takes one Tab per part (day, month, year, hours, minutes...) without focus
+# leaving the element, so only this many Tabs in a row on one element count as stuck.
+_MAX_TABS_ON_ONE = 8
+
+
+# ---- fake upstreams ----------------------------------------------------------------------------
+
+
+def _fakes():
+    """Fake auth and portfolio clients serving the review data. Imported here rather than at
+    module level, so the page list above can be read without the web package's dependencies."""
+    from web.auth_client.base import AuthResult, AuthUser
+    from web.auth_client.errors import SessionInvalid
+    from web.portfolio_client.base import (
+        Account,
+        Broker,
+        Position,
+        Return,
+        TickerMapping,
+        Transaction,
+        UnmappedInstrument,
+    )
+
+    users = {
+        "admin-tok": AuthUser("u1", "ann@example.com", "Ann", is_admin=True),
+        "user-tok": AuthUser("u2", "bo@example.com", "Bo"),
+    }
+    today = date(2026, 10, 9)
+
+    class Auth:
+        async def validate_session(self, *, cookie_header):
+            for token, user in users.items():
+                if f"stakehold_session={token}" in (cookie_header or ""):
+                    return AuthResult(user=user, set_cookie=f"stakehold_session={token}; Path=/")
+            raise SessionInvalid("no session")
+
+    # (ticker, quantity, average cost, currency, market value or None while waiting for prices)
+    holdings = [
+        ("VWCE.DE", "42", "98.40", "EUR", "5124.84"),
+        ("AAPL", "12.5", "182.10", "USD", "1978.40"),
+        ("NEWCO.DE", "3", "20.00", "EUR", None),
+    ]
+
+    def latest(ticker, quantity, cost, value, on):
+        cost_basis = Decimal(quantity) * Decimal(cost)
+        unrealized = Decimal(value) - cost_basis
+        dividends = Decimal("31.20") if ticker == "VWCE.DE" else Decimal("0")
+        return Return(
+            account_id=1,
+            canonical_ticker=ticker,
+            price_date=on,
+            quantity=Decimal(quantity),
+            market_value_native=Decimal(value),
+            market_value_eur=Decimal(value),
+            cost_basis_eur=cost_basis,
+            unrealized_return_eur=unrealized,
+            unrealized_return_pct=unrealized / cost_basis,
+            dividends_received_eur=dividends,
+            total_return_eur=unrealized + dividends,
+            total_return_pct=(unrealized + dividends) / cost_basis,
+        )
+
+    def history():
+        """A year of daily rows for the priced holdings, wandering around today's value."""
+        rows = []
+        for ticker, quantity, cost, _, value in holdings:
+            if value is None:
+                continue
+            for back in range(365, -1, -1):
+                drift = Decimal(str(round(1 + 0.08 * math.sin(back / 40) - back / 4000, 4)))
+                on = today - timedelta(days=back)
+                rows.append(latest(ticker, quantity, cost, Decimal(value) * drift, on))
+        return rows
+
+    def txn(ref, kind, day, amount, *, identifier=None, quantity=None, price=None, currency="EUR"):
+        native = Decimal(amount)
+        return Transaction(
+            account_id=1,
+            broker_transaction_ref=ref,
+            transaction_type=kind,
+            trade_datetime=datetime(2026, 9, day, 9, 30, tzinfo=timezone.utc),
+            instrument_identifier=identifier,
+            instrument_identifier_kind="TICKER" if identifier else None,
+            quantity=None if quantity is None else Decimal(quantity),
+            price=None if price is None else Decimal(price),
+            native_currency=currency,
+            native_amount=native,
+            eur_amount=native * (Decimal("0.92") if currency == "USD" else 1),
+            fx_rate=Decimal("0.92") if currency == "USD" else None,
+            fx_rate_source="ECB" if currency == "USD" else None,
+            fees_native=Decimal("1.00") if quantity else None,
+        )
+
+    class Portfolio:
+        async def list_accounts(self, *, user_id):
+            return [
+                Account(1, "main", "acme", "2026-01-01T00:00:00Z"),
+                Account(2, "pension", "globex", "2026-02-01T00:00:00Z"),
+            ]
+
+        async def list_brokers(self):
+            return [
+                Broker("acme", ("transactions", "cashflow")),
+                Broker("globex", ("transactions",)),
+            ]
+
+        async def list_tickers(self):
+            return ["AAPL", "VWCE.DE", "NEWCO.DE"]
+
+        async def list_positions(self, *, user_id, account_label):
+            return [
+                Position(
+                    1,
+                    ticker,
+                    today,
+                    Decimal(qty),
+                    Decimal(cost),
+                    currency,
+                    Decimal(cost),
+                    Decimal(qty) * Decimal(cost),
+                )
+                for ticker, qty, cost, currency, _ in holdings
+            ]
+
+        async def list_latest_returns(self, *, user_id, account_label):
+            return [
+                latest(ticker, qty, cost, value, today)
+                for ticker, qty, cost, _, value in holdings
+                if value is not None
+            ]
+
+        async def list_returns(self, *, user_id, account_label):
+            return history()
+
+        async def list_transactions(self, *, user_id, account_label):
+            return [
+                txn(
+                    "c0a8f5e2-9b1d-4e7a-8f3c-2d6b9e1a7f40",
+                    "BUY",
+                    28,
+                    "-2276.25",
+                    identifier="AAPL",
+                    quantity="12.5",
+                    price="182.1000",
+                    currency="USD",
+                ),
+                txn("div-0917", "DIVIDEND", 17, "31.20", identifier="VWCE.DE"),
+                txn(
+                    "buy-0904",
+                    "BUY",
+                    4,
+                    "-4133.80",
+                    identifier="VWCE.DE",
+                    quantity="42",
+                    price="98.4000",
+                ),
+                txn("dep-0901", "DEPOSIT", 1, "10000.00"),
+            ]
+
+        async def list_unmapped_instruments(self, *, user_id):
+            return [UnmappedInstrument("ISIN", "IE00B4L5Y983", None)]
+
+        async def list_all_unmapped_instruments(self):
+            return [
+                UnmappedInstrument("ISIN", "IE00B4L5Y983", None),
+                UnmappedInstrument("SYMBOL", "SXR8", "acme"),
+            ]
+
+        async def list_ticker_mappings(self):
+            updated = datetime(2026, 9, 2, tzinfo=timezone.utc)
+            return [
+                TickerMapping(1, "ISIN", "IE00BK5BQT80", None, "VWCE.DE", updated),
+                TickerMapping(2, "SYMBOL", "APC", "acme", "AAPL", updated),
+            ]
+
+    return Auth(), Portfolio()
+
+
+def _serve():
+    """Start the app on a free local port in a background thread; return its base URL."""
+    import uvicorn
+    from web import settings as settings_module
+    from web.api.app import create_app
+    from web.api.deps import get_auth_client, get_portfolio_client
+    from web.settings import Settings
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    settings = Settings(
+        auth_api_url="http://auth.invalid",
+        internal_secret="review-script",  # pragma: allowlist secret
+        portfolio_api_url="http://portfolio.invalid",
+        portfolio_internal_secret="review-script",  # pragma: allowlist secret
+        brand_dir=settings_module._DEFAULT_BRAND_DIR,
+        cookie_secure=False,
+        api_host="127.0.0.1",
+        api_port=port,
+        http_timeout_seconds=5.0,
+    )
+    auth, portfolio = _fakes()
+    app = create_app(settings)
+    app.dependency_overrides[get_auth_client] = lambda: auth
+    app.dependency_overrides[get_portfolio_client] = lambda: portfolio
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error"))
+    threading.Thread(target=server.run, daemon=True).start()
+    while not server.started:
+        time.sleep(0.05)
+    return f"http://127.0.0.1:{port}"
+
+
+# ---- checks ------------------------------------------------------------------------------------
+
+
+def _focus_problems(page) -> list[str]:
+    """Tab through the page from the top; report anything focused without a visible marker, and
+    a Tab that doesn't move focus on (a trap)."""
+    problems, first, previous, repeats = [], None, None, 0
+    for _ in range(_MAX_TABS):
+        page.keyboard.press("Tab")
+        focused = page.evaluate(_FOCUS_JS)
+        if focused is None or focused["position"] == first:
+            return problems
+        repeats = repeats + 1 if focused["position"] == previous else 0
+        if repeats >= _MAX_TABS_ON_ONE:
+            return problems + [f"focus stuck on {focused['key']}"]
+        # Every stop, a date input's inner parts included: its calendar button is one of them.
+        if not focused["visible"]:
+            problem = f"focus on an invisible element: {focused['key']}"
+        elif not focused["marked"]:
+            problem = f"no visible focus indicator: {focused['key']}"
+        else:
+            problem = None
+        if problem and problem not in problems:
+            problems.append(problem)
+        first = focused["position"] if first is None else first
+        previous = focused["position"]
+    return problems + [f"still tabbing after {_MAX_TABS} stops"]
+
+
+def _review(browser, base_url, page_spec, theme, width_name, out) -> list[str]:
+    context = browser.new_context(
+        color_scheme=theme, viewport={"width": WIDTHS[width_name], "height": 900}
+    )
+    if page_spec.viewer != "anon":
+        token = f"{page_spec.viewer}-tok"
+        context.add_cookies([{"name": "stakehold_session", "value": token, "url": base_url}])
+    page = context.new_page()
+    url = base_url + page_spec.path
+    console = []
+
+    def on_console(message):
+        # An error page's own status is logged as a failed load; that's the page working.
+        if message.type == "error" and message.location.get("url") != url:
+            console.append(message.text)
+
+    page.on("console", on_console)
+    page.on("pageerror", lambda e: console.append(str(e)))
+    page.goto(url, wait_until="networkidle")
+
+    # Before the checks: the focus walk scrolls whatever it tabs into.
+    page.screenshot(path=out / f"{page_spec.name}-{theme}-{width_name}.png", full_page=True)
+    problems = []
+    if width_name == "phone" and not page.evaluate(
+        "document.documentElement.scrollWidth <= window.innerWidth"
+    ):
+        problems.append("scrolls sideways")
+    problems += [f"contrast: {f}" for f in page.evaluate(_CONTRAST_JS)]
+    problems += [f"focus: {p}" for p in _focus_problems(page)]
+    problems += [f"console: {line}" for line in console]
+    context.close()
+    return problems
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("--out", type=Path, default=_DEFAULT_OUT, help="screenshot folder")
+    parser.add_argument("--only", nargs="+", metavar="NAME", help="review just these pages")
+    args = parser.parse_args(argv)
+
+    from playwright.sync_api import sync_playwright
+
+    pages = [p for p in PAGES if not args.only or p.name in args.only]
+    unknown = set(args.only or ()) - {p.name for p in PAGES}
+    if unknown:
+        parser.error(f"no such page: {', '.join(sorted(unknown))}")
+    args.out.mkdir(parents=True, exist_ok=True)
+    variants = len(THEMES) * len(WIDTHS)
+    print(f"Reviewing {len(pages)} page(s) x {variants} variants; screenshots to {args.out}")
+
+    base_url = _serve()
+    failed = 0
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        for page_spec in pages:
+            for theme in THEMES:
+                for width_name in WIDTHS:
+                    problems = _review(browser, base_url, page_spec, theme, width_name, args.out)
+                    label = f"{page_spec.name} ({theme}, {width_name})"
+                    print(f"{'FAIL' if problems else 'ok  '} {label}")
+                    for problem in problems:
+                        print(f"       {problem}")
+                    failed += bool(problems)
+        browser.close()
+
+    total = len(pages) * variants
+    print(f"Done: {total - failed} of {total} passed, {failed} with problems.")
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

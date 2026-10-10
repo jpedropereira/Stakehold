@@ -92,7 +92,15 @@ a {
   color: var(--text);
 }
 
-:is(a, button, input, select, textarea, summary):focus-visible {
+/* .table-scroll: the admin tables' scroll box, focusable so a keyboard can scroll it. */
+:is(a, button, input, select, textarea, summary, .table-scroll):focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* A date/time input's calendar button is a Tab stop of its own inside the input; while it has
+   focus the input matches :focus-within but not :focus-visible, so the ring needs this too. */
+input[type="datetime-local"]:focus-within {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
@@ -739,8 +747,7 @@ img.logo-on-dark {
 }
 
 /* Eight columns in the 880px card: a smaller figure size and tighter cells keep every column
-   in view at desktop width, where the default size would push Fees and Reference behind the
-   scroll. A date never breaks at its hyphens. Phone width scrolls inside the card (UI-13). */
+   in view at desktop width. Phone width stacks the rows instead (.stack-table, below). */
 .transactions-table th,
 .transactions-table td {
   padding-inline: var(--space-2);
@@ -750,7 +757,8 @@ img.logo-on-dark {
   font-size: 13px;
 }
 
-.transactions-table .date {
+/* A date never breaks at its hyphens, in any table. */
+.positions-table .date {
   white-space: nowrap;
 }
 
@@ -840,13 +848,80 @@ img.logo-on-dark {
   margin-top: var(--space-1);
 }
 
-/* Tables on the admin page are wider than a phone; scroll them, not the page. */
+/* The admin tables are wider than a phone; scroll them, not the page. They're tools for one
+   admin, read at a desk, so they scroll rather than stack. */
 .table-scroll {
   overflow-x: auto;
 }
 
-/* Phone width: give the content the width rather than the padding. The full responsive pass
-   is UI-13. */
+/* ---- stacked tables (UI-13) ---- */
+
+/* The holdings and transactions tables at phone width: each row becomes a block with the
+   row's first cell (ticker or date) as its heading and one "label  figure" line per cell, so
+   nothing hides behind a sideways scroll. The headers stay in the page for screen readers,
+   which still read a table: the templates set explicit table roles, because changing a table's
+   display drops its native semantics in WebKit. The drawn label has empty alt text, since the
+   column header already names each cell for a screen reader. */
+@media (max-width: 600px) {
+  .stack-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .stack-table,
+  .stack-table tbody,
+  .stack-table tr {
+    display: block;
+  }
+
+  .stack-table tr {
+    padding: var(--space-3) 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .stack-table tr:last-child {
+    border-bottom: none;
+  }
+
+  /* Wraps, so a second figure (a non-EUR amount's EUR value) takes a line of its own. */
+  .positions-table.stack-table td {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 0 var(--space-3);
+    padding: var(--space-1) 0;
+    border-bottom: none;
+    text-align: right;
+  }
+
+  .stack-table td:first-child {
+    padding-bottom: var(--space-2);
+    font-weight: 600;
+  }
+
+  .stack-table td[data-label]::before {
+    content: attr(data-label) / "";
+    font: var(--text-caption);
+    color: var(--text-muted);
+    text-align: left;
+  }
+
+  .transactions-table .eur-amount {
+    flex-basis: 100%;
+  }
+
+  /* A whole line to itself now, so the reference can show more of itself. */
+  .transactions-table .reference {
+    max-width: 24ch;
+  }
+}
+
+/* Phone width: give the content the width rather than the padding. */
 @media (max-width: 480px) {
   .site-header {
     padding: var(--space-4);

@@ -129,8 +129,8 @@ def _deposit(*, ref="dep-1", day=1) -> Transaction:
 
 
 def _rows(html: str) -> list[str]:
-    tbody = html.split("<tbody>", 1)[1].split("</tbody>", 1)[0]
-    return re.findall(r"<tr>.*?</tr>", tbody, flags=re.S)
+    tbody = re.search(r"<tbody\b[^>]*>(.*?)</tbody>", html, flags=re.S).group(1)
+    return re.findall(r"<tr\b[^>]*>.*?</tr>", tbody, flags=re.S)
 
 
 def _cells(row: str) -> list[str]:
@@ -299,7 +299,7 @@ def test_transactions_page_type_is_a_neutral_badge(client):
 
     assert '<span class="badge">SELL</span>' in html
     assert '<span class="badge">DEPOSIT</span>' in html
-    tbody = html.split("<tbody>", 1)[1].split("</tbody>", 1)[0]
+    tbody = re.search(r"<tbody\b[^>]*>(.*?)</tbody>", html, flags=re.S).group(1)
     assert not re.search(r'class="[^"]*\b(gain|loss)\b', tbody)
 
 
