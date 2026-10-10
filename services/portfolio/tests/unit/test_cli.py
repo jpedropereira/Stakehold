@@ -1460,3 +1460,49 @@ def test_ticker_mapping_set_exits_nonzero_when_a_returns_rebuild_failed(monkeypa
 
     assert exit_code == 1
     assert "returns failed for 1 account(s)" in capsys.readouterr().out
+
+
+# --- delete-transaction ---
+
+
+def test_delete_transaction_dispatches_the_triple(monkeypatch, capsys):
+    captured = {}
+
+    def fake_run(**kw):
+        captured.update(kw)
+        return {
+            "status": "ok",
+            "rows_saved": 0,
+            "transactions_deleted": 1,
+            "positions_rebuild": "ok",
+            "returns_rebuild": "skipped",
+        }
+
+    monkeypatch.setattr(cli.jobs, "run_delete_transaction", fake_run)
+    user_id = uuid.uuid4()
+
+    exit_code = cli.main(
+        ["delete-transaction", "--user", str(user_id), "--account", "m", "--ref", "manual-1"]
+    )
+
+    assert exit_code == 0
+    assert captured == {
+        "user_id": user_id,
+        "account_label": "m",
+        "broker_transaction_ref": "manual-1",
+    }
+    assert capsys.readouterr().out == "1 transaction(s) deleted\n"
+
+
+def test_delete_transaction_reports_a_missing_transaction_and_exits_nonzero(monkeypatch, capsys):
+    def boom(**kw):
+        raise cli.PortfolioError("no transaction 'manual-1' in account 'm'")
+
+    monkeypatch.setattr(cli.jobs, "run_delete_transaction", boom)
+
+    exit_code = cli.main(
+        ["delete-transaction", "--user", str(uuid.uuid4()), "--account", "m", "--ref", "manual-1"]
+    )
+
+    assert exit_code == 1
+    assert "error: no transaction 'manual-1' in account 'm'" in capsys.readouterr().err

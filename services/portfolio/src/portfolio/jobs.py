@@ -250,13 +250,16 @@ def _rebuild_after_write(
         )
         return {"positions_rebuild": REBUILD_SKIPPED, "returns_rebuild": REBUILD_SKIPPED}
     positions, returns = _rebuild_derived_isolated(
-        user_id=user_id, account_label=account_label, settings=settings, saved_what="transactions"
+        user_id=user_id,
+        account_label=account_label,
+        settings=settings,
+        committed_write="transactions are saved",
     )
     return {"positions_rebuild": positions, "returns_rebuild": returns}
 
 
 def _rebuild_derived_isolated(
-    *, user_id: UUID, account_label: str, settings: Settings, saved_what: str
+    *, user_id: UUID, account_label: str, settings: Settings, committed_write: str
 ) -> tuple[str, str]:
     """One account's positions rebuild and then its returns rebuild, each isolated the way
     _rebuild_positions_isolated describes. Returns the two statuses.
@@ -268,7 +271,10 @@ def _rebuild_derived_isolated(
     still saves transactions.
     """
     positions = _rebuild_positions_isolated(
-        user_id=user_id, account_label=account_label, settings=settings, saved_what=saved_what
+        user_id=user_id,
+        account_label=account_label,
+        settings=settings,
+        committed_write=committed_write,
     )
     if positions == REBUILD_FAILED:
         logger.info(
@@ -294,11 +300,11 @@ def _rebuild_derived_isolated(
         )
     except Exception:
         logger.exception(
-            "returns rebuild after write failed for account %r (user %s) -- the %s are saved; "
+            "returns rebuild after write failed for account %r (user %s) -- the %s; "
             "run `portfolio rebuild-returns --user %s --account %s` to retry.",
             account_label,
             user_id,
-            saved_what,
+            committed_write,
             user_id,
             account_label,
         )
@@ -307,23 +313,23 @@ def _rebuild_derived_isolated(
 
 
 def _rebuild_positions_isolated(
-    *, user_id: UUID, account_label: str, settings: Settings, saved_what: str
+    *, user_id: UUID, account_label: str, settings: Settings, committed_write: str
 ) -> str:
     """One account's positions rebuild, run after some other write has already committed: a
     failure is logged with its traceback and reported as `failed`, never raised, since raising
-    would make the committed write look like it failed. `saved_what` names that write in the
-    log line."""
+    would make the committed write look like it failed. `committed_write` is the clause the
+    log line uses for that write, e.g. "transactions are saved"."""
     try:
         result = run_rebuild_positions(
             user_id=user_id, account_label=account_label, settings=settings
         )
     except Exception:
         logger.exception(
-            "positions rebuild after write failed for account %r (user %s) -- the %s "
-            "are saved; run `portfolio rebuild-positions --user %s --account %s` to retry.",
+            "positions rebuild after write failed for account %r (user %s) -- the %s; "
+            "run `portfolio rebuild-positions --user %s --account %s` to retry.",
             account_label,
             user_id,
-            saved_what,
+            committed_write,
             user_id,
             account_label,
         )
@@ -398,6 +404,50 @@ def run_add_transaction(
             saved=saved, user_id=user_id, account_label=account_label, settings=settings
         )
     )
+    return result
+
+
+def run_delete_transaction(
+    *,
+    user_id: UUID,
+    account_label: str,
+    broker_transaction_ref: str,
+    settings: Settings | None = None,
+) -> dict[str, int | str]:
+    """Delete one transaction, then rebuild the account's positions and returns so neither
+    still reflects it. TransactionNotFound and AccountNotFound propagate, like any domain error.
+
+    The rebuilds run after the delete has committed, isolated the same way a write's are
+    (_rebuild_derived_isolated): a rebuild failure is reported as `failed`, never raised, since
+    raising would tell the caller a done delete had failed."""
+    configure_logging()
+    settings = settings or load_settings()
+    conn = get_connection(settings.database_url)
+    try:
+        logger.info(
+            "delete-transaction: deleting %r from account %r (user %s).",
+            broker_transaction_ref,
+            account_label,
+            user_id,
+        )
+        pipeline.delete_transaction(
+            conn,
+            user_id=user_id,
+            account_label=account_label,
+            broker_transaction_ref=broker_transaction_ref,
+        )
+    finally:
+        conn.close()
+
+    logger.info("delete-transaction: done, 1 transaction(s) deleted.")
+    positions, returns = _rebuild_derived_isolated(
+        user_id=user_id,
+        account_label=account_label,
+        settings=settings,
+        committed_write="deletion is saved",
+    )
+    result = build_run_result(units_total=1, rows_saved=0, failed=0, transactions_deleted=1)
+    result.update({"positions_rebuild": positions, "returns_rebuild": returns})
     return result
 
 
@@ -693,7 +743,10 @@ def _rebuild_accounts_for_mapping(
     failed = returns_failed = 0
     for user_id, account_label in accounts:
         positions, returns = _rebuild_derived_isolated(
-            user_id=user_id, account_label=account_label, settings=settings, saved_what="mapping"
+            user_id=user_id,
+            account_label=account_label,
+            settings=settings,
+            committed_write="mapping is saved",
         )
         if positions == REBUILD_FAILED:
             failed += 1
