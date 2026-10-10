@@ -55,7 +55,7 @@ logger = logging.getLogger(__name__)
 # Same pattern as data-store's SCRAPERS / MARKET_DATA_SOURCES -- a Protocol plus a registry dict,
 # no branching in flow functions. Populated once, at import time, by discovering whatever
 # implementations are installed under the two entry-point groups -- pipeline.py itself never
-# imports a concrete parser. See docs/architecture.md's "Extension points" section.
+# imports a concrete parser. See docs/broker-import.md section.
 #
 # A broken plugin installation must not take down every CLI command -- account creation and
 # manual entry need neither registry (see add_account's docstring), so a discovery failure is
@@ -423,7 +423,7 @@ def list_unmapped_instruments(
     conn, *, user_id: UUID, mappings: TickerMappings
 ) -> list[tuple[str, str, str]]:
     """Every (kind, identifier, broker) this user's transactions reference that `mappings` can't
-    resolve to a canonical_ticker -- see docs/architecture.md's "unmapped instrument blocks its
+    resolve to a canonical_ticker -- see docs/flows.md's "unmapped instrument blocks its
     own rebuild, loudly" rule. Read-only; diffed through TickerMappings.resolve, the same check a
     rebuild applies."""
     instruments = transactions_repository.list_distinct_instruments(conn, user_id)
@@ -534,7 +534,7 @@ def delete_ticker_mapping(conn, *, mapping_id: int) -> TickerMappingRow:
 
     The instrument goes back to being unmapped: its next rebuild blocks it, and -- per "blocked
     means don't touch" -- leaves the snapshots the old mapping produced in place. See
-    docs/architecture.md's known limitations."""
+    docs/flows.md's known limitations."""
     with transaction(conn):
         deleted = ticker_mapping_repository.delete(conn, mapping_id)
     if deleted is None:
@@ -620,7 +620,7 @@ def rebuild_positions(
     """Replay every relevant account's transaction log into position_snapshots.
 
     Needs no price or FX data -- quantity and average cost are pure functions of the transaction
-    log (docs/architecture.md). Scoped per account: an --account rebuilds only that account
+    log (docs/flows.md). Scoped per account: an --account rebuilds only that account
     (raising AccountNotFound if it doesn't resolve for this user, the isolation chokepoint);
     omitting it rebuilds every account this user owns. Every account's transaction log is fetched
     in one batched read (transactions_repository.list_by_accounts) rather than one query per
@@ -720,7 +720,7 @@ def rebuild_positions(
         # only safe when nothing in this account is currently blocked -- a blocked instrument's
         # old canonical_ticker (from before its mapping was removed) is indistinguishable from a
         # genuinely stale one here, and "blocked means don't touch, not delete"
-        # (docs/architecture.md) means the ambiguous case must not delete.
+        # (docs/flows.md) means the ambiguous case must not delete.
         if not account_blocked:
             stale_tickers = set(positions_repository.list_tickers(conn, account.id)) - set(
                 by_ticker
@@ -783,7 +783,7 @@ def rebuild_returns(
 ) -> ReturnsRebuildOutcome:
     """Compute return_snapshots for every (account, ticker) pair that ever had a position,
     from position_snapshots plus data-store's price/FX series plus this pair's own DIVIDEND
-    transactions (docs/architecture.md's cross-service prerequisite; docs/schema.md's
+    transactions (docs/flows.md's cross-service prerequisite; docs/schema.md's
     return_snapshots columns).
 
     Scoped per account, same as rebuild_positions: an --account rebuilds only that account

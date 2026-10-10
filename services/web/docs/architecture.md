@@ -233,7 +233,7 @@ this file for size. It counts as part of this document under `.claude/rules/arch
   so the view is one page per account (linked from `accounts.html`); a cross-account "whole
   portfolio" rollup is future work. The route only displays whatever `position_snapshots`/
   `return_snapshots` rows already exist. `web` never calls a rebuild itself: `portfolio` rebuilds
-  an account's positions and returns on every transaction write (see `portfolio/docs/architecture.md`,
+  an account's positions and returns on every transaction write (see `portfolio/docs/flows.md`,
   "Positions and returns follow every transaction write"), and refreshes returns on a schedule
   ("Returns follow new prices"). An
   `AccountNotFound` from any of the positions, returns or latest-returns calls is treated as fatal
@@ -486,7 +486,7 @@ task 13: the multi-service network topology. The exact `auth` API contract (see 
 surface" and `auth/docs/architecture.md`'s own "Endpoint surface").
 
 Closed by task 11: the exact `portfolio` API contract (see "Endpoint surface" above and
-`portfolio/docs/architecture.md`'s own "HTTP API" section).
+`portfolio/docs/flows.md`'s own "HTTP API" section).
 
 Closed by task 12: the charting library choice (Chart.js, vendored); the portfolio-level return
 aggregation design (`portfolio_view.aggregate_portfolio_returns`); confirmed no direct `data-store`

@@ -1,6 +1,6 @@
 """The HTTP entry point -- a new sibling of cli.py, not a replacement for it. Routes are
 argument parsing plus a call into jobs.py, the same shape cli.py has. See
-docs/architecture.md's "HTTP API" section for the full error-mapping/status-code contract this
+docs/flows.md's "HTTP API" section for the full error-mapping/status-code contract this
 module implements.
 
 create_app() fails loudly if PORTFOLIO_INTERNAL_SECRET is unset, rather than deferring to the

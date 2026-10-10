@@ -18,7 +18,7 @@ services:
   # reach the chart without anyone touching their account. Polls rather than being called by
   # data-store when its DAG finishes: portfolio depends on data-store, never the reverse, and
   # Airflow isn't on stakehold-net. Lives in this overlay, not docker-compose.yml, because it's
-  # useless without data-store reachable. See docs/architecture.md's "Returns follow new prices".
+  # useless without data-store reachable. See docs/flows.md's "Returns follow new prices".
   returns-refresh:
     # Same build and tag as docker-compose.yml's x-portfolio-image anchor, which this file can't
     # reference -- a build block rather than only `image:`, so `up` builds the local tag instead

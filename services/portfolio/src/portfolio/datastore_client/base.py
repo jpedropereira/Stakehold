@@ -1,6 +1,6 @@
 """The DataStoreClient Protocol -- portfolio's domain code depends only on this, not on
 http_client.py's implementation, so a stub can stand in for tests without a live data-store
-instance. See docs/architecture.md's cross-service prerequisite section.
+instance. See docs/flows.md's cross-service prerequisite section.
 """
 
 from dataclasses import dataclass
