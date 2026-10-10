@@ -212,6 +212,7 @@ def test_overview_one_failing_account_degrades_only_its_row(client):
     assert "Couldn't load figures" in _account_row(html, "pension")
     assert "€2,000.00" in _tile(html, "Market value")
     assert "Totals leave out 1 account that couldn't be loaded." in html
+    assert re.search(r'data-kind="warning">.*?Totals leave out', html, re.DOTALL)
 
 
 def test_overview_an_account_gone_since_listing_degrades_like_a_failure(client):
@@ -272,6 +273,9 @@ def test_overview_accounts_outage_is_not_a_first_run(client):
 
     assert response.status_code == 200
     assert "reach the portfolio service right now, so your accounts" in response.text
+    assert re.search(
+        r"data-kind=\"error\">.*?Couldn't load your accounts\.", response.text, re.DOTALL
+    )
     assert "No accounts yet" not in response.text
     assert not [c for c in fake_portfolio.calls if c[0] == "list_latest_returns"]
 

@@ -141,32 +141,40 @@ main:focus {
   margin-right: auto;
 }
 
+/* Login and signup carry the mark in their card instead, so nothing pushes the theme toggle
+   right; keep it where it sits on every other page. */
+.site-header-inner:not(:has(.brand-mark)) {
+  justify-content: flex-end;
+}
+
 .brand-mark img {
   display: block;
   height: 40px;
   width: auto;
 }
 
-/* Both logo files are in the page; the theme decides which one shows (charter chapter I: gold
-   mark on dark surfaces, stone on light). The mark itself is never recolored. */
-.brand-mark .logo-on-dark {
+/* Both logo files are in the page, in the header or (login and signup) in the card; the theme
+   decides which one shows (charter chapter I: gold mark on dark surfaces, stone on light). The
+   mark itself is never recolored. img in the selector to match .brand-mark img, which sets
+   display too and would otherwise win, showing both marks. */
+img.logo-on-dark {
   display: none;
 }
 
-:root[data-theme="dark"] .brand-mark .logo-on-light {
+:root[data-theme="dark"] .logo-on-light {
   display: none;
 }
 
-:root[data-theme="dark"] .brand-mark .logo-on-dark {
+:root[data-theme="dark"] .logo-on-dark {
   display: block;
 }
 
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .brand-mark .logo-on-light {
+  :root:not([data-theme="light"]) .logo-on-light {
     display: none;
   }
 
-  :root:not([data-theme="light"]) .brand-mark .logo-on-dark {
+  :root:not([data-theme="light"]) .logo-on-dark {
     display: block;
   }
 }
@@ -299,6 +307,22 @@ main:focus {
 
 .card-wide {
   max-width: 880px;
+}
+
+/* Login and signup: the mark heads the card, and the header shows none (UI-12). */
+.card-auth .auth-mark {
+  display: flex;
+  justify-content: center;
+  margin-bottom: var(--space-5);
+}
+
+.auth-mark img {
+  height: 48px;
+  width: auto;
+}
+
+.card-auth h1 {
+  text-align: center;
 }
 
 .card h1 {
@@ -437,6 +461,51 @@ main:focus {
   text-decoration: underline;
 }
 
+/* Disabled by htmx (hx-disabled-elt) while its form's request is in flight, so a slow submit
+   can't be posted twice. No dimming: the busy text beside it says what's happening, and a
+   faded gold button would fall under the contrast the charter guarantees. */
+.btn:disabled {
+  cursor: progress;
+}
+
+/* ---- in-flight state (UI-12) ---- */
+
+/* The rules htmx would otherwise inject as an inline <style>, which the strict CSP blocks
+   (base.html's htmx-config turns that off). htmx puts htmx-request on the form while its request
+   is in flight, so the form's own busy text shows only then. */
+.htmx-indicator {
+  display: none;
+}
+
+.htmx-request .htmx-indicator {
+  display: inline;
+}
+
+.busy {
+  font: var(--text-caption);
+  color: var(--text-muted);
+  text-align: center;
+}
+
+/* ---- password field ---- */
+
+.password-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.password-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Rendered hidden; password_toggle.js shows it. An explicit rule, because .btn's display would
+   otherwise override [hidden]. */
+.password-toggle[hidden] {
+  display: none;
+}
+
 /* ---- text ---- */
 
 /* Read by assistive tech, not shown: extra words a link needs out of context. */
@@ -461,18 +530,43 @@ main:focus {
   color: var(--loss);
 }
 
-.form-error {
-  font: var(--text-caption);
-  font-weight: 600;
+/* ---- banner (UI-12) ---- */
+
+/* The charter's ink rule (chapter II, "Errors and warnings"): a bar in the text color, an icon
+   and a bold lead word, the same for errors and warnings, which differ only by icon and wording.
+   Neither oxblood (a loss) nor gold ("act here"). A confirmation takes a hairline bar. On the
+   page background rather than the card's, so it reads as set apart inside a card too. Built
+   from the semantic aliases alone, so dark mode needs no rule of its own. */
+.banner {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+  margin: 0 0 var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border-left: 3px solid var(--text);
+  border-radius: var(--radius-card);
+  background: var(--surface);
   color: var(--text);
-  margin: 0 0 var(--space-1);
+  font: var(--text-caption);
 }
 
-.confirmation-banner {
-  font: var(--text-caption);
+.banner-success {
+  border-left-color: var(--border);
+}
+
+.banner svg {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+}
+
+.banner p {
+  margin: 0;
+}
+
+.banner strong {
   font-weight: 600;
-  color: var(--text);
-  margin: 0 0 var(--space-4);
 }
 
 .auth-switch {
@@ -590,7 +684,7 @@ main:focus {
   margin-bottom: var(--space-4);
 }
 
-.import-summary .confirmation-banner {
+.import-summary .banner {
   margin-bottom: var(--space-2);
 }
 

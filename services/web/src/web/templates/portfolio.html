@@ -1,11 +1,12 @@
 {% extends "base.html" %}
+{% from "partials/_banner.html" import banner %}
 {% block title %}Portfolio — {{ account_label }} — Stakehold{% endblock %}
 {% from "partials/_delta.html" import delta %}
 {% set freshness = "Prices update daily; returns are recalculated a few times a day." %}
 {% block content %}
 {% include "partials/_account_header.html" %}
 {% if error %}
-<p class="confirmation-banner">{{ error }}</p>
+{% call banner("error") %}<strong>Couldn't load everything.</strong> {{ error }}{% endcall %}
 {% endif %}
 
 {% if summary %}
@@ -34,10 +35,13 @@
   <h1>Holdings</h1>
   {% if unmapped %}
   {# An unmapped instrument has no position at all, so it can't be a row of the table below. #}
-  <p class="entry-subtitle" id="unmapped-notice">Waiting for a ticker mapping:
+  {# The charter's own warning example. The id lets tests find the notice among the banners. #}
+  <div id="unmapped-notice">
+  {% call banner("warning") %}<strong>Waiting for a ticker mapping:</strong>
     {% for instrument in unmapped %}<span class="mono">{{ instrument.kind }} {{ instrument.identifier }}</span>{% if not loop.last %}, {% endif %}{% endfor %}.
     They appear as holdings once mapped.
-    {% if user.is_admin %}<a href="/admin/mappings">Map them</a>{% else %}An admin needs to map them.{% endif %}</p>
+    {% if user.is_admin %}<a href="/admin/mappings">Map them</a>{% else %}An admin needs to map them.{% endif %}{% endcall %}
+  </div>
   {% endif %}
   {% if holdings %}
   <div class="table-scroll">

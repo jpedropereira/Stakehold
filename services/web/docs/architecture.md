@@ -24,7 +24,7 @@ calls [`portfolio`](../../portfolio/docs/architecture.md), `data-store`, and
     `--border-control`, `--accent`, `--on-accent`, `--gain`, `--loss`, `--focus-ring`) are
     defined in the
     `:root` block at the top of `static/web.css`. That block and the dark-theme blocks after it
-    (see "Theme" under "Key decisions") are the only places in the file a brand *color* token may
+    (see "Theme" in [`ui-architecture.md`](ui-architecture.md)) are the only places in the file a brand *color* token may
     appear. Every rule styles through the aliases, so the dark theme re-points about ten aliases
     instead of rewriting rules one by one.
     `--on-accent` exists separately from `--text` because text on a gold button stays stone in
@@ -58,9 +58,13 @@ calls [`portfolio`](../../portfolio/docs/architecture.md), `data-store`, and
   call to another service, so the same argument doesn't carry over; see
   `auth/docs/architecture.md`, "Stack".)
 - **Chart.js** (task 12), vendored into `static/vendor/chart.min.js` — the same htmx precedent:
-  no CDN `<script src>`, so no `script-src` CSP exception is needed (see "Key decisions" below).
+  no CDN `<script src>`, so no `script-src` CSP exception is needed (see [`ui-architecture.md`](ui-architecture.md)).
 
 ## Key decisions
+
+Presentation decisions (theme, chart, display formatting, the app shell, form scripts, and
+feedback and error states) are in [`ui-architecture.md`](ui-architecture.md), split out of
+this file for size. It counts as part of this document under `.claude/rules/architecture.md`.
 
 - **Server-rendered, not an SPA; `auth`'s session cookie is proxied, not reissued.** `auth` sets
   `Set-Cookie` itself (`auth/api/cookies.py`); `web`'s `AuthResult` (`auth_client/base.py`)
@@ -110,7 +114,10 @@ calls [`portfolio`](../../portfolio/docs/architecture.md), `data-store`, and
 - **Security headers as middleware (`api/security_headers.py`)**: `X-Frame-Options: DENY`,
   `X-Content-Type-Options: nosniff`, `Referrer-Policy: same-origin`, and a CSP allowing `'self'`
   plus `fonts.googleapis.com`/`fonts.gstatic.com` (`brand/tokens.css` `@import`s Google Fonts).
-  No script-src exception is needed since htmx is vendored rather than CDN-loaded.
+  No script-src exception is needed since htmx is vendored rather than CDN-loaded. The headers
+  are set by one function, `apply_security_headers`, which the 500 handler also calls itself:
+  Starlette runs an `Exception` handler in `ServerErrorMiddleware`, outside every user
+  middleware, so that response would otherwise leave without the CSP (UI-12).
 - **Brand assets are mounted, not copied.** `brand/` (tokens, logos) is mounted as `StaticFiles`
   at `/brand`, from a `WEB_BRAND_DIR` setting defaulting to the repo-root `brand/` directory
   resolved relative to `settings.py`. The Docker image instead sets `WEB_BRAND_DIR` to a path it
@@ -193,26 +200,6 @@ calls [`portfolio`](../../portfolio/docs/architecture.md), `data-store`, and
   needed, and a browser without `:has()` just always shows it. `portfolio` itself still accepts
   any broker string (its CLI and manual entry must work with no plugin installed). The list is a
   `web` form constraint, not a data rule, and existing accounts are untouched.
-- **The accounts page lists accounts first and folds the create form into a `<details>`
-  (UI-10).** Creating an account is rare once there is one, so the form starts collapsed then.
-  It renders `open` in two cases. The first is a first run (no accounts, and the list loaded),
-  which also shows the two first steps. The second is any re-render carrying a create-form
-  `error`: a no-JS post that fails lands back on this page, and the message sits inside the form.
-  The list outage notice moved out of the form into its own `list_error`, above the list. As one
-  shared `error`, it would have been hidden in the collapsed form, and its presence would have
-  opened the form. A failed list is not a first run: no steps, form collapsed, notice shown. Each
-  row's primary action is the account name itself, a link to its holdings. Transactions, Add and
-  Import are `.btn-secondary` beside it. *Rejected: a gold `.btn-primary` per row*, since five
-  accounts would mean five gold buttons competing with the one accent (charter, chapter II).
-- **The import drop zone is the file input itself, enlarged and dashed; no script (UI-10).**
-  Browsers accept a dropped file on a file input natively, and the input's own text names the
-  chosen file, so a CSS-only zone keeps the strict CSP and works without JS. The cost: there's
-  no highlight while a file is dragged over the zone. *Rejected: an invisible input stretched
-  over a styled box*, which hides the chosen file's name, and a drag-state script, which is one
-  more asset for a cosmetic gain. The stated limit comes from `routes._MAX_UPLOAD_MB`, the same
-  constant behind the size check and its error message, so the copy can't drift from the cap.
-  After an import, the summary (count plus rebuild outcome) links to the account's holdings and
-  transactions, and the form stays below it as "Import another file".
 - **`account_label` is always a query parameter or a hidden form field in `web` too, never a path
   segment** — the same reasoning `portfolio`'s own API documents (a label is free text that may
   contain `/`), applied here even though nothing forces `web`'s own routing to follow it.
@@ -241,77 +228,6 @@ calls [`portfolio`](../../portfolio/docs/architecture.md), `data-store`, and
   positions) for the "current holdings" table, but keeps a negative quantity visible — that's a
   replay anomaly `positions/calculator.py` warns about but still computes, not a modeled short
   position, and hiding it would hide the thing a user most needs to notice.
-- **Chart.js is vendored (`static/vendor/chart.min.js`), and the chart reads its colors from
-  the semantic tokens at runtime rather than from a hardcoded hex value.** `script-src 'self'` (no CDN
-  exception, no `unsafe-inline`, no nonce) rules out both a CDN `<script src>` and an inline
-  `<script>` block with real logic — this codebase has never had one, and adding the first here
-  would either be silently blocked by the browser or force a CSP weakening this task's own
-  no-CDN framing argues against. The chart's numeric data is embedded via a non-executable
-  `<script type="application/json">` data island in `portfolio.html` (inspected as data, not run
-  as script — needs no `script-src` permission to be read); the logic (`getComputedStyle(...)
-  .getPropertyValue('--gain')` etc., and the `Chart` instantiation) lives in a same-origin
-  `static/portfolio_chart.js`, loaded exactly like vendored htmx. `test_templates.py`'s new
-  `test_templates_have_no_inline_executable_script` makes the "no inline `<script>` with logic"
-  invariant mechanical rather than only reviewed by eye. The chart uses a `category` x-axis, not
-  Chart.js's `time` scale, to avoid vendoring a second date-adapter dependency just to plot daily
-  points — a calendar gap renders as an equal-width step rather than a proportionally wider one,
-  an accepted v1 simplification. Since UI-3 it reads the semantic tokens (`--gain`, `--loss`,
-  `--border`, `--text-muted`), not brand tokens, so it follows the theme. A canvas doesn't
-  restyle itself, so it re-reads them and redraws on `stakehold:themechange` (the header toggle)
-  and on a `prefers-color-scheme` change.
-- **The chart's view toggle and date ranges (UI-6) work client-side over the one data island.**
-  The island carries `market_value_eur` and `total_return_eur` per day, so switching between
-  "Total return" and "Market value", or between 1M / 6M / 1Y / All, never makes a request. A range
-  counts back from the *last data point's* date, not from today, so an account whose prices
-  stopped updating still shows its final stretch rather than an empty chart. Total return is a
-  delta, so its line keeps the gain/loss segment colors. Market value is a level, so it's drawn in
-  `--text`, because forest and oxblood mean gains and losses only, and gold is kept for controls.
-  The buttons are in the template, not built by the script. They ship `hidden`, because without JS
-  they'd do nothing, and the script reveals them. Building them in JS would also put their classes
-  outside `test_templates.py`'s template/CSS class check. Only the first draw animates: morphing
-  one range into another, with a different point count, draws stray lines. Tooltip and y-axis
-  labels use a small formatter in `portfolio_chart.js` that mirrors `formatting.py`'s
-  `money`/`signed_money`. **Known sharp edge:** that is two copies of one convention, and no test
-  ties them together (there's no JS test runner). A change to the convention must touch both.
-- **Theme (UI-3): a cookie, applied on the server.** The choice (`light` / `dark` / `system`,
-  default `system`) is stored in a `stakehold_theme` cookie, set by `POST /theme`
-  (`api/theme.py`). A Jinja2Templates context processor (`theme_context`, registered in
-  `app.py`) gives every template a `theme`, including pages rendered outside `routes.py` such as
-  the 403 page. `base.html` renders `data-theme="light|dark"` on `<html>` from it, or no
-  attribute for `system`. This is server-side because the alternative, localStorage read by a
-  script, would have to run before first paint to avoid a flash of the wrong theme. That would
-  mean an inline `<script>` in `<head>`, which `script-src 'self'` forbids. A same-origin
-  `defer` script would run too late. The cookie is `HttpOnly`: only the server reads it, and JS
-  learns the theme from the attribute or the htmx trigger below.
-  - *CSS*: dark applies on `:root[data-theme="dark"]` (a manual choice) and on
-    `:root:not([data-theme="light"])` inside `@media (prefers-color-scheme: dark)` (no manual
-    choice, OS dark). CSS can't share one declaration block between an attribute selector and a
-    media query, so the dark aliases are written twice; `test_templates.py` asserts the two
-    copies are identical, and that every color alias the light block sets is re-pointed.
-    `color-scheme` is set alongside (`light dark` by default, one scheme per choice) so native
-    controls, scrollbars and the date picker follow. Rejected: CSS `light-dark()`, which would
-    need one block only. `getPropertyValue` returns an alias as the unresolved
-    `light-dark(...)` text, so the chart couldn't read its colors. It's also only Baseline since
-    2024.
-  - *Logo*: both `logo-stone.svg` and `logo-gold.svg` are in the header, and CSS shows one,
-    using the same selectors as the dark blocks. A server-chosen `<img>` plus `<picture>` for
-    `system` would also need JS to rebuild the element after an in-place switch. The cost is one
-    extra small SVG download per page. The hidden image is `display: none`, so screen readers
-    skip it.
-  - *Toggle*: a form in the header with three submit buttons (`name="theme"`), the current one
-    marked `aria-pressed="true"`. It's shown on every page rendered with a CSRF token, logged in
-    or not; the 403 page has no token, so no toggle. Without JS it posts and gets a 303 back to
-    the page it came from (`next`, the current path and query). With htmx (`hx-swap="none"`)
-    the route answers `200` with `HX-Trigger: {"stakehold:theme": "<value>"}`, and
-    `static/theme.js` sets the attribute and `aria-pressed`, then fires
-    `stakehold:themechange` for the chart.
-  - *`next` is a redirect target*, so `theme.safe_next` only accepts a same-site path. It refuses
-    `//host`, `/\host`, a scheme, and any control character or non-ASCII. Browsers strip tabs
-    and newlines, so `/\t/host` would otherwise become `//host`. Anything refused redirects to
-    `/`. Known sharp edge: on a page re-rendered after a failed POST (a form error), `next` is
-    the POST's own URL, so the no-JS toggle redirects to that route's GET. For
-    `/transactions/new` and `/transactions/import`, the account is lost from the query and the
-    GET answers 422. The htmx path doesn't navigate, so it's unaffected.
 - **`GET /portfolio` is per-account, read-only, and never triggers a rebuild.** Every `portfolio`
   positions/returns endpoint is `account_label`-scoped with no cross-account aggregation endpoint,
   so the view is one page per account (linked from `accounts.html`); a cross-account "whole
@@ -383,29 +299,6 @@ calls [`portfolio`](../../portfolio/docs/architecture.md), `data-store`, and
     sits next to "Prices as of" and in the no-history empty state. It names no interval because
     the refresh period is `portfolio`'s config (`PORTFOLIO_RETURNS_REFRESH_SECONDS`), not
     `web`'s.
-- **App shell (UI-4): the current page is marked on the server, and the account pages share one
-  header.** Each route passes `nav_active` (`overview` / `accounts` / `admin`) and, on the four
-  account-scoped pages, `account_nav_active` (`holdings` / `transactions` / `add` / `import`). The templates turn these into `aria-current="page"`, and `web.css` styles
-  that attribute rather than a class. The mark a screen reader announces and the one a sighted
-  visitor sees therefore come from one source and can't disagree, and no script works out "where
-  am I" from the URL. `partials/_account_header.html` (label, broker, sub-nav, switcher) is fed by
-  `routes._account_header_context`, one `list_accounts` call. The same call answers "is this the
-  visitor's account?": `/transactions/new` and `/transactions/import` used to render a form for
-  any `?account=` label and leave `portfolio` to reject the write. They now 404 up front
-  (`account_not_found.html`, shared with `/portfolio`). The 404 happens only when the list loaded
-  and the label isn't in it. If `portfolio` can't be reached, the page renders with a label-only
-  header and no switcher, because an outage must not tell the visitor a real account doesn't
-  exist. POST routes load the header lazily (`extra_context_loader`), so only a full-page error
-  re-render pays for that call, never a successful write.
-- **The account switcher is a plain GET form, with no htmx enhancement.** The form submits
-  `?account=` back to the current path, so switching keeps the visitor on Holdings,
-  Transactions, Add or Import. An htmx `hx-get` swapping the response into `<body>` was planned and rejected. htmx
-  1.9 does take a full document's `<body>` and update the title, but page scripts that start on
-  `DOMContentLoaded` (`portfolio_chart.js`) never run after a swap, so `/portfolio` would lose its
-  chart. A full navigation is also what an account switch is: every figure on the page changes.
-  The cost is a visible "Switch" button, since the form can't submit on `change` without a script.
-  The Transactions sub-nav link shipped ahead of its page (UI-4) and 404ed until UI-8 built
-  `GET /transactions`.
 - **The transactions list (UI-8) is the whole log, reversed in `web`.** `portfolio`'s
   `GET /transactions` returns an account's log oldest first (its replay order) and takes no
   paging, filter or sort parameters, so `web` fetches all of it and reverses it to show newest
@@ -419,47 +312,6 @@ calls [`portfolio`](../../portfolio/docs/architecture.md), `data-store`, and
   muted second line under a non-EUR amount, rather than its own column: with a ninth column the
   table overflowed the 880px card at desktop width. A long reference is cut off with an ellipsis
   by CSS, its full value still in the page and in a `title` tooltip.
-- **The manual-entry form shows only the fields a type uses, and the mapping lives on the
-  server (UI-9).** `routes.py`'s `_FIELD_TYPES` / `_FIELD_REQUIRED_FOR` say which types each
-  type-dependent field applies to and requires. They mirror `portfolio`'s `validate()` and
-  `_manual_amount`, with a comment there, the same way `_TRANSACTION_TYPES` mirrors its type
-  list. The template renders them as `data-types` / `data-required-for` attributes, and
-  `static/transaction_form.js` only reads them, so the mapping isn't duplicated in JS. A hidden
-  field's controls are *disabled*, not cleared: a disabled control isn't submitted, and a value
-  typed before a type switch comes back on the way back. The server renders the form with no
-  field hidden and no type-dependent `required`, so without JS it is today's form, and
-  `portfolio`'s validation stays the only gate either way. The amount is hidden for BUY/SELL,
-  because `portfolio` derives it and accepts a typed one only if it matches. The reference is
-  prefilled with a fresh `manual-<uuid4>` per render. It's the idempotency key, so a
-  double-submitted form saves once, and it stays editable for a known broker reference. The
-  date defaults to now (UTC) through a `_utcnow()` seam for tests. **Known limitation:** the
-  currency suggestions (`_SUGGESTED_CURRENCIES`) are a constant in `web`, because nothing
-  exposes `data-store`'s `currencies.yaml` and this chunk adds no endpoints. The field still
-  accepts any code, so drift only makes the suggestions less useful. The fix, an endpoint
-  listing supported currencies, is under Deferred in `tasks.md`.
-- **Display formatting (UI-5) is one fixed convention, applied by Jinja filters from a pure
-  module.** `formatting.py` defines `money`, `signed_money`, `qty`, `pct` and `date` (plus UI-6's
-  `share`, an unsigned percentage for weights, and `delta_class`), registered on
-  the templates environment in `app.py`'s lifespan. Templates never round or append units
-  themselves. The convention: English digit grouping (`€1,234.50`), a `€` prefix because every
-  aggregated figure `portfolio` returns is EUR, a true minus sign (U+2212) instead of a hyphen,
-  `pct` taking a fraction (`0.0184` → `+1.84%`), and ISO dates (`2026-10-06`, the format the admin
-  mappings page already used, and unambiguous whatever the reader's locale). Rounding is half-up on
-  the `Decimal`, not Python's default banker's rounding, since a displayed cent should round the
-  way a reader expects. The sign is chosen *after* rounding, so a value that rounds to zero shows
-  no sign: a zero delta is neither a gain nor a loss, and `−€0.00` would be noise. `qty` trims
-  trailing zeros but never falls into scientific notation (`Decimal.normalize()` alone renders 100
-  as `1E+2`). Every filter renders `—` for `None`. Locale switching is out of scope; if it's ever
-  needed, Babel would replace the bodies of these functions and nothing else. The module has
-  no Jinja or FastAPI import so it can be tested on its own, and so that `portfolio_chart.js` has
-  a single, readable reference for the rules it mirrors (UI-6). `delta_class` returns `gain` /
-  `loss` / nothing from the sign a figure *displays* with, after the same rounding as
-  `signed_money` or `pct`. A delta's color therefore can't disagree with its printed sign: `-0.004`
-  prints `€0.00` and is uncolored, where a `>= 0` test in the template would have colored it a gain.
-  UI-8 added `native_money(value, currency, places=2)` for a transaction's own figures, which
-  aren't EUR: the currency code follows the number (`−1,503.50 USD`), and the sign is `money`'s
-  (`−` only) because it's a cash-flow direction, not a delta. Prices use `places=4` and trim
-  zeros past the second decimal (`112.34 USD`, `0.1235 USD`).
 
 ## Endpoint surface
 
@@ -472,12 +324,12 @@ calls [`portfolio`](../../portfolio/docs/architecture.md), `data-store`, and
 | `POST /admin/mappings/{id}/delete` | `require_admin`, CSRF-checked; calls `DELETE /ticker-mappings/{id}`. POST rather than DELETE because a plain HTML form can't send DELETE and the page has no script. An already-deleted mapping (portfolio's 404, mapped to `TickerMappingNotFound` on this route only) re-renders with "That mapping was already deleted." |
 | `GET /login`, `GET /signup` | `optional_user` dependency: already logged in → redirected to `/`; otherwise renders the form with a fresh or existing CSRF cookie |
 | `POST /login`, `POST /signup` | CSRF-checked, calls `auth`, proxies the `Set-Cookie` `auth` returned, then redirects to `/` — a 303 for a plain form post, or an `HX-Redirect` response header for an `hx-post` (htmx's own XHR follows a 303 by swapping the *content* of the request's own response into the target element, which would drop a full HTML document into a form's error slot; `HX-Redirect` instead triggers a real browser navigation) |
-| `POST /theme` | No login needed. CSRF-checked: a mismatch changes nothing and redirects back (an `HX-Redirect` for htmx), like `POST /logout`, rather than re-rendering a form error. A value other than `light`/`dark`/`system` → `400`. Otherwise sets the `stakehold_theme` cookie (`HttpOnly`, `SameSite=Lax`, `Path=/`, one year, `Secure` per `WEB_COOKIE_SECURE`), then a 303 to the validated `next`, or for htmx a `200` with `HX-Trigger`. See "Theme" under "Key decisions" |
+| `POST /theme` | No login needed. CSRF-checked: a mismatch changes nothing and redirects back (an `HX-Redirect` for htmx), like `POST /logout`, rather than re-rendering a form error. A value other than `light`/`dark`/`system` → `400`. Otherwise sets the `stakehold_theme` cookie (`HttpOnly`, `SameSite=Lax`, `Path=/`, one year, `Secure` per `WEB_COOKIE_SECURE`), then a 303 to the validated `next`, or for htmx a `200` with `HX-Trigger`. See "Theme" in [`ui-architecture.md`](ui-architecture.md) |
 | `POST /logout` | CSRF-checked, calls `auth` (best-effort — a failure is logged, not surfaced, since the user's intent to log out should not depend on `auth` being reachable), clears the session cookie locally, redirects to `/login` |
 | `GET /health` | `200 {"status": "ok"}`, unauthenticated, no dependency check (see "Key decisions") |
-| `GET /accounts` | `require_user`; lists the caller's accounts (`portfolio`'s `GET /accounts`) and installed brokers (`GET /brokers`) and renders them as a list (the name links to holdings; Transactions / Add / Import beside it), with the create-account form in a `<details>` below it, open on first run or after a create error (see "Key decisions"). Its broker field is a `<select>` of those brokers plus "Custom". A failed list shows a notice above the list, never the first-run steps |
+| `GET /accounts` | `require_user`; lists the caller's accounts (`portfolio`'s `GET /accounts`) and installed brokers (`GET /brokers`) and renders them as a list (the name links to holdings; Transactions / Add / Import beside it), with the create-account form in a `<details>` below it, open on first run or after a create error (see [`ui-architecture.md`](ui-architecture.md)). Its broker field is a `<select>` of those brokers plus "Custom". A failed list shows a notice above the list, never the first-run steps |
 | `POST /accounts` | CSRF-checked. With "Custom" chosen (`broker=__custom__`), sends the typed `custom_broker` name instead, after refusing a blank one or one matching an installed broker ignoring case (both 422, no `portfolio` write). Calls `portfolio`'s `POST /accounts`, redirects to `/accounts` on success |
-| `GET /transactions/new` | `require_user`; required `account` query param (a bare 422 for a missing/blank value — reachable only via a hand-crafted URL, since every link that points here already includes it); renders the manual-entry form, with a confirmation banner if `?saved=<n>` (plus the rebuild outcome from `positions`/`returns`; see "Key decisions"). Fields are grouped into What / When / Amount / Instrument fieldsets; the reference is prefilled with a fresh `manual-<uuid4>`, the date with now (UTC) and the currency with EUR (a datalist suggests others), and `transaction_form.js` hides the fields the chosen type doesn't use (see "Key decisions"). The instrument field is a ticker picker: a native `<datalist>` filled from `portfolio`'s `GET /instruments/tickers` (no script, so the strict CSP is untouched). If that call fails, the form still renders with an empty list and a notice; the picker is a convenience, and portfolio checks whatever is typed when it's saved. Also fetches `GET /accounts` (concurrently) for the account header: a label that isn't one of the visitor's accounts renders `account_not_found.html` with a 404, and a failed fetch degrades to a label-only header rather than a 404 |
+| `GET /transactions/new` | `require_user`; required `account` query param (a bare 422 for a missing/blank value — reachable only via a hand-crafted URL, since every link that points here already includes it); renders the manual-entry form, with a confirmation banner if `?saved=<n>` (plus the rebuild outcome from `positions`/`returns`; see "Key decisions"). Fields are grouped into What / When / Amount / Instrument fieldsets; the reference is prefilled with a fresh `manual-<uuid4>`, the date with now (UTC) and the currency with EUR (a datalist suggests others), and `transaction_form.js` hides the fields the chosen type doesn't use (see [`ui-architecture.md`](ui-architecture.md)). The instrument field is a ticker picker: a native `<datalist>` filled from `portfolio`'s `GET /instruments/tickers` (no script, so the strict CSP is untouched). If that call fails, the form still renders with an empty list and a notice; the picker is a convenience, and portfolio checks whatever is typed when it's saved. Also fetches `GET /accounts` (concurrently) for the account header: a label that isn't one of the visitor's accounts renders `account_not_found.html` with a 404, and a failed fetch degrades to a label-only header rather than a 404 |
 | `POST /transactions/new` | CSRF-checked, calls `portfolio`'s `POST /transactions` (an instrument, when given, is always sent as `instrument_identifier_kind = 'TICKER'`; a blank Amount is sent as `null`, for portfolio to derive on a BUY/SELL or reject as missing on anything else), redirects to `/transactions/new?account=<label>&saved=<transactions_saved>&positions=<status>&returns=<status>` on success. An unknown ticker comes back as portfolio's 422, whose message is shown as-is like every other 422. The ticker list is re-fetched for the error re-render |
 | `GET /transactions/import` | `require_user`; required `account` query param; renders the upload form with an importer `<select>` listing the account's own broker's importers and the file input styled as a drop zone, with the 20 MB limit stated. With `?imported=<n>` it adds an import summary (count and rebuild outcome) and links to the account's holdings and transactions, with the form below as "Import another file". A broker with no importer gets a pointer to manual entry instead of a form; brokers that can't be listed get an inline notice, never the "no importer" text. Fetches `GET /accounts` (for the account header, with the same 404 and degrade rules as `GET /transactions/new`) and `GET /brokers` concurrently |
 | `POST /transactions/import` | CSRF-checked, multipart; `importer` must be `transactions` or `cashflow` (anything else is a 422 with no `portfolio` call); size-capped at 20MB (matching `portfolio`'s own cap) before the bytes are forwarded; calls `portfolio`'s `POST /transactions/import` or `POST /cashflows/import` to match, redirects to `/transactions/import?account=<label>&imported=<rows_saved>&positions=<status>&returns=<status>` on success |
@@ -490,6 +342,10 @@ a flat, specific message — chapter IV of the brand charter's "no panic, no hyp
 copy as much as to figures. A wrong password and an unknown email deliberately render the same
 message, so `web` doesn't reintroduce the enumeration oracle `auth`'s own `passwords.dummy_verify()`
 exists to close; no equivalent concern applies to the portfolio routes; see "Key decisions" above.
+
+Any path no route matches is a branded 404 page, any other HTTP error or malformed request a
+branded page with its own status, and an unhandled exception a branded 500 (UI-12; see
+"Feedback and error states" in [`ui-architecture.md`](ui-architecture.md)). None of them is JSON.
 
 ## Modules
 
@@ -533,7 +389,7 @@ exists to close; no equivalent concern applies to the portfolio routes; see "Key
   `AccountOverview`, for `GET /`. No FastAPI/httpx dependency, tested in isolation, mirroring how `portfolio`'s own
   `returns/calculator.py` is a pure function.
 - `formatting.py` (UI-5) — pure display formatters (`money`, `signed_money`, `qty`, `pct`,
-  `date`, UI-6's `share` and `delta_class`, and UI-8's `native_money`) plus the `FILTERS` mapping `app.py` registers as Jinja filters; see "Key decisions".
+  `date`, UI-6's `share` and `delta_class`, and UI-8's `native_money`) plus the `FILTERS` mapping `app.py` registers as Jinja filters; see [`ui-architecture.md`](ui-architecture.md).
 - `api/overview.py` (UI-11) — `GET /`, on its own router (like `api/theme.py`) because
   `routes.py` is near the 64KB file limit. It renders through `routes._render`, so the
   `_finish` header merge stays in one place.
@@ -548,12 +404,14 @@ exists to close; no equivalent concern applies to the portfolio routes; see "Key
   handler, so every redirect in the app picks htmx-partial vs. full-navigation the same way).
 - `templates/`, `static/` — Jinja2 templates (`base.html`, which holds the skip link, the
   top nav and the theme toggle, plus one per page; `partials/_form_errors.html` for the htmx swap
-  target; `partials/_account_header.html`, included by the four account-scoped pages;
-  `partials/_delta.html`, the gain/loss-colored figure macro shared by home and portfolio; and
-  `account_not_found.html`, their shared 404) and `web.css` plus vendored `htmx.min.js`.
-  Same-origin scripts: `htmx-error-swap.js`, `portfolio_chart.js`, `theme.js` (UI-3, applies
-  a theme switch in place), and `transaction_form.js` (UI-9, shows the manual-entry fields the
-  chosen type and currency need).
+  target; `partials/_banner.html`, the message macro, and `partials/_logo.html`, the two-logo
+  pair (UI-12); `partials/_account_header.html`, included by the four account-scoped pages;
+  `partials/_delta.html`, the gain/loss-colored figure macro shared by home and portfolio;
+  `account_not_found.html`, their shared 404; and `error.html`, every other error page) and
+  `web.css` plus vendored `htmx.min.js`. Same-origin scripts: `htmx-error-swap.js` (also the
+  generic failure banner, UI-12), `portfolio_chart.js`, `theme.js` (UI-3, applies a theme
+  switch in place), `transaction_form.js` (UI-9, shows the manual-entry fields the chosen type
+  and currency need), and `password_toggle.js` (UI-12).
 - `cli.py` — `web serve` only, mirroring `auth serve`'s lazy-import-uvicorn shape.
 
 ## Deployment

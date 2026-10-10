@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "partials/_banner.html" import banner %}
 {% block title %}Import broker file — Stakehold{% endblock %}
 {% block content %}
 {% include "partials/_account_header.html" %}
@@ -8,26 +9,26 @@
   {% set account_query = "?account=" ~ (account_label | urlencode) %}
   <div class="import-summary">
     {% if imported == 0 %}
-    <p class="confirmation-banner">Nothing new to import — every row was already recorded.</p>
+    {% call banner("success") %}<strong>Nothing new to import</strong> — every row was already recorded.{% endcall %}
     {% else %}
-    <p class="confirmation-banner">Imported <span class="mono">{{ imported | qty }}</span> transaction(s).{% if outcome %} {{ outcome }}{% endif %}</p>
+    {% call banner("success") %}<strong>Imported <span class="mono">{{ imported | qty }}</span> transaction(s).</strong>{% if outcome %} {{ outcome }}{% endif %}{% endcall %}
     {% endif %}
     <p class="next-steps"><a href="/portfolio{{ account_query }}">View holdings</a> <a href="/transactions{{ account_query }}">View transactions</a></p>
   </div>
   {% endif %}
   {# Outside the form: a full-page error re-render must show its message even when the form
      itself isn't rendered (importers couldn't be loaded). #}
-  <div id="form-errors">
+  <div id="form-errors" aria-live="polite">
     {% include "partials/_form_errors.html" %}
   </div>
   {% if importers is none %}
-  <p class="form-error">Can't load the importers right now. Try again in a moment.</p>
+  {% call banner("error") %}<strong>Can't load the importers right now.</strong> Try again in a moment.{% endcall %}
   {% elif not importers %}
   <p class="entry-empty">No file importer is available for {{ account.broker }}. Add its transactions
     manually instead: <a href="/transactions/new?account={{ account_label | urlencode }}">add a transaction</a>.</p>
   {% else %}
   {% if imported is not none %}<h2>Import another file</h2>{% endif %}
-  <form hx-post="/transactions/import" hx-target="#form-errors" hx-swap="innerHTML" hx-encoding="multipart/form-data"
+  <form hx-post="/transactions/import" hx-target="#form-errors" hx-swap="innerHTML" hx-disabled-elt="find button[type='submit']" hx-encoding="multipart/form-data"
         method="post" action="/transactions/import" enctype="multipart/form-data">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <input type="hidden" name="account_label" value="{{ account_label }}">
@@ -48,6 +49,7 @@
         <span class="mono">{{ max_upload_mb }}</span> MB.</p>
     </div>
     <button type="submit" class="btn btn-primary">Upload</button>
+    <span class="htmx-indicator busy" role="status">Uploading…</span>
   </form>
   {% endif %}
 </section>

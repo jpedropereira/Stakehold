@@ -526,8 +526,21 @@ def _unmapped(identifier, broker="acme", kind="ISIN") -> UnmappedInstrument:
 
 
 def _mapping_notice(html):
-    match = re.search(r'<p class="entry-subtitle" id="unmapped-notice">(.*?)</p>', html, re.DOTALL)
-    return None if match is None else match.group(1)
+    """The warning banner's text, its bold lead unwrapped."""
+    match = re.search(r'<div id="unmapped-notice">.*?<p>(.*?)</p>', html, re.DOTALL)
+    if match is None:
+        return None
+    return match.group(1).replace("<strong>", "").replace("</strong>", "")
+
+
+def test_mapping_notice_is_a_warning_banner(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.list_unmapped_instruments_result = [_unmapped("IE00B4L5Y983")]
+
+    html = test_client.get("/portfolio", params={"account": "main"}).text
+
+    assert re.search(r'<div id="unmapped-notice">\s*<div class="banner" data-kind="warning">', html)
 
 
 def test_portfolio_page_lists_instruments_waiting_for_a_mapping_at_this_broker(client):

@@ -538,7 +538,7 @@ def test_mappings_page_shows_the_outcome_of_the_last_change(client):
         "/admin/mappings", params={"saved": "1", "rebuilt": "1", "failed": "1"}
     )
 
-    assert "Mapping saved. Positions rebuilt for 2 account(s)." in saved.text
+    assert "<strong>Mapping saved.</strong> Positions rebuilt for 2 account(s)." in saved.text
     assert "1 rebuild(s) failed" in failed.text
 
 

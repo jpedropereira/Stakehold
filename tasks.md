@@ -34,7 +34,9 @@ numbers. Code comments and docs throughout the repo say "task 9", "task 13", and
   exposes. Work needing new ones is listed under [Deferred](#deferred).
 - **Tests first**, per `.claude/rules/testing.md`. **`services/web/docs/architecture.md` is updated
   in the same change** whenever a task adds a route, a client method, a module or a static asset
-  with behaviour, per `.claude/rules/architecture.md`.
+  with behaviour, per `.claude/rules/architecture.md`. Presentation decisions (theme, chart,
+  formatting, page layout, form scripts, feedback states) go in its companion
+  `services/web/docs/ui-architecture.md`, split out for size during UI-12.
 
 ## Status table
 
@@ -51,8 +53,8 @@ numbers. Code comments and docs throughout the repo say "task 9", "task 13", and
 | UI-9 | [Transaction entry form UX](#ui-9-transaction-entry-form-ux) | UI-1 | done |
 | UI-10 | [Accounts & import pages](#ui-10-accounts--import-pages) | UI-4 | done |
 | UI-11 | [Home dashboard](#ui-11-home-dashboard) | UI-6 | done |
-| UI-12 | [Feedback, loading & error states](#ui-12-feedback-loading--error-states) | UI-1, UI-2 | ready |
-| UI-13 | [Responsive & accessibility pass](#ui-13-responsive--accessibility-pass) | UI-3, UI-6, UI-7, UI-8, UI-9, UI-10, UI-11, UI-12, UI-14 | blocked |
+| UI-12 | [Feedback, loading & error states](#ui-12-feedback-loading--error-states) | UI-1, UI-2 | done |
+| UI-13 | [Responsive & accessibility pass](#ui-13-responsive--accessibility-pass) | UI-3, UI-6, UI-7, UI-8, UI-9, UI-10, UI-11, UI-12, UI-14 | ready |
 | UI-14 | [Broker dropdown & importer choice](#ui-14-broker-dropdown--importer-choice) | UI-4 | done |
 
 UI-1, UI-2 and UI-5 have no dependencies and can be done in any order. UI-2 is mostly a proposal
@@ -535,7 +537,7 @@ As built (decided with the user before implementation):
 
 ### UI-12. Feedback, loading & error states
 
-**Status:** ready
+**Status:** done
 
 Depends on UI-1 and UI-2 (the error treatment).
 
@@ -552,9 +554,42 @@ Depends on UI-1 and UI-2 (the error treatment).
 Tests: exception-handler routes render the branded pages with the right status codes; the
 `aria-live` attribute is present; existing htmx error-swap tests still pass.
 
+As built (decided with the user before implementation):
+- **One banner macro for every message** (`partials/_banner.html`): error, warning and success,
+  in the charter's ink rule. The pages that showed outage errors in the success style
+  (`portfolio.html`, `transactions.html`), the list errors, and the import page's "can't load
+  the importers" all use it now. UI-7's unmapped notice became a warning banner, since it's the
+  charter's own warning example. `.form-error` and `.confirmation-banner` are gone, including
+  on UI-11's home page (merged in mid-task): its accounts outage is an error banner, and its
+  "Totals leave out N accounts" line a warning.
+- **Each form has a fixed lead word** (user's decision): "Couldn't log in.", "Couldn't save.",
+  and so on, from `routes._ERROR_LEADS`. The messages are unchanged. A success's existing first
+  sentence became its lead ("Transaction saved."), and the admin mapping outcome is split into
+  a lead and a detail.
+- **An htmx 5xx or lost connection now shows a generic banner** (user's decision, beyond the
+  spec). Before, nothing happened on screen. The copy is a `<template>` in `base.html`, not JS.
+- **Error pages cover every status, not only 404 and 5xx** (user's decision): one `error.html`
+  for a 404, any other 4xx (Starlette's `HTTPException`, so 405 too, and FastAPI's 422) and a
+  500. Rendered without a session, like the 403 page, so no nav. The 500 handler applies the
+  security headers itself, since Starlette runs it outside the middleware.
+- **htmx's inline indicator `<style>` is switched off** with an `htmx-config` meta, and
+  `web.css` carries those rules. That ends the CSP console error UI-3 noted. The class-usage
+  test allowlists `htmx-request`, which only htmx adds at runtime.
+- **On login and signup the mark moved into the card** (user's decision), and the header shows
+  none there. `partials/_logo.html` is shared by both places.
+- Tests are in a new `tests/unit/test_feedback_states.py`, because `test_routes.py` is past the
+  64KB limit. Existing helpers that sliced the old banner markup were moved to the new markup,
+  with their asserted copy unchanged.
+- Checked in Chromium (Playwright, fake upstreams): every banner kind in light and dark, a slow
+  login and account create (button disabled, busy text shown, a second click sending no second
+  POST), an upstream 500 and an offline submit both showing the generic banner, the 404 and 405
+  pages, one logo per theme (including a manual choice against the OS), the password toggle,
+  the no-JS login, and no horizontal scroll at 360 px. The console shows no CSP violations.
+  `docs/architecture.md` is now 62.9KB, close to the 64KB limit.
+
 ### UI-13. Responsive & accessibility pass
 
-**Status:** blocked
+**Status:** ready
 
 Last, once every page exists in its new form.
 

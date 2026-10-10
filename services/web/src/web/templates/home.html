@@ -1,10 +1,11 @@
 {% extends "base.html" %}
 {% from "partials/_delta.html" import delta %}
+{% from "partials/_banner.html" import banner %}
 {% block title %}Overview — Stakehold{% endblock %}
 {% block content %}
 {# First run only when the list actually loaded: an outage must never read as "no accounts". #}
 {% if list_error %}
-<p class="confirmation-banner">{{ list_error }}</p>
+{% call banner("error") %}<strong>Couldn't load your accounts.</strong> {{ list_error }}{% endcall %}
 {% elif not rows %}
 <section class="card card-narrow">
   <h1>Welcome, {{ user.display_name }}.</h1>
@@ -35,7 +36,7 @@
 </section>
 {% endif %}
 {% if failed_count %}
-<p class="confirmation-banner">Totals leave out {{ failed_count }} account{{ "s" if failed_count != 1 }} that couldn't be loaded.</p>
+{% call banner("warning") %}<strong>Totals leave out {{ failed_count }} account{{ "s" if failed_count != 1 }} that couldn't be loaded.</strong>{% endcall %}
 {% endif %}
 <section class="card card-wide">
   <h1>Accounts</h1>
