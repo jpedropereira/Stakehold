@@ -23,6 +23,7 @@ this file; references to sections that stayed in `architecture.md` name it.
 | Broker file import | `import-transactions --user <id> --file <path> --account <label>` | `POST /transactions/import` (multipart) | manual, on demand | export file, `accounts` scoped by `user_id` | `transactions` (idempotent on `(account_id, broker_transaction_ref)`) |
 | Cash-ledger import | `import-cashflow --user <id> --file <path> --account <label>` | `POST /cashflows/import` (multipart) | manual, on demand | export file, `accounts` scoped by `user_id`, data-store's FX read API (`datastore_client`) for non-EUR rows | `transactions` (idempotent on `(account_id, broker_transaction_ref)`) |
 | Transaction listing | — (CLI has none) | `GET /transactions` | on demand | `transactions`, scoped through the resolved account | — (read-only report) |
+| Transaction delete | `delete-transaction --user <id> --account <label> --ref <key>` | `DELETE /transactions?user_id=&account_label=&broker_transaction_ref=` | manual, by the account's owner | `accounts`, scoped by `user_id` | `transactions` (one row deleted, 404 if none matched), then `position_snapshots` and `return_snapshots` for that account |
 | Positions rebuild | `rebuild-positions --user <id> [--account <label>]` | `POST /positions/rebuild` | automatically after every transaction write that saves rows (see "Positions and returns follow every transaction write") and, for each affected account, after every ticker-mapping change | `transactions`, `ticker_mappings` | `position_snapshots` |
 | Position listing | — (CLI has none) | `GET /positions` | on demand | `position_snapshots`, latest row per ticker | — (read-only report) |
 | Returns rebuild | `rebuild-returns --user <id> [--account <label>]` | `POST /returns/rebuild` | automatically after every positions rebuild that follows a write or a mapping change (see "Positions and returns follow every transaction write") | `position_snapshots`, `transactions` (`DIVIDEND` rows), `ticker_mappings`, `data-store` read API | `return_snapshots` |
@@ -123,6 +124,17 @@ returns on the account and home pages. See `schema.md`'s loading strategy for
 `run_rebuild_positions` and then `run_rebuild_returns` for the one account they just wrote to
 (`jobs._rebuild_after_write`), and report their outcomes as `positions_rebuild` and
 `returns_rebuild` alongside their own `status`.
+
+`run_delete_transaction` does the same after a delete, through the same isolated helper
+(`jobs._rebuild_derived_isolated`), for the same reason: without it the deleted row would keep
+showing in the portfolio view until someone ran a CLI command. The positions rebuild prunes a
+ticker the delete left with no transactions, and the returns rebuild then drops that ticker's
+return rows and any rows from before a window start that moved later (see "Pruning a ticker"
+above and `schema.md`'s loading strategy for `return_snapshots`). A miss (no such reference in
+the account) raises `TransactionNotFound` before anything is rebuilt. **Known limitation:** in an account with
+a blocked (unmapped) instrument the positions rebuild skips pruning altogether, so a ticker
+whose only BUY was deleted keeps its last position, and with it its returns, until that
+instrument is mapped.
 
 **Why:** `GET /positions` reads only `position_snapshots`, and before this nothing but an explicit
 `rebuild-positions` ever wrote it — so a transaction entered through the web UI was durably saved,
@@ -363,6 +375,7 @@ handlers, `auth`'s pattern of app-level handlers rather than per-route `try`/`ex
 |---|---|---|
 | `AccountNotFound` | 404 | `--account`/`account_label` didn't resolve for this user — the isolation chokepoint |
 | `TickerMappingNotFound` | 404 | a mapping delete for an id that's already gone |
+| `TransactionNotFound` | 404 | a transaction delete whose reference isn't in the (resolved) account, most likely already deleted |
 | `AccountLabelConflict` | 409 | a label re-used under a different broker |
 | `InvalidBroker`, `InvalidTransaction`, `BrokerFileError`, `BrokerParserNotFound`, `UnknownTicker`, `InvalidTickerMapping` | 422 | a caller-supplied value failed validation or parsing |
 | `TickerMappingError`, `BrokerPluginError` | 500 | a server-side data/plugin problem, not a caller mistake (`TickerMappingError` now means a stored transaction carries an identifier kind `resolve` doesn't know) |

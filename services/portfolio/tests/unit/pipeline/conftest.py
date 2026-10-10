@@ -1,6 +1,6 @@
-"""Fakes and fixtures shared by the pipeline unit tests in this directory (test_pipeline.py and
-test_pipeline_rebuilds.py): in-memory stand-ins for the repositories pipeline.py composes,
-patched onto the module by the `repos`/`returns_repo` fixtures.
+"""Fakes and fixtures shared by the pipeline unit tests in this directory (test_pipeline.py,
+test_pipeline_rebuilds.py, test_pipeline_deletes.py): in-memory stand-ins for the repositories
+pipeline.py composes, patched onto the module by the `repos`/`returns_repo` fixtures.
 
 They live in a conftest, not a helper module, because test directories aren't packages (see
 CLAUDE.md's "Never add an `__init__.py` under a service's `tests/`"), so a sibling helper module
@@ -134,6 +134,15 @@ class FakeTransactionsRepo:
                 rows, key=lambda t: (t.trade_datetime, t.broker_transaction_ref)
             )
         return grouped
+
+    def delete_one(self, conn, *, account_id, broker_transaction_ref):
+        before = len(self.saved)
+        self.saved = [
+            t
+            for t in self.saved
+            if (t.account_id, t.broker_transaction_ref) != (account_id, broker_transaction_ref)
+        ]
+        return before - len(self.saved)
 
     def list_by_account(self, conn, account_id, *, transaction_types=None):
         return self.list_by_accounts(conn, [account_id], transaction_types=transaction_types).get(

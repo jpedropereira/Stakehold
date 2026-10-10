@@ -24,7 +24,7 @@ CREATE INDEX IF NOT EXISTS idx_accounts_user_id ON accounts (user_id);
 -- Scoped to the owner, not global: the label is the user's own handle for the account.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_user_label ON accounts (user_id, account_label);
 
--- The immutable ledger. No broker column: an account has exactly one broker, so it would be
+-- The ledger: rows are never edited, only added or deleted by their owner. No broker column: an account has exactly one broker, so it would be
 -- functionally dependent on account_id and free to disagree with it -- see docs/schema.md.
 CREATE TABLE IF NOT EXISTS transactions (
     id                          BIGSERIAL     PRIMARY KEY,

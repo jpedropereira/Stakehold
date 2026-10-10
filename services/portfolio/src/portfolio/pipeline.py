@@ -32,6 +32,7 @@ from portfolio.errors import (
     InvalidTickerMapping,
     InvalidTransaction,
     TickerMappingNotFound,
+    TransactionNotFound,
     UnknownTicker,
 )
 from portfolio.positions import repository as positions_repository
@@ -215,6 +216,24 @@ def list_transactions(conn, *, user_id: UUID, account_label: str) -> list[Canoni
     through."""
     account = _resolve_account(conn, user_id=user_id, account_label=account_label)
     return transactions_repository.list_by_account(conn, account.id)
+
+
+def delete_transaction(
+    conn, *, user_id: UUID, account_label: str, broker_transaction_ref: str
+) -> None:
+    """Remove one transaction from this user's account, in its own transaction. Raises
+    AccountNotFound if the label doesn't resolve for this user, and TransactionNotFound if the
+    account has no transaction with that reference. Rebuilding the snapshots derived from it is
+    jobs.run_delete_transaction's job, as it is for every write."""
+    account = _resolve_account(conn, user_id=user_id, account_label=account_label)
+    with transaction(conn):
+        deleted = transactions_repository.delete_one(
+            conn, account_id=account.id, broker_transaction_ref=broker_transaction_ref
+        )
+    if not deleted:
+        raise TransactionNotFound(
+            f"no transaction {broker_transaction_ref!r} in account {account_label!r}"
+        )
 
 
 def list_positions(conn, *, user_id: UUID, account_label: str) -> list[PositionSnapshot]:

@@ -71,6 +71,15 @@ class AccountLabelConflict(PortfolioError):
     status_code = 409
 
 
+class TransactionNotFound(PortfolioError):
+    """No transaction with that reference in the given account -- already deleted, most likely.
+    Only raised once the account itself resolved for the caller; an account that doesn't is
+    AccountNotFound, so another user's transactions are never distinguishable from missing ones.
+    """
+
+    status_code = 404
+
+
 class InvalidTransaction(PortfolioError):
     """A CanonicalTransaction failed transactions/base.py's validation rules."""
 

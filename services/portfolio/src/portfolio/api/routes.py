@@ -43,6 +43,7 @@ from portfolio.api.models import (
     TickerMappingSetRequest,
     TickerMappingWriteResponse,
     TransactionCreateRequest,
+    TransactionDeleteResponse,
     TransactionResponse,
     TransactionsWriteResponse,
     UnmappedInstrumentAnyBrokerResponse,
@@ -266,6 +267,23 @@ def create_transaction(
     )
     response.status_code = _write_status_code(result)
     return result
+
+
+@router.delete("/transactions", response_model=TransactionDeleteResponse)
+def delete_transaction(
+    user_id: UUID = Query(...),
+    account_label: str = Query(...),
+    broker_transaction_ref: str = Query(...),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    """200, not 204: the body carries the follow-on rebuilds' statuses. An unknown account or
+    reference is a 404 via app.py's handlers."""
+    return jobs.run_delete_transaction(
+        user_id=user_id,
+        account_label=account_label,
+        broker_transaction_ref=broker_transaction_ref,
+        settings=settings,
+    )
 
 
 async def _handle_import(

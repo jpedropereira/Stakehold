@@ -3,6 +3,7 @@ from decimal import Decimal
 
 from portfolio.transactions.base import CanonicalTransaction
 from portfolio.transactions.repository import (
+    delete_one,
     insert_transactions,
     list_by_account,
     list_by_accounts,
@@ -258,3 +259,32 @@ def test_list_by_accounts_an_account_with_no_rows_has_no_key():
     result = list_by_accounts(conn, [1])
 
     assert result == {}
+
+
+# --- delete_one ---
+
+
+def test_delete_one_executes_a_delete_scoped_to_the_account_and_ref():
+    conn = FakeConnection(rowcounts=[1])
+
+    deleted = delete_one(conn, account_id=7, broker_transaction_ref="manual-1")
+
+    sql, params = conn._cursor.executed[0]
+    assert "DELETE FROM transactions" in sql
+    assert "account_id = %s" in sql and "broker_transaction_ref = %s" in sql
+    assert params == (7, "manual-1")
+    assert deleted == 1
+
+
+def test_delete_one_returns_zero_when_no_row_matched():
+    conn = FakeConnection(rowcounts=[0])
+
+    assert delete_one(conn, account_id=7, broker_transaction_ref="missing") == 0
+
+
+def test_delete_one_does_not_commit():
+    conn = FakeConnection(rowcounts=[1])
+
+    delete_one(conn, account_id=7, broker_transaction_ref="manual-1")
+
+    assert conn.committed is False

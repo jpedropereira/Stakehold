@@ -11,7 +11,7 @@ out this way*, see [`architecture.md`](architecture.md), which this document tur
 conceptual entity model into concrete tables.
 
 Five tables: `accounts` (who owns what — `user_id` is a plain UUID referencing `auth`, not a local
-`users` table), `transactions` (the immutable ledger), `position_snapshots` /
+`users` table), `transactions` (the ledger), `position_snapshots` /
 `return_snapshots` (derived, materialized, rebuildable), and `ticker_mappings` (the global,
 admin-managed broker-instrument → `data-store`-ticker mapping).
 
@@ -101,7 +101,17 @@ there's no database row left to point at.
 
 ## `transactions`
 
-The immutable ledger. One row per broker-reported line item or manually entered transaction.
+The ledger. One row per broker-reported line item or manually entered transaction.
+
+**Rows are never edited, only added or deleted.** This used to be "the immutable ledger", with
+no delete path at all. Deleting is now allowed, by the account's owner, one row at a time
+(`portfolio delete-transaction`, `DELETE /transactions`), so a mistaken entry can be removed
+and, since the reference is free again, re-entered correctly. Editing in place is still not
+offered: a correction is a delete plus a new row, so every figure a row carries stays exactly
+what was entered or imported. A row is addressed by `(account_id, broker_transaction_ref)`, the
+same unique key imports are idempotent on. Deletes hard-delete; nothing records that the row
+existed. No DDL changed for this. The snapshots derived from a deleted row are rebuilt straight
+after (see [`flows.md`](flows.md)'s "Positions and returns follow every transaction write").
 
 | Column | Type | Notes |
 |---|---|---|

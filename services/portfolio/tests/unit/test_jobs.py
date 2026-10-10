@@ -2,9 +2,9 @@
 results, connection lifecycle, settings checks, and the rebuilds every write triggers.
 
 Siblings, split out to keep each file under the repo's 64KB limit: test_jobs_rebuilds.py (the
-rebuild jobs themselves) and test_jobs_ticker_mappings.py (the mapping admin jobs). Each repeats
-the small helpers it needs, since a sibling helper module can't be imported under the
-workspace's --import-mode=importlib."""
+rebuild jobs themselves), test_jobs_ticker_mappings.py (the mapping admin jobs) and
+test_jobs_deletes.py (deletes). Each repeats the small helpers it needs, since a sibling helper
+module can't be imported under the workspace's --import-mode=importlib."""
 
 import logging
 import uuid
