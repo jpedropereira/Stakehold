@@ -175,9 +175,11 @@ def _tile(html, label):
 def _holding_cells(html, ticker):
     """The <td> contents of the holdings-table row for `ticker`."""
     tbody = re.search(
-        r'<table class="positions-table holdings-table">.*?<tbody>(.*?)</tbody>', html, re.DOTALL
+        r'<table class="[^"]*\bholdings-table\b[^"]*"[^>]*>.*?<tbody\b[^>]*>(.*?)</tbody>',
+        html,
+        re.DOTALL,
     )
-    for row in re.findall(r"<tr>(.*?)</tr>", tbody.group(1), re.DOTALL):
+    for row in re.findall(r"<tr\b[^>]*>(.*?)</tr>", tbody.group(1), re.DOTALL):
         cells = [c.strip() for c in re.findall(r"<td[^>]*>(.*?)</td>", row, re.DOTALL)]
         if cells and cells[0] == f'<span class="mono">{ticker}</span>':
             return cells

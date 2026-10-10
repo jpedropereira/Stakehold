@@ -21,7 +21,8 @@
   {% if unmapped is none %}
   {% elif unmapped %}
   <p class="entry-subtitle">These instruments block positions until they're mapped.</p>
-  <div class="table-scroll">
+  {# Focusable, so a keyboard can scroll a table wider than the screen; named for screen readers. #}
+  <div class="table-scroll" tabindex="0" role="region" aria-label="Instruments waiting for a mapping">
     <table class="positions-table">
       <thead>
         <tr><th>Kind</th><th>Identifier</th><th>Broker</th><th>Ticker</th></tr>
@@ -56,7 +57,7 @@
   <h1>Mappings</h1>
   {% if mappings is none %}
   {% elif mappings %}
-  <div class="table-scroll">
+  <div class="table-scroll" tabindex="0" role="region" aria-label="Mappings">
     <table class="positions-table">
       <thead>
         <tr><th>Kind</th><th>Identifier</th><th>Broker</th><th>Ticker</th><th>Updated</th><th></th></tr>
@@ -68,7 +69,7 @@
           <td class="mono">{{ mapping.identifier }}</td>
           <td>{{ mapping.broker or "Any" }}</td>
           <td class="mono">{{ mapping.canonical_ticker }}</td>
-          <td class="mono">{{ mapping.updated_at | date }}</td>
+          <td class="mono date">{{ mapping.updated_at | date }}</td>
           <td>
             <form method="post" action="/admin/mappings/{{ mapping.id }}/delete" class="inline-form">
               <input type="hidden" name="csrf_token" value="{{ csrf_token }}">

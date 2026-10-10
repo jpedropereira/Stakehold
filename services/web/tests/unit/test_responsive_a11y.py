@@ -1,0 +1,356 @@
+"""UI-13: the responsive and accessibility pass.
+
+Phone-width behaviour itself is checked in a browser by scripts/review_pages.py. These tests pin
+the markup and CSS that behaviour relies on:
+
+- the holdings and transactions tables carry a label on every figure, so they can stack;
+- they carry explicit table roles, because a stacked table's `display` change drops its native
+  semantics in WebKit;
+- the admin tables, which still scroll, can be reached by keyboard;
+- the review script covers every page.
+
+Kept apart from test_routes.py, which is over the repo's 64KB file limit. Like
+test_home_page.py, it carries its own minimal fakes: only the calls these pages make.
+"""
+
+import html as html_module
+import importlib.util
+import re
+from datetime import date, datetime, timezone
+from decimal import Decimal
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+from web import settings as settings_module
+from web.api import overview, routes
+from web.api.app import create_app
+from web.api.deps import get_auth_client, get_portfolio_client
+from web.auth_client.base import AuthResult, AuthUser
+from web.auth_client.errors import SessionInvalid
+from web.portfolio_client.base import (
+    Account,
+    Position,
+    Return,
+    TickerMapping,
+    Transaction,
+    UnmappedInstrument,
+)
+from web.settings import Settings
+
+SESSION_COOKIE = "stakehold_session=tok; Path=/; HttpOnly; SameSite=lax"
+_WEB_DIR = Path(__file__).resolve().parents[2]
+_WEB_CSS_PATH = _WEB_DIR / "src" / "web" / "static" / "web.css"
+_REVIEW_SCRIPT_PATH = _WEB_DIR / "scripts" / "review_pages.py"
+
+
+class FakeAuthClient:
+    """Anonymous until `_logged_in` sets a result."""
+
+    def __init__(self):
+        self.validate_result: AuthResult | None = None
+
+    async def validate_session(self, *, cookie_header):
+        if self.validate_result is None:
+            raise SessionInvalid("no session")
+        return self.validate_result
+
+
+class FakePortfolioClient:
+    def __init__(self):
+        self.list_accounts_result = [
+            Account(id=1, account_label="main", broker="acme", created_at="2026-01-01T00:00:00Z")
+        ]
+        self.positions: list[Position] = []
+        self.latest_returns: list[Return] = []
+        self.transactions: list[Transaction] = []
+        self.mappings: list[TickerMapping] = []
+        self.unmapped: list[UnmappedInstrument] = []
+
+    async def list_accounts(self, *, user_id):
+        return self.list_accounts_result
+
+    async def list_unmapped_instruments(self, *, user_id):
+        return []
+
+    async def list_positions(self, *, user_id, account_label):
+        return self.positions
+
+    async def list_returns(self, *, user_id, account_label):
+        return []
+
+    async def list_latest_returns(self, *, user_id, account_label):
+        return self.latest_returns
+
+    async def list_transactions(self, *, user_id, account_label):
+        return self.transactions
+
+    async def list_ticker_mappings(self):
+        return self.mappings
+
+    async def list_all_unmapped_instruments(self):
+        return self.unmapped
+
+    async def list_tickers(self):
+        return ["VWCE.DE"]
+
+
+def _settings() -> Settings:
+    return Settings(
+        auth_api_url="http://auth.internal",
+        internal_secret="test-secret",  # pragma: allowlist secret
+        portfolio_api_url="http://portfolio.internal",
+        portfolio_internal_secret="test-portfolio-secret",  # pragma: allowlist secret
+        brand_dir=settings_module._DEFAULT_BRAND_DIR,
+        cookie_secure=False,
+        api_host="127.0.0.1",
+        api_port=8000,
+        http_timeout_seconds=5.0,
+    )
+
+
+@pytest.fixture
+def client():
+    fake_auth, fake_portfolio = FakeAuthClient(), FakePortfolioClient()
+    app = create_app(_settings())
+    app.dependency_overrides[get_auth_client] = lambda: fake_auth
+    app.dependency_overrides[get_portfolio_client] = lambda: fake_portfolio
+    with TestClient(app) as test_client:
+        yield test_client, fake_auth, fake_portfolio
+
+
+def _logged_in(test_client, fake_auth, *, is_admin=False):
+    user = AuthUser(user_id="u1", email="ann@example.com", display_name="Ann", is_admin=is_admin)
+    fake_auth.validate_result = AuthResult(user=user, set_cookie=SESSION_COOKIE)
+    test_client.cookies.set("stakehold_session", "tok")
+
+
+def _position(ticker) -> Position:
+    return Position(
+        account_id=1,
+        canonical_ticker=ticker,
+        as_of_date=date(2026, 1, 5),
+        quantity=Decimal("10"),
+        average_cost_native=Decimal("150"),
+        native_currency="EUR",
+        average_cost_eur=Decimal("150"),
+        cost_basis_eur=Decimal("1500"),
+    )
+
+
+def _latest(ticker) -> Return:
+    return Return(
+        account_id=1,
+        canonical_ticker=ticker,
+        price_date=date(2026, 1, 5),
+        quantity=Decimal("10"),
+        market_value_native=Decimal("1600"),
+        market_value_eur=Decimal("1600"),
+        cost_basis_eur=Decimal("1500"),
+        unrealized_return_eur=Decimal("100"),
+        unrealized_return_pct=Decimal("0.0667"),
+        dividends_received_eur=Decimal("0"),
+        total_return_eur=Decimal("100"),
+        total_return_pct=Decimal("0.0667"),
+    )
+
+
+def _buy() -> Transaction:
+    return Transaction(
+        account_id=1,
+        broker_transaction_ref="buy-1",
+        transaction_type="BUY",
+        trade_datetime=datetime(2026, 1, 5, 9, 30, tzinfo=timezone.utc),
+        instrument_identifier="VWCE.DE",
+        instrument_identifier_kind="TICKER",
+        quantity=Decimal("10"),
+        price=Decimal("112.34"),
+        native_currency="EUR",
+        native_amount=Decimal("-1124.40"),
+        eur_amount=Decimal("-1124.40"),
+        fx_rate=None,
+        fx_rate_source=None,
+        fees_native=Decimal("1"),
+    )
+
+
+def _table(page_html, css_class):
+    match = re.search(
+        rf'<table [^>]*class="[^"]*\b{css_class}\b[^"]*"[^>]*>.*?</table>', page_html, re.S
+    )
+    assert match, f"no table with class {css_class}"
+    return match.group(0)
+
+
+def _tags(table_html, tag):
+    """The opening tags of every `tag` element in the table."""
+    return re.findall(rf"<{tag}\b[^>]*>", table_html)
+
+
+def _attr(tag_html, name):
+    match = re.search(rf'\b{name}="([^"]*)"', tag_html)
+    return None if match is None else html_module.unescape(match.group(1))
+
+
+def _body_rows(table_html):
+    tbody = re.search(r"<tbody\b[^>]*>(.*?)</tbody>", table_html, re.S).group(1)
+    return re.findall(r"<tr\b[^>]*>(.*?)</tr>", tbody, re.S)
+
+
+def _assert_stackable(table_html, expected_labels):
+    """The table can stack: explicit roles throughout, and every cell after a row's first
+    labelled like its column, in column order."""
+    assert "stack-table" in _attr(_tags(table_html, "table")[0], "class")
+    assert _attr(_tags(table_html, "table")[0], "role") == "table"
+    for tag in ("thead", "tbody"):
+        assert [_attr(t, "role") for t in _tags(table_html, tag)] == ["rowgroup"]
+    assert {_attr(t, "role") for t in _tags(table_html, "tr")} == {"row"}
+    assert {_attr(t, "role") for t in _tags(table_html, "th")} == {"columnheader"}
+    assert {_attr(t, "role") for t in _tags(table_html, "td")} == {"cell"}
+    rows = _body_rows(table_html)
+    assert rows
+    for row in rows:
+        cells = re.findall(r"<td\b[^>]*>", row)
+        assert _attr(cells[0], "data-label") is None, "the first cell is the row's heading"
+        assert [_attr(c, "data-label") for c in cells[1:]] == expected_labels
+
+
+_HOLDINGS_LABELS = [
+    "Quantity",
+    "Avg cost",
+    "Market value",
+    "Weight",
+    "Unrealized return",
+    "Unrealized return (%)",
+]
+
+
+def test_holdings_table_can_stack_at_phone_width(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.positions = [_position("AAPL"), _position("MSFT")]
+    fake_portfolio.latest_returns = [_latest("AAPL"), _latest("MSFT")]
+
+    page_html = test_client.get("/portfolio?account=main").text
+
+    _assert_stackable(_table(page_html, "holdings-table"), _HOLDINGS_LABELS)
+
+
+def test_holdings_waiting_for_prices_cell_is_labelled(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.positions = [_position("AAPL"), _position("MSFT")]
+    fake_portfolio.latest_returns = [_latest("AAPL")]
+
+    table = _table(test_client.get("/portfolio?account=main").text, "holdings-table")
+
+    waiting = next(row for row in _body_rows(table) if "MSFT" in row)
+    labels = [_attr(c, "data-label") for c in re.findall(r"<td\b[^>]*>", waiting)]
+    assert labels == [None, "Quantity", "Avg cost", "Market value"]
+    assert "Waiting for prices" in waiting
+
+
+def test_transactions_table_can_stack_at_phone_width(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.transactions = [_buy()]
+
+    page_html = test_client.get("/transactions?account=main").text
+
+    _assert_stackable(
+        _table(page_html, "transactions-table"),
+        ["Type", "Instrument", "Quantity", "Price", "Amount", "Fees", "Reference"],
+    )
+
+
+def test_stacked_tables_no_longer_scroll_sideways(client):
+    """A stacked table fits the width, so it needs no scroll box around it."""
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.positions = [_position("AAPL")]
+    fake_portfolio.latest_returns = [_latest("AAPL")]
+    fake_portfolio.transactions = [_buy()]
+
+    for path in ("/portfolio?account=main", "/transactions?account=main"):
+        assert "table-scroll" not in test_client.get(path).text, path
+
+
+def test_admin_tables_scroll_in_a_keyboard_reachable_region(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth, is_admin=True)
+    fake_portfolio.unmapped = [
+        UnmappedInstrument(kind="ISIN", identifier="IE00B4L5Y983", broker=None)
+    ]
+    fake_portfolio.mappings = [
+        TickerMapping(
+            id=1,
+            identifier_kind="ISIN",
+            identifier="IE00BK5BQT80",
+            broker=None,
+            canonical_ticker="VWCE.DE",
+            updated_at=datetime(2026, 1, 5, tzinfo=timezone.utc),
+        )
+    ]
+
+    page_html = test_client.get("/admin/mappings").text
+
+    regions = re.findall(r'<div [^>]*class="table-scroll"[^>]*>', page_html)
+    assert len(regions) == 2
+    for region in regions:
+        assert _attr(region, "tabindex") == "0"
+        assert _attr(region, "role") == "region"
+    assert sorted(_attr(r, "aria-label") for r in regions) == [
+        "Instruments waiting for a mapping",
+        "Mappings",
+    ]
+
+
+def _css():
+    return re.sub(r"/\*.*?\*/", "", _WEB_CSS_PATH.read_text(), flags=re.S)
+
+
+def test_web_css_stacks_tables_at_phone_width():
+    blocks = re.findall(r"@media \(max-width: 600px\) \{(.*?)\n\}", _css(), re.S)
+    assert blocks, "no phone-width media block for stacked tables"
+    assert ".stack-table" in blocks[0]
+
+
+def test_stacked_table_labels_are_hidden_from_screen_readers():
+    """The column header already names each cell for a screen reader; the drawn label carries
+    empty alt text so it isn't read a second time."""
+    assert re.search(r'content:\s*attr\(data-label\)\s*/\s*""', _css())
+
+
+def test_table_scroll_regions_show_a_focus_ring():
+    focus_rule = re.search(r"^:is\(([^)]*)\):focus-visible", _css(), re.M)
+    assert focus_rule and ".table-scroll" in focus_rule.group(1)
+
+
+def test_date_input_keeps_a_focus_ring_on_its_calendar_button():
+    """Chrome's date/time input has a calendar button inside it, reached by Tab. While it has
+    focus the input itself doesn't match :focus-visible, only :focus-within, so without its own
+    rule the keyboard stop shows no ring at all."""
+    rule = re.search(r'input\[type="datetime-local"\]:focus-within\s*\{([^}]*)\}', _css())
+    assert rule, "no focus ring for a date input's calendar button"
+    assert "var(--focus-ring)" in rule.group(1)
+
+
+def _review_script():
+    spec = importlib.util.spec_from_file_location("review_pages", _REVIEW_SCRIPT_PATH)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_review_script_covers_every_page():
+    """A page added later can't silently miss the screenshot and contrast review."""
+    page_routes = {
+        route.path
+        for router in (routes.router, overview.router)
+        for route in router.routes
+        if "GET" in route.methods
+    }
+
+    reviewed = {page.path.split("?", 1)[0] for page in _review_script().PAGES}
+
+    assert page_routes <= reviewed, f"not reviewed: {sorted(page_routes - reviewed)}"

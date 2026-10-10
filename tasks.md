@@ -54,7 +54,7 @@ numbers. Code comments and docs throughout the repo say "task 9", "task 13", and
 | UI-10 | [Accounts & import pages](#ui-10-accounts--import-pages) | UI-4 | done |
 | UI-11 | [Home dashboard](#ui-11-home-dashboard) | UI-6 | done |
 | UI-12 | [Feedback, loading & error states](#ui-12-feedback-loading--error-states) | UI-1, UI-2 | done |
-| UI-13 | [Responsive & accessibility pass](#ui-13-responsive--accessibility-pass) | UI-3, UI-6, UI-7, UI-8, UI-9, UI-10, UI-11, UI-12, UI-14 | ready |
+| UI-13 | [Responsive & accessibility pass](#ui-13-responsive--accessibility-pass) | UI-3, UI-6, UI-7, UI-8, UI-9, UI-10, UI-11, UI-12, UI-14 | done |
 | UI-14 | [Broker dropdown & importer choice](#ui-14-broker-dropdown--importer-choice) | UI-4 | done |
 
 UI-1, UI-2 and UI-5 have no dependencies and can be done in any order. UI-2 is mostly a proposal
@@ -589,7 +589,7 @@ As built (decided with the user before implementation):
 
 ### UI-13. Responsive & accessibility pass
 
-**Status:** ready
+**Status:** done
 
 Last, once every page exists in its new form.
 
@@ -603,6 +603,60 @@ Last, once every page exists in its new form.
 - A Playwright screenshot script under `services/web/` (Playwright is already a workspace
   dependency, used by `data-store`) that captures every page in light and dark at desktop and
   phone width, for review rather than as a pixel-diff gate.
+
+As built (decided with the user before implementation):
+
+- **Holdings and transactions stack at phone width** (user's decision, over scrolling with a
+  cue). At 600px and below each row becomes a block: the ticker or date heads it, then one
+  "label, figure" line per cell. Labels come from `data-label` through
+  `content: attr(data-label) / ""`, with empty alt text so a screen reader doesn't hear them on
+  top of the column headers. Explicit table roles keep the semantics WebKit drops when a table's
+  `display` changes. Pure CSS, so it works the same without JS.
+- **The admin mapping tables still scroll**, now inside a focusable, labelled region with a focus
+  ring, so a keyboard can scroll them. Their "Updated" date no longer breaks at its hyphens.
+- **Review script** `services/web/scripts/review_pages.py`. It runs 13 pages (the 403, 404 and
+  account-not-found pages included) × light/dark × 1280/360 px against in-process fake clients,
+  in about 50s. Screenshots go to `services/web/screenshots/`, which is gitignored. Each
+  variant is checked for:
+  - sideways scroll;
+  - WCAG AA contrast of every visible text element against the background actually behind it;
+  - a visible focus indicator at every Tab stop, and no focus trap;
+  - console errors.
+
+  It exits non-zero on any problem. It's for review, not CI (user's decision to write our own
+  contrast check rather than add axe-core). A unit test keeps its page list in step with the
+  `GET` page routes. `playwright` joined the root `dev` group, since web's tooling now uses it
+  directly.
+- **Audit findings:**
+  - No page failed contrast in either theme, which is consistent with UI-2's alias-pair tests.
+  - No page scrolled sideways at 360px. The two wide tables had scrolled inside their cards, and
+    now stack.
+  - One focus gap, which has been fixed: Chrome's `datetime-local` (the Add page's date) has an
+    inner calendar button. While it has focus the input matches `:focus-within` but not
+    `:focus-visible`, so that stop showed no ring.
+  - The review script's own focus walk initially skipped an element's repeated inner stops, so
+    it missed the date input. It now checks every stop, and it reports the gap when the fix is
+    removed.
+  - The checks were also confirmed to report injected faint text, a removed ring and an
+    overflowing element.
+- **Keyboard-only walkthroughs** in Chromium, in light and dark at 360px, used Tab, Shift+Tab,
+  Enter, Space and the arrow keys only:
+  - signup (including the password toggle) → create an account through the collapsed form →
+    add a deposit, with the type picked by typing → holdings (chart view and range toggles) →
+    transactions;
+  - admin → mappings → scroll the table → map an instrument → delete a mapping;
+  - the theme toggle, where focus stays in the toggle after the in-place switch.
+
+  Visible focus held at every stop. The order is skip link, mark, nav, logout, theme, then main.
+- **Known limitation**, recorded in `ui-architecture.md`: text drawn on the chart canvas isn't
+  measured. It uses the same aliases `test_brand_contrast.py` covers.
+- Tests are in a new `tests/unit/test_responsive_a11y.py`. The holdings and transactions row
+  helpers in `test_portfolio_page.py` and `test_transactions_page.py`, and one admin date
+  assertion in `test_routes.py`, were updated for the new attributes. Their asserted content is
+  unchanged.
+
+With UI-13 done, every task in the UI/UX chunk is `done`. Per `.claude/rules/tasks.md`, this file
+moves to `docs/roadmap-archive/` once the next chunk is planned.
 
 ### UI-14. Broker dropdown & importer choice
 

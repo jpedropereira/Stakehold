@@ -413,6 +413,10 @@ branded page with its own status, and an unhandled exception a branded 500 (UI-1
   switch in place), `transaction_form.js` (UI-9, shows the manual-entry fields the chosen type
   and currency need), and `password_toggle.js` (UI-12).
 - `cli.py` — `web serve` only, mirroring `auth serve`'s lazy-import-uvicorn shape.
+- `scripts/review_pages.py` (UI-13) — a developer tool, not part of the package and not an
+  entry point of the service. It screenshots every page against fake clients and checks
+  contrast, focus and phone-width overflow; see [`ui-architecture.md`](ui-architecture.md).
+  Playwright comes from the workspace `dev` group.
 
 ## Deployment
 

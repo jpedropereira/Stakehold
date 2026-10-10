@@ -67,3 +67,6 @@ services/data-store/config/macro_regions.yaml
 # services/portfolio/plugins/README.md)
 services/portfolio/plugins/*
 !services/portfolio/plugins/README.md
+
+# Screenshots from services/web/scripts/review_pages.py -- for review, never committed
+services/web/screenshots/

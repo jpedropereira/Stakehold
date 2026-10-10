@@ -9,6 +9,42 @@ described here updates this file in the same change.
 
 ## Key decisions
 
+- **Responsive and accessibility pass (UI-13).**
+  - *Stacked tables*: at 600px and below, the holdings and transactions tables become one block
+    per row. The first cell (the ticker or the date) heads the block, and each other cell is a
+    "label, figure" line. The label is drawn from the cell's `data-label` by
+    `content: attr(data-label) / ""`. The empty alt text is there because the column header,
+    still in the page but visually hidden, already names the cell for a screen reader; without
+    it, every label would be read twice. Changing a table's `display` drops its table semantics
+    in WebKit, so the templates set explicit `table`/`rowgroup`/`row`/`columnheader`/`cell`
+    roles, which cost nothing at desktop width. This won over scrolling with an edge cue
+    because, at 360px, a scrolling eight-column table shows about three columns at a time, and
+    the figures a holding is read for (value, return) would be the hidden ones.
+  - *Admin tables still scroll*: the mappings tables are an admin's desk tool, with forms in
+    their cells. Their `.table-scroll` box is a focusable, labelled region (`tabindex="0"`,
+    `role="region"`), so a keyboard can scroll it in browsers that don't make scrollers
+    focusable on their own. It gets the same focus ring as everything else.
+  - *Date input focus*: Chrome's `datetime-local` has a calendar button inside it that is a
+    Tab stop of its own. While that button has focus, the input matches `:focus-within` but not
+    `:focus-visible`, so the field gets the ring for `:focus-within` too.
+  - *Review script*: `scripts/review_pages.py` serves `create_app()` against in-process fake
+    clients, then screenshots every page in both themes at 1280px and 360px. For each of those
+    variants it also checks:
+    - no sideways scroll at phone width;
+    - WCAG AA contrast of every visible text element against the background actually behind
+      it;
+    - a visible focus indicator at every Tab stop, a date input's inner stops included;
+    - no console errors.
+
+    Fakes rather than the running stack, so it needs nothing up, shows the same data every run,
+    and can't touch a dev database. It complements `test_brand_contrast.py`, which proves the
+    alias pairs; the script proves how pages use them. The script is for a person to review,
+    not a CI gate: it needs a Chromium download and takes about a minute, and screenshots would
+    make a brittle pixel diff. Its own contrast check was chosen over axe-core to avoid a
+    third-party dependency. It covers contrast and focus only, not labels or ARIA use. A unit
+    test checks that its page list includes every `GET` page route, so a new page can't skip
+    review. **Known limitation:** text drawn on the chart's canvas isn't measured. It's
+    colored from the same aliases, which `test_brand_contrast.py` covers.
 - **Feedback and error states (UI-12).**
   - *Banners*: every message is one macro, `partials/_banner.html`, in the charter's ink rule
     (chapter II): an icon and a bold lead word carry the meaning, never color, so errors use

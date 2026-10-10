@@ -491,7 +491,9 @@ def test_mappings_page_lists_mappings_unmapped_instruments_and_the_ticker_picker
     assert "IE00B4L5Y983" in response.text
     assert '<option value="SGLD.L">' in response.text
     assert 'action="/admin/mappings/7/delete"' in response.text
-    assert '<td class="mono">2026-10-06</td>' in response.text  # updated_at, via the date filter
+    assert (
+        '<td class="mono date">2026-10-06</td>' in response.text
+    )  # updated_at, via the date filter
 
 
 def test_mappings_page_says_so_when_nothing_is_left_to_map(client):

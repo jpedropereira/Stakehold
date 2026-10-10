@@ -44,37 +44,38 @@
   </div>
   {% endif %}
   {% if holdings %}
-  <div class="table-scroll">
-    <table class="positions-table holdings-table">
-      <thead>
-        <tr>
-          <th>Ticker</th>
-          <th class="num">Quantity</th>
-          <th class="num">Avg cost</th>
-          <th class="num">Market value</th>
-          <th class="num">Weight</th>
-          <th class="num" colspan="2">Unrealized return</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for holding in holdings %}
-        <tr>
-          <td><span class="mono">{{ holding.canonical_ticker }}</span></td>
-          <td class="num"><span class="mono">{{ holding.quantity | qty }}</span></td>
-          <td class="num"><span class="mono">{{ holding.average_cost_eur | money }}</span></td>
-          {% if prices_known and holding.awaiting_prices %}
-          <td class="num" colspan="4"><span class="entry-empty">Waiting for prices</span></td>
-          {% else %}
-          <td class="num"><span class="mono">{{ holding.market_value_eur | money }}</span></td>
-          <td class="num"><span class="mono">{{ holding.weight | share }}</span></td>
-          <td class="num">{{ delta(holding.unrealized_return_eur) }}</td>
-          <td class="num">{{ delta(holding.unrealized_return_pct, "pct") }}</td>
-          {% endif %}
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
+  {# Stacks into one labelled block per holding at phone width (web.css, .stack-table). The
+     explicit roles keep it a table for screen readers once its display changes, and each
+     data-label repeats its column header for the stacked layout. #}
+  <table class="positions-table holdings-table stack-table" role="table">
+    <thead role="rowgroup">
+      <tr role="row">
+        <th role="columnheader">Ticker</th>
+        <th class="num" role="columnheader">Quantity</th>
+        <th class="num" role="columnheader">Avg cost</th>
+        <th class="num" role="columnheader">Market value</th>
+        <th class="num" role="columnheader">Weight</th>
+        <th class="num" role="columnheader" colspan="2">Unrealized return</th>
+      </tr>
+    </thead>
+    <tbody role="rowgroup">
+      {% for holding in holdings %}
+      <tr role="row">
+        <td role="cell"><span class="mono">{{ holding.canonical_ticker }}</span></td>
+        <td class="num" role="cell" data-label="Quantity"><span class="mono">{{ holding.quantity | qty }}</span></td>
+        <td class="num" role="cell" data-label="Avg cost"><span class="mono">{{ holding.average_cost_eur | money }}</span></td>
+        {% if prices_known and holding.awaiting_prices %}
+        <td class="num" role="cell" data-label="Market value" colspan="4"><span class="entry-empty">Waiting for prices</span></td>
+        {% else %}
+        <td class="num" role="cell" data-label="Market value"><span class="mono">{{ holding.market_value_eur | money }}</span></td>
+        <td class="num" role="cell" data-label="Weight"><span class="mono">{{ holding.weight | share }}</span></td>
+        <td class="num" role="cell" data-label="Unrealized return">{{ delta(holding.unrealized_return_eur) }}</td>
+        <td class="num" role="cell" data-label="Unrealized return (%)">{{ delta(holding.unrealized_return_pct, "pct") }}</td>
+        {% endif %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
   {% else %}
   <p class="entry-empty">No positions yet — they appear here as soon as you add a buy transaction.</p>
   {% endif %}
