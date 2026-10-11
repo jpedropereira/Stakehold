@@ -1,345 +1,309 @@
 # Tasks
 
-Roadmap for the ticker-onboarding chunk: letting users and admins add a Yahoo Finance ticker that
-`data-store` doesn't price yet, instead of an operator editing `tracked_tickers.yaml` on the server.
-A symbol is checked against Yahoo before it can be added, its full history is backfilled in the
-background, and every page that shows it says plainly whether it is loading, ready or failed.
+Roadmap for the portfolio-view chunk: one page that shows everything a user holds across all of
+their accounts, summed per ticker. 120 units of IWDA in account A and 20 in account B show as 140
+units of IWDA, with a per-account breakdown on request. A returns-over-time chart for the whole
+portfolio follows the holdings table.
 The previous chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archive/):
-[walking skeleton](docs/roadmap-archive/walking-skeleton.md) and
-[UI/UX](docs/roadmap-archive/ui-ux.md).
+[walking skeleton](docs/roadmap-archive/walking-skeleton.md),
+[UI/UX](docs/roadmap-archive/ui-ux.md) and
+[ticker onboarding](docs/roadmap-archive/ticker-onboarding.md).
 
-**Task IDs are prefixed `TK-`** so they can't be confused with the walking-skeleton's bare "task N"
-references or the UI chunk's `UI-N`.
+**Task IDs are prefixed `PF-`** so they can't be confused with the walking-skeleton's bare
+"task N" references, the UI chunk's `UI-N` or the ticker-onboarding chunk's `TK-N`.
 
 **Status** is one of:
 - `done`: implemented, tested, merged.
 - `ready`: every dependency is `done`, so it can be started now.
-- `blocked`: waiting on at least one dependency (or, for TK-1, a sign-off).
+- `blocked`: waiting on at least one dependency.
 
 ## Agreed requirements
 
-- Users add tickers directly, within a daily limit (default 10, rolling 24 h). Admins have no limit.
-- A symbol Yahoo doesn't know can't be added. "Yahoo didn't answer" is reported as "try again
-  later", never as "doesn't exist".
-- Adding a ticker backfills its full history (yfinance `max`, 1960 onward wherever Yahoo has it).
-- `tracked_tickers.yaml` stays as the platform's default list and is loaded automatically.
-- Delisted securities are unsupported for now, as a documented limitation.
+- **URLs.** The combined view lives at `/portfolio`, with its own top-level "Portfolio" nav link.
+  The per-account holdings page moves from `/portfolio?account=X` to
+  `/accounts/holdings?account=X`, and old links redirect.
+- **Matching.** Holdings merge on `canonical_ticker`. Different listings of one security (e.g.
+  `IWDA.AS` and `SWDA.L`) stay as separate rows.
+- **Columns.** Each row shows units, average cost (EUR), market value (EUR), weight, unrealized
+  return and total return (€ and %), growth since inception (%), native-currency figures, and a
+  per-account breakdown.
+- **Mixed currencies.** If two accounts recorded a ticker in different trade currencies, the
+  row's native cells read "Mixed currencies" and the breakdown shows each account's own native
+  figures. EUR figures are always summed.
+- **Summing happens in the portfolio service**, in a new read-only `GET /holdings?user_id`,
+  computed on read from the existing snapshots. web makes one call rather than two per account,
+  and PF-5's time series needs a server-side path anyway, since fetching every account's full
+  return history into web is what UI-11 avoided as too expensive.
+- **Chart.** The returns-over-time chart for the whole portfolio is a later task in this chunk
+  (PF-5, PF-6), after the holdings table.
+- **Returns as a percentage.** The combined page offers the same percentage views as the
+  per-account page after #65:
+  - per row, unrealized and total return % over cost basis (PF-1, PF-4), plus that holding's
+    growth since inception %, time-weighted across every account holding it (PF-5, PF-6),
+  - for the whole portfolio, the total return % tile, plus a "Growth since inception" tile and a
+    "Growth %" chart toggle. Growth is time-weighted, so money added or taken out doesn't move it
+    (PF-5, PF-6).
+
+  Growth is computed by portfolio, as #65's `GET /returns/growth` is for one account, because
+  its money flows need `mappings.resolve`.
 
 ## Constraints that apply to every task
 
-- **Schema is the user's.** `tracked_tickers` (TK-1) is built only after explicit sign-off, per
-  `.claude/rules/data-schema.md`, and documented in `services/data-store/docs/schema.md` in the
-  same change.
-- **Call path stays web → portfolio → data-store.** web never calls data-store directly. Admin
-  checks stay in web (`require_admin`), the same trust model the ticker-mapping routes use.
-- **The daily ingest prices only `ready` tracked tickers.** If it landed a rolling window for a
-  pending ticker first, backfill's resume rule ("skip any ticker that already has data") would then
-  skip that ticker's history entirely.
-- **Tests first**, per `.claude/rules/testing.md`. Each service's `docs/architecture.md` is updated
-  in the same change whenever a task is architectural, per `.claude/rules/architecture.md`.
-- **Brand**: status chips use `--gold` and neutral tokens, never forest or oxblood. Copy follows
-  chapter IV of the charter.
+- **No schema change is planned.** Everything is computed on read from `position_snapshots` and
+  `return_snapshots`. If a task turns out to need a table or column, stop and agree it with the
+  user first, per `.claude/rules/data-schema.md`.
+- **User isolation stays in `accounts/repository.py`.** The cross-account read lists the user's
+  accounts through it, and never queries snapshots by `user_id` in some new way.
+- **Percentages are recomputed from summed EUR figures and never averaged**, the same rule as
+  web's `aggregate_portfolio_returns`. Cross-account sums are keyed on (account, ticker) until the
+  final merge, so the same ticker in two accounts can't collapse into one account's row. That
+  collapse is the bug UI-11 documented.
+- **Call path stays web → portfolio → data-store.** New pages get their own routers, as
+  `api/portfolio_page.py` already does, so web's `api/routes.py` (56 KB) stays under 64 KB.
+- **Tests first**, per `.claude/rules/testing.md`. Each service's `docs/architecture.md` (and
+  web's `docs/ui-architecture.md`) is updated in the same change whenever a task is
+  architectural, per `.claude/rules/architecture.md`.
+- **Brand.** Forest and oxblood are used only on gain and loss figures, every number is set in
+  `--font-mono`, and tables stack below 600 px. Copy follows chapter IV of the charter.
 
 ## Status table
 
 | ID | Task | Depends on | Status |
 |----|------|-------------|--------|
-| TK-0 | [yfinance behaviour spike](#tk-0-yfinance-behaviour-spike) | — | done |
-| TK-1 | [`tracked_tickers` table & YAML sync](#tk-1-tracked_tickers-table--yaml-sync) | schema sign-off | done |
-| TK-2 | [Priced flows read the table](#tk-2-priced-flows-read-the-table) | TK-1 | done |
-| TK-3 | [Yahoo ticker lookup](#tk-3-yahoo-ticker-lookup) | TK-0 | done |
-| TK-4 | [FX universe follows ticker currencies](#tk-4-fx-universe-follows-ticker-currencies) | TK-1 | done |
-| TK-5 | [Onboarding flow & DAG](#tk-5-onboarding-flow--dag) | TK-2, TK-4 | done |
-| TK-6 | [data-store API for tracked tickers](#tk-6-data-store-api-for-tracked-tickers) | TK-3, TK-5 | done |
-| TK-7 | [portfolio pass-through & relaxed checks](#tk-7-portfolio-pass-through--relaxed-checks) | TK-6 | done |
-| TK-8 | [web: add-ticker and tickers pages](#tk-8-web-add-ticker-and-tickers-pages) | TK-7 | done |
-| TK-9 | [web: loading state on the portfolio page](#tk-9-web-loading-state-on-the-portfolio-page) | TK-8 | done |
-| TK-10 | [portfolio: returns catch up when a ticker is ready](#tk-10-portfolio-returns-catch-up-when-a-ticker-is-ready) | TK-7 | done |
+| PF-0 | [Roadmap housekeeping](#pf-0-roadmap-housekeeping) | — | done |
+| PF-1 | [portfolio: `GET /holdings` across accounts](#pf-1-portfolio-get-holdings-across-accounts) | — | ready |
+| PF-2 | [web: move per-account holdings to `/accounts/holdings`](#pf-2-web-move-per-account-holdings-to-accountsholdings) | — | ready |
+| PF-3 | [web: portfolio client for `/holdings`](#pf-3-web-portfolio-client-for-holdings) | PF-1 | blocked |
+| PF-4 | [web: `/portfolio` combined page](#pf-4-web-portfolio-combined-page) | PF-2, PF-3 | blocked |
+| PF-5 | [portfolio: cross-account return series](#pf-5-portfolio-cross-account-return-series) | PF-1 | blocked |
+| PF-6 | [web: returns chart on `/portfolio`](#pf-6-web-returns-chart-on-portfolio) | PF-4, PF-5 | blocked |
 
 ## Tasks
 
-### TK-0. yfinance behaviour spike
+### PF-0. Roadmap housekeeping
 
 **Status:** done
 
-The lookup's three outcomes (found / not found / couldn't check) rest on how yfinance actually
-responds, which must be observed rather than assumed. Make real calls and record what comes back
-for: a valid equity, ETF, crypto and mutual fund; an unknown symbol; a delisted symbol; a
-pence-quoted London listing (`GBp`); an index (`^GSPC`); and, if it can be provoked, a throttled
-request. For each: does `history(period="5d")` raise or return empty, what does
-`history_metadata` contain (name, currency, exchange, instrument type), and which exception types
-appear.
+The ticker-onboarding chunk moved verbatim (apart from relative links) to
+[`docs/roadmap-archive/ticker-onboarding.md`](docs/roadmap-archive/ticker-onboarding.md), and this
+file was started. The Deferred list is carried over, except for the cross-account return series,
+which PF-5 and PF-6 now cover.
 
-Output: findings recorded in `services/data-store/docs/architecture.md`, and any change they force
-on TK-3's design noted in its subsection. No production code.
+### PF-1. portfolio: `GET /holdings` across accounts
 
-As found: findings are in data-store's `architecture.md`, "How yfinance answers a symbol lookup
-(verified)". The one that changes the design: an unknown symbol raises a 404 `HTTPError`, which is
-an `OSError` and so counts as *transient* under `yfinance_retry._is_transient`. TK-3 changed
-accordingly.
+**Status:** ready
 
-### TK-1. `tracked_tickers` table & YAML sync
+A new pure module, `holdings/aggregator.py`, provides
+`aggregate_holdings(per_account) -> list[Holding]`. Its inputs are each account's latest position
+and latest return rows, read through the existing
+`positions/repository.list_latest_snapshots` and `returns/repository.list_latest_snapshots`.
 
-**Status:** done (schema signed off 2026-10-10)
+Aggregation rules:
+- **Rows.** Only open positions, `quantity > 0`, the same filter as web's
+  `filter_open_positions`.
+- **Summed per ticker:** `quantity`, `cost_basis_eur`, `market_value_eur`,
+  `unrealized_return_eur`, `dividends_received_eur` and `total_return_eur`.
+- **Average cost** is `sum(cost_basis_eur) / sum(quantity)`.
+- **Percentages** are `sum(return) / sum(cost)`, and null when the cost is 0, matching
+  `returns/calculator.py`.
+- **Native figures.** If every account agrees on `native_currency`, `average_cost_native` is
+  weighted by quantity and `market_value_native` is summed. Otherwise both are null and the row
+  reads `mixed_currency = true`.
+- **Unpriced holdings.** A holding with no return row in some account (prices loading or failed)
+  still counts its units and cost. Its value fields are null and the row reads `priced = false`.
+  A partial sum is never shown as if it were a total.
+- **Price date.** `price_date` is the newest latest-return date among the accounts' rows.
+- **Breakdown.** Each row lists every account holding it: `account_label`, `quantity`,
+  `native_currency`, `average_cost_native`, `cost_basis_eur`, `market_value_eur` and
+  `unrealized_return_eur`.
+- **Matching the home page.** First check whether closed positions' dividends count in the
+  per-account and home totals today. Use the same rule here, so the totals match the home
+  page's, and record it. #65's `docs/flows.md` notes a related gap: growth misses a dividend
+  paid after a position fully closed.
 
-- New `tracked_tickers` table, PK `(ticker, source)`. Columns: `display_name`, `asset_type`,
-  `currency`, `exchange`, `origin` (`config`/`request`), `status`
-  (`pending`/`backfilling`/`ready`/`failed`), `enabled`, `attempts`, `next_attempt_at`,
-  `last_error`, `requested_by`, `requested_at`, `ready_at`, `updated_at`. Indexes on
-  `(requested_by, requested_at)` and a partial index on in-flight statuses. Full proposal in the
-  approved plan; final shape as signed off.
-- `tracked_tickers/repository.py` and `sync_config_tickers`: inserts missing YAML tickers as
-  `origin='config', status='pending'`, applies YAML `enabled: false`, and warns (never deletes)
-  for a config row no longer in the YAML.
-- CLI: `data-store sync-tracked-tickers`.
+Then:
+- **Pipeline.** `pipeline.list_holdings(conn, *, user_id)` resolves the user's accounts through
+  `accounts/repository`. `pipeline.py` is 49 KB, so if the function grows it goes in
+  `holdings/flows.py` instead.
+- **Jobs.** `jobs.get_holdings(user_id)`.
+- **API.** Route `GET /holdings`, read-only (it never triggers a rebuild), with
+  `HoldingResponse` and `HoldingAccountResponse` models.
 
-Files: `db/schema.sql`, `tracked_tickers/repository.py`, `jobs.py`, `cli.py`; `docs/schema.md`,
-`docs/architecture.md`.
+Unit tests cover:
+- two accounts holding the same ticker (120 + 20 = 140),
+- mixed currencies, partly priced, unpriced, a closed position, zero cost, and an empty
+  portfolio.
 
-As built:
-- `ticker_onboarding.py` was created here rather than in TK-5, to hold `sync_config_tickers`
-  outside the 42 KB `pipeline.py`. TK-5 adds the onboarding run to it.
-- **The YAML is authoritative for every ticker it names.** It owns `display_name`, `asset_type`,
-  `enabled` and `origin`. Naming a ticker a user requested first turns it into a config row,
-  keeping its `requested_by`. The sync never touches onboarding state.
-- An over-long YAML ticker is skipped with a warning and makes the run `partial`.
-- No `CHECK` constraints on `origin`/`status`. Their values are named once in the repository,
-  matching how the service already validates `asset_type`.
-- The sync is a manual command until TK-2 runs it before every priced flow.
+An integration test uses two accounts with real snapshots, plus another user's account that must
+not leak into the result.
 
-### TK-2. Priced flows read the table
+Files: new `holdings/{__init__,aggregator}.py`, `pipeline.py`, `jobs.py`,
+`api/{routes,models}.py`; `docs/architecture.md`, `README.md` if it lists the routes.
 
-**Status:** done
+### PF-2. web: move per-account holdings to `/accounts/holdings`
 
-`jobs._run_priced_flow` syncs the YAML, then reads tracked tickers from the table instead of the
-YAML: ingest takes `enabled AND status='ready'`, backfill takes every enabled row. Fund-holdings
-pricing is unchanged.
+**Status:** ready
 
-Files: `jobs.py`, `tracked_tickers/repository.py`; `docs/architecture.md` (resolution diagram,
-configuration section).
+- Rename the router `api/portfolio_page.py` (which already holds the `GET /portfolio` handler
+  and `_load_portfolio_view`, moved out of `routes.py` in #65) to `api/holdings.py`, and serve it
+  at `/accounts/holdings`.
+- Rename `templates/portfolio.html` to `account_holdings.html`.
+- `GET /portfolio?account=X` answers with a 308 to `/accounts/holdings?account=X`. PF-4 keeps
+  that redirect whenever an `account` parameter is present.
+- Update every link: the home page's account rows, `partials/_account_header.html` (Holdings),
+  the account switcher form, deletion redirects, and `scripts/review_pages.py`.
 
-As built:
-- The table-to-`TickerConfig` conversion is `ticker_onboarding.tracked_ticker_configs`, so the
-  flows in `pipeline.py` are unchanged and still take `TickerConfig`s.
-- **A ticker added to the YAML is no longer priced daily until it is `ready`.** Existing YAML
-  tickers start as `pending` too. TK-5's onboarding marks them `ready` within one run, since their
-  history is already stored and backfill skips them. Until TK-5 runs, the daily ingest prices
-  fund holdings only. This is why TK-2 and TK-5 must ship together.
-
-### TK-3. Yahoo ticker lookup
-
-**Status:** done
-
-New `tracked_tickers/base.py` (`TickerLookupSource` Protocol) and `yfinance_source.py`. One
-`history(period="1mo")` plus its metadata gives one of three outcomes. The window is a month
-rather than 5 days so a briefly suspended listing still counts as found.
-
-- `found`: rows came back. Store `history_metadata["symbol"]` as the canonical spelling. The
-  display name is `longName`, falling back to `shortName`.
-- `not_found`: a 404 `HTTPError` or any `YFTickerMissingError`. This is checked **before**
-  `_is_transient`, which would otherwise call a 404 transient (TK-0).
-- `unavailable`: `YFRateLimitError`, or anything else `_is_transient` matches.
-
-Instrument types map `EQUITY`→`equity`, `ETF`→`etf`, `CRYPTOCURRENCY`→`crypto`,
-`MUTUALFUND`→`fund`, `FUTURE`→`commodity`. `INDEX`, `CURRENCY` and anything unknown are rejected
-as "can't be held". A symbol whitelist (`^[A-Z0-9.\-=^]{1,20}$`, after uppercasing), a 10 s timeout, and a 15-minute
-in-process cache of `found`/`not_found` (never `unavailable`).
-
-Files: `tracked_tickers/{base,yfinance_source}.py`, `config_loader.py` (`fund` asset type);
-`docs/architecture.md`.
-
-As built:
-- **A fourth outcome, `unsupported`**: the symbol has prices but is an index or a currency pair.
-  It's split from `not_found` so the user is told why it can't be added.
-- `normalize_symbol`, `LookupCache` and `lookup_symbol` live in `ticker_onboarding.py`, the
-  orchestration side. The source only classifies.
-- Checked against live Yahoo: `asml.as`→found as `ASML.AS`, `VOD.L`→found in `GBp`,
-  `VFIAX`→found as `fund`, `^GSPC` and `EURUSD=X`→unsupported, `NOTAREALTICKER123`, `SIVB` and
-  `TWTR`→not_found.
-
-### TK-4. FX universe follows ticker currencies
-
-**Status:** done
-
-The FX universe becomes `currencies.yaml`'s enabled codes plus the major-unit currency of every
-enabled tracked ticker (`GBp`→`GBP`, `ZAc`→`ZAR`, `ILA`→`ILS`). Applies to `ingest_fx_rates`,
-`backfill_fx_rates` and the read API's `CurrencyNotTracked` check.
-
-Files: `ticker_onboarding.py`, `jobs.py`; `docs/architecture.md`, `docs/schema.md` (`fx_rates`
-universe), `README.md`.
-
-As built:
-- The widening (`currencies_with_tracked_tickers`) runs in the job layer, so `pipeline.py` and
-  `read_flows.py` are unchanged. They still take a plain `CurrenciesConfig`.
-- A currency the YAML explicitly disables stays disabled, with a warning naming the tickers it
-  leaves unconvertible.
-- A config ticker's `currency` is empty until onboarding fills it (TK-5), so its currency joins
-  the universe only after its first onboarding run.
-
-### TK-5. Onboarding flow & DAG
-
-**Status:** done
-
-New `ticker_onboarding.py` (kept out of the 42 KB `pipeline.py`) and a `process-ticker-requests`
-CLI. Each run: syncs the YAML; returns rows stuck in `backfilling` for over an hour to `pending`;
-then for each due `pending` row sets `backfilling`, runs `backfill_market_data(only_tickers=…)`,
-backfills FX for an uncovered currency, runs `calculate_returns(only_tickers=…)`, and sets `ready`.
-A failure increments `attempts` with backoff (about 10 min × 2^attempts); the 3rd failure sets
-`failed`. Returns the standard run-result contract. New DAG `ticker_onboarding`, every 5 minutes,
-`max_active_runs=1`, using `dags/common.py`'s `check_run(expect_rows=False)`.
-
-Files: `ticker_onboarding.py`, `jobs.py`, `cli.py`, `dags/ticker_onboarding.py`;
-`docs/architecture.md` (flows table, deployment).
-
-As built:
-- **Success is judged by what landed.** `backfill_market_data` absorbs a per-ticker fetch failure
-  as "no data", so `ready` requires stored prices, the FX pair (for a non-base currency) and
-  successful returns.
-- **Only a ticker given up on makes the run `partial`.** A retry still to come is a warning, so a
-  passing Yahoo blip doesn't turn the DAG red.
-- A config row has no currency, so onboarding looks it up first and stores it with the exchange.
-  Failing to is a warning, not a failed attempt.
-- At most 50 tickers per run, with a 2 s pause after each provider fetch.
-- Run for real against the test database with live Yahoo:
-  - `ASML.AS` (config row, no currency): looked up as EUR, then history back to 1998.
-  - `NPN.JO` (`ZAc`): 6,851 price rows, plus EUR/ZAR rates added automatically.
-  - An unknown symbol: scheduled for a retry.
-- The new DAG is paused when the dev Airflow first sees it (`dags_are_paused_at_creation`), so it
-  can't run against an image built before this change.
-
-### TK-6. data-store API for tracked tickers
-
-**Status:** done
-
-- `GET /tickers/{t}/lookup`: already priced (with status), available on Yahoo (with metadata),
-  not found, or unavailable.
-- `POST /tracked-tickers` `{ticker, requested_by, enforce_limit}`: 201 added, 200 already
-  tracked, 404 not on Yahoo, 422 unsupported type, 429 over the daily limit, 503 Yahoo
-  unavailable. Re-validates server-side rather than trusting an earlier lookup.
-- `GET /tracked-tickers?requested_by=&status=` and `PATCH /tracked-tickers/{t}`
-  (enable/disable/retry). Enabling or disabling a config row through the API is refused (409),
-  since the next YAML sync would undo it (TK-1). That is edited in the YAML instead.
-- `TickerInfo` gains `status`.
-- New setting `DATA_STORE_TICKER_REQUESTS_PER_DAY` (default 10).
-
-Files: `api/{routes,models}.py`, `jobs.py`, `read_flows.py`, `settings.py`; `docs/architecture.md`
-(Read API section, which stops being read-only), `README.md`.
-
-As built:
-- The request flows (`lookup_ticker`, `add_tracked_ticker`, `list_tracked`, `update_tracked`) live
-  in `ticker_onboarding.py` and raise named exceptions. The routes map each to its status code in
-  one table.
-- **The lookup reports `outcome`:** `tracked` (with `status`), `available`, `unsupported`,
-  `not_found` or `unavailable`.
-- **`POST` answers 201 or 200 with the row plus `created`.** Adding an already-tracked ticker is
-  free and isn't counted.
-- **The limit is checked before the provider is asked.** The provider is asked again on add
-  rather than trusting an earlier lookup.
-- `GET /tracked-tickers` also takes repeated `ticker` filters, for TK-9's status lookups.
-- `DATA_STORE_TICKER_REQUESTS_PER_DAY` is added to `.env.example`.
-
-### TK-7. portfolio pass-through & relaxed checks
-
-**Status:** done
-
-`DataStoreClient` methods and pass-through endpoints for TK-6's routes. Manual entry and
-mapping-save existence checks accept "exists, or tracked and `pending`/`backfilling`", so a user
-can record a holding while its prices load; `failed` is still refused with a clear message.
-
-Files: `datastore_client/{base,http_client}.py`, `api/{routes,models}.py`, `pipeline.py`,
-`jobs.py`; `docs/architecture.md`.
-
-As built:
-- **Routes:** `GET /instruments/tickers/{t}/lookup`, `POST`/`GET /instruments/tracked-tickers`,
-  `PATCH /instruments/tracked-tickers/{t}`.
-- **`enforce_limit` is required, with no default**, so the caller always decides whether the
-  daily limit applies.
-- **A new error, `TickerRequestRefused`, keeps data-store's status code** (404, 409, 422, 429,
-  503), so web can tell "not found" from "over the limit". Anything else stays a 502
-  `DataStoreApiError`.
-- **The ticker is quoted into the URL path.** That keeps a typed `a/b` from reaching another
-  route.
-- `pipeline._require_usable_ticker` accepts `exists`, or `pending`/`backfilling`. `failed` gets
-  its own message pointing to an admin retry.
-
-### TK-8. web: add-ticker and tickers pages
-
-**Status:** done
-
-- `/tickers/new`: enter a symbol → look up → confirm name, exchange and currency → add. A
-  not-found message says delisted securities may not be available.
-- `/tickers`: the tickers you added, with status. Admins see every ticker, plus disable and retry.
-- "Not in the list? Add a ticker" links from manual entry and the admin mappings page.
-- Progressive enhancement and CSP rules as in the UI chunk.
-
-Files: `portfolio_client/*`, new `api/tickers.py`, new `ticker_status.py`, `api/routes.py`
-(error leads only), `api/app.py`, new `templates/tickers*.html`, `base.html`,
-`transactions_new.html`, `admin_mappings.html`; `docs/architecture.md`, `docs/ui-architecture.md`.
-
-As built:
-- **The pages live in `api/tickers.py`**, their own router, because `routes.py` is at 60 KB. The
-  status labels live in `ticker_status.py`, shared with the portfolio page.
-- **A "Tickers" nav link for every user.** Users see the tickers they added, and admins see every
-  ticker with Retry (for a failed one) and Disable/Enable (for a user-added one).
-- **The lookup is a GET form**, so it works without JS. Adding is a separate CSRF-checked POST
-  that sends `enforce_limit = not user.is_admin`.
-- **A minor-unit currency (`GBp`, `ZAc`, `ILA`) is warned about before adding.** Its values will
-  read 100 times too high until the deferred rescaling exists.
-- No new CSS: the pages reuse the existing card, field, table, badge and banner styles.
-
-### TK-9. web: loading state on the portfolio page
-
-**Status:** done
-
-Holdings whose ticker isn't `ready` show "Prices loading" or "Prices couldn't be loaded", never a
-blank or a zero.
-
-Files: `api/routes.py`, `ticker_status.py`, `portfolio.html`; `docs/architecture.md`,
+Files: `api/{portfolio_page→holdings,routes,app}.py`, `templates/{account_holdings,home}.html`,
+`partials/_account_header.html`, `scripts/review_pages.py`; `docs/architecture.md`,
 `docs/ui-architecture.md`.
 
-As built: the page asks for statuses only for holdings with no return row, in one extra call.
-They read "Prices loading" (`pending`/`backfilling`) or "Prices couldn't be loaded" (`failed`).
-Anything else, or a failed status call, keeps "Waiting for prices", so UI-7's decision not to
-split untracked from not-priced-yet still holds.
+### PF-3. web: portfolio client for `/holdings`
 
-### TK-10. portfolio: returns catch up when a ticker is ready
+**Status:** blocked (PF-1)
 
-**Status:** done
+`list_holdings(user_id)` on the `PortfolioClient` protocol and its HTTP implementation, plus the
+`Holding` and `HoldingAccount` models. The fake client used in tests gets the same method.
 
-Without this, returns for a newly ready ticker wait for the 6-hourly `rebuild-returns --all`. The
-`returns-refresh` loop also runs a cheap sweep every few minutes: tickers marked `ready` since its
-last check, rebuilding only the accounts that hold them.
+Files: `portfolio_client/{base,http_client}.py`; `docs/architecture.md` (endpoint table).
 
-Files: `jobs.py`, `cli.py`, `pipeline.py`, `positions/repository.py`,
-`docker-compose.stakehold-net.yml`; `docs/architecture.md`, `docs/smoke-test.md`.
+### PF-4. web: `/portfolio` combined page
 
-As built:
-- **A new command, `portfolio refresh-ready-tickers --window-minutes N`**, run by a new
-  `returns-refresh-ready` container every 5 minutes with a 10-minute window.
-- **Stateless, with no portfolio table:** it lists data-store's `ready` tickers and keeps those
-  whose `ready_at` is inside the window. A ticker caught twice is rebuilt twice, which is a
-  harmless re-upsert.
-- It rebuilds only the accounts whose `position_snapshots` hold one of those tickers, across
-  users. Each account is isolated.
+**Status:** blocked (PF-2, PF-3)
+
+- A new router, `api/portfolio.py`, and a "Portfolio" nav link (`nav_active="portfolio"`) placed
+  between Overview and Accounts.
+- **The page shows:**
+  - the "Prices as of" line and the summary tiles computed from the holdings: market value,
+    cost basis, total return € and % (over cost basis), and dividends. The growth tile comes
+    with PF-6, since it needs PF-5's series,
+  - the unmapped-instruments warning, covering the user's whole list rather than one broker's,
+  - the holdings table: Ticker | Units | Avg cost (EUR + native) | Market value (EUR + native) |
+    Weight | Unrealized € / % | Total return € / %. PF-6 adds a Growth % column.
+- **Breakdown.** Each row has a `<details>` per-account breakdown, so it works without JS and
+  under the CSP.
+- **Unpriced rows** reuse TK-9's `ticker_status.load_statuses`: "Prices loading" or "Prices
+  couldn't be loaded".
+- **Weight** is computed over priced rows only.
+- **View model.** It is built by pure functions in `portfolio_view.py`, and formatting goes
+  through the existing filters.
+- **Empty and error states:**
+  - no accounts: the first-run card,
+  - accounts but no holdings: "No holdings yet",
+  - client error: a notice, never an empty table.
+- Add the page to `scripts/review_pages.py`.
+
+Files: new `api/portfolio.py`, `api/app.py`, `portfolio_view.py`, new `templates/portfolio.html`,
+`base.html`, `scripts/review_pages.py`; `docs/architecture.md`, `docs/ui-architecture.md`.
+
+### PF-5. portfolio: cross-account return series
+
+**Status:** blocked (PF-1)
+
+`GET /returns/portfolio?user_id[&start&end]` returns an object with two parts:
+- **`series`**, one point per date:
+  - summed market value, cost basis, dividends and total return in EUR,
+  - `total_return_pct`, recomputed from the sums,
+  - `growth_pct`, the whole portfolio's time-weighted growth since inception.
+- **`by_ticker`**, one `{canonical_ticker, growth_pct}` per ticker: that holding's latest
+  growth since inception across every account holding it.
+
+`start` and `end` only crop `series`. Growth is always computed from the first priced day, so a
+shorter range never restarts it at zero, and `by_ticker` ignores the range.
+
+One series carries the EUR figures and growth together, so the chart needs one call and no join
+by date. #65's per-account page needed that join only because its euro series was built in web.
+
+**Why per-row growth lives here, not in PF-1's `/holdings`.** It needs each ticker's full
+history and its trades, the same read the series makes. `/holdings` reads only the latest rows
+and stays cheap. Keeping growth in a separate call also lets it fail on its own: the table still
+renders, and the growth cells show "—".
+
+**Growth across accounts.**
+- It reuses `returns/performance.py`'s `compute_growth`, run over every account's return rows
+  and `BUY`/`SELL` flows at once. It is never an average of per-account growth figures, which is
+  not a time-weighted return.
+- `compute_growth` groups rows and lands flows by `canonical_ticker` alone. Given two accounts'
+  rows, the same ticker would collapse into one forward-filled series, which is the bug UI-11
+  documented. So it must first be keyed on (account, ticker):
+  - `TradeFlow` gains `account_id`,
+  - the grouping and the flow lookup use the pair,
+  - existing `GET /returns/growth` results stay unchanged (a regression test pins this).
+- Each account's transactions resolve through `mappings.resolve` with that account's own broker,
+  as `pipeline.list_growth` does.
+- A sell in one account and a buy in another count as money out and money in. That is correct
+  for a time-weighted return, and a test should cover it.
+- **Per ticker:** `compute_growth` runs over that ticker's rows and flows from every account,
+  still keyed on (account, ticker), and the last point is the figure. A ticker sold out and
+  bought back holds flat while nothing is held, as account growth does.
+
+**Forward-fill** happens in Python, in the same pass `compute_growth` already makes, rather than
+in SQL. Record why. No new table.
+
+**Placement.** `pipeline.py` (51 KB) and `jobs.py` (52 KB) are near the limit, so the
+orchestration goes in `holdings/flows.py`.
+
+Tests:
+- one account, which matches `GET /returns/growth`,
+- the same ticker in two accounts, for both the portfolio series and `by_ticker`,
+- a ticker held in only one account, whose `by_ticker` figure matches that account's growth
+  over that ticker alone,
+- money moving between accounts,
+- `start` and `end` cropping `series` without changing any growth figure,
+- an account with no rows yet,
+- an integration test that checks another user's data doesn't leak in.
+
+Files: `returns/performance.py`, `holdings/flows.py`, `jobs.py`, `api/{routes,models}.py`;
+`docs/architecture.md`, `docs/flows.md`.
+
+### PF-6. web: returns chart on `/portfolio`
+
+**Status:** blocked (PF-4, PF-5)
+
+Reuse `static/portfolio_chart.js` and the JSON data island pattern, fed from PF-5 through a new
+client method. The island carries `market_value_eur`, `total_return_eur` and `growth_pct`, as
+#65 defined it. `by_ticker` is joined onto the holdings table rows by `canonical_ticker`, in a
+pure function in `portfolio_view.py`.
+
+The toggles work as on the per-account page:
+- views: Total return, Market value, and Growth %,
+- ranges: 1M, 6M, 1Y and All.
+
+Growth figures:
+- The "Growth since inception" tile is added here, from the series' last point, because it
+  comes from the same call.
+- A "Growth %" column is added to the holdings table, after Total return.
+- A row shows "—" when it is unpriced or partly priced (`priced = false`, so a growth figure over
+  only some accounts is never shown as the holding's), or when `by_ticker` has no entry for it.
+- If the call fails, the tile and every growth cell show "—" and the Growth % button is dropped,
+  but the rest of the holdings table is unaffected.
+
+Files: `portfolio_client/*`, `portfolio_view.py`, `api/portfolio.py`, `templates/portfolio.html`;
+`docs/architecture.md`, `docs/ui-architecture.md`.
 
 ## Known limitations
 
-- **Delisted securities** can't be added (Yahoo usually drops them).
-- **Pence-quoted listings** (`GBp`, `ZAc`, `ILA`): FX coverage uses the major currency, but nothing
-  in the system rescales prices quoted in minor units. This gap predates this chunk.
-- **The lookup cache** is per API process, which is fine with one uvicorn worker.
+- **Holdings merge only by `canonical_ticker`.** Different listings of one security stay as
+  separate rows.
+- **Portfolio growth inherits #65's limits** (`portfolio/docs/flows.md`, "Growth since
+  inception"):
+  - a dividend paid after a full close is missed,
+  - stale rows after a failed rebuild make growth dip,
+  - rows and transactions are two separate reads.
 
 ## Deferred
 
-Carried over from the UI/UX chunk, each needing a new `portfolio` endpoint (and possibly a schema
-discussion per `.claude/rules/data-schema.md`):
+Carried over from the earlier chunks, each needing a new `portfolio` endpoint (and possibly a
+schema discussion per `.claude/rules/data-schema.md`):
 
 - Editing or deleting a transaction.
 - Renaming or deleting an account.
-- A server-side cross-account return-over-time series (UI-11 shows the current snapshot only).
 - Pagination or filtering of transactions, if `GET /transactions` doesn't already support it.
 - A list of the currencies `data-store` tracks (its `currencies.yaml`), so manual entry can
   suggest exactly those (UI-9 suggests a fixed list instead).
 - Unmapped instruments per account, not per user (UI-7 filters by broker, so two accounts at one
   broker share a list).
 - Rescaling prices quoted in minor currency units (`GBp`, `ZAc`, `ILA`).
+
+New in this chunk:
+
+- Merging different listings of one security (e.g. by ISIN) into one portfolio row.
