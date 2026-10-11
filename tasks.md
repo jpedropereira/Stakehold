@@ -25,7 +25,8 @@ The previous chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archi
 - **Matching.** Holdings merge on `canonical_ticker`. Different listings of one security (e.g.
   `IWDA.AS` and `SWDA.L`) stay as separate rows.
 - **Columns.** Each row shows units, average cost (EUR), market value (EUR), weight, unrealized
-  return and total return (€ and %), native-currency figures, and a per-account breakdown.
+  return and total return (€ and %), growth since inception (%), native-currency figures, and a
+  per-account breakdown.
 - **Mixed currencies.** If two accounts recorded a ticker in different trade currencies, the
   row's native cells read "Mixed currencies" and the breakdown shows each account's own native
   figures. EUR figures are always summed.
@@ -37,7 +38,8 @@ The previous chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archi
   (PF-5, PF-6), after the holdings table.
 - **Returns as a percentage.** The combined page offers the same percentage views as the
   per-account page after #65:
-  - per row, unrealized and total return % over cost basis (PF-1, PF-4),
+  - per row, unrealized and total return % over cost basis (PF-1, PF-4), plus that holding's
+    growth since inception %, time-weighted across every account holding it (PF-5, PF-6),
   - for the whole portfolio, the total return % tile, plus a "Growth since inception" tile and a
     "Growth %" chart toggle. Growth is time-weighted, so money added or taken out doesn't move it
     (PF-5, PF-6).
@@ -176,7 +178,7 @@ Files: `portfolio_client/{base,http_client}.py`; `docs/architecture.md` (endpoin
     with PF-6, since it needs PF-5's series,
   - the unmapped-instruments warning, covering the user's whole list rather than one broker's,
   - the holdings table: Ticker | Units | Avg cost (EUR + native) | Market value (EUR + native) |
-    Weight | Unrealized € / % | Total return € / %.
+    Weight | Unrealized € / % | Total return € / %. PF-6 adds a Growth % column.
 - **Breakdown.** Each row has a `<details>` per-account breakdown, so it works without JS and
   under the CSP.
 - **Unpriced rows** reuse TK-9's `ticker_status.load_statuses`: "Prices loading" or "Prices
@@ -197,13 +199,24 @@ Files: new `api/portfolio.py`, `api/app.py`, `portfolio_view.py`, new `templates
 
 **Status:** blocked (PF-1)
 
-`GET /returns/portfolio?user_id[&start&end]` returns one point per date with:
-- summed market value, cost basis, dividends and total return in EUR,
-- `total_return_pct`, recomputed from the sums,
-- `growth_pct`, the whole portfolio's time-weighted growth since inception.
+`GET /returns/portfolio?user_id[&start&end]` returns an object with two parts:
+- **`series`**, one point per date:
+  - summed market value, cost basis, dividends and total return in EUR,
+  - `total_return_pct`, recomputed from the sums,
+  - `growth_pct`, the whole portfolio's time-weighted growth since inception.
+- **`by_ticker`**, one `{canonical_ticker, growth_pct}` per ticker: that holding's latest
+  growth since inception across every account holding it.
 
-One series carries both, so the chart needs one call and no join by date. #65's per-account page
-needed that join only because its euro series was built in web.
+`start` and `end` only crop `series`. Growth is always computed from the first priced day, so a
+shorter range never restarts it at zero, and `by_ticker` ignores the range.
+
+One series carries the EUR figures and growth together, so the chart needs one call and no join
+by date. #65's per-account page needed that join only because its euro series was built in web.
+
+**Why per-row growth lives here, not in PF-1's `/holdings`.** It needs each ticker's full
+history and its trades, the same read the series makes. `/holdings` reads only the latest rows
+and stays cheap. Keeping growth in a separate call also lets it fail on its own: the table still
+renders, and the growth cells show "—".
 
 **Growth across accounts.**
 - It reuses `returns/performance.py`'s `compute_growth`, run over every account's return rows
@@ -219,6 +232,9 @@ needed that join only because its euro series was built in web.
   as `pipeline.list_growth` does.
 - A sell in one account and a buy in another count as money out and money in. That is correct
   for a time-weighted return, and a test should cover it.
+- **Per ticker:** `compute_growth` runs over that ticker's rows and flows from every account,
+  still keyed on (account, ticker), and the last point is the figure. A ticker sold out and
+  bought back holds flat while nothing is held, as account growth does.
 
 **Forward-fill** happens in Python, in the same pass `compute_growth` already makes, rather than
 in SQL. Record why. No new table.
@@ -228,8 +244,11 @@ orchestration goes in `holdings/flows.py`.
 
 Tests:
 - one account, which matches `GET /returns/growth`,
-- the same ticker in two accounts,
+- the same ticker in two accounts, for both the portfolio series and `by_ticker`,
+- a ticker held in only one account, whose `by_ticker` figure matches that account's growth
+  over that ticker alone,
 - money moving between accounts,
+- `start` and `end` cropping `series` without changing any growth figure,
 - an account with no rows yet,
 - an integration test that checks another user's data doesn't leak in.
 
@@ -242,7 +261,8 @@ Files: `returns/performance.py`, `holdings/flows.py`, `jobs.py`, `api/{routes,mo
 
 Reuse `static/portfolio_chart.js` and the JSON data island pattern, fed from PF-5 through a new
 client method. The island carries `market_value_eur`, `total_return_eur` and `growth_pct`, as
-#65 defined it.
+#65 defined it. `by_ticker` is joined onto the holdings table rows by `canonical_ticker`, in a
+pure function in `portfolio_view.py`.
 
 The toggles work as on the per-account page:
 - views: Total return, Market value, and Growth %,
@@ -251,8 +271,11 @@ The toggles work as on the per-account page:
 Growth figures:
 - The "Growth since inception" tile is added here, from the series' last point, because it
   comes from the same call.
-- If the call fails, the tile shows "—" and the Growth % button is dropped, but the holdings
-  table is unaffected.
+- A "Growth %" column is added to the holdings table, after Total return.
+- A row shows "—" when it is unpriced or partly priced (`priced = false`, so a growth figure over
+  only some accounts is never shown as the holding's), or when `by_ticker` has no entry for it.
+- If the call fails, the tile and every growth cell show "—" and the Growth % button is dropped,
+  but the rest of the holdings table is unaffected.
 
 Files: `portfolio_client/*`, `portfolio_view.py`, `api/portfolio.py`, `templates/portfolio.html`;
 `docs/architecture.md`, `docs/ui-architecture.md`.
