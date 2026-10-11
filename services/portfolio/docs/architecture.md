@@ -536,7 +536,7 @@ forced the API to either replay history per request or build its own cache — r
 materialization anyway, just less deliberately.
 
 **Growth since inception is computed on read, the one figure that is.** The time-weighted
-growth `returns/performance.py` produces is not stored. It is one linear pass over rows that are
+growth `returns/performance.py` produces, served by `GET /returns/growth`, is not stored. It is one linear pass over rows that are
 already materialized (the same `return_snapshots` read `GET /returns` serves) plus the account's
 `BUY`/`SELL` rows: no history replay and no `datastore_client` call, so the cost the decision
 above guards against doesn't arise. Storing it would mean a new table (a schema sign-off) and one

@@ -109,6 +109,12 @@ class ReturnResponse(BaseModel):
     total_return_pct: Decimal | None
 
 
+class GrowthResponse(BaseModel):
+    price_date: date
+    # A fraction, not a percentage: 0.1234 is +12.34%, the same convention as total_return_pct.
+    growth_pct: Decimal
+
+
 class BrokerResponse(BaseModel):
     broker: str
     # Which import routes this broker has a parser for: "transactions" (POST

@@ -32,7 +32,7 @@ this file; references to sections that stayed in `architecture.md` name it.
 | Returns refresh, every user | `rebuild-returns --all` | — | every `PORTFOLIO_RETURNS_REFRESH_SECONDS` (default 6h), by the `returns-refresh` container (see "Returns follow new prices") | as for one user, for each user with an account | `return_snapshots` |
 | Returns refresh, newly ready tickers | `refresh-ready-tickers --window-minutes N` | — | every 5 minutes with a 10-minute window, by the `returns-refresh-ready` container | `data-store`'s `GET /tracked-tickers?status=ready` (`ready_at` inside the window), then `position_snapshots` joined to `accounts` for the accounts holding them | `return_snapshots`, for those accounts only |
 | Return listing | — (CLI has none) | `GET /returns`, `GET /returns/latest` | on demand | `return_snapshots`, optionally filtered by ticker/date range | — (read-only report) |
-| Growth since inception | — (CLI has none) | — (not exposed yet; `pipeline.list_growth` only) | on demand | `return_snapshots` and the account's `BUY`/`SELL` `transactions`, scoped through the resolved account; `ticker_mappings` | — (computed on read, see "Growth since inception") |
+| Growth since inception | — (CLI has none) | `GET /returns/growth?user_id=&account_label=` (404 if the label didn't resolve) | on demand | `return_snapshots` and the account's `BUY`/`SELL` `transactions`, scoped through the resolved account; `ticker_mappings` | — (computed on read, see "Growth since inception") |
 
 **No separate `brokers` table** ever materialized — `schema.md` settled on `broker` as a plain
 string on `accounts`, so `account add` writes only to `accounts`, never a second table.
@@ -480,6 +480,12 @@ into one portfolio-level series. This is deliberate, not an oversight: different
 on different trading calendars, so summing across them is a real design question — how to handle
 a date one ticker priced and another didn't — not a serialization detail, and it's left to task
 12 (the view UI), where the chart's actual shape will settle the question.
+
+`GET /returns/growth` is the one exception, and answers that question for itself: it returns one
+account-level series, `[{price_date, growth_pct}]`, where a ticker with no row on a date holds its
+last value (the forward-fill web's chart already used). It combines tickers here rather than in
+web because its money flows need `mappings.resolve`; see "Growth since inception" above.
+`growth_pct` is a fraction (`0.1234` is +12.34%), like `total_return_pct`.
 
 **Known limitations, same category as `data-store`'s own read API:**
 
