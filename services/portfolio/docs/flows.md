@@ -32,6 +32,7 @@ this file; references to sections that stayed in `architecture.md` name it.
 | Returns refresh, every user | `rebuild-returns --all` | — | every `PORTFOLIO_RETURNS_REFRESH_SECONDS` (default 6h), by the `returns-refresh` container (see "Returns follow new prices") | as for one user, for each user with an account | `return_snapshots` |
 | Returns refresh, newly ready tickers | `refresh-ready-tickers --window-minutes N` | — | every 5 minutes with a 10-minute window, by the `returns-refresh-ready` container | `data-store`'s `GET /tracked-tickers?status=ready` (`ready_at` inside the window), then `position_snapshots` joined to `accounts` for the accounts holding them | `return_snapshots`, for those accounts only |
 | Return listing | — (CLI has none) | `GET /returns`, `GET /returns/latest` | on demand | `return_snapshots`, optionally filtered by ticker/date range | — (read-only report) |
+| Growth since inception | — (CLI has none) | — (not exposed yet; `pipeline.list_growth` only) | on demand | `return_snapshots` and the account's `BUY`/`SELL` `transactions`, scoped through the resolved account; `ticker_mappings` | — (computed on read, see "Growth since inception") |
 
 **No separate `brokers` table** ever materialized — `schema.md` settled on `broker` as a plain
 string on `accounts`, so `account add` writes only to `accounts`, never a second table.
@@ -367,6 +368,44 @@ canonical type, which rows are the broker's own internal housekeeping to skip, t
 for a non-English export — are documented in that plugin's own `docs/architecture.md`, not here,
 for the same reason as the extension points in [`broker-import.md`](broker-import.md): those specifics are exactly what stays out of
 this repo.
+
+### Growth since inception
+
+How much an account's holdings have grown since its first priced day, as a percentage, without
+money going in or out moving the figure: a time-weighted return. `pipeline.list_growth` reads the
+account's `return_snapshots` rows and its `BUY`/`SELL` transactions, resolves each trade to its
+ticker through `mappings.resolve` (as `rebuild_positions` does), and hands both to
+`returns/performance.py`'s `compute_growth`. Each day's return is
+
+    r_d = (MV_d + Div_d + Out_d − MV_{d−1} − In_d) / (MV_{d−1} + In_d)
+
+with buys (`In`, fees included) counted at the start of the day and sells (`Out`, the proceeds)
+at its end, and growth is the product of `1 + r_d` minus 1. `Div_d` is the day's change in the
+summed `dividends_received_eur`.
+
+- **Only `BUY`/`SELL` are flows.** A `DIVIDEND` already reaches growth through the rows, so
+  counting its transaction too would count it twice. `DEPOSIT`/`WITHDRAWAL` move cash, which no
+  table models, so growth measures the holdings, not the account's cash.
+- **A trade lands on its own ticker's first row dated on or after its UTC date**, the first day
+  that ticker's market value reflects it. One with no such row (an unmapped instrument, a ticker
+  still loading, a trade newer than the latest price) is left out rather than read as a loss.
+- **Sells keep their gain.** The proceeds are money out, so what a sold position made stays in
+  the figure, unlike `total_return_eur`, which loses it (no `realized_gains` table yet).
+
+*Why sells count at the end of the day:* a sell-out's own row has a zero market value, so
+proceeds counted at the start would leave nothing, or less than nothing, to divide by. *Why it
+isn't stored:* see `architecture.md`'s "Growth since inception is computed on read".
+*Rejected: a money-weighted return (XIRR)* — it lets the timing of deposits shape the figure,
+which is what this view exists to remove, and gives one rate per period rather than a series.
+
+*Known limits:*
+- **A dividend paid after a position has fully closed is missed**, since the ticker has no
+  return row after its closing day to carry it.
+- **Stale rows after a failed rebuild.** A backdated trade on a ticker whose returns rebuild then
+  failed counts as a flow that its stale rows don't reflect yet, so growth dips until the next
+  refresh rebuilds them.
+- **Two separate reads.** The rows and the transactions are two queries, so a write landing
+  between them can skew one response the same way; the next read is right.
 
 ## HTTP API
 
