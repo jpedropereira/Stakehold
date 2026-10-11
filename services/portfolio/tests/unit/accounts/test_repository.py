@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 
 from portfolio.accounts.repository import (
     Account,
+    delete_account,
     get_by_label,
     insert_account,
     list_by_user,
@@ -14,6 +15,7 @@ class FakeCursor:
         self.fetch_result = fetch_result
         self.fetchall_result = fetchall_result if fetchall_result is not None else []
         self.executed = []
+        self.rowcount = 0
 
     def execute(self, sql, params=None):
         self.executed.append((sql, params))
@@ -131,3 +133,20 @@ def test_list_by_user_returns_empty_list_when_no_accounts():
     conn = FakeConnection(fetchall_result=[])
 
     assert list_by_user(conn, uuid.uuid4()) == []
+
+
+def test_delete_account_is_scoped_to_the_owner_and_does_not_commit():
+    """Scoped by user_id as well as id, even though the caller resolved the id through
+    get_by_label: this module is the isolation chokepoint, so a delete never trusts an id alone."""
+    conn = FakeConnection()
+    conn._cursor.rowcount = 1
+    user_id = uuid.uuid4()
+
+    deleted = delete_account(conn, user_id=user_id, account_id=7)
+
+    [(sql, params)] = conn._cursor.executed
+    assert "DELETE FROM accounts" in sql
+    assert "id = %s" in sql and "user_id = %s" in sql
+    assert params == (7, user_id)
+    assert deleted == 1
+    assert conn.committed is False

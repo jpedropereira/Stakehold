@@ -1536,3 +1536,35 @@ def test_delete_transaction_reports_a_missing_transaction_and_exits_nonzero(monk
 
     assert exit_code == 1
     assert "error: no transaction 'manual-1' in account 'm'" in capsys.readouterr().err
+
+
+# --- account delete ---
+
+
+def test_account_delete_dispatches_and_reports_what_went_with_it(monkeypatch, capsys):
+    captured = {}
+
+    def fake_run(**kw):
+        captured.update(kw)
+        return {"status": "ok", "rows_saved": 0, "accounts_deleted": 1, "transactions_deleted": 3}
+
+    monkeypatch.setattr(cli.jobs, "run_delete_account", fake_run)
+    user_id = uuid.uuid4()
+
+    exit_code = cli.main(["account", "delete", "--user", str(user_id), "--label", "m"])
+
+    assert exit_code == 0
+    assert captured == {"user_id": user_id, "account_label": "m"}
+    assert capsys.readouterr().out == "1 account(s) deleted, with 3 transaction(s)\n"
+
+
+def test_account_delete_reports_an_unknown_account_and_exits_nonzero(monkeypatch, capsys):
+    def boom(**kw):
+        raise cli.PortfolioError("no account 'm' for this user")
+
+    monkeypatch.setattr(cli.jobs, "run_delete_account", boom)
+
+    exit_code = cli.main(["account", "delete", "--user", str(uuid.uuid4()), "--label", "m"])
+
+    assert exit_code == 1
+    assert "error: no account 'm' for this user" in capsys.readouterr().err

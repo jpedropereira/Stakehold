@@ -12,6 +12,7 @@ this file; references to sections that stayed in `architecture.md` name it.
 |---|---|---|---|---|---|
 | Account setup | `account add --user <id> --broker <key> --label <label>` | `POST /accounts` | rare, manual | — | `accounts` |
 | Account listing | `account list --user <id>` | `GET /accounts` | manual, on demand | `accounts`, scoped by `user_id` | — (read-only report) |
+| Account delete | `account delete --user <id> --label <label>` | `DELETE /accounts?user_id=&account_label=` | manual, by the account's owner | `accounts`, scoped by `user_id` | `return_snapshots`, `position_snapshots`, `transactions` and `accounts`: every row of the account, in one transaction (404 if the label didn't resolve) |
 | Broker-plugin discovery | `broker list` | `GET /brokers` | manual, on demand | `BROKER_PARSERS`, `CASHFLOW_PARSERS` (in-memory) | — (read-only report: each broker and its import kinds) |
 | Ticker mapping: set | `ticker-mapping set --kind ISIN\|SYMBOL --identifier <id> [--broker <b>] --ticker <t> --user <admin id>` | `PUT /ticker-mappings` | manual, by an admin, as unmapped instruments surface | data-store's `GET /tickers/{ticker}` (the ticker must exist), then `transactions` joined to `accounts` (every account, across users, using the instrument) | `ticker_mappings` (upsert), then `position_snapshots` for each affected account |
 | Ticker mapping: delete | `ticker-mapping delete --id <n> --user <admin id>` | `DELETE /ticker-mappings/{id}?updated_by=` | manual, by an admin | `transactions` joined to `accounts` (affected accounts) | `ticker_mappings` (delete), then `position_snapshots` for each affected account |
@@ -137,6 +138,18 @@ the account) raises `TransactionNotFound` before anything is rebuilt. **Known li
 a blocked (unmapped) instrument the positions rebuild skips pruning altogether, so a ticker
 whose only BUY was deleted keeps its last position, and with it its returns, until that
 instrument is mapped.
+
+`run_delete_account` is the exception: it rebuilds nothing. `pipeline.delete_account` deletes the
+account's return snapshots, position snapshots and transactions, and then the account itself, in
+that order and inside one transaction. Every derived row it could have rebuilt goes with the
+account, and no other account's rows are derived from it. The order is forced by the foreign keys
+to `accounts`, none of which cascade. Doing it in code rather than with `ON DELETE CASCADE` kept
+the DDL unchanged, and keeps an account delete an explicit act that a stray `DELETE FROM accounts`
+can't trigger. The response reports `transactions_deleted`, so a caller can say what went with the
+account. **Known edge:** a write to the same account that commits while the delete runs (an
+import, or the rebuild that follows one) makes the delete fail with a foreign-key violation and
+roll back whole, with nothing removed. Retrying the delete succeeds. Locking the account row first
+would serialize the two instead, which isn't worth it for something a single user does by hand.
 
 **Why:** `GET /positions` reads only `position_snapshots`, and before this nothing but an explicit
 `rebuild-positions` ever wrote it — so a transaction entered through the web UI was durably saved,

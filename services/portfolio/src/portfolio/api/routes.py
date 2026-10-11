@@ -34,6 +34,7 @@ from fastapi import (
 from portfolio import jobs
 from portfolio.api.models import (
     AccountCreateRequest,
+    AccountDeleteResponse,
     AccountResponse,
     AccountWriteResponse,
     BrokerResponse,
@@ -175,6 +176,17 @@ def create_account(
     )
     response.status_code = _write_status_code(result)
     return result
+
+
+@router.delete("/accounts", response_model=AccountDeleteResponse)
+def delete_account(
+    user_id: UUID = Query(...),
+    account_label: str = Query(...),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    """Deletes the account with every transaction and snapshot recorded in it. An unknown
+    account, or another user's, is a 404 via app.py's handlers."""
+    return jobs.run_delete_account(user_id=user_id, account_label=account_label, settings=settings)
 
 
 @router.get("/brokers", response_model=list[BrokerResponse])

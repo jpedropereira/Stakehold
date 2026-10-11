@@ -49,6 +49,16 @@ def get_by_label(conn, *, user_id: UUID, account_label: str) -> Account | None:
     return Account(*row) if row else None
 
 
+def delete_account(conn, *, user_id: UUID, account_id: int) -> int:
+    """Delete one account row. Returns the row count removed (0 or 1). The caller deletes the
+    rows that reference it first, in the same transaction, since none of those foreign keys
+    cascade. Scoped by user_id as well as id, so a delete never rests on an id alone. Does not
+    commit."""
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM accounts WHERE id = %s AND user_id = %s", (account_id, user_id))
+        return cur.rowcount
+
+
 def list_by_user(conn, user_id: UUID) -> list[Account]:
     with conn.cursor() as cur:
         cur.execute(

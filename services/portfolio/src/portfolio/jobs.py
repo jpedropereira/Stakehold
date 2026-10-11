@@ -451,6 +451,42 @@ def run_delete_transaction(
     return result
 
 
+def run_delete_account(
+    *, user_id: UUID, account_label: str, settings: Settings | None = None
+) -> dict[str, int | str]:
+    """Delete one account with everything recorded in it. AccountNotFound propagates, like any
+    domain error. Unlike a transaction delete, no rebuild follows: the account's positions and
+    returns are deleted with it, and no other account's rows depend on them."""
+    configure_logging()
+    settings = settings or load_settings()
+    conn = get_connection(settings.database_url)
+    try:
+        logger.info(
+            "delete-account: deleting account %r and everything recorded in it (user %s).",
+            account_label,
+            user_id,
+        )
+        outcome = pipeline.delete_account(conn, user_id=user_id, account_label=account_label)
+    finally:
+        conn.close()
+
+    logger.info(
+        "delete-account: done, account %r deleted with %d transaction(s), "
+        "%d position snapshot(s) and %d return snapshot(s).",
+        account_label,
+        outcome.transactions_deleted,
+        outcome.position_snapshots_deleted,
+        outcome.return_snapshots_deleted,
+    )
+    return build_run_result(
+        units_total=1,
+        rows_saved=0,
+        failed=0,
+        accounts_deleted=1,
+        transactions_deleted=outcome.transactions_deleted,
+    )
+
+
 def run_import_transactions(
     *, user_id: UUID, account_label: str, file_path: Path, settings: Settings | None = None
 ) -> dict[str, int | str]:

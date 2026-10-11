@@ -58,6 +58,14 @@ re-running with the same broker is a safe no-op; re-running with a *different* b
 already taken is rejected rather than silently ignored, since the two calls disagree about a fact
 that can't both be true.
 
+**Deleting**: `account delete --user <id> --label <label>` (`DELETE /accounts`) removes the
+account with everything recorded in it: its `return_snapshots`, `position_snapshots` and
+`transactions`, then the `accounts` row, in that order and in one transaction. The foreign keys to
+`accounts` have no `ON DELETE`, which is why the order is explicit; no DDL changed for this. It's a
+hard delete, like a transaction delete, and the label is free to use again afterwards. See
+[`flows.md`](flows.md)'s "Positions and returns follow every transaction write" for why no
+rebuild follows.
+
 ## `ticker_mappings`
 
 One row per mapping from a broker-reported instrument to the canonical ticker `data-store` prices.
@@ -105,7 +113,8 @@ The ledger. One row per broker-reported line item or manually entered transactio
 
 **Rows are never edited, only added or deleted.** This used to be "the immutable ledger", with
 no delete path at all. Deleting is now allowed, by the account's owner, one row at a time
-(`portfolio delete-transaction`, `DELETE /transactions`), so a mistaken entry can be removed
+(`portfolio delete-transaction`, `DELETE /transactions`), or every row at once when the whole
+account is deleted (see `accounts`' "Deleting" above), so a mistaken entry can be removed
 and, since the reference is free again, re-entered correctly. Editing in place is still not
 offered: a correction is a delete plus a new row, so every figure a row carries stays exactly
 what was entered or imported. A row is addressed by `(account_id, broker_transaction_ref)`, the

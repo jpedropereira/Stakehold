@@ -1,6 +1,8 @@
 import uuid
 
+import pytest
 from portfolio import jobs
+from portfolio.errors import AccountNotFound
 
 
 def test_list_accounts_returns_the_jobs_own_list(monkeypatch, client):
@@ -156,3 +158,44 @@ def test_list_unmapped_instruments_returns_the_jobs_own_list(monkeypatch, client
 
     assert response.status_code == 200
     assert response.json() == [{"kind": "ISIN", "identifier": "IE00B4L5Y983", "broker": "acme"}]
+
+
+# --- DELETE /accounts ---
+
+
+def test_delete_account_passes_the_label_to_the_job_and_returns_200(monkeypatch, client):
+    captured = {}
+
+    def fake_run(**kw):
+        captured.update(kw)
+        return {"status": "ok", "rows_saved": 0, "accounts_deleted": 1, "transactions_deleted": 3}
+
+    monkeypatch.setattr(jobs, "run_delete_account", fake_run)
+    user_id = uuid.uuid4()
+
+    response = client.delete(
+        "/accounts", params={"user_id": str(user_id), "account_label": "main / old"}
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok", "accounts_deleted": 1, "transactions_deleted": 3}
+    assert captured["user_id"] == user_id
+    assert captured["account_label"] == "main / old"
+
+
+@pytest.mark.parametrize("missing", ["user_id", "account_label"])
+def test_delete_account_requires_the_user_and_the_label(client, missing):
+    params = {"user_id": str(uuid.uuid4()), "account_label": "main"}
+    del params[missing]
+
+    assert client.delete("/accounts", params=params).status_code == 422
+
+
+def test_delete_account_lets_an_unknown_account_reach_the_404_handler(monkeypatch, client):
+    def boom(**kw):
+        raise AccountNotFound("no account 'main' for this user")
+
+    monkeypatch.setattr(jobs, "run_delete_account", boom)
+
+    with pytest.raises(AccountNotFound):
+        client.delete("/accounts", params={"user_id": str(uuid.uuid4()), "account_label": "main"})

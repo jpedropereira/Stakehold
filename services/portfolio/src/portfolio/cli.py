@@ -70,6 +70,15 @@ def _account_list(args: argparse.Namespace) -> int:
     return _report(result, "account(s)", count_key="accounts_listed")
 
 
+def _account_delete(args: argparse.Namespace) -> int:
+    result = jobs.run_delete_account(user_id=args.user, account_label=args.label)
+    print(
+        f"{result['accounts_deleted']} account(s) deleted, "
+        f"with {result['transactions_deleted']} transaction(s)"
+    )
+    return _exit_code(result)
+
+
 def _broker_list(_args: argparse.Namespace) -> int:
     result = jobs.run_list_available_brokers()
     for broker in result["brokers"]:
@@ -263,6 +272,17 @@ def _build_parser() -> argparse.ArgumentParser:
     list_parser = account_subparsers.add_parser("list", help="List a user's accounts")
     list_parser.add_argument("--user", required=True, type=_uuid, help="The auth-issued user id")
     list_parser.set_defaults(handler=_account_list)
+
+    delete_account_parser = account_subparsers.add_parser(
+        "delete", help="Delete an account with all its transactions -- can't be undone"
+    )
+    delete_account_parser.add_argument(
+        "--user", required=True, type=_uuid, help="The auth-issued user id"
+    )
+    delete_account_parser.add_argument(
+        "--label", required=True, help="The --label of the account to delete"
+    )
+    delete_account_parser.set_defaults(handler=_account_delete)
 
     broker_parser = subparsers.add_parser("broker", help="Broker-parser plugin commands")
     broker_subparsers = broker_parser.add_subparsers(dest="broker_command", required=True)
