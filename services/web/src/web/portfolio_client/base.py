@@ -101,6 +101,15 @@ class TransactionWriteResult:
 
 
 @dataclass(frozen=True)
+class TransactionDeleteResult:
+    status: str
+    transactions_deleted: int
+    # The rebuilds portfolio runs after the delete, reported as on TransactionWriteResult.
+    positions_rebuild: str | None = None
+    returns_rebuild: str | None = None
+
+
+@dataclass(frozen=True)
 class TickerMapping:
     id: int
     identifier_kind: str
@@ -215,6 +224,11 @@ class PortfolioClient(Protocol):
         content: bytes,
         content_type: str,
     ) -> TransactionWriteResult: ...
+
+    # Raises TransactionNotFound when the account or the reference doesn't resolve for this user.
+    async def delete_transaction(
+        self, *, user_id: str, account_label: str, broker_transaction_ref: str
+    ) -> TransactionDeleteResult: ...
 
     # Oldest first, as portfolio returns it.
     async def list_transactions(self, *, user_id: str, account_label: str) -> list[Transaction]: ...

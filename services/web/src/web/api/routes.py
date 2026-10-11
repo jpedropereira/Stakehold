@@ -41,6 +41,7 @@ from web.portfolio_client.base import (
     PortfolioClient,
     Position,
     Return,
+    TransactionDeleteResult,
     TransactionWriteResult,
     UnmappedInstrument,
 )
@@ -190,6 +191,7 @@ _ERROR_LEADS = {
     "admin_mappings.html": "Couldn't change the mapping.",
     "tickers_new.html": "Couldn't add the ticker.",
     "tickers.html": "Couldn't change the ticker.",
+    "transaction_delete.html": "Couldn't delete.",
 }
 
 
@@ -1034,6 +1036,10 @@ async def transactions_page(
             "account_label": account,
             "transactions": None if transactions is None else transactions[::-1],
             "error": error,
+            # Set by deletion.py's redirect after a delete: 1 if it deleted the row, 0 if the
+            # row was already gone.
+            "deleted": _query_int(request, "deleted"),
+            "outcome": _write_outcome(request),
             **_account_page_context("transactions"),
             **header,
         },
@@ -1068,9 +1074,12 @@ def _query_int(request: Request, name: str) -> int | None:
     return int(raw) if raw.isdigit() else None
 
 
-def _with_rebuild_statuses(url: str, result: TransactionWriteResult) -> str:
-    """The post-write redirect, plus portfolio's follow-on rebuild statuses, so the confirmation
-    page can say what they did (UI-7). A status an older portfolio doesn't report is left out."""
+def _with_rebuild_statuses(
+    url: str, result: TransactionWriteResult | TransactionDeleteResult
+) -> str:
+    """The post-write (or post-delete) redirect, plus portfolio's follow-on rebuild statuses, so
+    the page it lands on can say what they did (UI-7). A status an older portfolio doesn't
+    report is left out."""
     statuses = {
         name: value
         for name, value in (

@@ -15,6 +15,7 @@ from web.portfolio_client.base import (
     TrackedTicker,
     TrackedTickerAddResult,
     Transaction,
+    TransactionDeleteResult,
     TransactionWriteResult,
     UnmappedInstrument,
 )
@@ -30,6 +31,7 @@ from web.portfolio_client.errors import (
     TickerNotOnProvider,
     TickerProviderUnavailable,
     TrackedTickerNotFound,
+    TransactionNotFound,
 )
 
 
@@ -140,6 +142,18 @@ def _transaction_write_result(body: dict) -> TransactionWriteResult:
             status=body["status"],
             rows_saved=body["rows_saved"],
             transactions_saved=body["transactions_saved"],
+            positions_rebuild=_opt_status(body, "positions_rebuild"),
+            returns_rebuild=_opt_status(body, "returns_rebuild"),
+        )
+    except (KeyError, TypeError) as exc:
+        raise PortfolioUnavailable(f"malformed portfolio response: {exc}") from exc
+
+
+def _transaction_delete_result(body: dict) -> TransactionDeleteResult:
+    try:
+        return TransactionDeleteResult(
+            status=body["status"],
+            transactions_deleted=body["transactions_deleted"],
             positions_rebuild=_opt_status(body, "positions_rebuild"),
             returns_rebuild=_opt_status(body, "returns_rebuild"),
         )
@@ -487,6 +501,24 @@ class HttpPortfolioClient:
         if response.status_code != 200:
             _raise_for_status(response)
         return _ticker_mapping_write_result(_json_body(response))
+
+    async def delete_transaction(
+        self, *, user_id: str, account_label: str, broker_transaction_ref: str
+    ) -> TransactionDeleteResult:
+        response = await self._request(
+            "DELETE",
+            "/transactions",
+            params={
+                "user_id": user_id,
+                "account_label": account_label,
+                "broker_transaction_ref": broker_transaction_ref,
+            },
+        )
+        if response.status_code == 404:
+            raise TransactionNotFound(_error_detail(response))
+        if response.status_code != 200:
+            _raise_for_status(response)
+        return _transaction_delete_result(_json_body(response))
 
     async def delete_ticker_mapping(
         self, *, mapping_id: int, updated_by: str

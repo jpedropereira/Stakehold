@@ -14,9 +14,9 @@ The run exits non-zero if any check fails.
 
 The app runs in-process against fake auth and portfolio clients, so the run needs no stack and
 never touches a database, and the pages show the same data every run. The data is chosen to
-exercise every state worth seeing: a gain, a loss, a holding waiting for prices, a non-EUR
-transaction, a long broker reference, an instrument waiting for a mapping, and return history
-for the chart.
+exercise every state worth seeing: a gain, a loss, a holding whose prices are still loading, a
+non-EUR transaction, a long broker reference, an instrument waiting for a mapping, return
+history for the chart, and tracked tickers in every status.
 """
 
 import argparse
@@ -43,6 +43,8 @@ class Page:
     path: str
     # "anon", "user" or "admin": who is logged in when the page is opened.
     viewer: str
+    # Clicked once the page has loaded, for a state only a click reaches (an open dialog).
+    click: str | None = None
 
 
 PAGES = [
@@ -52,8 +54,18 @@ PAGES = [
     Page("accounts", "/accounts", "admin"),
     Page("portfolio", "/portfolio?account=main", "admin"),
     Page("transactions", "/transactions?account=main", "admin"),
+    Page(
+        "transactions-delete-dialog",
+        "/transactions?account=main",
+        "admin",
+        click="a[data-confirm]",
+    ),
+    Page("transactions-delete", "/transactions/delete?account=main&ref=buy-0904", "admin"),
     Page("transactions-new", "/transactions/new?account=main", "admin"),
     Page("transactions-import", "/transactions/import?account=main", "admin"),
+    Page("tickers", "/tickers", "admin"),
+    Page("tickers-user", "/tickers", "user"),
+    Page("tickers-new", "/tickers/new?symbol=SXR8.DE", "user"),
     Page("admin", "/admin", "admin"),
     Page("admin-mappings", "/admin/mappings", "admin"),
     Page("forbidden", "/admin", "user"),
@@ -174,7 +186,9 @@ def _fakes():
         Broker,
         Position,
         Return,
+        TickerLookup,
         TickerMapping,
+        TrackedTicker,
         Transaction,
         UnmappedInstrument,
     )
@@ -229,6 +243,39 @@ def _fakes():
                 on = today - timedelta(days=back)
                 rows.append(latest(ticker, quantity, cost, Decimal(value) * drift, on))
         return rows
+
+    def tracked(ticker, name, status, *, origin="config", requested_by=None, error=None):
+        requested = datetime(2026, 9, 1, tzinfo=timezone.utc)
+        return TrackedTicker(
+            ticker=ticker,
+            display_name=name,
+            asset_type="ETF" if ticker.endswith(".DE") else "EQUITY",
+            currency="USD" if ticker == "AAPL" else "EUR",
+            exchange="NMS" if ticker == "AAPL" else "GER",
+            origin=origin,
+            status=status,
+            enabled=True,
+            attempts=3 if status == "failed" else 1,
+            last_error=error,
+            requested_by=requested_by,
+            requested_at=requested,
+            ready_at=requested if status == "ready" else None,
+        )
+
+    # Every status a ticker can show, the last two added by the plain user ("u2").
+    tracked_tickers = [
+        tracked("VWCE.DE", "Vanguard FTSE All-World", "ready"),
+        tracked("AAPL", "Apple Inc.", "ready"),
+        tracked("NEWCO.DE", "Newco AG", "backfilling", origin="request", requested_by="u2"),
+        tracked(
+            "OLDCO.DE",
+            "Oldco AG",
+            "failed",
+            origin="request",
+            requested_by="u2",
+            error="no price history returned",
+        ),
+    ]
 
     def txn(ref, kind, day, amount, *, identifier=None, quantity=None, price=None, currency="EUR"):
         native = Decimal(amount)
@@ -331,6 +378,27 @@ def _fakes():
                 TickerMapping(2, "SYMBOL", "APC", "acme", "AAPL", updated),
             ]
 
+        async def list_tracked_tickers(self, *, requested_by=None, statuses=None, tickers=None):
+            return [
+                t
+                for t in tracked_tickers
+                if (requested_by is None or t.requested_by == requested_by)
+                and (statuses is None or t.status in statuses)
+                and (tickers is None or t.ticker in tickers)
+            ]
+
+        async def lookup_ticker(self, ticker):
+            # Not tracked yet but on the provider: the lookup's confirm-and-add state.
+            return TickerLookup(
+                ticker=ticker,
+                outcome="available",
+                status=None,
+                display_name="iShares Core S&P 500",
+                currency="EUR",
+                exchange="GER",
+                asset_type="ETF",
+            )
+
     return Auth(), Portfolio()
 
 
@@ -415,6 +483,8 @@ def _review(browser, base_url, page_spec, theme, width_name, out) -> list[str]:
     page.on("console", on_console)
     page.on("pageerror", lambda e: console.append(str(e)))
     page.goto(url, wait_until="networkidle")
+    if page_spec.click:
+        page.click(page_spec.click)
 
     # Before the checks: the focus walk scrolls whatever it tabs into.
     page.screenshot(path=out / f"{page_spec.name}-{theme}-{width_name}.png", full_page=True)

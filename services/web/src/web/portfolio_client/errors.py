@@ -25,6 +25,12 @@ class TickerMappingNotFound(PortfolioClientError):
     class because on every other route a 404 means AccountNotFound."""
 
 
+class TransactionNotFound(PortfolioClientError):
+    """portfolio returned 404 on a transaction delete. portfolio 404s an account that doesn't
+    resolve for the user and a reference that isn't in the account alike, and either way there
+    is nothing of the user's to delete, so the two aren't told apart here."""
+
+
 class InvalidPortfolioRequest(PortfolioClientError):
     """portfolio returned 422 -- a caller-supplied value failed validation or parsing (a bad
     fx_rate, an unmapped broker, a malformed export file, and so on).

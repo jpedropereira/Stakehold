@@ -347,7 +347,9 @@ this file for size. It counts as part of this document under `.claude/rules/arch
 | `POST /transactions/new` | CSRF-checked, calls `portfolio`'s `POST /transactions` (an instrument, when given, is always sent as `instrument_identifier_kind = 'TICKER'`; a blank Amount is sent as `null`, for portfolio to derive on a BUY/SELL or reject as missing on anything else), redirects to `/transactions/new?account=<label>&saved=<transactions_saved>&positions=<status>&returns=<status>` on success. An unknown ticker comes back as portfolio's 422, whose message is shown as-is like every other 422. The ticker list is re-fetched for the error re-render |
 | `GET /transactions/import` | `require_user`; required `account` query param; renders the upload form with an importer `<select>` listing the account's own broker's importers and the file input styled as a drop zone, with the 20 MB limit stated. With `?imported=<n>` it adds an import summary (count and rebuild outcome) and links to the account's holdings and transactions, with the form below as "Import another file". A broker with no importer gets a pointer to manual entry instead of a form; brokers that can't be listed get an inline notice, never the "no importer" text. Fetches `GET /accounts` (for the account header, with the same 404 and degrade rules as `GET /transactions/new`) and `GET /brokers` concurrently |
 | `POST /transactions/import` | CSRF-checked, multipart; `importer` must be `transactions` or `cashflow` (anything else is a 422 with no `portfolio` call); size-capped at 20MB (matching `portfolio`'s own cap) before the bytes are forwarded; calls `portfolio`'s `POST /transactions/import` or `POST /cashflows/import` to match, redirects to `/transactions/import?account=<label>&imported=<rows_saved>&positions=<status>&returns=<status>` on success |
-| `GET /transactions` | `require_user`; required `account` query param; fetches `portfolio`'s `GET /transactions` and `GET /accounts` (for the account header) concurrently, and renders the log newest first (reversed in `web`; see "Key decisions"): date, type badge, instrument, quantity, price, amount (with the EUR amount under it on a non-EUR row), fees and reference. No pagination. An empty log shows links to Add and Import. `AccountNotFound`, or a label missing from a successfully loaded account list, renders `account_not_found.html` with a 404; any other failure renders a banner and no table, never the empty state; a failed account list degrades to a label-only header |
+| `GET /transactions` | `require_user`; required `account` query param; fetches `portfolio`'s `GET /transactions` and `GET /accounts` (for the account header) concurrently, and renders the log newest first (reversed in `web`; see "Key decisions"): date, type badge, instrument, quantity, price, amount (with the EUR amount under it on a non-EUR row), fees, reference, and a Delete link (see `GET /transactions/delete`). No pagination. An empty log shows links to Add and Import. After a delete, `?deleted=1` (plus the rebuild statuses) shows "Transaction deleted." with the rebuild outcome, and `?deleted=0` says nothing was deleted because the row was already gone. `AccountNotFound`, or a label missing from a successfully loaded account list, renders `account_not_found.html` with a 404; any other failure renders a banner and no table, never the empty state; a failed account list degrades to a label-only header |
+| `GET /transactions/delete` | `require_user`; required `account` and `ref` query params (`ref` is the row's `broker_transaction_ref`, which with the account is what identifies a transaction to `portfolio`). The no-JS confirmation page each Delete link on the log points to (`api/deletion.py`): the transaction's date, type, instrument, amount and reference, a "can't be undone" warning, and a form posting to `POST /transactions/delete`. `portfolio` has no single-transaction read, so the account's log is fetched (with `GET /accounts` for the header, concurrently) and searched. An unknown account is a 404 like the log's; a row that's gone redirects to the log with `deleted=0`; a failed fetch shows a notice and no form, since the visitor would be confirming a delete they can't see. With JS, `confirm_dialog.js` opens the same confirmation as a dialog on the log instead (see [`ui-architecture.md`](ui-architecture.md)) |
+| `POST /transactions/delete` | `require_user`, CSRF-checked; posted by both the dialog and the page. Calls `portfolio`'s `DELETE /transactions` with the visitor's own `user_id`, then redirects to `/transactions?account=<label>&deleted=1&positions=<status>&returns=<status>`. POST rather than DELETE because a plain HTML form can't send DELETE. A 404 (the account or the row is gone; `TransactionNotFound`) redirects with `deleted=0` rather than showing an error: the visitor wanted the row gone. Any other failure, a CSRF mismatch included, re-renders the confirmation page with the error, so a delete started from the dialog can be retried from there |
 | `GET /portfolio` | `require_user`; required `account` query param; fetches `portfolio`'s `GET /positions`, `GET /returns`, `GET /returns/latest` and `GET /instruments/unmapped` concurrently. Renders a "Prices as of" line and summary tiles (market value, cost basis, total return € and %, dividends; `portfolio_view.summarize_latest_returns`), a holdings table of open positions joined to their latest return row (quantity, average cost, market value, weight, unrealized return; `portfolio_view.build_holdings`), and a Chart.js chart of the per-ticker series aggregated into one portfolio-level series (`portfolio_view.aggregate_portfolio_returns`), with a total return / market value toggle and date ranges. `GET /accounts` is fetched concurrently for the account header. `AccountNotFound` on any call, or a label missing from a successfully loaded account list, renders `account_not_found.html` with a 404; any other failure degrades only the part that call feeds, mirroring `GET /accounts`'s own pattern. Pending states: "Waiting for prices" on a holding with no return row, and a notice listing the instruments waiting for a ticker mapping at this account's broker (UI-7). No writes, no rebuild trigger. |
 
 Every POST error (wrong credentials, a duplicate email, a tripped throttle, `auth`/`portfolio`
@@ -393,7 +395,12 @@ branded page with its own status, and an unhandled exception a branded 500 (UI-1
   degraded. Guessing "no imports" would tell the visitor their broker has no importer when it
   may have several. UI-8 added `list_transactions` (`GET /transactions`) and its
   `Transaction` dataclass, mirroring `portfolio`'s `TransactionResponse`. It returns
-  `portfolio`'s order unchanged; the route reverses it.
+  `portfolio`'s order unchanged; the route reverses it. The transaction delete added
+  `delete_transaction` (`DELETE /transactions`), its `TransactionDeleteResult` (the rebuild
+  statuses as on `TransactionWriteResult`), and `TransactionNotFound`. `portfolio` 404s an account
+  that doesn't resolve and a reference that isn't in it alike, and either way there is nothing of
+  the visitor's to delete, so the client maps every 404 on this call to that one error rather than
+  guessing from the message.
 - `rebuild_outcome.py` (UI-7) — pure. Turns the two rebuild statuses into the confirmation
   banner's one sentence; see "Key decisions".
 - `portfolio_view.py` (task 12) — pure, I/O-free reshaping of what `routes.py` fetches for
@@ -412,6 +419,9 @@ branded page with its own status, and an unhandled exception a branded 500 (UI-1
 - `ticker_status.py` (TK-8/TK-9) — how a tracked ticker's status reads (labels, a holding's
   price note) and the degrading status lookup the portfolio page uses. Its own module so
   `routes.py` and `api/tickers.py` share it without importing each other.
+- `api/deletion.py` — the transaction delete: `GET`/`POST /transactions/delete`, on its own
+  router for the same reason as `api/overview.py`, rendering, redirecting and checking CSRF
+  through `routes.py`'s helpers.
 - `api/theme.py` (UI-3) — the theme cookie, `POST /theme` on its own router, the
   `theme_context` context processor, and `safe_next`. It's a separate module because it's
   self-contained and needs neither upstream client.
@@ -426,11 +436,15 @@ branded page with its own status, and an unhandled exception a branded 500 (UI-1
   target; `partials/_banner.html`, the message macro, and `partials/_logo.html`, the two-logo
   pair (UI-12); `partials/_account_header.html`, included by the four account-scoped pages;
   `partials/_delta.html`, the gain/loss-colored figure macro shared by home and portfolio;
+  `partials/_delete_dialog.html`, the confirmation dialog macro, and
+  `partials/_transaction_summary.html`, the one-line transaction description the dialog and
+  `transaction_delete.html` both show;
   `account_not_found.html`, their shared 404; and `error.html`, every other error page) and
   `web.css` plus vendored `htmx.min.js`. Same-origin scripts: `htmx-error-swap.js` (also the
   generic failure banner, UI-12), `portfolio_chart.js`, `theme.js` (UI-3, applies a theme
   switch in place), `transaction_form.js` (UI-9, shows the manual-entry fields the chosen type
-  and currency need), and `password_toggle.js` (UI-12).
+  and currency need), `password_toggle.js` (UI-12), and `confirm_dialog.js` (opens a delete's
+  confirmation as a dialog in place of its page).
 - `cli.py` — `web serve` only, mirroring `auth serve`'s lazy-import-uvicorn shape.
 - `scripts/review_pages.py` (UI-13) — a developer tool, not part of the package and not an
   entry point of the service. It screenshots every page against fake clients and checks
@@ -466,7 +480,7 @@ one-time network creation. See `docs/smoke-test.md` for the full bring-up sequen
   carrying `WEB_INTERNAL_SECRET` as `X-Internal-Secret` and the browser's address as
   `X-Forwarded-For` on signup/login.
 - **`portfolio`** (tasks 11–12) — account creation, manual transaction entry, broker-file import,
-  and (task 12) reading positions/returns, server-to-server, carrying
+  transaction deletes, and (task 12) reading positions/returns, server-to-server, carrying
   `WEB_PORTFOLIO_INTERNAL_SECRET` as `X-Internal-Secret`. Rebuild triggers aren't called from
   `web`: `portfolio` rebuilds positions and returns itself on each transaction write, and
   refreshes returns on a schedule. `web` only reports the write's rebuild statuses (UI-7).

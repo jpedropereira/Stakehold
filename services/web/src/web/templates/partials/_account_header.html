@@ -1,5 +1,7 @@
 {# Shared by every account-scoped page. Expects account_label, account (or none when the account
-   list couldn't be loaded), accounts, and account_nav_active from the route. #}
+   list couldn't be loaded), accounts, and account_nav_active from the route. A page whose URL
+   carries more than the account (a delete confirmation's ref) sets hide_account_switcher, since
+   the switcher's GET would drop the rest. #}
 {% set account_query = "?account=" ~ (account_label | urlencode) %}
 <header class="account-header">
   <div class="account-heading">
@@ -16,7 +18,7 @@
     <a href="{{ href }}{{ account_query }}"{% if account_nav_active == key %} aria-current="page"{% endif %}>{{ label }}</a>
     {% endfor %}
   </nav>
-  {% if accounts|length > 1 %}
+  {% if accounts|length > 1 and not hide_account_switcher %}
   {# A plain GET back to this same page: switching keeps the visitor on Holdings, Transactions, Add or Import. #}
   <form class="account-switcher" method="get" action="{{ request.url.path }}">
     <label for="account-switch">Account</label>

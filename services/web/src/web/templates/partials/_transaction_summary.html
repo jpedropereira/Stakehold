@@ -1,0 +1,6 @@
+{#- One line naming a transaction for a delete confirmation: its date, type, instrument and
+    amount. Plain text, so it can go in an attribute (the Delete link's data-confirm-summary)
+    as well as on a page. -#}
+{% macro transaction_summary(txn) -%}
+{{ txn.trade_datetime | date }} · {{ txn.transaction_type }}{% if txn.instrument_identifier %} {{ txn.instrument_identifier }}{% endif %} · {{ txn.native_amount | native_money(txn.native_currency) }}
+{%- endmacro %}
