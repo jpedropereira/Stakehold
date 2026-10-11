@@ -420,11 +420,15 @@ branded page with its own status, and an unhandled exception a branded 500 (UI-1
 - `api/overview.py` (UI-11) — `GET /`, on its own router (like `api/theme.py`) because
   `routes.py` is near the 64KB file limit. It renders through `routes._render`, so the
   `_finish` header merge stays in one place.
+- `api/portfolio_page.py` — `GET /portfolio`, one account's holdings, tiles and chart, on its
+  own router for the same file-size reason. Moved out of `routes.py` unchanged when the growth
+  view was added; it still renders through `routes._render` and shares `routes.py`'s
+  account-page header helpers with the transactions and import pages.
 - `api/tickers.py` (TK-8) — the Tickers pages, on their own router for the same file-size
   reason, rendering through `routes.py`'s helpers so CSRF and cookie handling stay identical.
 - `ticker_status.py` (TK-8/TK-9) — how a tracked ticker's status reads (labels, a holding's
   price note) and the degrading status lookup the portfolio page uses. Its own module so
-  `routes.py` and `api/tickers.py` share it without importing each other.
+  `api/portfolio_page.py` and `api/tickers.py` share it without importing each other.
 - `api/deletion.py` — the deletes: `GET`/`POST /transactions/delete` and
   `GET`/`POST /accounts/delete`, on their own router for the same reason as `api/overview.py`,
   rendering, redirecting and checking CSRF through `routes.py`'s helpers.
