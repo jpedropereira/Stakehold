@@ -47,8 +47,8 @@ The previous chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archi
   web's `aggregate_portfolio_returns`. Cross-account sums are keyed on (account, ticker) until the
   final merge, so the same ticker in two accounts can't collapse into one account's row. That
   collapse is the bug UI-11 documented.
-- **Call path stays web → portfolio → data-store.** web's `api/routes.py` is at 61.7 KB, so new
-  pages get their own routers.
+- **Call path stays web → portfolio → data-store.** New pages get their own routers, as
+  `api/portfolio_page.py` already does, so web's `api/routes.py` (56 KB) stays under 64 KB.
 - **Tests first**, per `.claude/rules/testing.md`. Each service's `docs/architecture.md` (and
   web's `docs/ui-architecture.md`) is updated in the same change whenever a task is
   architectural, per `.claude/rules/architecture.md`.
@@ -132,15 +132,16 @@ Files: new `holdings/{__init__,aggregator}.py`, `pipeline.py`, `jobs.py`,
 
 **Status:** ready
 
-- Move the `GET /portfolio` handler and `_load_portfolio_view` out of `api/routes.py` into a new
-  router, `api/holdings.py`, at `/accounts/holdings`. This also frees room in `routes.py`.
+- Rename the router `api/portfolio_page.py` (which already holds the `GET /portfolio` handler
+  and `_load_portfolio_view`, moved out of `routes.py` in #65) to `api/holdings.py`, and serve it
+  at `/accounts/holdings`.
 - Rename `templates/portfolio.html` to `account_holdings.html`.
 - `GET /portfolio?account=X` answers with a 308 to `/accounts/holdings?account=X`. PF-4 keeps
   that redirect whenever an `account` parameter is present.
 - Update every link: the home page's account rows, `partials/_account_header.html` (Holdings),
   the account switcher form, deletion redirects, and `scripts/review_pages.py`.
 
-Files: `api/{routes,holdings,app}.py`, `templates/{account_holdings,home}.html`,
+Files: `api/{portfolio_page→holdings,routes,app}.py`, `templates/{account_holdings,home}.html`,
 `partials/_account_header.html`, `scripts/review_pages.py`; `docs/architecture.md`,
 `docs/ui-architecture.md`.
 
