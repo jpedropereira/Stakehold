@@ -403,7 +403,10 @@ branded page with its own status, and an unhandled exception a branded 500 (UI-1
   that doesn't resolve and a reference that isn't in it alike, and either way there is nothing of
   the visitor's to delete, so the client maps every 404 on this call to that one error rather than
   guessing from the message. The account delete added `delete_account` (`DELETE /accounts`) and
-  its `AccountDeleteResult`; its 404 is the existing `AccountNotFound`.
+  its `AccountDeleteResult`; its 404 is the existing `AccountNotFound`. The growth-since-inception
+  view added `list_growth` (`GET /returns/growth`) and its `GrowthPoint`: one account-level
+  series `portfolio` computes, since its money flows need `portfolio`'s ticker mappings. A 404
+  is the existing `AccountNotFound`.
 - `rebuild_outcome.py` (UI-7) — pure. Turns the two rebuild statuses into the confirmation
   banner's one sentence; see "Key decisions".
 - `portfolio_view.py` (task 12) — pure, I/O-free reshaping of what `routes.py` fetches for

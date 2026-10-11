@@ -8,6 +8,7 @@ from web.portfolio_client.base import (
     AccountDeleteResult,
     AccountWriteResult,
     Broker,
+    GrowthPoint,
     Position,
     Return,
     TickerLookup,
@@ -226,6 +227,16 @@ def _return(item: dict) -> Return:
             dividends_received_eur=Decimal(item["dividends_received_eur"]),
             total_return_eur=Decimal(item["total_return_eur"]),
             total_return_pct=_opt_decimal(item["total_return_pct"]),
+        )
+    except (KeyError, TypeError, ValueError, InvalidOperation) as exc:
+        raise PortfolioUnavailable(f"malformed portfolio response: {exc}") from exc
+
+
+def _growth_point(item: dict) -> GrowthPoint:
+    try:
+        return GrowthPoint(
+            price_date=date.fromisoformat(item["price_date"]),
+            growth_pct=Decimal(item["growth_pct"]),
         )
     except (KeyError, TypeError, ValueError, InvalidOperation) as exc:
         raise PortfolioUnavailable(f"malformed portfolio response: {exc}") from exc
@@ -465,6 +476,14 @@ class HttpPortfolioClient:
         if response.status_code != 200:
             _raise_for_status(response)
         return [_return(item) for item in _json_body(response)]
+
+    async def list_growth(self, *, user_id: str, account_label: str) -> list[GrowthPoint]:
+        response = await self._request(
+            "GET", "/returns/growth", params={"user_id": user_id, "account_label": account_label}
+        )
+        if response.status_code != 200:
+            _raise_for_status(response)
+        return [_growth_point(item) for item in _json_body(response)]
 
     async def list_ticker_mappings(self) -> list[TickerMapping]:
         response = await self._request("GET", "/ticker-mappings")
