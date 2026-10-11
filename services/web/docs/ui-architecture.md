@@ -47,8 +47,9 @@ described here updates this file in the same change.
     Tab stop of its own. While that button has focus, the input matches `:focus-within` but not
     `:focus-visible`, so the field gets the ring for `:focus-within` too.
   - *Review script*: `scripts/review_pages.py` serves `create_app()` against in-process fake
-    clients, then screenshots every page in both themes at 1280px and 360px. For each of those
-    variants it also checks:
+    clients, then screenshots every page in both themes at 1280px and 360px. A page entry can
+    name an element to click once loaded, for a state only a click reaches, such as the
+    transaction log's open delete dialog. For each of those variants it also checks:
     - no sideways scroll at phone width;
     - WCAG AA contrast of every visible text element against the background actually behind
       it;
@@ -231,6 +232,28 @@ described here updates this file in the same change.
   exposes `data-store`'s `currencies.yaml` and this chunk adds no endpoints. The field still
   accepts any code, so drift only makes the suggestions less useful. The fix, an endpoint
   listing supported currencies, is under Deferred in `tasks.md`.
+- **A delete is confirmed in a native `<dialog>`, with a confirmation page behind it.** Each row
+  of the transaction log has a Delete link to `GET /transactions/delete`, a full page with the
+  transaction, the warning and the form. Without JS that page is the whole flow.
+  `static/confirm_dialog.js` intercepts a plain click on any `[data-confirm]` link and opens the
+  dialog the link names instead: it copies the link's query string into the dialog form's hidden
+  fields (the page's form posts the same names, so there is no second mapping to keep in step)
+  and the link's `data-confirm-summary` into the summary line as text, since it comes from broker
+  data. A modified click still opens the page in a new tab. One dialog per page
+  (`partials/_delete_dialog.html`), not one per row, and every word of it is in the template.
+  The native dialog gives the modal behaviour without code: focus stays inside it, Esc closes it,
+  and the page behind is inert. Cancel is a `formmethod="dialog"` button, which closes it and
+  posts nothing; the script only returns focus to the link that opened it and disables the
+  confirm button while the delete posts. Cancel comes first and takes the focus on open, so an
+  Enter pressed out of habit doesn't delete. The copy follows chapter IV: "Delete this
+  transaction?", "This can't be undone." and what happens next, then "Delete permanently" and
+  "Cancel". Ink only: the confirm button is `.btn-secondary`, never the gold `.btn-primary`
+  (gold means "act here", chapter II) and never oxblood (a loss); the warning is the existing
+  `banner("warning")`, and the backdrop is the dark page color (`--backdrop`) in both themes. The
+  Delete link sits in its own narrow last column with no stacked label at phone width, since it
+  names its row for screen readers itself. *Rejected: a `confirm()` prompt*, which can't be
+  styled or worded beyond one string and is suppressed by some browsers, and *a delete button
+  per row posting straight away*, which is one slip from a loss that can't be undone.
 - **Display formatting (UI-5) is one fixed convention, applied by Jinja filters from a pure
   module.** `formatting.py` defines `money`, `signed_money`, `qty`, `pct` and `date` (plus UI-6's
   `share`, an unsigned percentage for weights, and `delta_class`), registered on

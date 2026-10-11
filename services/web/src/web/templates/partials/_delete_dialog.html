@@ -1,0 +1,29 @@
+{% from "partials/_banner.html" import banner %}
+{#- The confirmation dialog a Delete link opens (static/confirm_dialog.js). Never open without
+    the script, so a visitor without it follows the link to the confirmation page instead.
+
+    The script copies the clicked link's query string into the hidden fields named in `fields`
+    (the page's form posts the same names) and its data-confirm-summary into the summary line.
+    The caller supplies the warning's content, starting with its <strong> lead.
+
+    Cancel comes first and takes the focus when the dialog opens, so an Enter pressed out of
+    habit doesn't delete. The confirm button is secondary, not the gold primary: gold means
+    "act here" (charter chapter II), and oxblood means a loss. -#}
+{% macro delete_dialog(id, action, heading, csrf_token, fields) -%}
+{% set warning = caller() %}
+<dialog class="confirm-dialog" id="{{ id }}" aria-labelledby="{{ id }}-heading">
+  <form method="post" action="{{ action }}">
+    <h2 id="{{ id }}-heading">{{ heading }}</h2>
+    <p class="confirm-summary mono" data-confirm-summary></p>
+    {% call banner("warning") %}{{ warning }}{% endcall %}
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    {% for name in fields %}
+    <input type="hidden" name="{{ name }}" value="">
+    {% endfor %}
+    <div class="confirm-actions">
+      <button type="submit" formmethod="dialog" class="btn btn-ghost" autofocus>Cancel</button>
+      <button type="submit" class="btn btn-secondary">Delete permanently</button>
+    </div>
+  </form>
+</dialog>
+{%- endmacro %}

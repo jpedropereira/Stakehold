@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% from "partials/_banner.html" import banner %}
+{% from "partials/_transaction_summary.html" import transaction_summary %}
+{% block title %}Delete transaction — {{ account_label }} — Stakehold{% endblock %}
+{% block content %}
+{% include "partials/_account_header.html" %}
+{% set log_url = "/transactions?account=" ~ (account_label | urlencode) %}
+{# The no-JS confirmation behind each Delete link on the log, and where a failed delete lands.
+   The dialog on the log (partials/_delete_dialog.html) says the same things. #}
+<section class="card">
+  <h1>Delete this transaction?</h1>
+  {% if error %}{% call banner("error") %}<strong>{{ error_lead }}</strong> {{ error }}{% endcall %}{% endif %}
+  {% if load_error %}
+  {% call banner("error") %}<strong>Couldn't load the transaction.</strong> {{ load_error }}{% endcall %}
+  <a href="{{ log_url }}">Back to the transactions</a>
+  {% elif transaction %}
+  <p class="confirm-summary"><span class="mono">{{ transaction_summary(transaction) }}</span><br>Reference <span class="mono">{{ ref }}</span></p>
+  {% call banner("warning") %}<strong>This can't be undone.</strong> Your holdings and returns for this account will be recalculated without it.{% endcall %}
+  <form method="post" action="/transactions/delete">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="account" value="{{ account_label }}">
+    <input type="hidden" name="ref" value="{{ ref }}">
+    <div class="confirm-actions">
+      <a class="btn btn-ghost" href="{{ log_url }}">Cancel</a>
+      <button type="submit" class="btn btn-secondary">Delete permanently</button>
+    </div>
+  </form>
+  {% else %}
+  <p>That transaction isn't in this account any more.</p>
+  <a href="{{ log_url }}">Back to the transactions</a>
+  {% endif %}
+</section>
+{% endblock %}

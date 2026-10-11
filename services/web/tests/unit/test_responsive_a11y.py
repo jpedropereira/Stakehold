@@ -23,7 +23,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 from web import settings as settings_module
-from web.api import overview, routes
+from web.api import deletion, overview, routes, tickers
 from web.api.app import create_app
 from web.api.deps import get_auth_client, get_portfolio_client
 from web.auth_client.base import AuthResult, AuthUser
@@ -262,7 +262,8 @@ def test_transactions_table_can_stack_at_phone_width(client):
 
     _assert_stackable(
         _table(page_html, "transactions-table"),
-        ["Type", "Instrument", "Quantity", "Price", "Amount", "Fees", "Reference"],
+        # The Delete link names itself, so its cell needs no label.
+        ["Type", "Instrument", "Quantity", "Price", "Amount", "Fees", "Reference", None],
     )
 
 
@@ -349,7 +350,7 @@ def test_review_script_covers_every_page():
     """A page added later can't silently miss the screenshot and contrast review."""
     page_routes = {
         route.path
-        for router in (routes.router, overview.router)
+        for router in (routes.router, overview.router, deletion.router, tickers.router)
         for route in router.routes
         if "GET" in route.methods
     }

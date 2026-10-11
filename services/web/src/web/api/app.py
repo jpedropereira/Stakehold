@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from shared.logging_config import configure_logging
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from web.api.deletion import router as deletion_router
 from web.api.deps import AdminRequired, AuthRequired
 from web.api.htmx import htmx_or_redirect
 from web.api.overview import router as overview_router
@@ -95,6 +96,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(health_router)
     app.include_router(overview_router)
     app.include_router(router)
+    app.include_router(deletion_router)
     app.include_router(theme_router)
     app.include_router(tickers_router)
 

@@ -1,10 +1,17 @@
 {% extends "base.html" %}
 {% from "partials/_banner.html" import banner %}
+{% from "partials/_delete_dialog.html" import delete_dialog %}
+{% from "partials/_transaction_summary.html" import transaction_summary %}
 {% block title %}Transactions — {{ account_label }} — Stakehold{% endblock %}
 {% block content %}
 {% include "partials/_account_header.html" %}
 {% if error %}
 {% call banner("error") %}<strong>Couldn't load the transactions.</strong> {{ error }}{% endcall %}
+{% endif %}
+{% if deleted == 1 %}
+{% call banner("success") %}<strong>Transaction deleted.</strong>{% if outcome %} {{ outcome }}{% endif %}{% endcall %}
+{% elif deleted == 0 %}
+{% call banner("warning") %}<strong>Nothing deleted.</strong> That transaction isn't in this account any more.{% endcall %}
 {% endif %}
 
 <section class="card card-wide">
@@ -22,6 +29,7 @@
         <th class="num" role="columnheader">Amount</th>
         <th class="num" role="columnheader">Fees</th>
         <th role="columnheader">Reference</th>
+        <th role="columnheader"><span class="visually-hidden">Actions</span></th>
       </tr>
     </thead>
     <tbody role="rowgroup">
@@ -41,10 +49,15 @@
         <td class="num" role="cell" data-label="Fees"><span class="mono">{{ txn.fees_native | native_money(currency) }}</span></td>
         {# Shortened by CSS; the full value stays selectable and is in the tooltip. #}
         <td role="cell" data-label="Reference"><span class="mono reference" title="{{ txn.broker_transaction_ref }}">{{ txn.broker_transaction_ref }}</span></td>
+        {# A link to the confirmation page, which is the whole flow without JS; with it,
+           confirm_dialog.js opens the dialog below instead. #}
+        <td class="row-action" role="cell"><a class="btn btn-ghost" href="/transactions/delete?account={{ account_label | urlencode }}&amp;ref={{ txn.broker_transaction_ref | urlencode }}" data-confirm="delete-transaction-dialog" data-confirm-summary="{{ transaction_summary(txn) }}">Delete<span class="visually-hidden"> {{ txn.transaction_type }} on {{ txn.trade_datetime | date }}</span></a></td>
       </tr>
       {% endfor %}
     </tbody>
   </table>
+  {% call delete_dialog("delete-transaction-dialog", "/transactions/delete", "Delete this transaction?", csrf_token, ["account", "ref"]) %}<strong>This can't be undone.</strong> Your holdings and returns for this account will be recalculated without it.{% endcall %}
+  <script src="/static/confirm_dialog.js" defer></script>
   {% elif transactions is not none %}
   {% set account_query = "?account=" ~ (account_label | urlencode) %}
   <p class="entry-empty" id="transactions-empty">No transactions yet. <a href="/transactions/new{{ account_query }}">Add one</a> or <a href="/transactions/import{{ account_query }}">import a broker file</a>.</p>

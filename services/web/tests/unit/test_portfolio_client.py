@@ -11,6 +11,7 @@ from web.portfolio_client.errors import (
     InvalidPortfolioRequest,
     PortfolioUnavailable,
     TickerMappingNotFound,
+    TransactionNotFound,
 )
 from web.portfolio_client.http_client import HttpPortfolioClient
 
@@ -888,3 +889,59 @@ async def test_list_transactions_malformed_body_raises_portfolio_unavailable(ite
 
     with pytest.raises(PortfolioUnavailable):
         await client.list_transactions(user_id=USER_ID, account_label="main")
+
+
+# --- deleting a transaction ---
+
+
+async def test_delete_transaction_sends_the_users_account_and_ref_and_parses_the_result():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["method"] = request.method
+        captured["path"] = request.url.path
+        captured["params"] = dict(request.url.params)
+        captured["headers"] = request.headers
+        return httpx.Response(
+            200,
+            json={
+                "status": "ok",
+                "transactions_deleted": 1,
+                "positions_rebuild": "ok",
+                "returns_rebuild": "partial",
+            },
+        )
+
+    result = await _client(handler).delete_transaction(
+        user_id=USER_ID, account_label="my isa", broker_transaction_ref="buy 1"
+    )
+
+    assert (captured["method"], captured["path"]) == ("DELETE", "/transactions")
+    assert captured["params"] == {
+        "user_id": USER_ID,
+        "account_label": "my isa",
+        "broker_transaction_ref": "buy 1",
+    }
+    assert captured["headers"]["x-internal-secret"] == INTERNAL_SECRET
+    assert result.transactions_deleted == 1
+    assert (result.positions_rebuild, result.returns_rebuild) == ("ok", "partial")
+
+
+async def test_delete_transaction_maps_404_to_transaction_not_found():
+    """portfolio 404s an unknown account and an unknown reference alike; either way there is
+    nothing of the user's to delete under that pair."""
+    client = _client(lambda request: httpx.Response(404, json={"detail": "no transaction"}))
+
+    with pytest.raises(TransactionNotFound):
+        await client.delete_transaction(
+            user_id=USER_ID, account_label="main", broker_transaction_ref="gone"
+        )
+
+
+async def test_delete_transaction_malformed_response_is_unavailable():
+    client = _client(lambda request: httpx.Response(200, json={"status": "ok"}))
+
+    with pytest.raises(PortfolioUnavailable):
+        await client.delete_transaction(
+            user_id=USER_ID, account_label="main", broker_transaction_ref="x"
+        )
