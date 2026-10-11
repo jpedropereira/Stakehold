@@ -236,6 +236,40 @@ def delete_transaction(
         )
 
 
+@dataclass(frozen=True)
+class AccountDeleteOutcome:
+    transactions_deleted: int
+    position_snapshots_deleted: int
+    return_snapshots_deleted: int
+
+
+def delete_account(conn, *, user_id: UUID, account_label: str) -> AccountDeleteOutcome:
+    """Remove this user's account and every row recorded in it, in one transaction: either
+    all of it goes, or none of it. Raises AccountNotFound if the label doesn't resolve for this
+    user.
+
+    Deletes in foreign-key order (snapshots, then transactions, then the account), because none
+    of those keys cascade. Nothing needs rebuilding afterwards: every derived row was the
+    account's own. If another request deleted the account between the lookup and the delete,
+    this rolls back and raises AccountNotFound instead of claiming the delete.
+
+    A write to this account that commits while the delete is running (an import, or the rebuild
+    that follows one) makes the account delete fail with a foreign-key violation and roll back.
+    Retrying the delete then succeeds."""
+    account = _resolve_account(conn, user_id=user_id, account_label=account_label)
+    with transaction(conn):
+        return_rows = returns_repository.delete_by_account(conn, account.id)
+        position_rows = positions_repository.delete_by_account(conn, account.id)
+        transaction_rows = transactions_repository.delete_by_account(conn, account.id)
+        if not accounts_repository.delete_account(conn, user_id=user_id, account_id=account.id):
+            raise AccountNotFound(f"no account {account_label!r} for this user")
+    return AccountDeleteOutcome(
+        transactions_deleted=transaction_rows,
+        position_snapshots_deleted=position_rows,
+        return_snapshots_deleted=return_rows,
+    )
+
+
 def list_positions(conn, *, user_id: UUID, account_label: str) -> list[PositionSnapshot]:
     """This account's current holdings -- one snapshot per canonical_ticker, its most recent
     as_of_date. Raises AccountNotFound if account_label doesn't resolve for this user."""

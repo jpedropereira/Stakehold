@@ -3,6 +3,7 @@ from decimal import Decimal
 
 from portfolio.returns.calculator import ReturnSnapshot
 from portfolio.returns.repository import (
+    delete_by_account,
     delete_snapshots,
     list_latest_snapshots,
     list_snapshots,
@@ -316,3 +317,16 @@ def test_list_latest_snapshots_scopes_by_account_one_row_per_ticker():
     assert "WHERE account_id = %s" in sql
     assert "ORDER BY canonical_ticker, price_date DESC" in sql
     assert params == (7,)
+
+
+def test_delete_by_account_removes_every_ticker_in_the_account_without_committing():
+    conn = FakeConnection(rowcount=4)
+
+    deleted = delete_by_account(conn, 7)
+
+    [(sql, params)] = conn._cursor.executed
+    assert "DELETE FROM return_snapshots" in sql
+    assert "canonical_ticker" not in sql
+    assert params == (7,)
+    assert deleted == 4
+    assert conn.committed is False

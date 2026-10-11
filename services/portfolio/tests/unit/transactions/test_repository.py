@@ -3,6 +3,7 @@ from decimal import Decimal
 
 from portfolio.transactions.base import CanonicalTransaction
 from portfolio.transactions.repository import (
+    delete_by_account,
     delete_one,
     insert_transactions,
     list_by_account,
@@ -288,3 +289,18 @@ def test_delete_one_does_not_commit():
     delete_one(conn, account_id=7, broker_transaction_ref="manual-1")
 
     assert conn.committed is False
+
+
+# --- delete_by_account ---
+
+
+def test_delete_by_account_removes_every_transaction_in_the_account():
+    conn = FakeConnection(rowcounts=[3])
+
+    deleted = delete_by_account(conn, 7)
+
+    sql, params = conn._cursor.executed[0]
+    assert "DELETE FROM transactions" in sql
+    assert "WHERE account_id = %s" in sql
+    assert params == (7,)
+    assert deleted == 3
