@@ -35,7 +35,7 @@ cp services/data-store/config/tracked_tickers.yaml.example services/data-store/c
 ```
 
 Each entry needs `ticker` (the yfinance symbol, e.g. `IWDA.AS`, `BTC-USD`), `asset_type` (one
-of `equity` / `etf` / `commodity` / `crypto` / `etc`), `display_name`, `price_source`, and
+of `equity` / `etf` / `commodity` / `crypto` / `etc` / `fund`), `display_name`, `price_source`, and
 `enabled`. If the file doesn't exist, `ingest-market-data` just treats it as "no tracked
 tickers" — you don't need to create it if you only care about fund-holdings-based pricing.
 
@@ -44,6 +44,19 @@ also happens to be a holding) is only fetched once per run, not once per source 
 `ingest-market-data` resolves the full ticker list across every fund's holdings and this file
 before fetching anything, deduping by ticker. If the same ticker appears in both, the
 `tracked_tickers.yaml` entry's `asset_type` wins.
+
+The pricing flows don't read this file directly. Every `ingest-market-data` and
+`backfill-market-data` run first syncs it into the `tracked_tickers` table, then reads the table
+(see `docs/schema.md`). A newly added ticker is priced daily only once onboarding has backfilled
+its history and marked it `ready`. To sync without pricing anything:
+
+```bash
+uv run data-store db init               # creates the table, once
+uv run data-store sync-tracked-tickers  # adds new YAML tickers, applies YAML edits
+```
+
+The YAML is authoritative for every ticker it names. Removing a ticker from the file leaves its
+row in place, with a warning; set `enabled: false` instead to stop pricing it.
 
 ## Currency configuration
 
@@ -67,9 +80,17 @@ currency list an FX ingest needs to run at all.
 
 ## Airflow
 
-Airflow orchestrates ingestion via four DAGs — two scheduled (`ingest_holdings`, `@weekly`;
-`daily_pipeline`, `@daily`) and two unscheduled, manually triggered backfills
-(`backfill_market_data`, `backfill_fx_rates`).
+Airflow orchestrates ingestion via its DAGs:
+
+- **Scheduled:** `ingest_holdings` (`@weekly`), `daily_pipeline` (`@daily`), `macro_indicators`
+  (`@monthly`) and `ticker_onboarding` (every 5 minutes).
+- **Unscheduled, manually triggered backfills:** `backfill_market_data` and `backfill_fx_rates`.
+
+`ticker_onboarding` takes each newly added tracked ticker (a new `tracked_tickers.yaml` entry,
+or a user's request) through a full-history backfill, its currency's FX rates and its returns,
+then marks it `ready` for the daily ingest. It runs `data-store process-ticker-requests`, which
+you can also run by hand. A failure is retried after 10, then 20 minutes. Only a ticker given up
+on after the 3rd attempt turns the run red.
 
 `daily_pipeline` runs four flows: `ingest-market-data`, `ingest-regimes` and `ingest-fx-rates`
 start together with no dependency between any pair of them — a hand-curated regimes CSV, a
@@ -255,7 +276,9 @@ no split term in them.
 ### Loading FX rates
 
 `ingest-fx-rates` fetches daily currency-conversion rates for every enabled currency in
-`config/currencies.yaml` against its `base_currency`:
+`config/currencies.yaml`, plus the currency of every enabled tracked ticker (so a newly added
+ticker in, say, ZAR needs no YAML edit), against its `base_currency`. A currency the YAML marks
+`enabled: false` stays off, with a warning:
 
 ```bash
 uv run data-store ingest-fx-rates --days 7   # rolling window, same default as ingest-market-data
@@ -387,7 +410,11 @@ Or as part of the compose stack (`docker compose up -d api`), reachable at
 | `GET /health` | Liveness, unauthenticated |
 | `GET /prices/{ticker}?start=&end=&source=yfinance` | `market_returns` series: split-adjusted close, future split factor, the four return columns |
 | `GET /fx/{base}/{quote}?start=&end=&source=yfinance` | FX rate series for any pair of enabled currencies — direct, inverse, or triangulated through `config/currencies.yaml`'s `base_currency` as needed |
-| `GET /tickers/{ticker}?source=yfinance` | Existence/validity: whether the ticker is ingested and whether returns have been computed for it |
+| `GET /tickers/{ticker}?source=yfinance` | Existence/validity: whether the ticker is ingested, whether returns have been computed for it, and its onboarding `status` if it's tracked |
+| `GET /tickers/{ticker}/lookup?source=yfinance` | What adding the ticker would do: already `tracked` (with its status), `available`, `unsupported`, `not_found`, or `unavailable` |
+| `POST /tracked-tickers` | Add a ticker for onboarding. Body: `{ticker, requested_by, enforce_limit, source}`. 201 added / 200 already tracked; 404, 422, 429 (daily limit), 503 |
+| `GET /tracked-tickers?requested_by=&status=&ticker=` | Tracked tickers with their onboarding status |
+| `PATCH /tracked-tickers/{ticker}` | `{enabled}` or `{retry: true}` for a failed ticker; 409 for a YAML-managed ticker's `enabled` |
 
 ```bash
 curl -H "Authorization: Bearer $INTERNAL_API_SECRET" \
@@ -406,6 +433,7 @@ docker exec <airflow-scheduler-container> airflow dags trigger daily_pipeline
 docker exec <airflow-scheduler-container> airflow dags trigger backfill_market_data
 docker exec <airflow-scheduler-container> airflow dags trigger backfill_fx_rates
 docker exec <airflow-scheduler-container> airflow dags trigger macro_indicators
+docker exec <airflow-scheduler-container> airflow dags trigger ticker_onboarding
 ```
 
 Task logs land under `services/data-store/logs/dag_id=.../run_id=.../task_id=.../attempt=N.log`

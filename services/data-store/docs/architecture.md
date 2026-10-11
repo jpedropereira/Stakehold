@@ -13,8 +13,8 @@ Getting external financial data into Postgres, correctly and repeatably. Three t
 - **Raw daily market data** — OHLCV prices, dividends and stock splits, for every ticker those
   holdings contain plus directly tracked ones. One fetch, one table (`raw_market_data`) —
   unprocessed, matching the source's own grain, not decomposed into a return calculation there.
-- **Daily FX rates** — currency-conversion rates for every currency in `config/currencies.yaml`
-  against its `base_currency`, landed in `fx_rates`. Kept separate from `raw_market_data`
+- **Daily FX rates** — currency-conversion rates for every currency in `config/currencies.yaml`,
+  plus every enabled tracked ticker's currency, against its `base_currency`, landed in `fx_rates`. Kept separate from `raw_market_data`
   deliberately — an FX rate isn't a security's price and has no OHLC, dividends, or splits to
   carry.
 - **Macro indicators** — monthly/quarterly US inflation and GDP (FRED) and EU/euro-area
@@ -51,6 +51,7 @@ flowchart TD
         JOBS["jobs.py<br/><i>runnable units: config + connection + one flow</i>"]
         PIPE["pipeline.py<br/><i>the run-level write flows; ticker/currency resolution</i>"]
         READ["read_flows.py<br/><i>read-side composition: FX derivation, existence checks</i>"]
+        ONB["ticker_onboarding.py<br/><i>tracked_tickers: YAML sync, onboarding</i>"]
     end
 
     subgraph domain["Domain modules"]
@@ -60,6 +61,7 @@ flowchart TD
         RET["returns/<br/>calculator · repository"]
         REG["regimes/<br/>loader · repository"]
         MACRO["macro/<br/>fred_source · eurostat_source · repository · calculator"]
+        TRK["tracked_tickers/<br/>yfinance_source (lookup) · repository"]
     end
 
     subgraph found["Foundation"]
@@ -83,6 +85,7 @@ flowchart TD
     API --> JOBS
     JOBS --> PIPE
     JOBS --> READ
+    JOBS --> ONB
     JOBS --> CONF
     JOBS --> SET
     JOBS --> DB
@@ -95,10 +98,13 @@ flowchart TD
     PIPE --> MACRO
     READ --> FX
     READ --> RET
+    ONB --> TRK
     HOLD --> EXT
     MKT --> EXT
     FX --> EXT
     MACRO --> EXT2
+    TRK --> EXT
+    TRK --> RETRY
     MKT --> RETRY
     FX --> RETRY
     HOLD --> PG
@@ -107,6 +113,7 @@ flowchart TD
     RET --> PG
     REG --> PG
     MACRO --> PG
+    TRK --> PG
     DB --> PG
 ```
 
@@ -128,6 +135,31 @@ no run to summarize, only a query to answer. `read_flows.py` is a sibling of `pi
 an addition to it: `pipeline.py` is already close to the file-size guidance in
 [`context-management.md`](../../../.claude/rules/context-management.md), and FX cross-rate
 derivation is a read-side decision with no write-flow analogue.
+
+**`ticker_onboarding.py` is a second sibling, for the same file-size reason.** It holds the flows
+that bring a ticker into the `tracked_tickers` table and through onboarding (`tasks.md`, the
+ticker-onboarding chunk): `sync_config_tickers` (the YAML-to-table sync), the symbol lookup a
+user's request goes through, and the onboarding run (TK-5).
+
+`tracked_tickers/` follows the standard three-file shape, with one twist: its `*_source.py` doesn't
+fetch data to store, it *classifies* a symbol. `base.py`'s `TickerLookupSource.lookup()` returns
+one of four outcomes:
+
+- `found`: has prices, and can be held.
+- `unsupported`: has prices, but is an index or a currency pair.
+- `not_found`.
+- `unavailable`: the provider didn't answer.
+
+A provider's answer is never an exception, so "Yahoo didn't answer" can't be mistaken for "no
+such symbol". The orchestration around it lives in `ticker_onboarding.py`:
+
+- **Normalisation:** `normalize_symbol` whitelists and uppercases a symbol before it reaches the
+  provider.
+- **Caching:** `lookup_symbol` keeps definite answers in an in-process `LookupCache` for 15
+  minutes. It never caches `unavailable`, which says nothing about the symbol.
+
+**Known limitation:** the cache is per process. The read API runs one uvicorn worker today, so
+that's one cache; a second worker would cost at most one extra provider call per symbol.
 
 Its arguments are plain builtins, including `earliest_date` as an ISO string rather than a `date`.
 That looks like a weaker type until you notice both callers hand it over as text — argparse from
@@ -231,21 +263,24 @@ two different strings. `.name` is what gets stamped into the `source` column and
 floors are read under; the key is what config files reference. Keep them equal unless you have a
 reason not to.
 
-## The nine flows
+## The flows
 
-All nine live in `pipeline.py` and are exposed as CLI subcommands.
+Nine live in `pipeline.py`. Two, the tracked-ticker sync and ticker onboarding, live in
+`ticker_onboarding.py`. All are exposed as CLI subcommands.
 
 | Flow | Command | Cadence | Reads | Writes |
 |---|---|---|---|---|
 | Holdings ingest | `ingest-holdings` | weekly | provider site | `etf_holdings` |
-| Market data ingest | `ingest-market-data` | daily, in parallel with regimes and FX ingest | `etf_holdings` + config | `raw_market_data` |
-| Market data backfill | `backfill-market-data` | manual | `raw_market_data` | `raw_market_data` |
+| Market data ingest | `ingest-market-data` | daily, in parallel with regimes and FX ingest | `etf_holdings` + `tracked_tickers` (`ready` rows only) | `raw_market_data` |
+| Market data backfill | `backfill-market-data` | manual | `raw_market_data` + `tracked_tickers` (every enabled row) | `raw_market_data` |
 | Returns calculation | `calculate-returns` | daily, immediately after market data ingest succeeds (same run) | `raw_market_data` | `market_returns` |
 | Regimes ingest | `ingest-regimes` | daily, in parallel with market data and FX ingest | `config/regimes.csv` | `regimes` |
-| FX rates ingest | `ingest-fx-rates` | daily, in parallel with market data and regimes ingest | `config/currencies.yaml` | `fx_rates` |
+| FX rates ingest | `ingest-fx-rates` | daily, in parallel with market data and regimes ingest | `config/currencies.yaml` + `tracked_tickers` currencies | `fx_rates` |
 | FX rates backfill | `backfill-fx-rates` | manual | `fx_rates` | `fx_rates` |
 | Macro indicators ingest | `ingest-macro-indicators` | monthly, own DAG | FRED + Eurostat + `config/macro_regions.yaml` | `raw_macro_indicators` |
 | Macro indicator rates | `calculate-macro-indicator-rates` | monthly, immediately after macro ingest succeeds (same run) | `raw_macro_indicators` | `macro_indicator_rates` |
+| Tracked-ticker sync | `sync-tracked-tickers` | at the start of every market data ingest, backfill and onboarding run; also runnable on its own | `config/tracked_tickers.yaml` | `tracked_tickers` |
+| Ticker onboarding | `process-ticker-requests` | every 5 minutes, own DAG (`ticker_onboarding`) | `tracked_tickers` (due `pending` rows) | `raw_market_data`, `fx_rates`, `market_returns`, `tracked_tickers` |
 
 **Returns calculation is the odd one out**: it reads no config and does no ticker resolution — it
 discovers both sources and tickers directly from `raw_market_data` (`returns/repository.py`'s
@@ -300,6 +335,41 @@ check succeeding, the same pattern as `calculate-returns` after `ingest-market-d
 counterpart exists: FRED and Eurostat both return a series' full available history in one call
 (unlike yfinance, there's no per-ticker rate-limit concern driving a slow, one-at-a-time backfill
 mode), so `ingest-macro-indicators` already fetches everything available each run.
+
+**Ticker onboarding gets its own DAG (`ticker_onboarding`), every 5 minutes, one run at a
+time.** A user who adds a ticker should wait minutes, not until tomorrow's `daily_pipeline`.
+Each run:
+
+1. syncs the YAML;
+2. returns any row left `backfilling` for over an hour (a run that died) to `pending`;
+3. takes up to 50 due `pending` rows, oldest request first. For each it:
+   - claims the row (`pending` → `backfilling`, a conditional update, so two runs can never both
+     work on one ticker);
+   - backfills the ticker's full history by reusing `backfill_market_data` with
+     `only_tickers` and no funds;
+   - backfills its currency's FX rates, if it isn't the base currency;
+   - calculates its returns;
+   - marks it `ready`.
+
+Why it's shaped this way:
+
+- **Success is judged by what landed, not by the flows' statuses.** The row only becomes `ready`
+  once `raw_market_data` holds prices for it and `fx_rates` holds the pair. Only then can a
+  portfolio value it.
+- **The recorded reason says whether Yahoo answered.** A backfill that couldn't reach the provider
+  (`tickers_unreachable`) is saved as "the provider couldn't be reached"; one that reached it and
+  got nothing is "the provider returned no price history". They were once the same message, so a
+  DNS failure right after the host woke from sleep read to an admin as a bad symbol.
+- **A failed attempt is retried after 10, then 20 minutes, and given up (`failed`) on the 3rd.**
+  Only giving up makes the run `partial` and the DAG red. A retry still to come is a warning, so
+  a passing Yahoo blip doesn't page anyone, while a ticker that will never load does.
+- **A config row arrives with no currency**, since the YAML doesn't carry one. Onboarding looks
+  it up first (the same lookup a user's request uses) and stores it with the exchange. Failing to
+  is a warning, not a failed attempt, because the prices can still load.
+- **Why not trigger a backfill from the API directly?** A queue table read by a frequent DAG
+  survives restarts, keeps retries and logs in Airflow with the rest of the pipeline, needs no
+  Airflow credentials in the API container, and never waits behind a multi-hour full backfill.
+  The cost is up to five minutes' delay, which the user sees as "loading".
 
 ### What a flow returns
 
@@ -364,7 +434,8 @@ flowchart LR
     C -->|yes| E["apply per-exchange<br/>normalizer"]
     E --> F["append suffix"]
     F --> Z
-    G["tracked_tickers.yaml<br/><i>already provider-ready</i>"] --> Z
+    Y["tracked_tickers.yaml"] -->|"sync_config_tickers"| G
+    G["tracked_tickers table<br/><i>already provider-ready</i>"] --> Z
 ```
 
 Three things about this are intentional:
@@ -377,6 +448,22 @@ Three things about this are intentional:
 3. **Tracked tickers bypass it entirely.** They're configured in provider-ready form already, so
    putting them through exchange resolution would corrupt them.
 
+**Tracked tickers are read from the `tracked_tickers` table, not the YAML.** Each market data
+ingest and backfill first syncs `tracked_tickers.yaml` into the table, then reads it back, so the
+YAML keeps working as the default list while users and admins can add rows of their own. The two
+flows read it differently, on purpose:
+
+- **The daily ingest takes only `enabled` rows whose `status` is `ready`.** Backfill's resume rule
+  skips any ticker that already has data. If the ingest landed a 7-day window for a ticker that
+  hadn't been backfilled yet, the backfill would then see data, skip it, and its history would
+  never be fetched. Keeping not-yet-ready tickers out of the ingest is what makes "backfill
+  first" hold.
+- **Backfill takes every `enabled` row**, ready or not, since filling the history is what makes a
+  ticker ready.
+
+A consequence: a ticker added to the YAML is not priced daily until onboarding (TK-5) has
+backfilled it and marked it `ready`.
+
 The per-exchange normalizers (`_TICKER_NORMALIZERS`) encode verified quirks — Hong Kong codes need
 zero-padding, London tickers ending in `.` must not double it, Nordic and Toronto share classes use
 a hyphen. These were confirmed against real provider responses, not inferred. Treat them as
@@ -384,19 +471,61 @@ findings, not guesses, and verify before adding more.
 
 Full details in [`schema.md`](schema.md).
 
+### How yfinance answers a symbol lookup (verified)
+
+Ticker onboarding (`tasks.md`, TK-3) has to tell "Yahoo doesn't know this symbol" apart from
+"Yahoo didn't answer". These are observed responses (yfinance 1.7.0, 2026-10-10, with
+`hide_exceptions = False` as `market_data/yfinance_source.py` sets it), not inferences:
+
+| Symbol | `Ticker(s).history(...)` |
+|---|---|
+| Unknown (`NOTAREALTICKER123`) or long-delisted (`TWTR`) | Raises `curl_cffi` `HTTPError`, `response.status_code == 404` |
+| Recently delisted (`SIVB`) | Raises `YFPricesMissingError` (`period="5d"`) or `YFTzMissingError` (`period="max"`), both subclasses of `YFTickerMissingError` |
+| Throttled | `YFRateLimitError("Too Many Requests. Rate limited. ...")`, read from the installed source; not provoked live |
+| Valid | Rows, plus `history_metadata` with `symbol`, `currency`, `exchangeName`, `fullExchangeName`, `instrumentType`, `longName`, `shortName` |
+
+What follows from it:
+
+- **A 404 is an `OSError`.** `curl_cffi`'s `HTTPError` subclasses `OSError`, so
+  `yfinance_retry._is_transient` classifies an unknown symbol as *transient*. A lookup must check
+  for a 404 (and for `YFTickerMissingError`) **before** asking `_is_transient`, or every typo would
+  read as "Yahoo is down, try again". That check is `yfinance_retry._is_missing_symbol`, shared by
+  the lookup and the market-data source; `_is_unreachable` is "transient and not missing". The
+  market-data source still retries a 404 like a network blip (wasted calls, nothing worse), but
+  doesn't report it as unreachable, so a delisted holding stays "no data" in a backfill.
+- **`instrumentType` values seen**: `EQUITY`, `ETF`, `CRYPTOCURRENCY`, `MUTUALFUND`, `FUTURE`,
+  `INDEX`, `CURRENCY`. The first five can be held; an index or a currency pair can't.
+- **`currency` is per listing, and can be a minor unit.** `VOD.L` is `GBp` (pence), `VUSA.L` is
+  `GBP` and `CSPX.L` is `USD`, all on the LSE. So a lookup has to show the currency for the user to
+  confirm. Nothing in the system rescales a minor-unit price yet; see `tasks.md`'s known
+  limitations.
+- **Symbols are case-insensitive** (`asml.as` works), and `history_metadata["symbol"]` returns the
+  canonical spelling (`ASML.AS`), which is what should be stored.
+- `longName` can be `null` (`GC=F`), so a display name falls back to `shortName`.
+- A valid lookup took 0.1–0.6 s and a 404 about 0.9 s, which is fast enough for a request path.
+
 ## Read API
 
-A fourth entry point, alongside `cli.py` and `dags/*.py`: a FastAPI app (`api/`) exposing three
-read-only operations over tables this service already owns, for `portfolio` and `web` to consume
-over HTTP rather than opening a database connection of their own — the cross-service boundary
-`portfolio/docs/architecture.md` insists is always an API, never a shared table.
+A fourth entry point, alongside `cli.py` and `dags/*.py`: a FastAPI app (`api/`) over tables this
+service already owns, for `portfolio` and `web` to consume over HTTP rather than opening a
+database connection of their own — the cross-service boundary `portfolio/docs/architecture.md`
+insists is always an API, never a shared table.
+
+It is mostly read-only. The exception is the tracked-ticker routes (below), which add and change
+`tracked_tickers` rows. They're still not a backfill trigger: a request only queues a ticker, and
+the `ticker_onboarding` DAG does the fetching. So the API process never makes a long provider
+call beyond one quick lookup.
 
 | Endpoint | Backed by | Notes |
 |---|---|---|
 | `GET /prices/{ticker}` | `market_returns` | Not `raw_market_data` — schema.md calls `market_returns` "the table a portfolio or chart should read"; serving raw OHLCV would push return computation onto every consumer. |
 | `GET /fx/{base}/{quote}` | `fx_rates` | See below — the endpoint derives pairs `fx_rates` never stores directly. |
 | `GET /tickers` | `raw_market_data` | Every ingested ticker for `source`, sorted and unpaginated (~1.3k tickers, ~10 KB). Built for `portfolio`'s manual-entry picker, which needs the whole set at once. Uses the same "ingested universe" definition as `GET /tickers/{ticker}`'s `exists` (`returns/repository.py`'s `list_tickers` sits next to `ticker_exists`), so a ticker in the list always reports `exists: true`. The query is a recursive-CTE loose index scan over the primary key: Postgres 17 has no skip scan, and a plain `SELECT DISTINCT` would read all ~9M rows to find the ~1.3k tickers. Measured at ~25 ms on the dev database. |
-| `GET /tickers/{ticker}` | `raw_market_data` + `market_returns` | Existence and whether returns have been computed are reported separately — a ticker can be ingested before `calculate-returns` has run for it. |
+| `GET /tickers/{ticker}` | `raw_market_data` + `market_returns` + `tracked_tickers` | Existence and whether returns have been computed are reported separately — a ticker can be ingested before `calculate-returns` has run for it. `status` is the ticker's onboarding status when it's tracked, else `null`. |
+| `GET /tickers/{ticker}/lookup` | `tracked_tickers`, then the provider | What adding a ticker would do. `outcome` is one of: `tracked` (with its `status`), `available`, `unsupported` (an index or a currency pair), `not_found`, or `unavailable` (the provider didn't answer). Always 200, except 422 for a symbol that can't be one. |
+| `POST /tracked-tickers` | `tracked_tickers` | Adds a user's ticker as `pending`. 201 when added, 200 when already tracked (free, and not counted). Errors: 404 not on the provider, 422 invalid or can't be held, 429 over the requester's daily limit, 503 provider unavailable. |
+| `GET /tracked-tickers` | `tracked_tickers` | Filterable by `requested_by`, repeated `status`, repeated `ticker`. |
+| `PATCH /tracked-tickers/{ticker}` | `tracked_tickers` | Admin changes: `enabled`, or `retry` a `failed` ticker. 409 for enabling or disabling a config row (the next YAML sync would undo it) or retrying one that isn't `failed`. |
 
 **`source` is an explicit, defaulted query parameter, not hardcoded.** `source` is part of the
 primary key on all three tables — the schema's own hook for a second provider to coexist with
@@ -441,7 +570,7 @@ Two details fall out of deriving rather than reading:
 
 **Errors follow the service's existing "a match on nothing is a failure" stance**
 (see "What a flow returns" above): a ticker with no ingested rows at all, or a currency outside
-`config/currencies.yaml`'s enabled list, is a 404 — a typo must be loud. A valid ticker or pair
+the FX universe (below), is a 404 — a typo must be loud. A valid ticker or pair
 whose requested date range simply has no rows is a 200 with an empty `points` list — a quiet
 range is not a broken one, the same distinction the write flows draw between "nothing to do" and
 "failed".
@@ -474,6 +603,18 @@ endpoint.
   there is no per-caller scoping, matching `auth`'s own accepted gap rather than inventing a
   stricter model data-store alone would need to maintain.
 
+**Who may add a ticker, and how often, is the caller's word.**
+
+- `POST /tracked-tickers` takes `requested_by` (an `auth` user id) and `enforce_limit`. `web` sets
+  `enforce_limit` to false for admins, through `portfolio`.
+- This service enforces the limit (`DATA_STORE_TICKER_REQUESTS_PER_DAY`, default 10 per rolling
+  24 hours) but doesn't decide who is exempt, the same trust model the ticker-mapping routes use.
+  It counts the rows a user created, so adding a ticker that is already tracked costs nothing.
+- The limit is checked before the provider is asked, which spares the rate limit, and the
+  provider is asked again on add rather than trusting an earlier lookup.
+- Two simultaneous adds by one user can both pass the count. That's accepted: the limit exists to
+  stop volume, not to be exact.
+
 ## Configuration
 
 Four files, split by whether they're personal or reference data:
@@ -481,7 +622,7 @@ Four files, split by whether they're personal or reference data:
 | File | Committed? | Why |
 |---|---|---|
 | `config/etfs.yaml` | no — gitignored | Someone's actual holdings |
-| `config/tracked_tickers.yaml` | no — gitignored | Same, and optional |
+| `config/tracked_tickers.yaml` | no — gitignored | Same, and optional. The platform's default tracked tickers, synced into the `tracked_tickers` table rather than read directly |
 | `config/currencies.yaml` | no — gitignored | Someone's own base/tracked currencies |
 | `config/yfinance_exchange_suffixes.yaml` | **yes** | Generic reference data, useful to everyone |
 | `config/macro_regions.yaml` | no — gitignored | Someone's own choice of EU regions, and optional |
@@ -489,6 +630,21 @@ Four files, split by whether they're personal or reference data:
 `.example` templates are committed for the first three. Paths are environment-overridable via
 `settings.py`, which is also where `DATABASE_URL` comes from — no credential is ever read from a
 config file or hardcoded.
+
+**The FX universe is `currencies.yaml` widened by tracked tickers' currencies.** A ticker
+nobody can convert into the base currency can't be valued, so `currencies_with_tracked_tickers`
+(`ticker_onboarding.py`) adds the currency of every enabled `tracked_tickers` row before FX
+ingest, FX backfill and `GET /fx` use the list. That way adding a Johannesburg stock doesn't also
+need someone to edit a file on the server.
+
+- Minor units map to their major currency first (`GBp`→`GBP`, `ZAc`→`ZAR`, `ILA`→`ILS`), since
+  FX rates exist only for the major one. That picks the pair only: a pence-quoted price is still
+  stored in pence, and nothing rescales it yet (a known limitation, in `tasks.md`).
+- **A currency the YAML explicitly disables stays disabled**, with a warning naming the tickers
+  it leaves unconvertible. `enabled: false` is an operator decision, and the ticker list
+  shouldn't override it silently.
+- The widening is done in the job layer, not `pipeline.py`. The FX flows still take a plain
+  `CurrenciesConfig` and don't know where its entries came from.
 
 `config/currencies.yaml` sits between the other two gitignored files in one way: it's required,
 not optional (`load_currencies` raises `ConfigError` on a missing file, the same as `load_funds`)
@@ -508,6 +664,11 @@ at the `Settings` level (every CLI/Airflow caller has no need of it, so making i
 break them) but required by `api/app.py` at its own startup: the API fails loudly with
 `SettingsError` if it's unset, rather than silently accepting every caller once the check would
 otherwise run.
+
+**`DATA_STORE_TICKER_REQUESTS_PER_DAY`** (default 10) is the per-user limit on new tickers
+via `POST /tracked-tickers`. It's a behavioural setting rather than a credential, but lives in the
+environment like the rest because it's per deployment. `load_settings` refuses a value that isn't
+a non-negative integer, rather than letting the API fall back to some default.
 
 **`FRED_API_KEY`** follows the identical pattern: `Settings.fred_api_key: str | None`, optional at
 the `Settings` level (only `ingest-macro-indicators` needs it), but `run_ingest_macro_indicators`
@@ -647,7 +808,18 @@ group when ingesting, per ticker when backfilling, per ticker-batch when calcula
 retries and gives up on one ticker at a time, so a single permanently-failing ticker no longer
 costs every other ticker fetched alongside it in the same group, the way one bad ticker used to
 fail an entire batched `yf.download()` call. One failure never costs the work queued behind it, and
-the summary reports the failure count. Configuration errors are the exception: an unknown provider
+the summary reports the failure count.
+
+A ticker the source gave up on comes back as an empty frame, exactly like one with no data, so
+the source also lists the tickers it **couldn't reach the provider for** in `unreachable` (part of
+the `MarketDataSource` Protocol, replaced on every `fetch()`). `backfill_market_data` counts those
+as failed (`tickers_unreachable`, making the run `partial`), and still counts a ticker the
+provider has nothing for, including an unknown or delisted symbol, as "no data". The split is
+deliberate: over thousands of ETF holdings, some symbols are always missing from Yahoo, and
+failing the run for them would make it red every day, while a network outage passing as "no
+data" is exactly the silent success the run-result contract exists to prevent.
+**Known gap:** `ingest_market_data` doesn't read `unreachable` yet, so a daily ingest during an
+outage still reports those tickers as having no data. It's the next place to use it. Configuration errors are the exception: an unknown provider
 is fatal, because it will fail identically on every retry.
 
 **`market_returns`'s upsert never deletes.** A full rebuild self-heals any row whose inputs changed

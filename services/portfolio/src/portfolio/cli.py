@@ -150,6 +150,15 @@ def _rebuild_returns_all() -> int:
     return _report(result, "return snapshot(s) saved")
 
 
+def _refresh_ready_tickers(args: argparse.Namespace) -> int:
+    result = jobs.run_refresh_ready_tickers(window_minutes=args.window_minutes)
+    print(
+        f"returns rebuilt for {result['accounts_rebuilt']} account(s), "
+        f"{result['accounts_failed']} failed"
+    )
+    return _report(result, "return snapshot(s) saved")
+
+
 def _list_unmapped_instruments(args: argparse.Namespace) -> int:
     if args.all:
         result = jobs.run_list_all_unmapped_instruments()
@@ -419,6 +428,21 @@ def _build_parser() -> argparse.ArgumentParser:
         "--account", help="The --label of one account to rebuild; omit to rebuild every account"
     )
     returns_parser.set_defaults(handler=_rebuild_returns)
+
+    ready_parser = subparsers.add_parser(
+        "refresh-ready-tickers",
+        help=(
+            "Rebuild returns for every account holding a ticker data-store finished loading "
+            "recently (what the returns-refresh-ready container runs every few minutes)"
+        ),
+    )
+    ready_parser.add_argument(
+        "--window-minutes",
+        type=int,
+        default=10,
+        help="How far back to look for newly ready tickers (default: 10)",
+    )
+    ready_parser.set_defaults(handler=_refresh_ready_tickers)
 
     serve_parser = subparsers.add_parser("serve", help="Run the HTTP API")
     serve_parser.set_defaults(handler=_serve)

@@ -56,6 +56,37 @@ def stub_load_ticker_resolution(monkeypatch):
     stub_resolution(monkeypatch)
 
 
+class TrackedTickersTable:
+    """Stands in for the tracked_tickers table behind the priced flows: records what the YAML
+    sync was handed and which read was asked for, in call order."""
+
+    def __init__(self):
+        self.configs = []
+        self.events = []
+
+    def sync(self, conn, config_tickers):
+        self.events.append(("sync", list(config_tickers)))
+        return {"status": "ok", "rows_saved": 0}
+
+    def read(self, conn, *, ready_only):
+        self.events.append(("read", ready_only))
+        return list(self.configs)
+
+
+@pytest.fixture(autouse=True)
+def tracked_table(monkeypatch):
+    # Every priced flow now syncs the YAML into tracked_tickers and reads the table back, which
+    # FakeConn can't serve. The table's own behaviour is tested in test_ticker_onboarding.py
+    # and against Postgres; here it only matters what the job hands in and passes on.
+    table = TrackedTickersTable()
+    monkeypatch.setattr(jobs, "sync_config_tickers", table.sync)
+    monkeypatch.setattr(jobs, "tracked_ticker_configs", table.read)
+    # The FX jobs widen currencies.yaml with tracked tickers' currencies; by default nothing is
+    # added, so the YAML config passes through unchanged.
+    monkeypatch.setattr(jobs, "currencies_with_tracked_tickers", lambda conn, config: config)
+    return table
+
+
 def flow_result(rows_saved=0, status="ok", **extra):
     """Minimal stand-in for a pipeline flow's return value, for stubs that only care that the
     CLI reads `rows_saved`/`status` off it rather than a bare int."""
@@ -298,23 +329,17 @@ def test_ingest_market_data_without_ticker_flag_passes_none(monkeypatch, fake_se
     assert calls[0] is None
 
 
-def test_ingest_market_data_includes_enabled_tracked_tickers(monkeypatch, fake_settings, tmp_path):
-    settings = Settings(
-        database_url=fake_settings.database_url,
-        config_path=fake_settings.config_path,
-        tracked_tickers_path=tmp_path / "tracked_tickers.yaml",
-        exchange_suffixes_path=fake_settings.exchange_suffixes_path,
-        regimes_csv_path=fake_settings.regimes_csv_path,
-        currencies_path=fake_settings.currencies_path,
-        macro_regions_path=fake_settings.macro_regions_path,
-    )
-    (tmp_path / "tracked_tickers.yaml").write_text("tickers: []\n")  # just needs to exist
-    tracked = [make_tracked_ticker("IWDA.AS"), make_tracked_ticker("BTC-USD", enabled=False)]
+def test_ingest_market_data_syncs_the_yaml_then_prices_ready_tracked_tickers(
+    monkeypatch, fake_settings, tracked_table
+):
+    fake_settings.tracked_tickers_path.write_text("tickers: []\n")  # just needs to exist
+    yaml_entries = [make_tracked_ticker("IWDA.AS"), make_tracked_ticker("OLD.AS", enabled=False)]
+    tracked_table.configs = [make_tracked_ticker("IWDA.AS")]
     calls = []
 
-    monkeypatch.setattr(jobs, "load_settings", lambda: settings)
+    monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
     monkeypatch.setattr(jobs, "load_funds", lambda path: [])
-    monkeypatch.setattr(jobs, "load_tracked_tickers", lambda path: tracked)
+    monkeypatch.setattr(jobs, "load_tracked_tickers", lambda path: yaml_entries)
     monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn([]))
     monkeypatch.setattr(
         jobs,
@@ -325,11 +350,35 @@ def test_ingest_market_data_includes_enabled_tracked_tickers(monkeypatch, fake_s
 
     jobs.run_ingest_market_data()
 
-    assert [t.ticker for t in calls[0]] == ["IWDA.AS"]  # disabled BTC-USD excluded
+    # Every YAML entry reaches the sync, disabled ones too; only ready rows are priced, so a
+    # pending ticker's history is backfilled before the rolling window ever touches it.
+    assert tracked_table.events == [("sync", yaml_entries), ("read", True)]
+    assert calls[0] == tracked_table.configs
+
+
+def test_backfill_market_data_reads_every_enabled_tracked_ticker(
+    monkeypatch, fake_settings, tracked_table
+):
+    tracked_table.configs = [make_tracked_ticker("NEW.AS")]
+    calls = []
+
+    monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(jobs, "load_funds", lambda path: [])
+    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(
+        jobs,
+        "backfill_market_data",
+        lambda conn, funds, tt, ex, ed, end, ds, **kw: calls.append(tt) or flow_result(),
+    )
+
+    jobs.run_backfill_market_data()
+
+    assert tracked_table.events == [("sync", []), ("read", False)]
+    assert calls[0] == tracked_table.configs
 
 
 def test_ingest_market_data_treats_missing_tracked_tickers_file_as_empty(
-    monkeypatch, fake_settings
+    monkeypatch, fake_settings, tracked_table
 ):
     calls = []
 
@@ -345,6 +394,7 @@ def test_ingest_market_data_treats_missing_tracked_tickers_file_as_empty(
 
     jobs.run_ingest_market_data()
 
+    assert tracked_table.events[0] == ("sync", [])
     assert calls[0] == []
 
 
@@ -570,7 +620,7 @@ def test_backfill_market_data_without_ticker_flag_passes_none(monkeypatch, fake_
 
 
 def test_backfill_market_data_treats_missing_tracked_tickers_file_as_empty(
-    monkeypatch, fake_settings
+    monkeypatch, fake_settings, tracked_table
 ):
     calls = []
 
@@ -585,6 +635,7 @@ def test_backfill_market_data_treats_missing_tracked_tickers_file_as_empty(
 
     jobs.run_backfill_market_data()
 
+    assert tracked_table.events[0] == ("sync", [])
     assert calls[0] == []
 
 
@@ -680,7 +731,7 @@ def test_tracked_tickers_file_present_but_empty_is_treated_as_none(tmp_path, mon
     path = tmp_path / "tracked_tickers.yaml"
     path.write_text("# everything still commented out\ntickers:\n")
 
-    assert jobs._load_enabled_tracked_tickers(path) == []
+    assert jobs._load_config_tickers(path) == []
 
 
 # --- run_calculate_returns --------------------------------------------------------------------
@@ -1209,3 +1260,263 @@ def test_calculate_macro_indicator_rates_calls_the_flow_and_closes_the_connectio
     assert result["rows_saved"] == 4
     assert len(calls) == 1
     assert closed == [True]
+
+
+# --- sync-tracked-tickers ---------------------------------------------------------------------
+
+
+def test_sync_tracked_tickers_passes_every_yaml_entry_including_disabled(
+    monkeypatch, fake_settings
+):
+    # The sync needs the disabled entries too: `enabled: false` in the YAML is how an operator
+    # turns a config row off, which it can't do for an entry it never sees.
+    entries = [make_tracked_ticker("IWDA.AS"), make_tracked_ticker("OLD.AS", enabled=False)]
+    fake_settings.tracked_tickers_path.write_text("tickers: []\n")
+    calls = []
+    closed = []
+
+    monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(jobs, "load_tracked_tickers", lambda path: entries)
+    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn(closed))
+    monkeypatch.setattr(
+        jobs,
+        "sync_config_tickers",
+        lambda conn, config_tickers: calls.append(config_tickers) or flow_result(2),
+    )
+
+    result = jobs.run_sync_tracked_tickers()
+
+    assert calls == [entries]
+    assert result["rows_saved"] == 2
+    assert closed == [True]
+
+
+def test_sync_tracked_tickers_treats_a_missing_yaml_as_no_entries(monkeypatch, fake_settings):
+    calls = []
+
+    monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(
+        jobs,
+        "sync_config_tickers",
+        lambda conn, config_tickers: calls.append(config_tickers) or flow_result(),
+    )
+
+    jobs.run_sync_tracked_tickers()
+
+    assert calls == [[]]
+
+
+# --- FX universe follows tracked tickers' currencies ---------------------------------------------
+
+
+@pytest.fixture
+def widened(monkeypatch):
+    """Replace the YAML-widening step with one that returns a marker config, so a test can see
+    which config each FX job passed on."""
+    marker = make_currencies(codes=("EUR", "USD", "GBP", "ZAR"))
+    seen = []
+
+    def widen(conn, config):
+        seen.append(config)
+        return marker
+
+    monkeypatch.setattr(jobs, "currencies_with_tracked_tickers", widen)
+    return marker, seen
+
+
+def test_ingest_fx_rates_uses_the_widened_currencies(monkeypatch, fake_settings, widened):
+    marker, seen = widened
+    yaml_config = make_currencies()
+    calls = []
+    monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(jobs, "load_currencies", lambda path: yaml_config)
+    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(
+        jobs,
+        "ingest_fx_rates",
+        lambda conn, c, s, e, only_currencies=None: calls.append(c) or flow_result(),
+    )
+
+    jobs.run_ingest_fx_rates()
+
+    assert seen == [yaml_config]
+    assert calls == [marker]
+
+
+def test_backfill_fx_rates_uses_the_widened_currencies(monkeypatch, fake_settings, widened):
+    marker, _ = widened
+    calls = []
+    monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(jobs, "load_currencies", lambda path: make_currencies())
+    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(
+        jobs,
+        "backfill_fx_rates",
+        lambda conn, c, *args, **kwargs: calls.append(c) or flow_result(),
+    )
+
+    jobs.run_backfill_fx_rates()
+
+    assert calls == [marker]
+
+
+def test_get_fx_series_uses_the_widened_currencies(monkeypatch, fake_settings, widened):
+    marker, _ = widened
+    calls = []
+    monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(jobs, "load_currencies", lambda path: make_currencies())
+    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(
+        jobs,
+        "fx_rate_series",
+        lambda conn, c, *args: calls.append(c) or {"points": []},
+    )
+
+    jobs.get_fx_series(
+        base="EUR", quote="ZAR", source="yfinance", start=date(2026, 1, 1), end=date(2026, 1, 2)
+    )
+
+    assert calls == [marker]
+
+
+# --- process-ticker-requests ---------------------------------------------------------------------
+
+
+def test_process_ticker_requests_syncs_the_yaml_then_runs_onboarding(
+    monkeypatch, fake_settings, tracked_table
+):
+    yaml_entries = [make_tracked_ticker("IWDA.AS")]
+    fake_settings.tracked_tickers_path.write_text("tickers: []\n")
+    yaml_currencies = make_currencies()
+    calls = []
+    closed = []
+
+    monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(jobs, "load_tracked_tickers", lambda path: yaml_entries)
+    monkeypatch.setattr(jobs, "load_currencies", lambda path: yaml_currencies)
+    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn(closed))
+
+    def fake_process(conn, *, currencies, lookup_source, now, today):
+        calls.append((currencies, lookup_source.name, now.tzinfo is not None, today))
+        return flow_result(5)
+
+    monkeypatch.setattr(jobs, "process_ticker_requests", fake_process)
+
+    result = jobs.run_process_ticker_requests()
+
+    assert tracked_table.events == [("sync", yaml_entries)]
+    assert calls == [(yaml_currencies, "yfinance", True, date.today())]
+    assert result["rows_saved"] == 5
+    assert closed == [True]
+
+
+# --- tracked-ticker requests: the read API's write jobs -----------------------------------------
+
+
+def tracked_row(ticker="ASML.AS", status="pending"):
+    from datetime import datetime, timezone
+
+    from data_store.tracked_tickers.repository import TrackedTicker
+
+    now = datetime(2026, 10, 10, tzinfo=timezone.utc)
+    return TrackedTicker(
+        ticker=ticker,
+        source="yfinance",
+        display_name="ASML Holding N.V.",
+        asset_type="equity",
+        currency="EUR",
+        exchange="Amsterdam",
+        origin="request",
+        status=status,
+        enabled=True,
+        attempts=0,
+        next_attempt_at=None,
+        last_error=None,
+        requested_by=None,
+        requested_at=now,
+        ready_at=None,
+        updated_at=now,
+    )
+
+
+@pytest.fixture
+def request_settings(monkeypatch, fake_settings):
+    from dataclasses import replace
+
+    settings = replace(fake_settings, ticker_requests_per_day=4)
+    closed = []
+    monkeypatch.setattr(jobs, "load_settings", lambda: settings)
+    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn(closed))
+    return closed
+
+
+def test_add_tracked_ticker_passes_the_limit_cache_and_source(monkeypatch, request_settings):
+    calls = []
+
+    def fake_add(conn, raw, **kwargs):
+        calls.append((raw, kwargs))
+        return tracked_row(), True
+
+    monkeypatch.setattr(jobs.ticker_onboarding, "add_tracked_ticker", fake_add)
+
+    result = jobs.run_add_tracked_ticker(
+        ticker="asml.as",
+        requested_by="00000000-0000-0000-0000-00000000000a",
+        enforce_limit=True,
+        source="yfinance",
+    )
+
+    [(raw, kwargs)] = calls
+    assert raw == "asml.as"
+    assert kwargs["limit_per_day"] == 4
+    assert kwargs["enforce_limit"] is True
+    assert kwargs["cache"] is jobs.ticker_onboarding.LOOKUP_CACHE
+    assert kwargs["lookup_source"].name == "yfinance"
+    assert kwargs["now"].tzinfo is not None
+    assert result["ticker"] == "ASML.AS"
+    assert result["created"] is True
+    assert request_settings == [True]
+
+
+def test_get_ticker_lookup_uses_the_shared_cache(monkeypatch, request_settings):
+    calls = []
+    monkeypatch.setattr(
+        jobs.ticker_onboarding,
+        "lookup_ticker",
+        lambda conn, raw, source, cache: calls.append((raw, source.name, cache))
+        or {"ticker": raw, "outcome": "available"},
+    )
+
+    result = jobs.get_ticker_lookup(ticker="ASML.AS", source="yfinance")
+
+    assert calls == [("ASML.AS", "yfinance", jobs.ticker_onboarding.LOOKUP_CACHE)]
+    assert result["outcome"] == "available"
+    assert request_settings == [True]
+
+
+def test_get_tracked_tickers_serializes_rows(monkeypatch, request_settings):
+    monkeypatch.setattr(
+        jobs.ticker_onboarding, "list_tracked", lambda conn, **filters: [tracked_row()]
+    )
+
+    result = jobs.get_tracked_tickers(source="yfinance")
+
+    assert [r["ticker"] for r in result["tracked_tickers"]] == ["ASML.AS"]
+
+
+def test_update_tracked_ticker_passes_the_change_through(monkeypatch, request_settings):
+    calls = []
+    monkeypatch.setattr(
+        jobs.ticker_onboarding,
+        "update_tracked",
+        lambda conn, ticker, source, **change: calls.append((ticker, source, change))
+        or tracked_row(status="pending"),
+    )
+
+    result = jobs.run_update_tracked_ticker(
+        ticker="GHOST", source="yfinance", enabled=None, retry=True
+    )
+
+    assert calls == [("GHOST", "yfinance", {"enabled": None, "retry": True})]
+    assert result["status"] == "pending"

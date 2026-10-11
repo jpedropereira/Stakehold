@@ -6,10 +6,14 @@
 # the ETF itself (not its constituents), commodities, crypto, or a standalone stock. A ticker
 # that also appears in a fund's holdings is only fetched once, not once per source — see
 # services/data-store/README.md.
+#
+# This is the platform's default list. Each pricing run syncs it into the tracked_tickers table
+# (new entries are added, edits applied); users and admins can add more tickers there. Removing
+# an entry leaves its row in place -- set `enabled: false` to stop pricing a ticker.
 
 tickers:
   - ticker: MY_TICKER               # the yfinance symbol, e.g. IWDA.AS, BTC-USD, GC=F
     display_name: "My Ticker"
-    asset_type: etf                 # one of: equity, etf, commodity, crypto, etc
+    asset_type: etf                 # one of: equity, etf, commodity, crypto, etc, fund
     price_source: yfinance          # which PriceSource implementation prices it
     enabled: true

@@ -18,6 +18,7 @@ this file; references to sections that stayed in `architecture.md` name it.
 | Ticker mapping: delete | `ticker-mapping delete --id <n> --user <admin id>` | `DELETE /ticker-mappings/{id}?updated_by=` | manual, by an admin | `transactions` joined to `accounts` (affected accounts) | `ticker_mappings` (delete), then `position_snapshots` for each affected account |
 | Ticker mapping listing | `ticker-mapping list` | `GET /ticker-mappings` | on demand | `ticker_mappings` | — (read-only report) |
 | Ticker list | — (CLI has none) | `GET /instruments/tickers` | on demand | `data-store`'s `GET /tickers` (`datastore_client.list_tickers`), passed through so `web` only ever talks to `portfolio` | — (read-only report) |
+| Tracked tickers (ticker onboarding) | — (CLI has none) | `GET /instruments/tickers/{t}/lookup`, `POST /instruments/tracked-tickers`, `GET /instruments/tracked-tickers`, `PATCH /instruments/tracked-tickers/{t}` | on demand (web's Tickers pages) | passed through to `data-store`'s matching routes; `data-store` owns every rule (symbol, daily limit, provider), and `web` decides `enforce_limit` (false for an admin) | `data-store`'s `tracked_tickers` (via its API) |
 | List unmapped instruments | `list-unmapped-instruments --user <id>` | `GET /instruments/unmapped` | manual, on demand | `transactions` joined to `accounts` (scoped by `user_id`, and to pick up each instrument's owning broker), `ticker_mappings` | — (read-only report) |
 | List unmapped instruments, every user | `list-unmapped-instruments --all` | `GET /instruments/unmapped/all` | on demand (the admin page) | `transactions` joined to `accounts`, unscoped; `ticker_mappings`. Returns identifiers only, never whose they are; an ISIN appears once, with no broker | — (read-only report) |
 | Manual transaction entry | `add-transaction --user <id> --account <label> --ref <key> --type <type> --datetime <iso8601> --amount <decimal> --currency <ISO4217> [--instrument <id> --instrument-kind ISIN\|SYMBOL\|TICKER] [--quantity <d>] [--price <d>] [--fx-rate <d>] [--fees <d>]` | `POST /transactions` | ad hoc | `accounts`, scoped by `user_id` | `transactions` (idempotent on `(account_id, broker_transaction_ref)`, keyed by the mandatory `--ref`) |
@@ -29,6 +30,7 @@ this file; references to sections that stayed in `architecture.md` name it.
 | Position listing | — (CLI has none) | `GET /positions` | on demand | `position_snapshots`, latest row per ticker | — (read-only report) |
 | Returns rebuild | `rebuild-returns --user <id> [--account <label>]` | `POST /returns/rebuild` | automatically after every positions rebuild that follows a write or a mapping change (see "Positions and returns follow every transaction write") | `position_snapshots`, `transactions` (`DIVIDEND` rows), `ticker_mappings`, `data-store` read API | `return_snapshots` |
 | Returns refresh, every user | `rebuild-returns --all` | — | every `PORTFOLIO_RETURNS_REFRESH_SECONDS` (default 6h), by the `returns-refresh` container (see "Returns follow new prices") | as for one user, for each user with an account | `return_snapshots` |
+| Returns refresh, newly ready tickers | `refresh-ready-tickers --window-minutes N` | — | every 5 minutes with a 10-minute window, by the `returns-refresh-ready` container | `data-store`'s `GET /tracked-tickers?status=ready` (`ready_at` inside the window), then `position_snapshots` joined to `accounts` for the accounts holding them | `return_snapshots`, for those accounts only |
 | Return listing | — (CLI has none) | `GET /returns`, `GET /returns/latest` | on demand | `return_snapshots`, optionally filtered by ticker/date range | — (read-only report) |
 
 **No separate `brokers` table** ever materialized — `schema.md` settled on `broker` as a plain
@@ -228,6 +230,20 @@ decision on materialization. *Known cost:* every run rebuilds every user's retur
 including users whose holdings have no new prices. Fine at this scale; the place to start if it
 isn't is skipping users whose latest snapshot is already at data-store's latest price date.
 
+**A ticker that has just finished loading gets its own, faster sweep.** A user who adds a ticker
+can record the holding while data-store is still loading it (see "Manual entry stores a
+`data-store` ticker"). Its returns are blocked until prices land, and waiting up to six hours
+after that for `rebuild-returns --all` would make the loading message a lie.
+
+- The `returns-refresh-ready` container runs `refresh-ready-tickers` every five minutes. It asks
+  data-store for tickers marked `ready` in the last ten minutes, and rebuilds only the accounts
+  whose positions hold one, across all users.
+- **It's stateless on purpose**: a time window, not a "last seen" checkpoint, so it needs no
+  table of its own. The window is twice the interval, so every ticker falls inside at least one
+  run. A ticker caught twice is rebuilt twice, which is a harmless re-upsert. If the container is
+  down for longer than the window, the six-hourly refresh still catches the ticker up.
+- It polls for the same reason the six-hourly refresh does: data-store never calls portfolio.
+
 ### Positions follow every ticker-mapping change
 
 A mapping is global, so saving or deleting one can change positions in any user's accounts.
@@ -280,7 +296,11 @@ follow-up rather than done as a drive-by.
 `data-store`'s own ticker list (`GET /instruments/tickers`) and always submits
 `instrument_identifier_kind = 'TICKER'`. `pipeline.add_manual_transaction` asks `data-store`
 whether the ticker exists (`get_ticker_info`) before writing anything, and raises `UnknownTicker`
-(422) if not. `TickerMappings.resolve` returns a `TICKER` identifier as-is, so positions,
+(422) if not. "Exists" includes a ticker `data-store` has accepted but is still loading
+(`status` `pending` or `backfilling`): a user who has just added a ticker can record the holding
+straight away, and its returns wait for prices the same way any blocked ticker's do. A ticker
+whose loading `failed` is refused with its own message. `set_ticker_mapping` applies the same
+rule (`pipeline._require_usable_ticker`). `TickerMappings.resolve` returns a `TICKER` identifier as-is, so positions,
 returns and the unmapped-instruments report all handle it without a mapping.
 
 *Why:* ticker mappings exist to translate what a broker export reports into the ticker
@@ -393,6 +413,7 @@ handlers, `auth`'s pattern of app-level handlers rather than per-route `try`/`ex
 | `InvalidBroker`, `InvalidTransaction`, `BrokerFileError`, `BrokerParserNotFound`, `UnknownTicker`, `InvalidTickerMapping` | 422 | a caller-supplied value failed validation or parsing |
 | `TickerMappingError`, `BrokerPluginError` | 500 | a server-side data/plugin problem, not a caller mistake (`TickerMappingError` now means a stored transaction carries an identifier kind `resolve` doesn't know) |
 | `DataStoreApiError` | 502 | the upstream `data-store` call failed |
+| `TickerRequestRefused` | `data-store`'s own (404, 409, 422, 429, 503) | `data-store` refused a tracked-ticker request for a reason the user must be told: not on the provider, can't be held, over the daily limit, provider down, or an admin change it won't make. Kept apart from `DataStoreApiError` so `web` can tell these apart from the status code |
 | any other `PortfolioError`, `SettingsError` | 500 | fails closed rather than leaking a raw traceback |
 
 **One practical consequence: `partial` now means only genuine partial success.** The two rebuild

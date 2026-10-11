@@ -16,6 +16,7 @@ from web.api.routes import health_router, router
 from web.api.security_headers import SecurityHeadersMiddleware, apply_security_headers
 from web.api.theme import router as theme_router
 from web.api.theme import theme_context
+from web.api.tickers import router as tickers_router
 from web.auth_client.http_client import HttpAuthClient
 from web.formatting import FILTERS
 from web.portfolio_client.http_client import HttpPortfolioClient
@@ -95,6 +96,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(overview_router)
     app.include_router(router)
     app.include_router(theme_router)
+    app.include_router(tickers_router)
 
     @app.exception_handler(AuthRequired)
     async def _auth_required(request: Request, _exc: AuthRequired) -> Response:

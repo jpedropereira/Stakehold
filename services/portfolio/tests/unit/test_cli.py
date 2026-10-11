@@ -1462,6 +1462,36 @@ def test_ticker_mapping_set_exits_nonzero_when_a_returns_rebuild_failed(monkeypa
     assert "returns failed for 1 account(s)" in capsys.readouterr().out
 
 
+# --- refresh-ready-tickers -----------------------------------------------------------------------
+
+
+def test_refresh_ready_tickers_defaults_to_a_ten_minute_window(monkeypatch, capsys):
+    calls = []
+    monkeypatch.setattr(
+        cli.jobs,
+        "run_refresh_ready_tickers",
+        lambda **kw: calls.append(kw)
+        or {"status": "ok", "rows_saved": 4, "accounts_rebuilt": 1, "accounts_failed": 0},
+    )
+
+    assert cli.main(["refresh-ready-tickers"]) == 0
+    assert calls == [{"window_minutes": 10}]
+    assert "4 return snapshot(s) saved" in capsys.readouterr().out
+
+
+def test_refresh_ready_tickers_takes_a_window(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        cli.jobs,
+        "run_refresh_ready_tickers",
+        lambda **kw: calls.append(kw)
+        or {"status": "partial", "rows_saved": 0, "accounts_rebuilt": 0, "accounts_failed": 1},
+    )
+
+    assert cli.main(["refresh-ready-tickers", "--window-minutes", "30"]) == 1
+    assert calls == [{"window_minutes": 30}]
+
+
 # --- delete-transaction ---
 
 

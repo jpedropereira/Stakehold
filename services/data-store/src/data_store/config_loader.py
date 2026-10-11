@@ -10,7 +10,8 @@ _EXCHANGE_SUFFIX_REQUIRED_FIELDS = ("exchange", "suffix")
 _TICKER_OVERRIDE_REQUIRED_FIELDS = ("raw_ticker", "ticker")
 _CURRENCY_REQUIRED_FIELDS = ("code", "enabled")
 _MACRO_REGION_REQUIRED_FIELDS = ("code", "enabled")
-VALID_ASSET_TYPES = {"equity", "etf", "commodity", "crypto", "etc"}
+# `fund` is a mutual fund: priced like an ETF, but yfinance reports it as its own type.
+VALID_ASSET_TYPES = {"equity", "etf", "commodity", "crypto", "etc", "fund"}
 _CURRENCY_CODE_RE = re.compile(r"^[A-Z]{3}$")
 
 

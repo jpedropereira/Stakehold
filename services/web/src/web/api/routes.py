@@ -60,6 +60,7 @@ from web.portfolio_view import (
 )
 from web.rebuild_outcome import rebuild_outcome
 from web.settings import Settings
+from web.ticker_status import holding_price_note, load_statuses
 
 logger = logging.getLogger(__name__)
 
@@ -187,6 +188,8 @@ _ERROR_LEADS = {
     "transactions_new.html": "Couldn't save.",
     "transactions_import.html": "Couldn't import.",
     "admin_mappings.html": "Couldn't change the mapping.",
+    "tickers_new.html": "Couldn't add the ticker.",
+    "tickers.html": "Couldn't change the ticker.",
 }
 
 
@@ -1578,6 +1581,12 @@ async def portfolio_page(
     if isinstance(view, BaseException):
         raise view
 
+    holdings = build_holdings(filter_open_positions(view.positions), view.latest_returns)
+    prices_known = "latest returns" not in view.failed
+    # A holding with no return row says where its ticker's loading stands (ticker onboarding):
+    # asked only about those holdings, and only when the returns call answered.
+    awaiting = [h.canonical_ticker for h in holdings if prices_known and h.awaiting_prices]
+    statuses = await load_statuses(portfolio_client, awaiting)
     return_points = aggregate_portfolio_returns(view.returns)
     chart_payload = [
         {
@@ -1597,9 +1606,10 @@ async def portfolio_page(
             "csrf_token": csrf_token,
             "account_label": account,
             "summary": summarize_latest_returns(view.latest_returns),
-            "holdings": build_holdings(filter_open_positions(view.positions), view.latest_returns),
+            "holdings": holdings,
             # A holding with no return row is "waiting for prices" only if the call answered.
-            "prices_known": "latest returns" not in view.failed,
+            "prices_known": prices_known,
+            "price_notes": {t: holding_price_note(statuses.get(t)) for t in awaiting},
             "unmapped": unmapped_for_broker(
                 view.unmapped, header["account"].broker if header["account"] else None
             ),

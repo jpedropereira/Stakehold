@@ -125,6 +125,48 @@ class TickerMappingWriteResult:
     rebuilds_failed: int
 
 
+@dataclass(frozen=True)
+class TickerLookup:
+    """What adding a ticker would do -- see data-store's GET /tickers/{ticker}/lookup."""
+
+    ticker: str
+    # "tracked" (see status), "available", "unsupported", "not_found" or "unavailable".
+    outcome: str
+    status: str | None
+    display_name: str | None
+    currency: str | None
+    exchange: str | None
+    asset_type: str | None
+
+
+@dataclass(frozen=True)
+class TrackedTicker:
+    """A ticker data-store prices directly, and how far its loading has got: status is
+    "pending", "backfilling", "ready" or "failed"."""
+
+    ticker: str
+    display_name: str
+    asset_type: str
+    currency: str | None
+    exchange: str | None
+    # "config" (the platform's default list) or "request" (added by a user or admin).
+    origin: str
+    status: str
+    enabled: bool
+    attempts: int
+    last_error: str | None
+    requested_by: str | None
+    requested_at: datetime
+    ready_at: datetime | None
+
+
+@dataclass(frozen=True)
+class TrackedTickerAddResult:
+    ticker: TrackedTicker
+    # False when it was already tracked: nothing was added, and nothing counted to the limit.
+    created: bool
+
+
 class PortfolioClient(Protocol):
     async def list_accounts(self, *, user_id: str) -> list[Account]: ...
 
@@ -204,3 +246,21 @@ class PortfolioClient(Protocol):
     async def delete_ticker_mapping(
         self, *, mapping_id: int, updated_by: str
     ) -> TickerMappingWriteResult: ...
+
+    async def lookup_ticker(self, ticker: str) -> TickerLookup: ...
+
+    async def add_tracked_ticker(
+        self, *, ticker: str, requested_by: str, enforce_limit: bool
+    ) -> TrackedTickerAddResult: ...
+
+    async def list_tracked_tickers(
+        self,
+        *,
+        requested_by: str | None = None,
+        statuses: list[str] | None = None,
+        tickers: list[str] | None = None,
+    ) -> list[TrackedTicker]: ...
+
+    async def update_tracked_ticker(
+        self, *, ticker: str, enabled: bool | None = None, retry: bool = False
+    ) -> TrackedTicker: ...

@@ -227,3 +227,26 @@ def test_fred_api_key_empty_string_is_treated_as_unset(monkeypatch):
     monkeypatch.setenv("FRED_API_KEY", "")
 
     assert load_settings().fred_api_key is None
+
+
+def test_ticker_requests_per_day_defaults_to_ten(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost/db")
+    monkeypatch.delenv("DATA_STORE_TICKER_REQUESTS_PER_DAY", raising=False)
+
+    assert load_settings().ticker_requests_per_day == 10
+
+
+def test_ticker_requests_per_day_read_from_env(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost/db")
+    monkeypatch.setenv("DATA_STORE_TICKER_REQUESTS_PER_DAY", "3")
+
+    assert load_settings().ticker_requests_per_day == 3
+
+
+@pytest.mark.parametrize("value", ["ten", "-1", "1.5"])
+def test_ticker_requests_per_day_must_be_a_non_negative_integer(monkeypatch, value):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost/db")
+    monkeypatch.setenv("DATA_STORE_TICKER_REQUESTS_PER_DAY", value)
+
+    with pytest.raises(SettingsError, match="DATA_STORE_TICKER_REQUESTS_PER_DAY"):
+        load_settings()

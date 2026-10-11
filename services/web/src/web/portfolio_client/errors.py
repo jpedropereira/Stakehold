@@ -38,3 +38,33 @@ class InvalidPortfolioRequest(PortfolioClientError):
 class PortfolioUnavailable(PortfolioClientError):
     """portfolio could not be reached, timed out, rejected the internal secret, or returned an
     unexpected/malformed response."""
+
+
+# --- tracked tickers (ticker onboarding) ---------------------------------------------------
+# Each is a different sentence for the user, so each gets its own class; on these routes a status
+# code means something other than it does on the account routes (a 404 isn't AccountNotFound).
+
+
+class InvalidTickerRequest(PortfolioClientError):
+    """422: not a ticker symbol, or an index or currency pair, which can't be held."""
+
+
+class TickerNotOnProvider(PortfolioClientError):
+    """404 on add: the price provider doesn't know the symbol (often a delisted security)."""
+
+
+class TickerLimitReached(PortfolioClientError):
+    """429: the user has added as many new tickers as they may in a day."""
+
+
+class TickerProviderUnavailable(PortfolioClientError):
+    """503: the price provider didn't answer. Says nothing about the symbol; try again later."""
+
+
+class TrackedTickerNotFound(PortfolioClientError):
+    """404 on an admin change: not a tracked ticker."""
+
+
+class TickerChangeRefused(PortfolioClientError):
+    """409: an admin change data-store won't make (a YAML-managed ticker's enabled flag, or a
+    retry of a ticker that hasn't failed)."""

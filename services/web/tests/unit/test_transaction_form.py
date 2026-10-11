@@ -308,3 +308,12 @@ def test_fx_rate_is_hidden_for_eur_and_shown_for_every_type(client):
 
     assert field["attrs"].get("data-hide-for-currency") == "EUR"
     assert _types(field) is None
+
+
+def test_the_ticker_field_links_to_adding_a_ticker(client):
+    # Ticker onboarding: the picker lists what Stakehold already prices; anything else is added
+    # from the Tickers page, not typed in here.
+    response = client.get("/transactions/new", params={"account": "main"})
+
+    assert 'href="/tickers/new"' in response.text
+    assert "Not in the list?" in response.text

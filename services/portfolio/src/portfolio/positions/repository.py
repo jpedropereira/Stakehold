@@ -13,6 +13,7 @@ inverting the "repositories never commit" rule for this module alone.
 """
 
 from collections.abc import Sequence
+from uuid import UUID
 
 from portfolio.positions.calculator import PositionSnapshot
 
@@ -81,6 +82,23 @@ def list_tickers(conn, account_id: int) -> list[str]:
     with conn.cursor() as cur:
         cur.execute(_LIST_TICKERS_SQL, (account_id,))
         return [row[0] for row in cur.fetchall()]
+
+
+def list_accounts_holding(conn, tickers: list[str]) -> list[tuple[UUID, str]]:
+    """(user_id, account_label) of every account, any user, with a snapshot for one of
+    `tickers` -- whose returns change when one of those tickers gets prices."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT DISTINCT a.user_id, a.account_label
+            FROM position_snapshots p
+            JOIN accounts a ON a.id = p.account_id
+            WHERE p.canonical_ticker = ANY(%s)
+            ORDER BY a.user_id, a.account_label
+            """,
+            (list(tickers),),
+        )
+        return [(row[0], row[1]) for row in cur.fetchall()]
 
 
 def delete_snapshots(conn, *, account_id: int, canonical_ticker: str) -> int:

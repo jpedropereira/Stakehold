@@ -50,8 +50,8 @@ snapshot. This is idempotent on rerun and needs no dedup-view machinery: "latest
 ## `raw_market_data`
 
 One row per `(ticker, price_date, source)` — daily OHLCV, dividends, and stock splits for tickers
-found in the most recent `etf_holdings` snapshot, plus ETFs, ETCs, commodities, and crypto tracked
-directly via `config/tracked_tickers.yaml` (not derived from any fund's holdings). Replaces the
+found in the most recent `etf_holdings` snapshot, plus ETFs, ETCs, commodities, crypto and stocks
+tracked directly in the `tracked_tickers` table (not derived from any fund's holdings). Replaces the
 former separate `daily_ohlcv`/`dividend_events` tables: one row matches one yfinance
 `Ticker.history()` response row exactly, dense rather than filtered — `dividends`/`stock_splits`
 are `0` on the overwhelming majority of days, not omitted, because this table's job is to be an
@@ -322,8 +322,9 @@ upstream table.
 ## `fx_rates`
 
 One row per `(base_currency, quote_currency, rate_date, source)` — a daily currency-conversion
-rate fetched from yfinance, for every currency configured in `config/currencies.yaml` against
-that file's `base_currency`. A separate table from `raw_market_data`, deliberately: an FX rate
+rate fetched from yfinance, for every currency configured in `config/currencies.yaml`, plus the
+currency of every enabled `tracked_tickers` row (minor units such as `GBp` mapped to their major
+currency), against that file's `base_currency`. A separate table from `raw_market_data`, deliberately: an FX rate
 has no OHLC, dividends, or splits, and forcing that shape onto it would mix currency-conversion
 lookups with `raw_market_data`'s unrelated split-restatement machinery for no benefit — nothing
 here needs a price chart, just a single daily number to convert with.
@@ -466,3 +467,72 @@ table's 8.95M rows, this is a few hundred rows total (a handful of series × a h
 × decades of monthly/quarterly history), so a full rebuild needs no batching; it runs in one pass
 every time `calculate-macro-indicator-rates` is invoked, and a revised raw value always
 propagates.
+
+## `tracked_tickers`
+
+One row per `(ticker, source)` priced directly rather than through a fund's holdings, plus how far
+that ticker is through onboarding. It replaces `config/tracked_tickers.yaml` as the list the
+pricing flows read, so that a user or an admin can add a ticker without editing a file on the
+server (`tasks.md`, the ticker-onboarding chunk). The YAML stays as the platform's default list and
+is synced into this table.
+
+**Who reads it**: market data ingest and backfill, after syncing the YAML in. The daily ingest
+takes only `enabled` rows whose `status` is `ready`, and backfill every `enabled` row. See
+`architecture.md`, "Ticker resolution", for why the ingest has to wait for `ready`.
+
+| Column            | Type           | Notes |
+|-------------------|----------------|-------|
+| `ticker`          | `VARCHAR(20)`  | Provider-ready ticker, the same spelling and width as `raw_market_data.ticker`. For a requested ticker, the provider's own canonical spelling (yfinance's `history_metadata["symbol"]`), not what the user typed. |
+| `source`          | `VARCHAR(20)`  | Defaults to `'yfinance'`. Part of the PK, as on every other ticker-keyed table, so a second provider can coexist. Config rows take it from the YAML's `price_source`. |
+| `display_name`    | `VARCHAR(200)` | From the YAML, or the provider's long name (short name when the long one is missing). |
+| `asset_type`      | `VARCHAR(20)`  | One of `config_loader.VALID_ASSET_TYPES`. Validated in code, not a DB `CHECK`, so adding a type needs no DDL. |
+| `currency`        | `VARCHAR(10)`  | Nullable. The provider's currency **verbatim**, including minor units such as `GBp` (pence) — wider than a 3-letter code for that reason. Set by the lookup for a requested ticker; a config row has none until onboarding fills it. |
+| `exchange`        | `VARCHAR(50)`  | Nullable. The provider's exchange name, for display only. |
+| `origin`          | `VARCHAR(10)`  | `'config'` (owned by the YAML) or `'request'` (added by a user or admin). |
+| `status`          | `VARCHAR(12)`  | `'pending'`, `'backfilling'`, `'ready'` or `'failed'`. |
+| `enabled`         | `BOOLEAN`      | Defaults to `true`. A disabled row is neither onboarded nor priced; its data stays. |
+| `attempts`        | `SMALLINT`     | Defaults to `0`. Onboarding attempts so far. |
+| `next_attempt_at` | `TIMESTAMPTZ`  | Nullable. When a failed attempt may be retried (backoff). |
+| `last_error`      | `TEXT`         | Nullable. Why the last onboarding attempt failed. |
+| `requested_by`    | `UUID`         | Nullable. The `auth` user id that requested it; `NULL` for a ticker that came from the YAML. No FK — `auth` is another database, the same as `portfolio`'s `ticker_mappings.updated_by`. |
+| `requested_at`    | `TIMESTAMPTZ`  | Defaults to `now()`. When the row was created. |
+| `ready_at`        | `TIMESTAMPTZ`  | Nullable. When onboarding last finished. |
+| `updated_at`      | `TIMESTAMPTZ`  | Defaults to `now()`; moves on every write. |
+
+Indexes: `(requested_by, requested_at)` for counting a user's requests over the last 24 hours (the
+daily limit), and a partial index on `status` for `pending`/`backfilling` rows, so finding
+onboarding work never scans the whole table.
+
+**No `CHECK` constraints on `origin` and `status`.** Their allowed values are named once in
+`tracked_tickers/repository.py` (`ORIGIN_*`, `STATUS_*`), and this service already validates
+vocabulary like this in code rather than in DDL (`asset_type`, `regimes.severity`).
+
+**Loading strategy: two writers, split by column ownership.**
+
+- **The YAML owns what a config ticker *is***: `display_name`, `asset_type`, `enabled`, and
+  `origin`. `sync_config_tickers` (`ticker_onboarding.py`) inserts a YAML ticker the table lacks
+  as `origin='config', status='pending'`, and rewrites those four fields on one it has.
+  - Naming a ticker a user requested first makes it a config row, because the operator's file
+    is authoritative for every ticker it names.
+  - It never touches onboarding state (`status`, `attempts`, `requested_by`), so a sync can't
+    undo a backfill or erase who asked first.
+  - A config row whose ticker has left the YAML is **left as it is**, with a warning. Deleting
+    it would cut its price history off from anything that follows it, and disabling it would
+    guess at intent; `enabled: false` in the YAML is the explicit way to stop pricing a ticker.
+- **Onboarding owns the rest**: `status`, `attempts`, `next_attempt_at`, `last_error`,
+  `ready_at`, and `currency`/`exchange` for a config row, which the YAML doesn't carry. Its state
+  machine (`ticker_onboarding.process_ticker_requests`):
+
+  ```
+  pending --claim--> backfilling --success--> ready
+     ^                    |
+     |                    +--failure, attempts < 3--> pending (next_attempt_at = +10, +20 min)
+     |                    +--failure, 3rd attempt---> failed
+     +---- backfilling untouched for over an hour (the run died) ----+
+  ```
+
+  `ready` resets `attempts`, `next_attempt_at` and `last_error`. A `failed` row stays failed
+  until something moves it back to `pending` (the admin retry, TK-6).
+
+An insert is `ON CONFLICT DO NOTHING`. A user's request or a concurrent sync can add the same
+ticker between the sync's read and its write, and the next sync turns that row into an update.

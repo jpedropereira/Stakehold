@@ -65,7 +65,7 @@
         <td class="num" role="cell" data-label="Quantity"><span class="mono">{{ holding.quantity | qty }}</span></td>
         <td class="num" role="cell" data-label="Avg cost"><span class="mono">{{ holding.average_cost_eur | money }}</span></td>
         {% if prices_known and holding.awaiting_prices %}
-        <td class="num" role="cell" data-label="Market value" colspan="4"><span class="entry-empty">Waiting for prices</span></td>
+        <td class="num" role="cell" data-label="Market value" colspan="4"><span class="entry-empty">{{ price_notes[holding.canonical_ticker] }}</span></td>
         {% else %}
         <td class="num" role="cell" data-label="Market value"><span class="mono">{{ holding.market_value_eur | money }}</span></td>
         <td class="num" role="cell" data-label="Weight"><span class="mono">{{ holding.weight | share }}</span></td>

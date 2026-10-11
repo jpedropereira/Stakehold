@@ -10,10 +10,11 @@ quantizes it to `fx_rates.rate`'s own scale before it gets here -- otherwise a d
 stored one it came from.
 """
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
+from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class PricePoint(BaseModel):
@@ -61,3 +62,59 @@ class TickerInfo(BaseModel):
     has_returns: bool
     first_date: date | None
     last_date: date | None
+    # The ticker's onboarding status ("pending", "backfilling", "ready", "failed") when it is in
+    # tracked_tickers; None when it's priced only through a fund's holdings, or not at all.
+    status: str | None = None
+
+
+class TickerLookup(BaseModel):
+    ticker: str
+    # "tracked" (see `status`), "available" (can be added), "unsupported" (an index or a
+    # currency pair), "not_found", or "unavailable" (the provider didn't answer; try again).
+    outcome: str
+    status: str | None
+    display_name: str | None
+    currency: str | None
+    exchange: str | None
+    asset_type: str | None
+
+
+class TrackedTicker(BaseModel):
+    ticker: str
+    source: str
+    display_name: str
+    asset_type: str
+    currency: str | None
+    exchange: str | None
+    origin: str
+    status: str
+    enabled: bool
+    attempts: int
+    last_error: str | None
+    requested_by: UUID | None
+    requested_at: datetime
+    ready_at: datetime | None
+
+
+class TrackedTickerAdded(TrackedTicker):
+    # False when the ticker was already tracked: the call changed nothing.
+    created: bool
+
+
+class TrackedTickerList(BaseModel):
+    tracked_tickers: list[TrackedTicker]
+
+
+class TrackedTickerCreate(BaseModel):
+    # Raw as typed; the flow normalizes and whitelists it. Capped generously here only so an
+    # absurd body is refused before it reaches any code.
+    ticker: str = Field(min_length=1, max_length=40)
+    requested_by: UUID
+    # The caller (web, through portfolio) decides who's an admin; admins pass False.
+    enforce_limit: bool = True
+    source: str = "yfinance"
+
+
+class TrackedTickerUpdate(BaseModel):
+    enabled: bool | None = None
+    retry: bool = False

@@ -1,5 +1,6 @@
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
+from urllib.parse import quote
 
 import httpx
 from web.portfolio_client.base import (
@@ -8,8 +9,11 @@ from web.portfolio_client.base import (
     Broker,
     Position,
     Return,
+    TickerLookup,
     TickerMapping,
     TickerMappingWriteResult,
+    TrackedTicker,
+    TrackedTickerAddResult,
     Transaction,
     TransactionWriteResult,
     UnmappedInstrument,
@@ -18,8 +22,14 @@ from web.portfolio_client.errors import (
     AccountLabelConflict,
     AccountNotFound,
     InvalidPortfolioRequest,
+    InvalidTickerRequest,
     PortfolioUnavailable,
+    TickerChangeRefused,
+    TickerLimitReached,
     TickerMappingNotFound,
+    TickerNotOnProvider,
+    TickerProviderUnavailable,
+    TrackedTickerNotFound,
 )
 
 
@@ -55,6 +65,48 @@ def _raise_for_status(response: httpx.Response) -> None:
     raise PortfolioUnavailable(
         f"unexpected portfolio response {response.status_code}: " f"{_error_detail(response)}"
     )
+
+
+# The tracked-ticker routes' refusals, each its own sentence for the user. A 404 means "not on
+# the provider" on add and "not tracked" on an admin change.
+_TICKER_ERRORS = {
+    409: TickerChangeRefused,
+    422: InvalidTickerRequest,
+    429: TickerLimitReached,
+    503: TickerProviderUnavailable,
+}
+
+
+def _raise_for_ticker_status(response: httpx.Response, *, not_found) -> None:
+    if response.status_code == 404:
+        raise not_found(_error_detail(response))
+    error = _TICKER_ERRORS.get(response.status_code)
+    if error is not None:
+        raise error(_error_detail(response))
+    raise PortfolioUnavailable(
+        f"unexpected portfolio response {response.status_code}: {_error_detail(response)}"
+    )
+
+
+def _tracked_ticker(item: dict) -> TrackedTicker:
+    try:
+        return TrackedTicker(
+            ticker=item["ticker"],
+            display_name=item["display_name"],
+            asset_type=item["asset_type"],
+            currency=item["currency"],
+            exchange=item["exchange"],
+            origin=item["origin"],
+            status=item["status"],
+            enabled=item["enabled"],
+            attempts=item["attempts"],
+            last_error=item["last_error"],
+            requested_by=item["requested_by"],
+            requested_at=datetime.fromisoformat(item["requested_at"]),
+            ready_at=datetime.fromisoformat(item["ready_at"]) if item["ready_at"] else None,
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise PortfolioUnavailable(f"malformed portfolio response: {exc}") from exc
 
 
 def _json_body(response: httpx.Response):
@@ -447,3 +499,73 @@ class HttpPortfolioClient:
         if response.status_code != 200:
             _raise_for_status(response)
         return _ticker_mapping_write_result(_json_body(response))
+
+    # --- tracked tickers (ticker onboarding) -----------------------------------------------------
+
+    async def lookup_ticker(self, ticker: str) -> TickerLookup:
+        # Quoted: a typed symbol must stay one path segment ("a/b" can't reach another route).
+        response = await self._request(
+            "GET", f"/instruments/tickers/{quote(ticker, safe='')}/lookup"
+        )
+        if response.status_code != 200:
+            _raise_for_ticker_status(response, not_found=TickerNotOnProvider)
+        body = _json_body(response)
+        try:
+            return TickerLookup(
+                ticker=body["ticker"],
+                outcome=body["outcome"],
+                status=body["status"],
+                display_name=body["display_name"],
+                currency=body["currency"],
+                exchange=body["exchange"],
+                asset_type=body["asset_type"],
+            )
+        except (KeyError, TypeError) as exc:
+            raise PortfolioUnavailable(f"malformed portfolio response: {exc}") from exc
+
+    async def add_tracked_ticker(
+        self, *, ticker: str, requested_by: str, enforce_limit: bool
+    ) -> TrackedTickerAddResult:
+        response = await self._request(
+            "POST",
+            "/instruments/tracked-tickers",
+            json={"ticker": ticker, "requested_by": requested_by, "enforce_limit": enforce_limit},
+        )
+        if response.status_code not in (200, 201):
+            _raise_for_ticker_status(response, not_found=TickerNotOnProvider)
+        body = _json_body(response)
+        if not isinstance(body, dict) or not isinstance(body.get("created"), bool):
+            raise PortfolioUnavailable("malformed portfolio response: no created flag")
+        return TrackedTickerAddResult(ticker=_tracked_ticker(body), created=body["created"])
+
+    async def list_tracked_tickers(
+        self,
+        *,
+        requested_by: str | None = None,
+        statuses: list[str] | None = None,
+        tickers: list[str] | None = None,
+    ) -> list[TrackedTicker]:
+        params = []
+        if requested_by is not None:
+            params.append(("requested_by", requested_by))
+        params.extend(("status", status) for status in statuses or [])
+        params.extend(("ticker", ticker) for ticker in tickers or [])
+        response = await self._request("GET", "/instruments/tracked-tickers", params=params)
+        if response.status_code != 200:
+            _raise_for_ticker_status(response, not_found=TrackedTickerNotFound)
+        body = _json_body(response)
+        if not isinstance(body, list):
+            raise PortfolioUnavailable("malformed portfolio response: not a list")
+        return [_tracked_ticker(item) for item in body]
+
+    async def update_tracked_ticker(
+        self, *, ticker: str, enabled: bool | None = None, retry: bool = False
+    ) -> TrackedTicker:
+        response = await self._request(
+            "PATCH",
+            f"/instruments/tracked-tickers/{quote(ticker, safe='')}",
+            json={"enabled": enabled, "retry": retry},
+        )
+        if response.status_code != 200:
+            _raise_for_ticker_status(response, not_found=TrackedTickerNotFound)
+        return _tracked_ticker(_json_body(response))

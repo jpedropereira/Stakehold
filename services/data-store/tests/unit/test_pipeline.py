@@ -32,6 +32,7 @@ def make_tracked_ticker(*, ticker, asset_type, price_source="yfinance"):
 
 class FakeMarketDataSource:
     name = "yfinance"
+    unreachable = frozenset()  # never fails to reach the provider
 
     def __init__(self):
         self.fetch_calls = []
@@ -974,6 +975,7 @@ def test_a_split_refresh_that_cannot_be_saved_is_isolated_too(monkeypatch, caplo
 
 class FakeSingleMarketDataSource:
     name = "yfinance"
+    unreachable = frozenset()  # never fails to reach the provider
 
     def __init__(self, *, fail_tickers=None):
         self.fetch_calls = []

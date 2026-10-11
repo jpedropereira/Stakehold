@@ -153,3 +153,30 @@ CREATE TABLE IF NOT EXISTS macro_indicator_rates (
 
 CREATE INDEX IF NOT EXISTS idx_macro_indicator_rates_region_type
     ON macro_indicator_rates (region, indicator_type);
+
+-- The tickers priced directly rather than through a fund's holdings, and how far each one is
+-- through onboarding. See docs/schema.md.
+CREATE TABLE IF NOT EXISTS tracked_tickers (
+    ticker          VARCHAR(20)   NOT NULL,
+    source          VARCHAR(20)   NOT NULL DEFAULT 'yfinance',
+    display_name    VARCHAR(200)  NOT NULL,
+    asset_type      VARCHAR(20)   NOT NULL,
+    currency        VARCHAR(10),
+    exchange        VARCHAR(50),
+    origin          VARCHAR(10)   NOT NULL,
+    status          VARCHAR(12)   NOT NULL,
+    enabled         BOOLEAN       NOT NULL DEFAULT true,
+    attempts        SMALLINT      NOT NULL DEFAULT 0,
+    next_attempt_at TIMESTAMPTZ,
+    last_error      TEXT,
+    requested_by    UUID,
+    requested_at    TIMESTAMPTZ   NOT NULL DEFAULT now(),
+    ready_at        TIMESTAMPTZ,
+    updated_at      TIMESTAMPTZ   NOT NULL DEFAULT now(),
+    PRIMARY KEY (ticker, source)
+);
+
+CREATE INDEX IF NOT EXISTS idx_tracked_tickers_requested_by
+    ON tracked_tickers (requested_by, requested_at);
+CREATE INDEX IF NOT EXISTS idx_tracked_tickers_in_flight
+    ON tracked_tickers (status) WHERE status IN ('pending', 'backfilling');

@@ -127,6 +127,11 @@ class _FakeDataStoreClient:
         known = ticker == "IWDA.AS"
         return TickerInfo(exists=known, has_returns=known)
 
+    def list_tracked_tickers(self, *, requested_by=None, statuses=None, tickers=None):
+        # Nothing is tracked directly here (no ticker onboarding in this suite), so a holding
+        # without prices reads "Waiting for prices".
+        return []
+
 
 @pytest.fixture
 async def web_client_with_data_store(monkeypatch):

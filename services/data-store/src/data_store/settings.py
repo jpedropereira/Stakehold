@@ -38,6 +38,9 @@ class Settings:
     # Optional at this level for the same reason: only ingest-macro-indicators needs it.
     # run_ingest_macro_indicators raises SettingsError itself if it's unset -- see jobs.py.
     fred_api_key: str | None = None
+    # How many new tickers one user may add per rolling 24 hours (admins aren't limited). Only
+    # the read API's add-ticker route uses it.
+    ticker_requests_per_day: int = 10
 
 
 def load_settings() -> Settings:
@@ -64,6 +67,12 @@ def load_settings() -> Settings:
         os.environ.get("DATA_STORE_MACRO_REGIONS_PATH", "config/macro_regions.yaml")
     )
 
+    raw_limit = os.environ.get("DATA_STORE_TICKER_REQUESTS_PER_DAY", "10")
+    if not raw_limit.isdigit():
+        raise SettingsError(
+            f"DATA_STORE_TICKER_REQUESTS_PER_DAY must be a non-negative integer, got {raw_limit!r}"
+        )
+
     return Settings(
         database_url=database_url,
         config_path=config_path,
@@ -74,4 +83,5 @@ def load_settings() -> Settings:
         macro_regions_path=macro_regions_path,
         internal_api_secret=os.environ.get("INTERNAL_API_SECRET") or None,
         fred_api_key=os.environ.get("FRED_API_KEY") or None,
+        ticker_requests_per_day=int(raw_limit),
     )

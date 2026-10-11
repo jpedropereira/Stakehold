@@ -9,6 +9,25 @@ described here updates this file in the same change.
 
 ## Key decisions
 
+- **Ticker onboarding pages (TK-8, TK-9).**
+  - **Status is a neutral badge** (the existing `.badge`, ink with a hairline): Queued,
+    Loading, Ready, Couldn't load, plus an "Off" badge for a disabled ticker. Never gold or a
+    gain/loss color, since loading isn't an action to take and a failure isn't a loss. The
+    labels live once, in `ticker_status.py`.
+  - **The lookup result tells the user what will happen before anything does.** An available
+    symbol shows its name, exchange and currency (`mono`) and an "Add" button; the provider's
+    spelling is what gets posted, not what was typed.
+  - Every other outcome is one plain sentence in a warning banner, never an error: nothing
+    went wrong, the symbol just can't be added. "Delisted securities may not be available" is
+    said wherever a symbol isn't found.
+  - **A minor-unit currency (`GBp`, `ZAc`, `ILA`) gets a warning before adding.** Nothing in
+    Stakehold rescales those prices yet, and saying "its values will read 100 times too high"
+    is better than a surprise on the holdings page.
+  - **No new CSS**: the pages reuse cards, `.field`, `.positions-table`, `.badge`,
+    `.inline-form`, `.field-hint` and the banner macro.
+  - A holding without prices reads "Prices loading" or "Prices couldn't be loaded" in the same
+    spanning cell that read "Waiting for prices" (see `architecture.md`).
+
 - **Responsive and accessibility pass (UI-13).**
   - *Stacked tables*: at 600px and below, the holdings and transactions tables become one block
     per row. The first cell (the ticker or the date) heads the block, and each other cell is a

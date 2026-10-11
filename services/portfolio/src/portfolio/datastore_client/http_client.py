@@ -2,17 +2,31 @@
 data-store/docs/architecture.md's "Read API" section for the endpoint contract this depends on.
 """
 
+from dataclasses import fields
 from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
+from urllib.parse import quote
+from uuid import UUID
 
 import requests
-from portfolio.datastore_client.base import FxPoint, PricePoint, TickerInfo
-from portfolio.errors import DataStoreApiError
+from portfolio.datastore_client.base import (
+    FxPoint,
+    PricePoint,
+    TickerInfo,
+    TickerLookup,
+    TrackedTicker,
+)
+from portfolio.errors import DataStoreApiError, TickerRequestRefused
 
 _REQUEST_TIMEOUT = 10  # seconds
 # Covers a long weekend or a bank holiday with no traded rate; GET /fx/{base}/{quote} returns
 # every point actually stored in the window, so a wider window than strictly needed is harmless.
 _LOOKBACK_DAYS = 7
+# data-store's tracked-ticker refusals that carry a meaning for the user. Anything else
+# unexpected stays a DataStoreApiError (502), like every other call here.
+_REFUSAL_STATUSES = frozenset({404, 409, 422, 429, 503})
+# A lookup or add can wait on one provider call inside data-store (its own timeout is 10 s).
+_TRACKED_TICKER_TIMEOUT = 20  # seconds
 
 
 class HttpDataStoreClient:
@@ -189,8 +203,106 @@ class HttpDataStoreClient:
 
         try:
             body = response.json()
-            return TickerInfo(exists=body["exists"], has_returns=body["has_returns"])
+            return TickerInfo(
+                exists=body["exists"], has_returns=body["has_returns"], status=body.get("status")
+            )
         except (ValueError, KeyError, TypeError) as exc:
             raise DataStoreApiError(
                 f"data-store returned a malformed response for tickers/{ticker}: {exc}"
             ) from exc
+
+    # --- tracked tickers ----------------------------------------------------------------------
+
+    def lookup_ticker(self, ticker: str) -> TickerLookup:
+        body = self._tracked_request("GET", f"/tickers/{_path(ticker)}/lookup")
+        return _parse(TickerLookup, body, what="ticker lookup")
+
+    def add_tracked_ticker(
+        self, ticker: str, *, requested_by: UUID, enforce_limit: bool
+    ) -> tuple[TrackedTicker, bool]:
+        body = self._tracked_request(
+            "POST",
+            "/tracked-tickers",
+            json={
+                "ticker": ticker,
+                "requested_by": str(requested_by),
+                "enforce_limit": enforce_limit,
+            },
+        )
+        try:
+            created = body["created"]
+        except (KeyError, TypeError) as exc:
+            raise DataStoreApiError(f"data-store returned a malformed tracked ticker: {exc}")
+        return _parse(TrackedTicker, body, what="tracked ticker"), bool(created)
+
+    def list_tracked_tickers(
+        self,
+        *,
+        requested_by: UUID | None = None,
+        statuses: list[str] | None = None,
+        tickers: list[str] | None = None,
+    ) -> list[TrackedTicker]:
+        params = []
+        if requested_by is not None:
+            params.append(("requested_by", str(requested_by)))
+        params.extend(("status", status) for status in statuses or [])
+        params.extend(("ticker", ticker) for ticker in tickers or [])
+        body = self._tracked_request("GET", "/tracked-tickers", params=params)
+        try:
+            rows = body["tracked_tickers"]
+            return [_parse(TrackedTicker, row, what="tracked ticker") for row in rows]
+        except (KeyError, TypeError) as exc:
+            raise DataStoreApiError(f"data-store returned a malformed tracked-ticker list: {exc}")
+
+    def update_tracked_ticker(
+        self, ticker: str, *, enabled: bool | None, retry: bool
+    ) -> TrackedTicker:
+        body = self._tracked_request(
+            "PATCH",
+            f"/tracked-tickers/{_path(ticker)}",
+            json={"enabled": enabled, "retry": retry},
+        )
+        return _parse(TrackedTicker, body, what="tracked ticker")
+
+    def _tracked_request(self, method: str, path: str, **kwargs) -> dict:
+        """One tracked-ticker call. A refusal the user must hear about keeps data-store's status
+        code (TickerRequestRefused); anything else unexpected is a DataStoreApiError."""
+        try:
+            response = requests.request(
+                method,
+                f"{self._base_url}{path}",
+                headers=self._headers,
+                timeout=_TRACKED_TICKER_TIMEOUT,
+                **kwargs,
+            )
+        except requests.RequestException as exc:
+            raise DataStoreApiError(f"request to data-store failed: {exc}") from exc
+
+        try:
+            body = response.json()
+        except ValueError:
+            body = None
+
+        if response.status_code in _REFUSAL_STATUSES:
+            detail = body.get("detail") if isinstance(body, dict) else None
+            raise TickerRequestRefused(
+                str(detail or f"data-store refused {method} {path}"), response.status_code
+            )
+        if response.status_code >= 400:
+            raise DataStoreApiError(f"data-store returned {response.status_code} for {path}")
+        if not isinstance(body, dict):
+            raise DataStoreApiError(f"data-store returned a malformed response for {path}")
+        return body
+
+
+def _path(segment: str) -> str:
+    """A user-typed ticker, quoted so it stays one path segment ("a/b" can't reach another
+    route). data-store whitelists the symbol itself; this only keeps the URL what it says."""
+    return quote(segment, safe="")
+
+
+def _parse(cls, body, *, what: str):
+    try:
+        return cls(**{field.name: body[field.name] for field in fields(cls)})
+    except (KeyError, TypeError) as exc:
+        raise DataStoreApiError(f"data-store returned a malformed {what}: {exc}") from exc

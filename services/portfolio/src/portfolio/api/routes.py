@@ -22,6 +22,9 @@ from fastapi import (
     File,
     Form,
     HTTPException,
+)
+from fastapi import Path as PathParam
+from fastapi import (
     Query,
     Request,
     Response,
@@ -40,9 +43,14 @@ from portfolio.api.models import (
     RebuildRequest,
     RebuildReturnsResponse,
     ReturnResponse,
+    TickerLookupResponse,
     TickerMappingResponse,
     TickerMappingSetRequest,
     TickerMappingWriteResponse,
+    TrackedTickerAddRequest,
+    TrackedTickerAddResponse,
+    TrackedTickerResponse,
+    TrackedTickerUpdateRequest,
     TransactionCreateRequest,
     TransactionDeleteResponse,
     TransactionResponse,
@@ -205,6 +213,58 @@ def list_all_unmapped_instruments(settings: Settings = Depends(get_settings)) ->
 def list_tickers(settings: Settings = Depends(get_settings)) -> list[str]:
     """data-store's ticker list, passed through so web only ever talks to portfolio."""
     return jobs.get_tickers(settings=settings)
+
+
+# --- tracked tickers ---
+#
+# Passed through to data-store, so web only ever talks to portfolio. Whether the requester is an
+# admin (and so not limited) is web's call, made in `enforce_limit`; like every other route here,
+# these trust a caller holding the internal secret. data-store's refusals keep their own status
+# code (TickerRequestRefused), so web can tell "not found" from "over the limit".
+
+
+@router.get("/instruments/tickers/{ticker}/lookup", response_model=TickerLookupResponse)
+def lookup_ticker(
+    ticker: str = PathParam(min_length=1, max_length=40), settings: Settings = Depends(get_settings)
+) -> dict:
+    return jobs.get_ticker_lookup(ticker=ticker, settings=settings)
+
+
+@router.post("/instruments/tracked-tickers", response_model=TrackedTickerAddResponse)
+def add_tracked_ticker(
+    body: TrackedTickerAddRequest, response: Response, settings: Settings = Depends(get_settings)
+) -> dict:
+    result = jobs.run_add_tracked_ticker(
+        ticker=body.ticker,
+        requested_by=body.requested_by,
+        enforce_limit=body.enforce_limit,
+        settings=settings,
+    )
+    response.status_code = 201 if result["created"] else 200
+    return result
+
+
+@router.get("/instruments/tracked-tickers", response_model=list[TrackedTickerResponse])
+def list_tracked_tickers(
+    requested_by: UUID | None = Query(None),
+    status: list[str] | None = Query(None),
+    ticker: list[str] | None = Query(None),
+    settings: Settings = Depends(get_settings),
+) -> list[dict]:
+    return jobs.get_tracked_tickers(
+        requested_by=requested_by, statuses=status, tickers=ticker, settings=settings
+    )
+
+
+@router.patch("/instruments/tracked-tickers/{ticker}", response_model=TrackedTickerResponse)
+def update_tracked_ticker(
+    body: TrackedTickerUpdateRequest,
+    ticker: str = PathParam(min_length=1, max_length=20),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    return jobs.run_update_tracked_ticker(
+        ticker=ticker, enabled=body.enabled, retry=body.retry, settings=settings
+    )
 
 
 # --- ticker mappings ---

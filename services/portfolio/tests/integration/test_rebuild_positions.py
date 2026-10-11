@@ -215,3 +215,23 @@ def test_an_unmapped_instrument_blocks_its_rebuild_and_exits_nonzero(pg_connect,
         cur.execute("SELECT COUNT(*) FROM position_snapshots")
         (count,) = cur.fetchone()
     assert count == 0
+
+
+def test_accounts_holding_tickers_finds_every_account_with_a_snapshot_for_them(pg_connect):
+    # What the ready-ticker sweep (TK-10) rebuilds: the accounts whose positions include a
+    # ticker that has just become ready -- across users, since one ticker serves everyone.
+    from portfolio import pipeline
+
+    alice, bob = uuid.uuid4(), uuid.uuid4()
+    _add_account(alice, label="main")
+    _add_account(alice, label="other")
+    _add_account(bob, label="isa")
+    _add_buy(alice, account_label="main", ref="a1")
+    _add_buy(bob, account_label="isa", ref="b1")
+
+    with pg_connect() as conn:
+        holding = pipeline.list_accounts_holding(conn, tickers=["IWDA.AS", "NOT.HELD"])
+        nobody = pipeline.list_accounts_holding(conn, tickers=["NOT.HELD"])
+
+    assert sorted(holding) == sorted([(alice, "main"), (bob, "isa")])
+    assert nobody == []
