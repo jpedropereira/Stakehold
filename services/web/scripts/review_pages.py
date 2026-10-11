@@ -55,6 +55,9 @@ PAGES = [
     Page("accounts-delete-dialog", "/accounts", "admin", click="a[data-confirm]"),
     Page("accounts-delete", "/accounts/delete?account=main", "admin"),
     Page("portfolio", "/portfolio?account=main", "admin"),
+    Page(
+        "portfolio-growth", "/portfolio?account=main", "admin", click="[data-chart-view=growth_pct]"
+    ),
     Page("transactions", "/transactions?account=main", "admin"),
     Page(
         "transactions-delete-dialog",
@@ -186,6 +189,7 @@ def _fakes():
     from web.portfolio_client.base import (
         Account,
         Broker,
+        GrowthPoint,
         Position,
         Return,
         TickerLookup,
@@ -245,6 +249,17 @@ def _fakes():
                 on = today - timedelta(days=back)
                 rows.append(latest(ticker, quantity, cost, Decimal(value) * drift, on))
         return rows
+
+    def growth():
+        """A year of growth since inception on the same dates, from a loss to a gain, so the
+        Growth % view shows both colors."""
+        return [
+            GrowthPoint(
+                today - timedelta(days=back),
+                Decimal(str(round(0.12 - back / 2000 + 0.05 * math.sin(back / 30), 6))),
+            )
+            for back in range(365, -1, -1)
+        ]
 
     def tracked(ticker, name, status, *, origin="config", requested_by=None, error=None):
         requested = datetime(2026, 9, 1, tzinfo=timezone.utc)
@@ -338,6 +353,9 @@ def _fakes():
 
         async def list_returns(self, *, user_id, account_label):
             return history()
+
+        async def list_growth(self, *, user_id, account_label):
+            return growth()
 
         async def list_transactions(self, *, user_id, account_label):
             return [
