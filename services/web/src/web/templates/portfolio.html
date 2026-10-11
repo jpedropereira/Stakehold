@@ -25,6 +25,11 @@
     <p class="tile-value">{{ delta(summary.total_return_eur) }} {{ delta(summary.total_return_pct, "pct") }}</p>
   </div>
   <div class="tile">
+    {# Time-weighted: money added or taken out doesn't move it, unlike the total return's %. #}
+    <p class="tile-label">Growth since inception</p>
+    <p class="tile-value">{{ delta(growth_pct, "pct") }}</p>
+  </div>
+  <div class="tile">
     <p class="tile-label">Dividends received</p>
     <p class="tile-value"><span class="mono">{{ summary.dividends_received_eur | money }}</span></p>
   </div>
@@ -88,6 +93,9 @@
     <div class="chart-toggle" role="group" aria-label="Chart view">
       <button type="button" class="btn btn-ghost" data-chart-view="total_return_eur" aria-pressed="true">Total return</button>
       <button type="button" class="btn btn-ghost" data-chart-view="market_value_eur" aria-pressed="false">Market value</button>
+      {% if growth_pct is not none %}
+      <button type="button" class="btn btn-ghost" data-chart-view="growth_pct" aria-pressed="false">Growth %</button>
+      {% endif %}
     </div>
     <div class="chart-toggle" role="group" aria-label="Date range">
       {% for months, label in [(1, "1M"), (6, "6M"), (12, "1Y"), (0, "All")] %}

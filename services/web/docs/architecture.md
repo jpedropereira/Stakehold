@@ -228,6 +228,14 @@ this file for size. It counts as part of this document under `.claude/rules/arch
   positions) for the "current holdings" table, but keeps a negative quantity visible — that's a
   replay anomaly `positions/calculator.py` warns about but still computes, not a modeled short
   position, and hiding it would hide the thing a user most needs to notice.
+- **Growth since inception comes from `portfolio`, not from `portfolio_view`.** Unlike the euro
+  series, it can't be built from `/returns` alone: a time-weighted return has to take out the
+  money each buy or sell moved, and turning a transaction's ISIN or symbol into the ticker its
+  rows are under is `portfolio`'s ticker mappings. So `GET /returns/growth` returns one
+  account-level series and `build_chart_payload` only joins it onto the aggregated points by
+  date. A date it doesn't cover gets `null`, drawn as a gap, never as zero. It is a separate
+  call that degrades on its own, like the other four. The "Total return" tile's % is unchanged
+  (return over current cost basis); the two answer different questions and both are shown.
 - **`GET /portfolio` is per-account, read-only, and never triggers a rebuild.** Every `portfolio`
   positions/returns endpoint is `account_label`-scoped with no cross-account aggregation endpoint,
   so the view is one page per account (linked from `accounts.html`); a cross-account "whole
@@ -352,7 +360,7 @@ this file for size. It counts as part of this document under `.claude/rules/arch
 | `POST /accounts/delete` | `require_user`, CSRF-checked; posted by both the dialog and the page. Calls `portfolio`'s `DELETE /accounts` with the visitor's own `user_id`, which removes the account and everything recorded in it, then redirects to `/accounts?deleted=1&transactions=<transactions_deleted>`. Nothing is rebuilt afterwards, so there are no rebuild statuses. A 404 (`AccountNotFound`) redirects with `deleted=0`; any other failure, a CSRF mismatch included, re-renders the confirmation page with the error |
 | `GET /transactions/delete` | `require_user`; required `account` and `ref` query params (`ref` is the row's `broker_transaction_ref`, which with the account is what identifies a transaction to `portfolio`). The no-JS confirmation page each Delete link on the log points to (`api/deletion.py`): the transaction's date, type, instrument, amount and reference, a "can't be undone" warning, and a form posting to `POST /transactions/delete`. `portfolio` has no single-transaction read, so the account's log is fetched (with `GET /accounts` for the header, concurrently) and searched. An unknown account is a 404 like the log's; a row that's gone redirects to the log with `deleted=0`; a failed fetch shows a notice and no form, since the visitor would be confirming a delete they can't see. With JS, `confirm_dialog.js` opens the same confirmation as a dialog on the log instead (see [`ui-architecture.md`](ui-architecture.md)) |
 | `POST /transactions/delete` | `require_user`, CSRF-checked; posted by both the dialog and the page. Calls `portfolio`'s `DELETE /transactions` with the visitor's own `user_id`, then redirects to `/transactions?account=<label>&deleted=1&positions=<status>&returns=<status>`. POST rather than DELETE because a plain HTML form can't send DELETE. A 404 (the account or the row is gone; `TransactionNotFound`) redirects with `deleted=0` rather than showing an error: the visitor wanted the row gone. Any other failure, a CSRF mismatch included, re-renders the confirmation page with the error, so a delete started from the dialog can be retried from there |
-| `GET /portfolio` | `require_user`; required `account` query param; fetches `portfolio`'s `GET /positions`, `GET /returns`, `GET /returns/latest` and `GET /instruments/unmapped` concurrently. Renders a "Prices as of" line and summary tiles (market value, cost basis, total return € and %, dividends; `portfolio_view.summarize_latest_returns`), a holdings table of open positions joined to their latest return row (quantity, average cost, market value, weight, unrealized return; `portfolio_view.build_holdings`), and a Chart.js chart of the per-ticker series aggregated into one portfolio-level series (`portfolio_view.aggregate_portfolio_returns`), with a total return / market value toggle and date ranges. `GET /accounts` is fetched concurrently for the account header. `AccountNotFound` on any call, or a label missing from a successfully loaded account list, renders `account_not_found.html` with a 404; any other failure degrades only the part that call feeds, mirroring `GET /accounts`'s own pattern. Pending states: "Waiting for prices" on a holding with no return row, and a notice listing the instruments waiting for a ticker mapping at this account's broker (UI-7). No writes, no rebuild trigger. |
+| `GET /portfolio` | `require_user`; required `account` query param; fetches `portfolio`'s `GET /positions`, `GET /returns`, `GET /returns/latest`, `GET /returns/growth` and `GET /instruments/unmapped` concurrently. Renders a "Prices as of" line and summary tiles (market value, cost basis, total return € and %, growth since inception, dividends; `portfolio_view.summarize_latest_returns`, and the last growth point), a holdings table of open positions joined to their latest return row (quantity, average cost, market value, weight, unrealized return; `portfolio_view.build_holdings`), and a Chart.js chart of the per-ticker series aggregated into one portfolio-level series (`portfolio_view.aggregate_portfolio_returns`), with growth joined on by date (`portfolio_view.build_chart_payload`), a total return / market value / growth % toggle and date ranges. A failed growth call shows the tile as "—" and drops the Growth % button, not the chart. `GET /accounts` is fetched concurrently for the account header. `AccountNotFound` on any call, or a label missing from a successfully loaded account list, renders `account_not_found.html` with a 404; any other failure degrades only the part that call feeds, mirroring `GET /accounts`'s own pattern. Pending states: "Waiting for prices" on a holding with no return row, and a notice listing the instruments waiting for a ticker mapping at this account's broker (UI-7). No writes, no rebuild trigger. |
 
 Every POST error (wrong credentials, a duplicate email, a tripped throttle, `auth`/`portfolio`
 being unreachable, a CSRF mismatch, or a `portfolio` validation failure) re-renders the form with
@@ -403,7 +411,10 @@ branded page with its own status, and an unhandled exception a branded 500 (UI-1
   that doesn't resolve and a reference that isn't in it alike, and either way there is nothing of
   the visitor's to delete, so the client maps every 404 on this call to that one error rather than
   guessing from the message. The account delete added `delete_account` (`DELETE /accounts`) and
-  its `AccountDeleteResult`; its 404 is the existing `AccountNotFound`.
+  its `AccountDeleteResult`; its 404 is the existing `AccountNotFound`. The growth-since-inception
+  view added `list_growth` (`GET /returns/growth`) and its `GrowthPoint`: one account-level
+  series `portfolio` computes, since its money flows need `portfolio`'s ticker mappings. A 404
+  is the existing `AccountNotFound`.
 - `rebuild_outcome.py` (UI-7) — pure. Turns the two rebuild statuses into the confirmation
   banner's one sentence; see "Key decisions".
 - `portfolio_view.py` (task 12) — pure, I/O-free reshaping of what `routes.py` fetches for
@@ -417,11 +428,15 @@ branded page with its own status, and an unhandled exception a branded 500 (UI-1
 - `api/overview.py` (UI-11) — `GET /`, on its own router (like `api/theme.py`) because
   `routes.py` is near the 64KB file limit. It renders through `routes._render`, so the
   `_finish` header merge stays in one place.
+- `api/portfolio_page.py` — `GET /portfolio`, one account's holdings, tiles and chart, on its
+  own router for the same file-size reason. Moved out of `routes.py` unchanged when the growth
+  view was added; it still renders through `routes._render` and shares `routes.py`'s
+  account-page header helpers with the transactions and import pages.
 - `api/tickers.py` (TK-8) — the Tickers pages, on their own router for the same file-size
   reason, rendering through `routes.py`'s helpers so CSRF and cookie handling stay identical.
 - `ticker_status.py` (TK-8/TK-9) — how a tracked ticker's status reads (labels, a holding's
   price note) and the degrading status lookup the portfolio page uses. Its own module so
-  `routes.py` and `api/tickers.py` share it without importing each other.
+  `api/portfolio_page.py` and `api/tickers.py` share it without importing each other.
 - `api/deletion.py` — the deletes: `GET`/`POST /transactions/delete` and
   `GET`/`POST /accounts/delete`, on their own router for the same reason as `api/overview.py`,
   rendering, redirecting and checking CSRF through `routes.py`'s helpers.

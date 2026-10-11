@@ -5,7 +5,8 @@ the /portfolio view: filtering closed positions out of a "current holdings" list
 per-ticker daily return series into one portfolio-level series for the chart
 (portfolio/docs/architecture.md's "Returns are served per ticker" note explicitly leaves this to
 task 12), (UI-6) the summary tiles and the holdings table built from /returns/latest, and
-(UI-11) the home overview's per-account rows and cross-account totals. No I/O, no FastAPI, no
+(UI-11) the home overview's per-account rows and cross-account totals, and the chart's data
+island, with portfolio's time-weighted growth joined on. No I/O, no FastAPI, no
 httpx -- mirrors how portfolio/returns/calculator.py is a pure function tested in isolation.
 """
 
@@ -14,7 +15,13 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 
-from web.portfolio_client.base import Account, Position, Return, UnmappedInstrument
+from web.portfolio_client.base import (
+    Account,
+    GrowthPoint,
+    Position,
+    Return,
+    UnmappedInstrument,
+)
 
 _ZERO = Decimal("0")
 
@@ -106,6 +113,33 @@ def aggregate_portfolio_returns(returns: Sequence[Return]) -> list[PortfolioRetu
         )
 
     return points
+
+
+def build_chart_payload(
+    points: Sequence[PortfolioReturnPoint], growth: Sequence[GrowthPoint]
+) -> list[dict]:
+    """The chart's data island (static/portfolio_chart.js): one entry per aggregated point, with
+    portfolio's growth since inception for that date joined on.
+
+    Growth is a separate read computed by portfolio, so it is joined by date, never by position.
+    A date it doesn't cover (the growth call failed, or the two reads straddled a rebuild) gets
+    None, which the chart draws as a gap rather than as zero. Floats, because this is JSON for
+    a canvas; the tiles keep the Decimals.
+    """
+    growth_by_date = {g.price_date: g.growth_pct for g in growth}
+    return [
+        {
+            "date": point.price_date.isoformat(),
+            "market_value_eur": float(point.market_value_eur),
+            "total_return_eur": float(point.total_return_eur),
+            "growth_pct": (
+                None
+                if point.price_date not in growth_by_date
+                else float(growth_by_date[point.price_date])
+            ),
+        }
+        for point in points
+    ]
 
 
 def summarize_latest_returns(latest: Sequence[Return]) -> PortfolioReturnPoint | None:

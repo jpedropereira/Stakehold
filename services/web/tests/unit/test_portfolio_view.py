@@ -1,12 +1,19 @@
 from datetime import date
 from decimal import Decimal
 
-from web.portfolio_client.base import Account, Position, Return, UnmappedInstrument
+from web.portfolio_client.base import (
+    Account,
+    GrowthPoint,
+    Position,
+    Return,
+    UnmappedInstrument,
+)
 from web.portfolio_view import (
     AccountOverview,
     HoldingRow,
     PortfolioReturnPoint,
     aggregate_portfolio_returns,
+    build_chart_payload,
     build_holdings,
     filter_open_positions,
     summarize_accounts,
@@ -743,3 +750,67 @@ def test_summarize_accounts_prices_as_of_is_the_newest_accounts_date():
     _, totals = summarize_accounts([(_account("a", 1), older), (_account("b", 2), newer)])
 
     assert totals.price_date == date(2026, 10, 6)
+
+
+# --- build_chart_payload ---
+
+
+def _point(price_date, market_value, total_return):
+    return PortfolioReturnPoint(
+        price_date=price_date,
+        market_value_eur=Decimal(market_value),
+        cost_basis_eur=Decimal("1000"),
+        dividends_received_eur=Decimal("0"),
+        total_return_eur=Decimal(total_return),
+        total_return_pct=None,
+    )
+
+
+def test_chart_payload_joins_growth_onto_each_date():
+    points = [
+        _point(date(2026, 1, 5), "1000", "0"),
+        _point(date(2026, 1, 6), "1100", "100"),
+    ]
+    growth = [
+        GrowthPoint(price_date=date(2026, 1, 5), growth_pct=Decimal("0E-8")),
+        GrowthPoint(price_date=date(2026, 1, 6), growth_pct=Decimal("0.12345678")),
+    ]
+
+    assert build_chart_payload(points, growth) == [
+        {
+            "date": "2026-01-05",
+            "market_value_eur": 1000.0,
+            "total_return_eur": 0.0,
+            "growth_pct": 0.0,
+        },
+        {
+            "date": "2026-01-06",
+            "market_value_eur": 1100.0,
+            "total_return_eur": 100.0,
+            "growth_pct": 0.12345678,
+        },
+    ]
+
+
+def test_chart_payload_has_no_growth_for_a_date_growth_does_not_cover():
+    # e.g. the growth call failed, or the two reads straddled a rebuild.
+    points = [_point(date(2026, 1, 5), "1000", "0"), _point(date(2026, 1, 6), "1100", "100")]
+    growth = [GrowthPoint(price_date=date(2026, 1, 6), growth_pct=Decimal("0.1"))]
+
+    payload = build_chart_payload(points, growth)
+
+    assert [p["growth_pct"] for p in payload] == [None, 0.1]
+
+
+def test_chart_payload_ignores_growth_for_a_date_with_no_chart_point():
+    points = [_point(date(2026, 1, 6), "1100", "100")]
+    growth = [
+        GrowthPoint(price_date=date(2026, 1, 5), growth_pct=Decimal("0")),
+        GrowthPoint(price_date=date(2026, 1, 6), growth_pct=Decimal("0.1")),
+    ]
+
+    assert [p["date"] for p in build_chart_payload(points, growth)] == ["2026-01-06"]
+
+
+def test_chart_payload_of_nothing_is_empty():
+    assert build_chart_payload([], []) == []
