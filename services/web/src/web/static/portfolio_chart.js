@@ -3,7 +3,9 @@ document.addEventListener("DOMContentLoaded", () => {
   const dataEl = document.getElementById("returns-chart-data");
   if (!canvas || !dataEl) return;
 
-  // [{date: "YYYY-MM-DD", market_value_eur, total_return_eur}], ascending by date.
+  // [{date: "YYYY-MM-DD", market_value_eur, total_return_eur, growth_pct}], ascending by date.
+  // growth_pct is a fraction (0.1234 is +12.34%), or null on a date portfolio's growth didn't
+  // cover; Chart.js draws a null as a gap.
   const points = JSON.parse(dataEl.textContent);
 
   // Mirrors web/formatting.py's money/signed_money (UI-5): en grouping, a € prefix, a true
@@ -19,11 +21,38 @@ document.addEventListener("DOMContentLoaded", () => {
     return `${sign}€${magnitude}`;
   };
 
-  // The two views the toggle switches between. Total return is a delta, so it's signed and its
-  // line is gain/loss colored; market value is a level, so it's neither.
+  // Mirrors web/formatting.py's pct: a fraction as a signed percentage, `0.0184` → `+1.84%`.
+  // Axis ticks pass minDigits 0 so a step like 2.5% isn't padded to 2.50%.
+  const formatPct = (value, { minDigits = 2 } = {}) => {
+    const magnitude = Math.abs(value * 100).toLocaleString("en-US", {
+      minimumFractionDigits: minDigits,
+      maximumFractionDigits: 2,
+    });
+    const isZero = Number(magnitude.replace(/,/g, "")) === 0;
+    const sign = isZero ? "" : value < 0 ? MINUS : "+";
+    return `${sign}${magnitude}%`;
+  };
+
+  // The views the toggle switches between. Total return and growth are deltas, so they're
+  // signed and their line is gain/loss colored; market value is a level, so it's neither.
+  // Growth is time-weighted since inception: each point is the growth from the first priced day
+  // to that date, so a shorter range crops the line rather than restarting it at zero.
   const VIEWS = {
-    total_return_eur: { signed: true, label: "Portfolio total return over time" },
-    market_value_eur: { signed: false, label: "Portfolio market value over time" },
+    total_return_eur: {
+      signed: true,
+      label: "Portfolio total return over time",
+      format: (value, digits) => formatEur(value, { signed: true, digits }),
+    },
+    market_value_eur: {
+      signed: false,
+      label: "Portfolio market value over time",
+      format: (value, digits) => formatEur(value, { digits }),
+    },
+    growth_pct: {
+      signed: true,
+      label: "Portfolio growth since inception over time",
+      format: (value, digits) => formatPct(value, { minDigits: digits }),
+    },
   };
   const state = { view: "total_return_eur", months: 0 };
 
@@ -44,7 +73,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Undefined falls back to the dataset's own (neutral) borderColor.
   const segmentColor = (ctx) => {
-    if (state.view !== "total_return_eur") return undefined;
+    if (!VIEWS[state.view].signed) return undefined;
     return ctx.p0.parsed.y >= 0 && ctx.p1.parsed.y >= 0 ? colors.gain : colors.loss;
   };
 
@@ -76,7 +105,8 @@ document.addEventListener("DOMContentLoaded", () => {
         legend: { display: false },
         tooltip: {
           callbacks: {
-            label: (ctx) => formatEur(ctx.parsed.y, { signed: VIEWS[state.view].signed }),
+            label: (ctx) =>
+              ctx.parsed.y === null ? "—" : VIEWS[state.view].format(ctx.parsed.y, 2),
           },
         },
       },
@@ -85,8 +115,7 @@ document.addEventListener("DOMContentLoaded", () => {
         y: {
           grid: {},
           ticks: {
-            callback: (value) =>
-              formatEur(value, { signed: VIEWS[state.view].signed, digits: 0 }),
+            callback: (value) => VIEWS[state.view].format(value, 0),
           },
         },
       },

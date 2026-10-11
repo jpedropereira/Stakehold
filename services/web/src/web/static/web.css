@@ -863,7 +863,8 @@ img.logo-on-dark {
 /* Four headline figures, wrapping to two rows (or one column) as the width shrinks. */
 .summary-tiles {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  /* 160px lets the account page's five tiles share one row at the 880px card width. */
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: var(--space-4);
   width: 100%;
   max-width: 880px;

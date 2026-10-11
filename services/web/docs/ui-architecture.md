@@ -138,11 +138,15 @@ described here updates this file in the same change.
   restyle itself, so it re-reads them and redraws on `stakehold:themechange` (the header toggle)
   and on a `prefers-color-scheme` change.
 - **The chart's view toggle and date ranges (UI-6) work client-side over the one data island.**
-  The island carries `market_value_eur` and `total_return_eur` per day, so switching between
-  "Total return" and "Market value", or between 1M / 6M / 1Y / All, never makes a request. A range
+  The island carries `market_value_eur`, `total_return_eur` and `growth_pct` per day, so
+  switching between "Total return", "Market value" and "Growth %", or between 1M / 6M / 1Y / All,
+  never makes a request. A range
   counts back from the *last data point's* date, not from today, so an account whose prices
   stopped updating still shows its final stretch rather than an empty chart. Total return is a
-  delta, so its line keeps the gain/loss segment colors. Market value is a level, so it's drawn in
+  delta, so its line keeps the gain/loss segment colors, and so does growth. Growth counts from
+  inception, so a shorter range crops its line rather than restarting it at zero; a `null` (a
+  date growth didn't cover) is a gap. The Growth % button is only rendered when growth loaded,
+  and its tick and tooltip labels mirror `formatting.pct`. Market value is a level, so it's drawn in
   `--text`, because forest and oxblood mean gains and losses only, and gold is kept for controls.
   The buttons are in the template, not built by the script. They ship `hidden`, because without JS
   they'd do nothing, and the script reveals them. Building them in JS would also put their classes

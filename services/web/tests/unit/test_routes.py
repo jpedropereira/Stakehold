@@ -212,6 +212,9 @@ class FakePortfolioClient:
         self.calls.append(("list_latest_returns", user_id, account_label))
         return []
 
+    async def list_growth(self, *, user_id, account_label):
+        return []
+
     async def list_ticker_mappings(self):
         self.calls.append(("list_ticker_mappings",))
         if self.list_ticker_mappings_error:

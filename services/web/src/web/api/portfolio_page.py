@@ -21,6 +21,7 @@ from web.api.routes import (
 )
 from web.auth_client.base import AuthUser
 from web.portfolio_client.base import (
+    GrowthPoint,
     PortfolioClient,
     Position,
     Return,
@@ -29,6 +30,7 @@ from web.portfolio_client.base import (
 from web.portfolio_client.errors import AccountNotFound, PortfolioClientError
 from web.portfolio_view import (
     aggregate_portfolio_returns,
+    build_chart_payload,
     build_holdings,
     filter_open_positions,
     summarize_latest_returns,
@@ -53,6 +55,7 @@ class _PortfolioViewData:
     returns: list[Return]
     latest_returns: list[Return]
     unmapped: list[UnmappedInstrument]
+    growth: list[GrowthPoint]
     # Which calls degraded, so the page doesn't read a failed call's empty list as "none yet".
     failed: frozenset[str]
     error: str | None
@@ -61,11 +64,11 @@ class _PortfolioViewData:
 async def _load_portfolio_view(
     portfolio_client: PortfolioClient, user_id: str, account_label: str
 ) -> _PortfolioViewData:
-    """Fetches this account's positions, return history and latest returns, plus the user's
-    unmapped instruments (UI-7), concurrently, tolerating any of them failing independently --
-    except AccountNotFound, which is re-raised rather than degraded: a bad account_label has
-    nothing partial to show for any call, so the caller renders a distinct 404 instead of the
-    generic "service unavailable" banner."""
+    """Fetches this account's positions, return history, latest returns and growth since
+    inception, plus the user's unmapped instruments (UI-7), concurrently, tolerating any of them
+    failing independently -- except AccountNotFound, which is re-raised rather than degraded: a
+    bad account_label has nothing partial to show for any call, so the caller renders a distinct
+    404 instead of the generic "service unavailable" banner."""
     calls = {
         "positions": portfolio_client.list_positions(user_id=user_id, account_label=account_label),
         "returns": portfolio_client.list_returns(user_id=user_id, account_label=account_label),
@@ -73,6 +76,7 @@ async def _load_portfolio_view(
             user_id=user_id, account_label=account_label
         ),
         "unmapped instruments": portfolio_client.list_unmapped_instruments(user_id=user_id),
+        "growth": portfolio_client.list_growth(user_id=user_id, account_label=account_label),
     }
     results = dict(
         zip(calls, await asyncio.gather(*calls.values(), return_exceptions=True), strict=True)
@@ -94,6 +98,7 @@ async def _load_portfolio_view(
         returns=results["returns"],
         latest_returns=results["latest returns"],
         unmapped=results["unmapped instruments"],
+        growth=results["growth"],
         failed=frozenset(failed),
         error=_PORTFOLIO_VIEW_ERROR if failed else None,
     )
@@ -131,14 +136,6 @@ async def portfolio_page(
     awaiting = [h.canonical_ticker for h in holdings if prices_known and h.awaiting_prices]
     statuses = await load_statuses(portfolio_client, awaiting)
     return_points = aggregate_portfolio_returns(view.returns)
-    chart_payload = [
-        {
-            "date": point.price_date.isoformat(),
-            "market_value_eur": float(point.market_value_eur),
-            "total_return_eur": float(point.total_return_eur),
-        }
-        for point in return_points
-    ]
     return _render(
         request,
         response,
@@ -157,7 +154,9 @@ async def portfolio_page(
                 view.unmapped, header["account"].broker if header["account"] else None
             ),
             "return_points": return_points,
-            "chart_payload": chart_payload,
+            "chart_payload": build_chart_payload(return_points, view.growth),
+            # The latest growth figure for its tile; None (shown as "—") if growth didn't load.
+            "growth_pct": view.growth[-1].growth_pct if view.growth else None,
             "error": view.error,
             **_account_page_context("holdings"),
             **header,
