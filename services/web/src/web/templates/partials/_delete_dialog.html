@@ -4,17 +4,18 @@
 
     The script copies the clicked link's query string into the hidden fields named in `fields`
     (the page's form posts the same names) and its data-confirm-summary into the summary line.
-    The caller supplies the warning's content, starting with its <strong> lead.
+    The caller supplies the warning's content, starting with its <strong> lead. The summary is
+    set in the figures font unless `summary_mono` is false (a sentence rather than a figure).
 
     Cancel comes first and takes the focus when the dialog opens, so an Enter pressed out of
     habit doesn't delete. The confirm button is secondary, not the gold primary: gold means
     "act here" (charter chapter II), and oxblood means a loss. -#}
-{% macro delete_dialog(id, action, heading, csrf_token, fields) -%}
+{% macro delete_dialog(id, action, heading, csrf_token, fields, summary_mono=true) -%}
 {% set warning = caller() %}
 <dialog class="confirm-dialog" id="{{ id }}" aria-labelledby="{{ id }}-heading">
   <form method="post" action="{{ action }}">
     <h2 id="{{ id }}-heading">{{ heading }}</h2>
-    <p class="confirm-summary mono" data-confirm-summary></p>
+    <p class="confirm-summary{% if summary_mono %} mono{% endif %}" data-confirm-summary></p>
     {% call banner("warning") %}{{ warning }}{% endcall %}
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     {% for name in fields %}

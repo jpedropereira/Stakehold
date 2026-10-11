@@ -56,6 +56,10 @@ class FakePortfolioClient:
     def __init__(self):
         self.write_error: Exception = InvalidPortfolioRequest("fx_rate must be positive")
 
+    # The accounts page counts each account's transactions for its Delete warning.
+    async def list_transactions(self, *, user_id, account_label):
+        return []
+
     async def list_accounts(self, *, user_id):
         return [
             Account(id=1, account_label="main", broker="acme", created_at="2026-01-01T00:00:00Z")
@@ -122,12 +126,16 @@ def _logged_in(test_client, fake_auth):
 
 
 _TEMPLATE = re.compile(r"<template\b.*?</template>", re.DOTALL)
+# A delete's confirmation <dialog> is closed until a Delete link opens it, so its warning
+# isn't shown either.
+_DIALOG = re.compile(r"<dialog\b.*?</dialog>", re.S)
 
 
 def _banners(html: str) -> list[tuple[str, str]]:
     """(kind, plain text) for every banner the page shows. Not those inside a <template>:
-    base.html carries one on every page for htmx-error-swap.js, and it isn't shown."""
-    shown = _TEMPLATE.sub("", html)
+    base.html carries one on every page for htmx-error-swap.js, and it isn't shown. Nor those
+    in a closed <dialog>."""
+    shown = _DIALOG.sub("", _TEMPLATE.sub("", html))
     return [
         (kind, " ".join(html_lib.unescape(_TAG.sub("", body)).split()))
         for kind, body in _BANNER.findall(shown)

@@ -62,6 +62,7 @@ from web.portfolio_view import (
 from web.rebuild_outcome import rebuild_outcome
 from web.settings import Settings
 from web.ticker_status import holding_price_note, load_statuses
+from web.transaction_counts import load_transaction_counts
 
 logger = logging.getLogger(__name__)
 
@@ -192,6 +193,7 @@ _ERROR_LEADS = {
     "tickers_new.html": "Couldn't add the ticker.",
     "tickers.html": "Couldn't change the ticker.",
     "transaction_delete.html": "Couldn't delete.",
+    "account_delete.html": "Couldn't delete.",
 }
 
 
@@ -903,6 +905,13 @@ async def accounts_page(
             # be hidden in it.
             "list_error": list_error,
             "error": None,
+            # For each Delete link's warning (api/deletion.py has the delete itself).
+            "transaction_counts": await load_transaction_counts(
+                portfolio_client, user.user_id, [a.account_label for a in accounts]
+            ),
+            # Set by deletion.py's redirect: 1 if it deleted the account, 0 if it was gone.
+            "deleted": _query_int(request, "deleted"),
+            "deleted_transactions": _query_int(request, "transactions") or 0,
         },
     )
 
@@ -933,7 +942,15 @@ async def accounts_submit(
         accounts, brokers, list_error = await _list_accounts_and_brokers(
             portfolio_client, user.user_id
         )
-        return {"accounts": accounts, "brokers": brokers, "list_error": list_error}
+        counts = await load_transaction_counts(
+            portfolio_client, user.user_id, [a.account_label for a in accounts]
+        )
+        return {
+            "accounts": accounts,
+            "brokers": brokers,
+            "list_error": list_error,
+            "transaction_counts": counts,
+        }
 
     csrf_error = await _check_csrf(
         request,

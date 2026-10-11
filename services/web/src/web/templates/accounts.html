@@ -1,5 +1,7 @@
 {% extends "base.html" %}
 {% from "partials/_banner.html" import banner %}
+{% from "partials/_account_summary.html" import account_summary %}
+{% from "partials/_delete_dialog.html" import delete_dialog %}
 {% block title %}Accounts — Stakehold{% endblock %}
 {% block content %}
 {# First run only when the list actually loaded: an outage must never read as "no accounts". #}
@@ -7,6 +9,11 @@
 <section class="card">
   <h1>Your accounts</h1>
   {% if list_error %}{% call banner("error") %}<strong>Couldn't load your accounts.</strong> {{ list_error }}{% endcall %}{% endif %}
+  {% if deleted == 1 %}
+  {% call banner("success") %}<strong>Account deleted.</strong>{% if deleted_transactions %} {{ deleted_transactions }} transaction{{ "" if deleted_transactions == 1 else "s" }} went with it.{% endif %}{% endcall %}
+  {% elif deleted == 0 %}
+  {% call banner("warning") %}<strong>Nothing deleted.</strong> That account no longer exists.{% endcall %}
+  {% endif %}
   {% if accounts|default([]) %}
   <ul class="account-list">
     {% for account in accounts %}
@@ -18,10 +25,15 @@
         <a class="btn btn-secondary" href="/transactions{{ account_query }}">Transactions</a>
         <a class="btn btn-secondary" href="/transactions/new{{ account_query }}">Add</a>
         <a class="btn btn-secondary" href="/transactions/import{{ account_query }}">Import</a>
+        {# A link to the confirmation page, which is the whole flow without JS; with it,
+           confirm_dialog.js opens the dialog below instead. #}
+        <a class="btn btn-ghost" href="/accounts/delete{{ account_query }}" data-confirm="delete-account-dialog" data-confirm-summary="{{ account_summary(account.account_label, transaction_counts.get(account.account_label)) }}">Delete<span class="visually-hidden"> {{ account.account_label }}</span></a>
       </span>
     </li>
     {% endfor %}
   </ul>
+  {% call delete_dialog("delete-account-dialog", "/accounts/delete", "Delete this account?", csrf_token, ["account"], summary_mono=false) %}<strong>This can't be undone.</strong> Its holdings and returns are deleted with it.{% endcall %}
+  <script src="/static/confirm_dialog.js" defer></script>
   {% elif first_run %}
   <p class="entry-subtitle">No accounts yet. To get started:</p>
   <ol class="first-run-steps">

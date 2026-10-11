@@ -1,0 +1,6 @@
+{#- What an account delete takes with it, in one sentence: the dialog's summary (through the
+    Delete link's data-confirm-summary) and the confirmation page both say it. `count` is None
+    when the transactions couldn't be counted, which must never read as "no transactions". -#}
+{% macro account_summary(label, count) -%}
+{% if count is none %}This deletes {{ label }} and every transaction in it.{% elif count == 0 %}This deletes {{ label }}. It has no transactions.{% elif count == 1 %}This deletes {{ label }} and its 1 transaction.{% else %}This deletes {{ label }} and its {{ count }} transactions.{% endif %}
+{%- endmacro %}

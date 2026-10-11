@@ -122,6 +122,10 @@ class FakePortfolioClient:
         self.delete_ticker_mapping_error: Exception | None = None
         self.calls: list[tuple] = []
 
+    # The accounts page counts each account's transactions for its Delete warning.
+    async def list_transactions(self, *, user_id, account_label):
+        return []
+
     async def list_accounts(self, *, user_id):
         self.list_accounts_calls += 1
         if self.list_accounts_error:

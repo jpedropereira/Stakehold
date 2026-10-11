@@ -52,6 +52,8 @@ PAGES = [
     Page("signup", "/signup", "anon"),
     Page("overview", "/", "admin"),
     Page("accounts", "/accounts", "admin"),
+    Page("accounts-delete-dialog", "/accounts", "admin", click="a[data-confirm]"),
+    Page("accounts-delete", "/accounts/delete?account=main", "admin"),
     Page("portfolio", "/portfolio?account=main", "admin"),
     Page("transactions", "/transactions?account=main", "admin"),
     Page(

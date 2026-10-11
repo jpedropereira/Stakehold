@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% from "partials/_banner.html" import banner %}
+{% from "partials/_account_summary.html" import account_summary %}
+{% block title %}Delete account — {{ account_label }} — Stakehold{% endblock %}
+{% block content %}
+{% include "partials/_account_header.html" %}
+{# The no-JS confirmation behind each account's Delete link, and where a failed delete lands.
+   The dialog on the accounts list (partials/_delete_dialog.html) says the same things. #}
+<section class="card">
+  <h1>Delete this account?</h1>
+  {% if error %}{% call banner("error") %}<strong>{{ error_lead }}</strong> {{ error }}{% endcall %}{% endif %}
+  <p class="confirm-summary">{{ account_summary(account_label, transaction_count) }}</p>
+  {% call banner("warning") %}<strong>This can't be undone.</strong> Its holdings and returns are deleted with it.{% endcall %}
+  <form method="post" action="/accounts/delete">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="account" value="{{ account_label }}">
+    <div class="confirm-actions">
+      <a class="btn btn-ghost" href="/accounts">Cancel</a>
+      <button type="submit" class="btn btn-secondary">Delete permanently</button>
+    </div>
+  </form>
+</section>
+{% endblock %}

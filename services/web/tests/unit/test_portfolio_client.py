@@ -945,3 +945,40 @@ async def test_delete_transaction_malformed_response_is_unavailable():
         await client.delete_transaction(
             user_id=USER_ID, account_label="main", broker_transaction_ref="x"
         )
+
+
+# --- deleting an account ---
+
+
+async def test_delete_account_sends_the_users_label_and_parses_the_result():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["method"] = request.method
+        captured["path"] = request.url.path
+        captured["params"] = dict(request.url.params)
+        captured["headers"] = request.headers
+        return httpx.Response(
+            200, json={"status": "ok", "accounts_deleted": 1, "transactions_deleted": 12}
+        )
+
+    result = await _client(handler).delete_account(user_id=USER_ID, account_label="my isa")
+
+    assert (captured["method"], captured["path"]) == ("DELETE", "/accounts")
+    assert captured["params"] == {"user_id": USER_ID, "account_label": "my isa"}
+    assert captured["headers"]["x-internal-secret"] == INTERNAL_SECRET
+    assert (result.accounts_deleted, result.transactions_deleted) == (1, 12)
+
+
+async def test_delete_account_maps_404_to_account_not_found():
+    client = _client(lambda request: httpx.Response(404, json={"detail": "no account"}))
+
+    with pytest.raises(AccountNotFound):
+        await client.delete_account(user_id=USER_ID, account_label="gone")
+
+
+async def test_delete_account_malformed_response_is_unavailable():
+    client = _client(lambda request: httpx.Response(200, json={"status": "ok"}))
+
+    with pytest.raises(PortfolioUnavailable):
+        await client.delete_account(user_id=USER_ID, account_label="main")
