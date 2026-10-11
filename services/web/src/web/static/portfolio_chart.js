@@ -141,6 +141,10 @@ document.addEventListener("DOMContentLoaded", () => {
       axis.ticks.color = colors.ticks;
     }
     canvas.setAttribute("aria-label", VIEWS[state.view].label);
+    // update("none") doesn't cancel the first draw's animation if it is still running, and that
+    // animation then finishes at the previous view's positions: a click in the first second left
+    // the line drawn as the old series against the new axis. Stopping it first prevents that.
+    if (!firstRender) chart.stop();
     chart.update(firstRender ? undefined : "none");
     firstRender = false;
   };
