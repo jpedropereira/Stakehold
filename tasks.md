@@ -35,6 +35,15 @@ The previous chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archi
   return history into web is what UI-11 avoided as too expensive.
 - **Chart.** The returns-over-time chart for the whole portfolio is a later task in this chunk
   (PF-5, PF-6), after the holdings table.
+- **Returns as a percentage.** The combined page offers the same percentage views as the
+  per-account page after #65:
+  - per row, unrealized and total return % over cost basis (PF-1, PF-4),
+  - for the whole portfolio, the total return % tile, plus a "Growth since inception" tile and a
+    "Growth %" chart toggle. Growth is time-weighted, so money added or taken out doesn't move it
+    (PF-5, PF-6).
+
+  Growth is computed by portfolio, as #65's `GET /returns/growth` is for one account, because
+  its money flows need `mappings.resolve`.
 
 ## Constraints that apply to every task
 
@@ -107,7 +116,8 @@ Aggregation rules:
   `unrealized_return_eur`.
 - **Matching the home page.** First check whether closed positions' dividends count in the
   per-account and home totals today. Use the same rule here, so the totals match the home
-  page's, and record it.
+  page's, and record it. #65's `docs/flows.md` notes a related gap: growth misses a dividend
+  paid after a position fully closed.
 
 Then:
 - **Pipeline.** `pipeline.list_holdings(conn, *, user_id)` resolves the user's accounts through
@@ -161,7 +171,9 @@ Files: `portfolio_client/{base,http_client}.py`; `docs/architecture.md` (endpoin
 - A new router, `api/portfolio.py`, and a "Portfolio" nav link (`nav_active="portfolio"`) placed
   between Overview and Accounts.
 - **The page shows:**
-  - the "Prices as of" line and the four summary tiles, computed from the holdings,
+  - the "Prices as of" line and the summary tiles computed from the holdings: market value,
+    cost basis, total return € and % (over cost basis), and dividends. The growth tile comes
+    with PF-6, since it needs PF-5's series,
   - the unmapped-instruments warning, covering the user's whole list rather than one broker's,
   - the holdings table: Ticker | Units | Avg cost (EUR + native) | Market value (EUR + native) |
     Weight | Unrealized € / % | Total return € / %.
@@ -185,28 +197,75 @@ Files: new `api/portfolio.py`, `api/app.py`, `portfolio_view.py`, new `templates
 
 **Status:** blocked (PF-1)
 
-`GET /returns/portfolio?user_id[&start&end]` returns one EUR point per date: summed market value,
-cost basis, dividends and total return, with the percentage recomputed. It uses a forward-fill
-over the union of dates, like web's `aggregate_portfolio_returns`, keyed on (account, ticker).
-Decide whether to forward-fill in SQL or in Python, and record why. No new table.
+`GET /returns/portfolio?user_id[&start&end]` returns one point per date with:
+- summed market value, cost basis, dividends and total return in EUR,
+- `total_return_pct`, recomputed from the sums,
+- `growth_pct`, the whole portfolio's time-weighted growth since inception.
 
-Files: `holdings/` or `returns/` (decided in the task), `pipeline.py`, `jobs.py`,
-`api/{routes,models}.py`; `docs/architecture.md`.
+One series carries both, so the chart needs one call and no join by date. #65's per-account page
+needed that join only because its euro series was built in web.
+
+**Growth across accounts.**
+- It reuses `returns/performance.py`'s `compute_growth`, run over every account's return rows
+  and `BUY`/`SELL` flows at once. It is never an average of per-account growth figures, which is
+  not a time-weighted return.
+- `compute_growth` groups rows and lands flows by `canonical_ticker` alone. Given two accounts'
+  rows, the same ticker would collapse into one forward-filled series, which is the bug UI-11
+  documented. So it must first be keyed on (account, ticker):
+  - `TradeFlow` gains `account_id`,
+  - the grouping and the flow lookup use the pair,
+  - existing `GET /returns/growth` results stay unchanged (a regression test pins this).
+- Each account's transactions resolve through `mappings.resolve` with that account's own broker,
+  as `pipeline.list_growth` does.
+- A sell in one account and a buy in another count as money out and money in. That is correct
+  for a time-weighted return, and a test should cover it.
+
+**Forward-fill** happens in Python, in the same pass `compute_growth` already makes, rather than
+in SQL. Record why. No new table.
+
+**Placement.** `pipeline.py` (51 KB) and `jobs.py` (52 KB) are near the limit, so the
+orchestration goes in `holdings/flows.py`.
+
+Tests:
+- one account, which matches `GET /returns/growth`,
+- the same ticker in two accounts,
+- money moving between accounts,
+- an account with no rows yet,
+- an integration test that checks another user's data doesn't leak in.
+
+Files: `returns/performance.py`, `holdings/flows.py`, `jobs.py`, `api/{routes,models}.py`;
+`docs/architecture.md`, `docs/flows.md`.
 
 ### PF-6. web: returns chart on `/portfolio`
 
 **Status:** blocked (PF-4, PF-5)
 
 Reuse `static/portfolio_chart.js` and the JSON data island pattern, fed from PF-5 through a new
-client method. The range and metric toggles work as on the per-account page.
+client method. The island carries `market_value_eur`, `total_return_eur` and `growth_pct`, as
+#65 defined it.
 
-Files: `portfolio_client/*`, `api/portfolio.py`, `templates/portfolio.html`;
+The toggles work as on the per-account page:
+- views: Total return, Market value, and Growth %,
+- ranges: 1M, 6M, 1Y and All.
+
+Growth figures:
+- The "Growth since inception" tile is added here, from the series' last point, because it
+  comes from the same call.
+- If the call fails, the tile shows "—" and the Growth % button is dropped, but the holdings
+  table is unaffected.
+
+Files: `portfolio_client/*`, `portfolio_view.py`, `api/portfolio.py`, `templates/portfolio.html`;
 `docs/architecture.md`, `docs/ui-architecture.md`.
 
 ## Known limitations
 
 - **Holdings merge only by `canonical_ticker`.** Different listings of one security stay as
   separate rows.
+- **Portfolio growth inherits #65's limits** (`portfolio/docs/flows.md`, "Growth since
+  inception"):
+  - a dividend paid after a full close is missed,
+  - stale rows after a failed rebuild make growth dip,
+  - rows and transactions are two separate reads.
 
 ## Deferred
 
