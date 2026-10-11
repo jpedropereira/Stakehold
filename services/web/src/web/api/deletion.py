@@ -1,14 +1,15 @@
-"""Deleting a transaction: the no-JS confirmation page and the POST that deletes.
+"""Deleting a transaction or an account: the no-JS confirmation pages and the POSTs that
+delete.
 
 On its own router, like overview.py, because routes.py is close to the repo's 64KB file limit.
 It renders and redirects through routes.py's helpers, so a cookie set earlier in the request
 (the CSRF cookie, a renewed session) still reaches the response.
 
-Each row of the transaction log links to the confirmation page. With JS, static/
-confirm_dialog.js opens a dialog on the log page instead, and the dialog's form posts the same
-fields as the page's form, so both reach the same POST. A delete can't be undone, and the
-transaction log page is the visitor's only view of the row, so the confirmation always shows
-which transaction is about to go.
+Each row of the transaction log, and each account on the accounts list, links to its
+confirmation page. With JS, static/confirm_dialog.js opens a dialog on the list instead, and
+the dialog's form posts the same fields as the page's form, so both reach the same POST. A
+delete can't be undone, so the confirmation always says what is about to go: which
+transaction, or which account and how many transactions with it.
 """
 
 import asyncio
@@ -36,6 +37,7 @@ from web.portfolio_client.errors import (
     TransactionNotFound,
 )
 from web.settings import Settings
+from web.transaction_counts import load_transaction_counts
 
 logger = logging.getLogger(__name__)
 
@@ -176,6 +178,120 @@ async def transaction_delete_submit(
         templates,
         template_name="transaction_delete.html",
         action_name="delete_transaction",
+        call=delete,
+        error_messages={},
+        on_success=on_success,
+        user=user,
+        extra_context_loader=load_page_context,
+    )
+
+
+# --- accounts ---------------------------------------------------------------------------
+
+
+async def _account_delete_context(
+    portfolio_client: PortfolioClient, user_id: str, account_label: str
+) -> dict:
+    """What account_delete.html shows: the account header and how many transactions go with the
+    account (None when they couldn't be counted, which the warning words vaguely rather than
+    as zero). The delete is still offered without a count: the account itself is known."""
+    header, counts = await asyncio.gather(
+        _account_header_context(portfolio_client, user_id, account_label),
+        load_transaction_counts(portfolio_client, user_id, [account_label]),
+    )
+    return {
+        "account_label": account_label,
+        "transaction_count": counts[account_label],
+        "hide_account_switcher": True,
+        **_account_page_context(None),
+        **header,
+    }
+
+
+@router.get("/accounts/delete")
+async def account_delete_confirm(
+    request: Request,
+    response: Response,
+    account: str = Query(..., min_length=1),
+    settings: Settings = Depends(get_settings),
+    templates=Depends(get_templates),
+    user: AuthUser = Depends(require_user),
+    portfolio_client: PortfolioClient = Depends(get_portfolio_client),
+):
+    """The confirmation page an account's Delete link opens without JS."""
+    csrf_token = ensure_csrf_cookie(request, response, cookie_secure=settings.cookie_secure)
+    context = await _account_delete_context(portfolio_client, user.user_id, account)
+    if context["account_known"] is False:
+        return _render_account_not_found(
+            request, response, templates, user=user, csrf_token=csrf_token
+        )
+    return _render(
+        request,
+        response,
+        templates,
+        "account_delete.html",
+        {"user": user, "csrf_token": csrf_token, "error": None, **context},
+    )
+
+
+@router.post("/accounts/delete")
+async def account_delete_submit(
+    request: Request,
+    response: Response,
+    # default="", not Form(...) -- see routes.accounts_submit.
+    account: str = Form(default=""),
+    csrf_token: str = Form(default=""),
+    settings: Settings = Depends(get_settings),
+    templates=Depends(get_templates),
+    user: AuthUser = Depends(require_user),
+    portfolio_client: PortfolioClient = Depends(get_portfolio_client),
+):
+    """Posted by both the dialog and the confirmation page; the same shape as the transaction
+    delete above. Back on the accounts list, the banner says how many transactions went with
+    the account. The label isn't echoed back through the query string, so a crafted link can't
+    put words in the banner."""
+
+    async def load_page_context() -> dict:
+        return await _account_delete_context(portfolio_client, user.user_id, account)
+
+    csrf_error = await _check_csrf(
+        request,
+        response,
+        settings,
+        templates,
+        "account_delete.html",
+        "delete_account",
+        csrf_token,
+        user=user,
+        extra_context_loader=load_page_context,
+    )
+    if csrf_error is not None:
+        return csrf_error
+
+    async def delete():
+        try:
+            return await portfolio_client.delete_account(
+                user_id=user.user_id, account_label=account
+            )
+        except AccountNotFound:
+            return None
+
+    def on_success(result) -> Response:
+        if result is None:
+            return _redirect(request, response, "/accounts?deleted=0")
+        return _redirect(
+            request,
+            response,
+            f"/accounts?deleted=1&transactions={result.transactions_deleted}",
+        )
+
+    return await _submit_portfolio_form(
+        request,
+        response,
+        settings,
+        templates,
+        template_name="account_delete.html",
+        action_name="delete_account",
         call=delete,
         error_messages={},
         on_success=on_success,

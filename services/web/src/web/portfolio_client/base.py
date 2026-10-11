@@ -101,6 +101,15 @@ class TransactionWriteResult:
 
 
 @dataclass(frozen=True)
+class AccountDeleteResult:
+    status: str
+    accounts_deleted: int
+    # Every transaction recorded in the account went with it. Nothing is rebuilt afterwards:
+    # the account's holdings and returns are deleted too.
+    transactions_deleted: int
+
+
+@dataclass(frozen=True)
 class TransactionDeleteResult:
     status: str
     transactions_deleted: int
@@ -224,6 +233,10 @@ class PortfolioClient(Protocol):
         content: bytes,
         content_type: str,
     ) -> TransactionWriteResult: ...
+
+    # Deletes the account and everything recorded in it. Raises AccountNotFound when the label
+    # doesn't resolve for this user.
+    async def delete_account(self, *, user_id: str, account_label: str) -> AccountDeleteResult: ...
 
     # Raises TransactionNotFound when the account or the reference doesn't resolve for this user.
     async def delete_transaction(

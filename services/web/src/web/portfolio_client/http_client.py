@@ -5,6 +5,7 @@ from urllib.parse import quote
 import httpx
 from web.portfolio_client.base import (
     Account,
+    AccountDeleteResult,
     AccountWriteResult,
     Broker,
     Position,
@@ -144,6 +145,17 @@ def _transaction_write_result(body: dict) -> TransactionWriteResult:
             transactions_saved=body["transactions_saved"],
             positions_rebuild=_opt_status(body, "positions_rebuild"),
             returns_rebuild=_opt_status(body, "returns_rebuild"),
+        )
+    except (KeyError, TypeError) as exc:
+        raise PortfolioUnavailable(f"malformed portfolio response: {exc}") from exc
+
+
+def _account_delete_result(body: dict) -> AccountDeleteResult:
+    try:
+        return AccountDeleteResult(
+            status=body["status"],
+            accounts_deleted=body["accounts_deleted"],
+            transactions_deleted=body["transactions_deleted"],
         )
     except (KeyError, TypeError) as exc:
         raise PortfolioUnavailable(f"malformed portfolio response: {exc}") from exc
@@ -501,6 +513,14 @@ class HttpPortfolioClient:
         if response.status_code != 200:
             _raise_for_status(response)
         return _ticker_mapping_write_result(_json_body(response))
+
+    async def delete_account(self, *, user_id: str, account_label: str) -> AccountDeleteResult:
+        response = await self._request(
+            "DELETE", "/accounts", params={"user_id": user_id, "account_label": account_label}
+        )
+        if response.status_code != 200:
+            _raise_for_status(response)
+        return _account_delete_result(_json_body(response))
 
     async def delete_transaction(
         self, *, user_id: str, account_label: str, broker_transaction_ref: str

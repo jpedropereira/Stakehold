@@ -675,10 +675,12 @@ img.logo-on-dark {
 }
 
 /* The links wrap as one group, so a narrow row breaks between the account and its actions
-   rather than in the middle of the actions. */
+   rather than in the middle of the actions. Centered, so the plain Delete link lines up with
+   the outlined buttons beside it. */
 .account-actions {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: var(--space-1) var(--space-3);
   margin-left: auto;
 }

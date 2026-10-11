@@ -38,6 +38,10 @@ class FakePortfolioClient:
         self.list_brokers_result: list[Broker] = [Broker(broker="acme", imports=("transactions",))]
         self.create_account_error: Exception | None = None
 
+    # The accounts page counts each account's transactions for its Delete warning.
+    async def list_transactions(self, *, user_id, account_label):
+        return []
+
     async def list_accounts(self, *, user_id):
         if self.list_accounts_error:
             raise self.list_accounts_error

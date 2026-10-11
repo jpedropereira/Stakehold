@@ -233,8 +233,9 @@ described here updates this file in the same change.
   accepts any code, so drift only makes the suggestions less useful. The fix, an endpoint
   listing supported currencies, is under Deferred in `tasks.md`.
 - **A delete is confirmed in a native `<dialog>`, with a confirmation page behind it.** Each row
-  of the transaction log has a Delete link to `GET /transactions/delete`, a full page with the
-  transaction, the warning and the form. Without JS that page is the whole flow.
+  of the transaction log has a Delete link to `GET /transactions/delete`, and each account on
+  the accounts list one to `GET /accounts/delete`: a full page with what is about to go, the
+  warning and the form. Without JS that page is the whole flow.
   `static/confirm_dialog.js` intercepts a plain click on any `[data-confirm]` link and opens the
   dialog the link names instead: it copies the link's query string into the dialog form's hidden
   fields (the page's form posts the same names, so there is no second mapping to keep in step)
@@ -246,12 +247,17 @@ described here updates this file in the same change.
   posts nothing; the script only returns focus to the link that opened it and disables the
   confirm button while the delete posts. Cancel comes first and takes the focus on open, so an
   Enter pressed out of habit doesn't delete. The copy follows chapter IV: "Delete this
-  transaction?", "This can't be undone." and what happens next, then "Delete permanently" and
-  "Cancel". Ink only: the confirm button is `.btn-secondary`, never the gold `.btn-primary`
+  transaction?" (or account), "This can't be undone." and what happens next, then "Delete
+  permanently" and "Cancel". An account's summary is a sentence, "This deletes ‹label› and its N
+  transactions.", so the visitor sees the size of what goes before confirming. The accounts list
+  counts each account's transactions to say so (`transaction_counts.py`); a count that couldn't
+  be loaded is worded "every transaction in it", never as zero. *Rejected: a summary with no
+  count*, cheaper but the one figure that tells a visitor they clicked the wrong account. Ink only: the confirm button is `.btn-secondary`, never the gold `.btn-primary`
   (gold means "act here", chapter II) and never oxblood (a loss); the warning is the existing
   `banner("warning")`, and the backdrop is the dark page color (`--backdrop`) in both themes. The
-  Delete link sits in its own narrow last column with no stacked label at phone width, since it
-  names its row for screen readers itself. *Rejected: a `confirm()` prompt*, which can't be
+  transaction's Delete link sits in its own narrow last column with no stacked label at phone
+  width, since it names its row for screen readers itself; an account's is a plain link after
+  Import, so the outlined buttons stay the row's everyday actions. *Rejected: a `confirm()` prompt*, which can't be
   styled or worded beyond one string and is suppressed by some browsers, and *a delete button
   per row posting straight away*, which is one slip from a loss that can't be undone.
 - **Display formatting (UI-5) is one fixed convention, applied by Jinja filters from a pure
