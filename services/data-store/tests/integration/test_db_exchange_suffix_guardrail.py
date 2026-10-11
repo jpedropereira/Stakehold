@@ -87,6 +87,7 @@ class FakeMarketDataSource:
     yfinance connectivity."""
 
     name = "yfinance"
+    unreachable = frozenset()  # never fails to reach the provider
 
     def __init__(self):
         self.fetch_calls = []

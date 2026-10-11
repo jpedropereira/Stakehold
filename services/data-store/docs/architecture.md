@@ -353,10 +353,13 @@ Each run:
 
 Why it's shaped this way:
 
-- **Success is judged by what landed, not by the flows' statuses.** `backfill_market_data`
-  absorbs a per-ticker fetch failure as "no data", so the row only becomes `ready` once
-  `raw_market_data` holds prices for it and `fx_rates` holds the pair. Only then can a portfolio
-  value it.
+- **Success is judged by what landed, not by the flows' statuses.** The row only becomes `ready`
+  once `raw_market_data` holds prices for it and `fx_rates` holds the pair. Only then can a
+  portfolio value it.
+- **The recorded reason says whether Yahoo answered.** A backfill that couldn't reach the provider
+  (`tickers_unreachable`) is saved as "the provider couldn't be reached"; one that reached it and
+  got nothing is "the provider returned no price history". They were once the same message, so a
+  DNS failure right after the host woke from sleep read to an admin as a bad symbol.
 - **A failed attempt is retried after 10, then 20 minutes, and given up (`failed`) on the 3rd.**
   Only giving up makes the run `partial` and the DAG red. A retry still to come is a warning, so
   a passing Yahoo blip doesn't page anyone, while a ticker that will never load does.
@@ -486,9 +489,10 @@ What follows from it:
 - **A 404 is an `OSError`.** `curl_cffi`'s `HTTPError` subclasses `OSError`, so
   `yfinance_retry._is_transient` classifies an unknown symbol as *transient*. A lookup must check
   for a 404 (and for `YFTickerMissingError`) **before** asking `_is_transient`, or every typo would
-  read as "Yahoo is down, try again". The same classification means the market-data source retries
-  a 404 like a network blip; harmless there (the ticker contributes no rows either way), but
-  wasted calls.
+  read as "Yahoo is down, try again". That check is `yfinance_retry._is_missing_symbol`, shared by
+  the lookup and the market-data source; `_is_unreachable` is "transient and not missing". The
+  market-data source still retries a 404 like a network blip (wasted calls, nothing worse), but
+  doesn't report it as unreachable, so a delisted holding stays "no data" in a backfill.
 - **`instrumentType` values seen**: `EQUITY`, `ETF`, `CRYPTOCURRENCY`, `MUTUALFUND`, `FUTURE`,
   `INDEX`, `CURRENCY`. The first five can be held; an index or a currency pair can't.
 - **`currency` is per listing, and can be a minor unit.** `VOD.L` is `GBp` (pence), `VUSA.L` is
@@ -804,7 +808,18 @@ group when ingesting, per ticker when backfilling, per ticker-batch when calcula
 retries and gives up on one ticker at a time, so a single permanently-failing ticker no longer
 costs every other ticker fetched alongside it in the same group, the way one bad ticker used to
 fail an entire batched `yf.download()` call. One failure never costs the work queued behind it, and
-the summary reports the failure count. Configuration errors are the exception: an unknown provider
+the summary reports the failure count.
+
+A ticker the source gave up on comes back as an empty frame, exactly like one with no data, so
+the source also lists the tickers it **couldn't reach the provider for** in `unreachable` (part of
+the `MarketDataSource` Protocol, replaced on every `fetch()`). `backfill_market_data` counts those
+as failed (`tickers_unreachable`, making the run `partial`), and still counts a ticker the
+provider has nothing for, including an unknown or delisted symbol, as "no data". The split is
+deliberate: over thousands of ETF holdings, some symbols are always missing from Yahoo, and
+failing the run for them would make it red every day, while a network outage passing as "no
+data" is exactly the silent success the run-result contract exists to prevent.
+**Known gap:** `ingest_market_data` doesn't read `unreachable` yet, so a daily ingest during an
+outage still reports those tickers as having no data. It's the next place to use it. Configuration errors are the exception: an unknown provider
 is fatal, because it will fail identically on every retry.
 
 **`market_returns`'s upsert never deletes.** A full rebuild self-heals any row whose inputs changed

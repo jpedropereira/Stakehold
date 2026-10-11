@@ -101,6 +101,7 @@ class Pipeline:
     def __init__(self):
         self.calls = []
         self.backfill_status = "ok"
+        self.backfill_unreachable = 0
         self.backfill_raises = None
         self.stored_tickers = None  # None: every backfilled ticker ends up with prices
         self.fx_status = "ok"
@@ -111,7 +112,11 @@ class Pipeline:
         self.calls.append(("backfill", [t.ticker for t in tracked], funds, earliest, end, kw))
         if self.backfill_raises:
             raise self.backfill_raises
-        return {"status": self.backfill_status, "rows_saved": 100}
+        return {
+            "status": self.backfill_status,
+            "rows_saved": 100,
+            "tickers_unreachable": self.backfill_unreachable,
+        }
 
     def backfill_fx_rates(self, conn, config, earliest, end, delay, **kw):
         self.calls.append(("fx", kw["only_currencies"], [c.code for c in config.currencies]))
@@ -321,6 +326,21 @@ def test_a_partial_backfill_is_a_failed_attempt(repo, pipe):
 
     assert "price history couldn't be saved" in repo.of("failed_attempt")[0][5]
     assert pipe.of("returns") == []
+
+
+def test_an_unreachable_provider_is_named_as_the_reason(repo, pipe):
+    # Not "no price history": that would send an admin looking for a symbol problem when the
+    # network was down (as it is for a minute after the host wakes from sleep).
+    repo.due = [row("SSLN.L")]
+    pipe.backfill_status = "partial"
+    pipe.backfill_unreachable = 1
+    pipe.stored_tickers = set()
+
+    run()
+
+    [(_, _, attempts, status, _, error)] = repo.of("failed_attempt")
+    assert (attempts, status) == (1, "pending")
+    assert error == "the provider couldn't be reached"
 
 
 def test_fx_that_never_lands_is_a_failed_attempt(repo, pipe):

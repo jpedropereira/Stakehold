@@ -633,12 +633,17 @@ def backfill_market_data(
 
     One ticker at a time, sleeping delay_seconds after each live fetch (success or failure) —
     never after a skip. A ticker that fails after YFinanceMarketDataSource's internal retries is
-    logged (inside the source itself) and simply comes back empty here rather than raising --
-    fetch() no longer distinguishes "genuinely no data" from "gave up after retries" at this
-    layer, since both now isolate at the ticker level inside the source; either way this ticker
-    contributes 0 rows and the run continues. `only_tickers`, when given, restricts the run to
-    exactly those final (post-suffix-resolution) tickers -- e.g. "0700.HK", not the raw "0700"
-    -- so it can target holdings-derived tickers too, not just tracked_tickers entries.
+    logged (inside the source itself) and comes back empty here rather than raising; either way
+    it contributes 0 rows and the run continues. An empty frame alone can't say whether the
+    provider has no data or never answered, so the source's `unreachable` says which: an
+    unreachable ticker counts as failed (`tickers_unreachable`, and the run is `partial`), while
+    a ticker with no data -- including one the provider says doesn't exist -- does not. That
+    keeps a delisted holding from failing every run, and a network outage from passing as a
+    quiet one; ticker onboarding relies on it to tell a user which happened.
+
+    `only_tickers`, when given, restricts the run to exactly those final (post-suffix-resolution)
+    tickers -- e.g. "0700.HK", not the raw "0700" -- so it can target holdings-derived tickers
+    too, not just tracked_tickers entries.
     `ticker_overrides` is forwarded to ticker resolution -- see _resolve_yfinance_ticker.
 
     Decorated rather than the daily flow because an empty result means something different
@@ -660,10 +665,11 @@ def backfill_market_data(
             tickers_fetched=0,
             tickers_skipped=0,
             tickers_failed=0,
+            tickers_unreachable=0,
         )
 
     total_rows = 0
-    processed = skipped = failed = 0
+    processed = skipped = failed = unreachable = 0
     ticker_count = len(resolved)
     for (source_name, asset_type), tickers in _group_by_source_and_type(resolved).items():
         try:
@@ -693,6 +699,16 @@ def backfill_market_data(
                 failed += 1
                 logger.warning(
                     "backfill-market-data: %s failed, skipping: %s", ticker, e, exc_info=True
+                )
+                time.sleep(delay_seconds)
+                processed += 1
+                continue
+
+            if ticker in source.unreachable:
+                failed += 1
+                unreachable += 1
+                logger.warning(
+                    "backfill-market-data: %s couldn't reach the provider, skipping.", ticker
                 )
                 time.sleep(delay_seconds)
                 processed += 1
@@ -735,7 +751,8 @@ def backfill_market_data(
 
     logger.info(
         f"backfill-market-data complete: {ticker_count} tickers "
-        f"({skipped} already covered, {failed} failed), {total_rows} rows written"
+        f"({skipped} already covered, {failed} failed ({unreachable} unreachable)), "
+        f"{total_rows} rows written"
     )
     return build_run_result(
         units_total=ticker_count,
@@ -746,6 +763,7 @@ def backfill_market_data(
         tickers_fetched=processed - skipped - failed,
         tickers_skipped=skipped,
         tickers_failed=failed,
+        tickers_unreachable=unreachable,
     )
 
 

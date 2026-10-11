@@ -268,3 +268,62 @@ def test_fetch_keeps_rows_missing_only_volume(monkeypatch):
 
     assert len(result) == 1
     assert pd.isna(result.iloc[0]["volume"])
+
+
+class FakeHttpError(OSError):
+    """Shaped like curl_cffi's HTTPError: an OSError carrying the response."""
+
+    def __init__(self, status_code):
+        super().__init__(f"HTTP Error {status_code}: ")
+        self.response = type("Response", (), {"status_code": status_code})()
+
+
+def test_fetch_reports_a_ticker_it_couldnt_reach_the_provider_for(monkeypatch):
+    # Without this, a ticker that failed every retry on a network error looks exactly like one
+    # the provider has no data for: both are simply missing from the frame.
+    def unreachable():
+        raise OSError("Failed to perform, curl: (6) Could not resolve host: query2.yahoo.com")
+
+    fake = FakeTicker.configured(
+        {
+            "OFFLINE": unreachable,
+            "EMPTY": pd.DataFrame(),
+            "GOOD": make_history_frame([date(2026, 1, 1)]),
+        }
+    )
+    monkeypatch.setattr("data_store.market_data.yfinance_source.yf.Ticker", fake)
+    monkeypatch.setattr("data_store.market_data.yfinance_source.time.sleep", lambda s: None)
+    source = YFinanceMarketDataSource(max_retries=2)
+
+    result = source.fetch(["OFFLINE", "EMPTY", "GOOD"], date(2026, 1, 1), date(2026, 1, 3))
+
+    assert set(result["ticker"]) == {"GOOD"}
+    assert source.unreachable == {"OFFLINE"}
+
+
+def test_fetch_doesnt_count_an_unknown_symbol_as_unreachable(monkeypatch):
+    fake = FakeTicker.configured({"GHOST": FakeHttpError(404)})
+    monkeypatch.setattr("data_store.market_data.yfinance_source.yf.Ticker", fake)
+    monkeypatch.setattr("data_store.market_data.yfinance_source.time.sleep", lambda s: None)
+    source = YFinanceMarketDataSource(max_retries=2)
+
+    source.fetch(["GHOST"], date(2026, 1, 1), date(2026, 1, 3))
+
+    assert source.unreachable == set()
+
+
+def test_each_fetch_reports_only_its_own_unreachable_tickers(monkeypatch):
+    def unreachable():
+        raise TimeoutError("timed out")
+
+    fake = FakeTicker.configured(
+        {"OFFLINE": unreachable, "GOOD": make_history_frame([date(2026, 1, 1)])}
+    )
+    monkeypatch.setattr("data_store.market_data.yfinance_source.yf.Ticker", fake)
+    monkeypatch.setattr("data_store.market_data.yfinance_source.time.sleep", lambda s: None)
+    source = YFinanceMarketDataSource(max_retries=1)
+
+    source.fetch(["OFFLINE"], date(2026, 1, 1), date(2026, 1, 3))
+    source.fetch(["GOOD"], date(2026, 1, 1), date(2026, 1, 3))
+
+    assert source.unreachable == set()

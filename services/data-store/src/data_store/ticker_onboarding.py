@@ -302,8 +302,9 @@ def process_ticker_requests(
     A ticker is `ready` only when it has stored prices, FX rates for its currency (unless that
     is the base currency, or the YAML disables it), and calculated returns -- everything a
     portfolio needs to value it. Success is judged by what landed in the tables, not by the
-    flows' statuses alone: `backfill_market_data` absorbs a per-ticker fetch failure and reports
-    it as "no data", so a ticker with no stored prices afterwards is a failure.
+    flows' statuses alone: a ticker with no stored prices afterwards is a failure, whatever the
+    backfill reported. The reason recorded names the provider being unreachable separately from
+    it having no history, because only the second is a problem with the symbol.
 
     A failed attempt is retried with a doubling delay, up to MAX_ATTEMPTS. Only a ticker given up
     on makes the run `partial` (and the DAG red); a retry still to come is logged and counted,
@@ -424,6 +425,10 @@ def _onboard(conn, row, currencies: CurrenciesConfig, lookup_source, today: date
         FETCH_DELAY_SECONDS,
         only_tickers={row.ticker},
     )
+    # Unreachable first: it also makes the run partial, and "couldn't be saved" would send an
+    # admin looking at the data when the network was down.
+    if backfill["tickers_unreachable"]:
+        raise OnboardingError("the provider couldn't be reached")
     if backfill["status"] == STATUS_PARTIAL:
         raise OnboardingError("the price history couldn't be saved")
     if not returns_repository.ticker_exists(conn, row.ticker, row.source):

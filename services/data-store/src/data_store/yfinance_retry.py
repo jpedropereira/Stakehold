@@ -1,3 +1,5 @@
+from yfinance.exceptions import YFTickerMissingError
+
 _TRANSIENT_MARKERS = (
     "timed out",
     "timeout",
@@ -30,3 +32,20 @@ def _is_transient(exc: Exception) -> bool:
         return True
     message = str(exc).lower()
     return any(marker in message for marker in _TRANSIENT_MARKERS)
+
+
+def _is_missing_symbol(exc: Exception) -> bool:
+    """The provider answered, and said this symbol doesn't exist: an HTTP 404 (an unknown or
+    long-delisted symbol, verified in TK-0) or yfinance's YFTickerMissingError family. Check
+    this before _is_transient where the difference matters -- a 404 is an OSError, so
+    _is_transient alone counts it as a network failure."""
+    if isinstance(exc, YFTickerMissingError):
+        return True
+    response = getattr(exc, "response", None)
+    return getattr(response, "status_code", None) == 404
+
+
+def _is_unreachable(exc: Exception) -> bool:
+    """The provider didn't answer (a network failure, a timeout, rate limiting), as opposed to
+    answering that it has nothing for this symbol."""
+    return _is_transient(exc) and not _is_missing_symbol(exc)

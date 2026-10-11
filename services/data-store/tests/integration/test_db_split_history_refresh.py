@@ -56,6 +56,7 @@ class SplittingMarketDataSource:
     """
 
     name = "yfinance"
+    unreachable = frozenset()  # never fails to reach the provider
 
     def __init__(self, *, base_close=100.0):
         self.base_close = base_close

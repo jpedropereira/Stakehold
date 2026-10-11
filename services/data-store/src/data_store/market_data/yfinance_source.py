@@ -6,7 +6,7 @@ from datetime import date
 
 import pandas as pd
 import yfinance as yf
-from data_store.yfinance_retry import _is_transient
+from data_store.yfinance_retry import _is_transient, _is_unreachable
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +81,10 @@ class YFinanceMarketDataSource:
         self.max_retries = max_retries
         self.backoff_base_seconds = backoff_base_seconds
         self.max_workers = max_workers
+        # The tickers the latest fetch() gave up on because yfinance didn't answer. They are
+        # missing from the frame exactly as a ticker with no data is, so this is the only way a
+        # caller can tell the two apart. Replaced on every fetch().
+        self.unreachable: set[str] = set()
 
     def fetch(self, tickers: list[str], start_date: date, end_date: date) -> pd.DataFrame:
         if not tickers:
@@ -89,6 +93,7 @@ class YFinanceMarketDataSource:
             raise ValueError("start_date must be before end_date.")
 
         frames = []
+        self.unreachable = set()
         with ThreadPoolExecutor(max_workers=min(self.max_workers, len(tickers))) as pool:
             futures = {
                 pool.submit(self._fetch_one, ticker, start_date, end_date): ticker
@@ -106,7 +111,8 @@ class YFinanceMarketDataSource:
     def _fetch_one(self, ticker: str, start_date: date, end_date: date) -> pd.DataFrame | None:
         """One ticker's whole retry loop. Never raises for a data-source failure -- a
         permanently-failing ticker (after exhausting retries, or a non-transient error) is
-        logged and simply omitted from fetch()'s result, so one bad ticker in a group can't cost
+        logged and simply omitted from fetch()'s result (and, if yfinance never answered,
+        recorded in `unreachable`), so one bad ticker in a group can't cost
         every other ticker fetched alongside it. Only fetch()'s own input validation above can
         raise out of this class."""
         attempt = 0
@@ -144,4 +150,8 @@ class YFinanceMarketDataSource:
                     e,
                     exc_info=True,
                 )
+                if _is_unreachable(e):
+                    # set.add from a worker thread is atomic; fetch() reads it after the pool
+                    # has finished.
+                    self.unreachable.add(ticker)
                 return None

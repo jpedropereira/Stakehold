@@ -11,7 +11,7 @@ from data_store.tracked_tickers.base import (
     OUTCOME_UNSUPPORTED,
     LookupResult,
 )
-from data_store.yfinance_retry import _is_transient
+from data_store.yfinance_retry import _is_missing_symbol, _is_unreachable
 from yfinance.exceptions import YFRateLimitError, YFTickerMissingError
 
 logger = logging.getLogger(__name__)
@@ -35,11 +35,6 @@ _ASSET_TYPES = {
 _PERIOD = "1mo"
 
 
-def _is_http_404(exc: Exception) -> bool:
-    response = getattr(exc, "response", None)
-    return getattr(response, "status_code", None) == 404
-
-
 class YFinanceTickerLookupSource:
     name = "yfinance"
 
@@ -56,12 +51,11 @@ class YFinanceTickerLookupSource:
             logger.warning("ticker lookup: %s -- yfinance is rate limiting: %s", ticker, e)
             return _unavailable(ticker)
         except Exception as e:
-            # The 404 check must come first: curl_cffi's HTTPError is an OSError, which
-            # _is_transient counts as a network failure, so an unknown symbol would otherwise
-            # read as "try again later".
-            if _is_http_404(e):
+            # An unknown symbol is a 404, which is an OSError; _is_missing_symbol keeps it from
+            # reading as "try again later".
+            if _is_missing_symbol(e):
                 return _not_found(ticker)
-            if _is_transient(e):
+            if _is_unreachable(e):
                 logger.warning("ticker lookup: %s -- yfinance didn't answer: %s", ticker, e)
                 return _unavailable(ticker)
             raise
