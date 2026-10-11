@@ -1,6 +1,8 @@
 import uuid
 
+import pytest
 from portfolio import jobs
+from portfolio.errors import AccountNotFound
 
 
 def _return_dict(**overrides):
@@ -138,3 +140,45 @@ def test_rebuild_returns_returns_201_when_ok(monkeypatch, client):
 
     assert response.status_code == 201
     assert response.json()["tickers_removed"] == 2
+
+
+# --- GET /returns/growth ---
+
+
+def test_list_growth_returns_the_jobs_own_list(monkeypatch, client):
+    captured = {}
+
+    def fake_get_growth(**kw):
+        captured.update(kw)
+        return [{"price_date": "2026-01-06", "growth_pct": "0.10000000"}]
+
+    monkeypatch.setattr(jobs, "get_growth", fake_get_growth)
+    user_id = uuid.uuid4()
+
+    response = client.get("/returns/growth", params={"user_id": str(user_id), "account_label": "m"})
+
+    assert response.status_code == 200
+    assert response.json() == [{"price_date": "2026-01-06", "growth_pct": "0.10000000"}]
+    assert captured["user_id"] == user_id
+    assert captured["account_label"] == "m"
+
+
+def test_list_growth_requires_account_label(client):
+    response = client.get("/returns/growth", params={"user_id": str(uuid.uuid4())})
+
+    assert response.status_code == 422
+
+
+def test_list_growth_lets_an_unknown_account_reach_the_404_handler(monkeypatch, client):
+    """app.py maps AccountNotFound to 404 (test_app.py covers that); this bare test app has no
+    handlers, so the route's part is only to let the error through."""
+
+    def boom(**kw):
+        raise AccountNotFound("no account 'nope' for this user")
+
+    monkeypatch.setattr(jobs, "get_growth", boom)
+
+    with pytest.raises(AccountNotFound):
+        client.get(
+            "/returns/growth", params={"user_id": str(uuid.uuid4()), "account_label": "nope"}
+        )

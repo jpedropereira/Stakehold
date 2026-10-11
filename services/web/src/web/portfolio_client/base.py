@@ -60,6 +60,15 @@ class Return:
 
 
 @dataclass(frozen=True)
+class GrowthPoint:
+    """One day of an account's time-weighted growth since inception, mirroring portfolio's
+    GrowthResponse. growth_pct is a fraction: 0.1234 is +12.34%."""
+
+    price_date: date
+    growth_pct: Decimal
+
+
+@dataclass(frozen=True)
 class Transaction:
     """One row of an account's transaction log, mirroring portfolio's TransactionResponse.
     Amounts are signed cash flows (a BUY's is negative), quantity is signed (a SELL's is
@@ -252,6 +261,9 @@ class PortfolioClient(Protocol):
 
     # One row per ticker, its most recent price_date. Includes closed tickers.
     async def list_latest_returns(self, *, user_id: str, account_label: str) -> list[Return]: ...
+
+    # One account-level point per priced day, oldest first. Empty while there are no prices yet.
+    async def list_growth(self, *, user_id: str, account_label: str) -> list[GrowthPoint]: ...
 
     async def list_ticker_mappings(self) -> list[TickerMapping]: ...
 

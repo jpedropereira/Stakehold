@@ -1242,3 +1242,35 @@ def get_latest_returns(
 
     logger.info("get-latest-returns: done, %d return snapshot(s) found.", len(returns))
     return [asdict(snapshot) for snapshot in returns]
+
+
+def get_growth(
+    *, user_id: UUID, account_label: str, settings: Settings | None = None
+) -> list[dict]:
+    """This account's time-weighted growth since inception, one point per priced day (see
+    pipeline.list_growth). Raises AccountNotFound if account_label doesn't resolve for this
+    user."""
+    configure_logging()
+    settings = settings or load_settings()
+    conn = get_connection(settings.database_url)
+    try:
+        logger.info(
+            "get-growth: computing growth for account %r (user %s).", account_label, user_id
+        )
+        mappings = pipeline.load_ticker_mappings(conn)
+        points = pipeline.list_growth(
+            conn, user_id=user_id, account_label=account_label, mappings=mappings
+        )
+    finally:
+        conn.close()
+
+    if points:
+        logger.info(
+            "get-growth: done, %d day(s), %s to %s.",
+            len(points),
+            points[0].price_date,
+            points[-1].price_date,
+        )
+    else:
+        logger.info("get-growth: done, no return rows yet, so no growth to report.")
+    return [asdict(point) for point in points]
