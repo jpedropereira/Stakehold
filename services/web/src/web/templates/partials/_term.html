@@ -1,0 +1,5 @@
+{# A figure's label, linking to its entry on the glossary page (/glossary#<anchor>). The anchor
+   must match an id in glossary.html; each holdings page's tests check every link lands. #}
+{% macro term(label, anchor) -%}
+<a class="term-link" href="/glossary#{{ anchor }}">{{ label }}</a>
+{%- endmacro %}

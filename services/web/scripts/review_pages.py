@@ -98,6 +98,9 @@ PAGES = [
     Page("tickers", "/tickers", "admin"),
     Page("tickers-user", "/tickers", "user"),
     Page("tickers-new", "/tickers/new?symbol=SXR8.DE", "user"),
+    Page("glossary", "/glossary", "user"),
+    # Followed from a holdings page's "Growth %" header: the entry it lands on is marked.
+    Page("glossary-growth", "/glossary#growth", "user"),
     Page("admin", "/admin", "admin"),
     Page("admin-mappings", "/admin/mappings", "admin"),
     Page("forbidden", "/admin", "user"),

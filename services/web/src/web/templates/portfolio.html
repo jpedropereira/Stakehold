@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% from "partials/_banner.html" import banner %}
 {% from "partials/_delta.html" import delta %}
+{% from "partials/_term.html" import term %}
 {% from "partials/_returns_chart.html" import returns_chart %}
 {% block title %}Portfolio — Stakehold{% endblock %}
 {% block page_width %} page-full{% endblock %}
@@ -32,24 +33,24 @@
 <p class="as-of">Prices as of <span class="mono">{{ totals.price_date | date }}</span>. {{ freshness }}</p>
 <section class="summary-tiles" aria-label="All accounts">
   <div class="tile">
-    <p class="tile-label">Market value</p>
+    <p class="tile-label">{{ term("Market value", "market-value") }}</p>
     <p class="tile-value"><span class="mono">{{ totals.market_value_eur | money }}</span></p>
   </div>
   <div class="tile">
-    <p class="tile-label">Cost basis</p>
+    <p class="tile-label">{{ term("Cost basis", "cost-basis") }}</p>
     <p class="tile-value"><span class="mono">{{ totals.cost_basis_eur | money }}</span></p>
   </div>
   <div class="tile">
-    <p class="tile-label">Total return</p>
+    <p class="tile-label">{{ term("Total return", "total-return") }}</p>
     <p class="tile-value">{{ delta(totals.total_return_eur) }} {{ delta(totals.total_return_pct, "pct") }}</p>
   </div>
   <div class="tile">
     {# Time-weighted: money added or taken out doesn't move it, unlike the total return's %. #}
-    <p class="tile-label">Growth since inception</p>
+    <p class="tile-label">{{ term("Growth since inception", "growth") }}</p>
     <p class="tile-value">{{ delta(growth_pct, "pct") }}</p>
   </div>
   <div class="tile">
-    <p class="tile-label">Dividends received</p>
+    <p class="tile-label">{{ term("Dividends received", "dividends") }}</p>
     <p class="tile-value"><span class="mono">{{ totals.dividends_received_eur | money }}</span></p>
   </div>
 </section>
@@ -61,6 +62,7 @@
 <div class="split">
 <section class="card card-wide">
   <h1>Holdings</h1>
+  <p class="glossary-link"><a href="/glossary">What these figures mean</a></p>
   {% include "partials/_unmapped_notice.html" %}
   {% if holdings_error %}
   {% call banner("error") %}<strong>Couldn't load your holdings.</strong> {{ holdings_error }}{% endcall %}
@@ -76,13 +78,13 @@
     <thead role="rowgroup">
       <tr role="row">
         <th role="columnheader">Ticker</th>
-        <th class="num" role="columnheader">Units</th>
-        <th class="num" role="columnheader">Avg cost</th>
-        <th class="num" role="columnheader">Market value</th>
-        <th class="num" role="columnheader">Weight</th>
-        <th class="num" role="columnheader" colspan="2">Unrealized return</th>
-        <th class="num" role="columnheader" colspan="2">Total return</th>
-        <th class="num" role="columnheader">Growth %</th>
+        <th class="num" role="columnheader">{{ term("Units", "units") }}</th>
+        <th class="num" role="columnheader">{{ term("Avg cost", "avg-cost") }}</th>
+        <th class="num" role="columnheader">{{ term("Market value", "market-value") }}</th>
+        <th class="num" role="columnheader">{{ term("Weight", "weight") }}</th>
+        <th class="num" role="columnheader" colspan="2">{{ term("Unrealized return", "unrealized-return") }}</th>
+        <th class="num" role="columnheader" colspan="2">{{ term("Total return", "total-return") }}</th>
+        <th class="num" role="columnheader">{{ term("Growth %", "growth") }}</th>
       </tr>
     </thead>
     <tbody role="rowgroup">
