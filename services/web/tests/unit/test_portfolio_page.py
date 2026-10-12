@@ -882,3 +882,95 @@ def test_no_chart_on_the_first_run_card(client):
 
     assert "No accounts yet" in html
     assert _chart_card(html) is None
+
+
+# --- layout: table and chart side by side (LY-4) ------------------------------------------------
+
+
+def _split(html):
+    """The two-column container's two cards, in document order, or None without it. Neither
+    card nests a <section>, so each one ends at its first </section>."""
+    match = re.search(
+        r'<div class="split">\s*(<section class="[^"]*">.*?</section>)\s*'
+        r'(<section class="[^"]*">.*?</section>)\s*</div>',
+        html,
+        re.S,
+    )
+    return None if match is None else match.groups()
+
+
+def test_holdings_and_chart_cards_share_the_split_holdings_first(client):
+    # DOM order is reading order: CSS grid places the columns, the markup never reorders them.
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_priced_holding(fake_portfolio)
+    fake_portfolio.portfolio_returns = _returns(_point(6))
+
+    holdings, returns = _split(_page(test_client))
+
+    assert "<h1>Holdings</h1>" in holdings
+    assert _holding_row(holdings, "IWDA.AS")
+    assert "<h1>Returns over time</h1>" in returns
+    assert '<canvas id="returns-chart"' in returns
+    # The chart card is the one that stays in view beside a tall table.
+    assert re.match(r'<section class="[^"]*\bsplit-aside\b', returns)
+
+
+def test_as_of_line_and_tiles_span_the_page_above_the_split(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_priced_holding(fake_portfolio)
+    fake_portfolio.portfolio_returns = _returns(_point(6))
+
+    html = _page(test_client)
+
+    split_at = html.index('<div class="split">')
+    assert html.index('class="as-of"') < split_at
+    assert html.index('class="summary-tiles"') < split_at
+    assert not any('class="tile"' in card for card in _split(html))
+
+
+def test_a_holdings_failure_keeps_both_cards_in_the_split(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.list_holdings_error = PortfolioUnavailable("down")
+    fake_portfolio.portfolio_returns = _returns(_point(6))
+
+    holdings, returns = _split(_page(test_client))
+
+    assert "Couldn't load your holdings" in holdings
+    assert '<canvas id="returns-chart"' in returns
+
+
+def test_a_returns_failure_keeps_both_cards_in_the_split(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_priced_holding(fake_portfolio)
+    fake_portfolio.list_portfolio_returns_error = PortfolioUnavailable("down")
+
+    holdings, returns = _split(_page(test_client))
+
+    assert _holding_row(holdings, "IWDA.AS")
+    assert "Couldn't load your returns" in returns
+
+
+def test_empty_holdings_and_history_still_render_in_the_split(client):
+    test_client, fake_auth, _ = client
+    _logged_in(test_client, fake_auth)
+
+    holdings, returns = _split(_page(test_client))
+
+    assert "No holdings yet" in holdings
+    assert "No return history yet" in returns
+
+
+def test_first_run_has_no_split_only_the_narrow_welcome_card(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.list_accounts_result = []
+
+    html = _page(test_client)
+
+    assert 'class="split"' not in html
+    assert '<section class="card card-narrow">' in html
+    assert "<h1>Holdings</h1>" not in html

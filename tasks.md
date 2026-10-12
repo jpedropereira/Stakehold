@@ -72,9 +72,9 @@ The previous chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archi
 | LY-1 | [Review at tablet and wide widths](#ly-1-review-at-tablet-and-wide-widths) | — | done |
 | LY-2 | [Wider content and wide tables](#ly-2-wider-content-and-wide-tables) | LY-1 | done |
 | LY-3 | [Chart sized by its container](#ly-3-chart-sized-by-its-container) | LY-1 | done |
-| LY-4 | [`/portfolio`: table and chart side by side](#ly-4-portfolio-table-and-chart-side-by-side) | LY-2, LY-3 | ready |
-| LY-5 | [Account holdings: table and chart side by side](#ly-5-account-holdings-table-and-chart-side-by-side) | LY-4 | blocked |
-| LY-6 | [Overview: two-column layout](#ly-6-overview-two-column-layout) | LY-4 | blocked |
+| LY-4 | [`/portfolio`: table and chart side by side](#ly-4-portfolio-table-and-chart-side-by-side) | LY-2, LY-3 | done |
+| LY-5 | [Account holdings: table and chart side by side](#ly-5-account-holdings-table-and-chart-side-by-side) | LY-4 | ready |
+| LY-6 | [Overview: two-column layout](#ly-6-overview-two-column-layout) | LY-4 | ready |
 | LY-7 | [Retire the 880px column](#ly-7-retire-the-880px-column) | LY-5, LY-6 | blocked |
 
 ## Tasks
@@ -197,7 +197,7 @@ Files: `static/portfolio_chart.js`, `static/web.css`,
 
 ### LY-4. `/portfolio`: table and chart side by side
 
-**Status:** ready
+**Status:** done
 
 - **Layout.** The as-of line and the five tiles span the full width, so all five tiles fit on
   one row at 1280px and up. Below them is a two-column grid (`.split`, reused by LY-5 and LY-6).
@@ -214,8 +214,10 @@ Files: `static/portfolio_chart.js`, `static/web.css`,
   stretch with the table.
 - **Error and empty states** still sit in their own card (holdings error with chart, chart
   error with holdings, first run). The first-run welcome card stays narrow and alone.
-- **Chart height.** To stretch the chart to its row, override `.chart-frame`'s `aspect-ratio`
-  and height bounds for this layout, and move `review_pages.py`'s `CHART_HEIGHT` to match.
+- **Chart height.** Override `.chart-frame`'s `aspect-ratio` and height bounds for this layout,
+  and move `review_pages.py`'s `CHART_HEIGHT` to match. (First written as "stretch the chart to
+  its row", which contradicts the top-aligned sticky card above; agreed instead: 4:3 of the
+  column's width, 320–560px.)
 - The `.table-scroll` wrapper is reviewed. The scroll box stays only for widths where the table
   still can't fit. (`.content-wide` went in LY-2, when `/portfolio` became a `page-full` page.)
 
@@ -224,14 +226,32 @@ renders the other card. First run renders neither.
 
 Files: `templates/portfolio.html`, `static/web.css`, `docs/ui-architecture.md`, `screenshots/`.
 
+Done as:
+- Breakpoint measured: the table is 875px, so its column's minimum is 940px with padding, and
+  the chart's 420px. Two columns from a 1480px window (about 1473px needed); 3:2 above that,
+  about 946px and 630px at 1920px. The added laptop width (1440px) reviews the stacked side.
+- The stacked `.split` column is explicitly `minmax(0, 1fr)`. Left `auto`, it grew to the
+  table's width and phone and tablet scrolled sideways.
+- The Returns card (`.split-aside`) is sticky only in a window at least 640px tall (a new
+  "tall" breakpoint): the card is about 580px at most, and a shorter window would hide its
+  bottom.
+- Chart in the column: `aspect-ratio: 4 / 3`, 320–560px, about 470px at 1920px.
+  `CHART_HEIGHT` is now 280–560px.
+- `review_pages.py` gains a check that no `.table-scroll` scrolls in a two-column `.split`.
+  260 of 260, from 208, the laptop width included.
+- `.table-scroll` stays: it scrolls only stacked, between the stack breakpoint and about
+  1000px.
+
 ### LY-5. Account holdings: table and chart side by side
 
-**Status:** blocked (LY-4)
+**Status:** ready
 
 The same `.split` on `/accounts/holdings`, after LY-4 has settled the pattern. Its table has
 seven cells, not ten, so the two-column breakpoint is lower. Measure it; it is expected to be
 about 1200px, so two columns already apply at 1280px. The account header, as-of line and tiles
 span both columns. The "Prices loading" row and the no-history state behave as on `/portfolio`.
+`.split`'s 940px table-column minimum and 1480px breakpoint were measured for `/portfolio`'s
+ten columns (LY-4), so this page needs its own values, e.g. a modifier on `.split`.
 
 Tests: as LY-4, for this page.
 
@@ -240,7 +260,7 @@ Files: `templates/account_holdings.html`, `static/web.css`, `docs/ui-architectur
 
 ### LY-6. Overview: two-column layout
 
-**Status:** blocked (LY-4)
+**Status:** ready
 
 Today Overview shows four tiles and a two-line accounts list, and nothing else.
 

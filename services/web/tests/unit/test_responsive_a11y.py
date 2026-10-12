@@ -624,10 +624,17 @@ def test_review_script_covers_every_chart_view_on_both_chart_pages():
             assert (path, click) in reviewed, f"{path} not reviewed with click {click}"
 
 
-def test_review_script_covers_phone_tablet_desktop_and_wide():
+def test_review_script_covers_phone_tablet_desktop_laptop_and_wide():
     """LY-1: the empty sides only show at 1920px, and tables overflowed between 600px and about
-    990px unseen, so the review covers each class of screen."""
-    assert _review_script().WIDTHS == {"phone": 360, "tablet": 768, "desktop": 1280, "wide": 1920}
+    990px unseen, so the review covers each class of screen. LY-4: laptop sits just under the
+    split breakpoint (1480px), so both sides of it are reviewed."""
+    assert _review_script().WIDTHS == {
+        "phone": 360,
+        "tablet": 768,
+        "desktop": 1280,
+        "laptop": 1440,
+        "wide": 1920,
+    }
 
 
 def test_review_script_rejects_an_unknown_width(capsys):
