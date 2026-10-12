@@ -449,6 +449,21 @@ def test_holdings_page_chart_payload_carries_the_euro_series(client):
     ]
 
 
+def test_holdings_page_chart_canvas_sits_alone_in_its_sizing_frame(client):
+    # LY-3: the frame, not the canvas's width, sets the chart's height, and Chart.js measures the
+    # canvas's parent, so the frame must hold nothing else.
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.list_returns_result = [_return_row()]
+
+    response = test_client.get("/accounts/holdings", params={"account": "main"})
+
+    assert re.search(
+        r'<div class="chart-frame">\s*<canvas id="returns-chart"[^>]*></canvas>\s*</div>',
+        response.text,
+    )
+
+
 def test_holdings_page_chart_controls_are_hidden_until_the_script_runs(client):
     # Without JS the buttons would do nothing, so they ship hidden and the chart script shows them.
     test_client, _, fake_auth, fake_portfolio = client

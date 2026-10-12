@@ -71,7 +71,7 @@ The previous chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archi
 | LY-0 | [Roadmap housekeeping](#ly-0-roadmap-housekeeping) | — | done |
 | LY-1 | [Review at tablet and wide widths](#ly-1-review-at-tablet-and-wide-widths) | — | done |
 | LY-2 | [Wider content and wide tables](#ly-2-wider-content-and-wide-tables) | LY-1 | ready |
-| LY-3 | [Chart sized by its container](#ly-3-chart-sized-by-its-container) | LY-1 | ready |
+| LY-3 | [Chart sized by its container](#ly-3-chart-sized-by-its-container) | LY-1 | done |
 | LY-4 | [`/portfolio`: table and chart side by side](#ly-4-portfolio-table-and-chart-side-by-side) | LY-2, LY-3 | blocked |
 | LY-5 | [Account holdings: table and chart side by side](#ly-5-account-holdings-table-and-chart-side-by-side) | LY-4 | blocked |
 | LY-6 | [Overview: two-column layout](#ly-6-overview-two-column-layout) | LY-4 | blocked |
@@ -146,7 +146,7 @@ Files: `static/web.css`, `templates/{transactions,tickers,admin_mappings,base}.h
 
 ### LY-3. Chart sized by its container
 
-**Status:** ready
+**Status:** done
 
 `portfolio_chart.js` uses Chart.js's default 2:1 aspect ratio, so its height is decided by its
 width. The chart is 880px wide today, so about 440px tall. That breaks either way once layouts
@@ -164,12 +164,23 @@ is unrelated to the table's.
 Tests: the chart template renders the sizing wrapper on both pages that have a chart. Verify
 visually at all widths, in all three chart views.
 
+Done as:
+- The wrapper is `.chart-frame`. Its height is `aspect-ratio: 2 / 1` of its own width, held
+  between 280px and 480px, rather than a `clamp()` on the viewport. A chart in LY-4's column is
+  much narrower than the window, so a viewport-based height would be wrong there. On an 880px
+  card the height is unchanged (408px). Phone charts grow from about 150px to 280px, and
+  `/portfolio`'s 1008px chart goes from 504px to the 480px cap.
+- `review_pages.py` gains a market-value page for both chart pages, so all three views are
+  reviewed, and a browser check that the canvas fills its frame and is 280 to 480px tall
+  (`CHART_HEIGHT`). It fails at phone width if `maintainAspectRatio: false` is removed.
+- Ticks and range buttons needed no change at about 420px wide or at phone width.
+
 Files: `static/portfolio_chart.js`, `static/web.css`,
 `templates/{portfolio,account_holdings}.html`, `docs/ui-architecture.md` (chart section).
 
 ### LY-4. `/portfolio`: table and chart side by side
 
-**Status:** blocked (LY-2, LY-3)
+**Status:** blocked (LY-2)
 
 - **Layout.** The as-of line and the five tiles span the full width, so all five tiles fit on
   one row at 1280px and up. Below them is a two-column grid (`.split`, reused by LY-5 and LY-6).
@@ -186,6 +197,8 @@ Files: `static/portfolio_chart.js`, `static/web.css`,
   stretch with the table.
 - **Error and empty states** still sit in their own card (holdings error with chart, chart
   error with holdings, first run). The first-run welcome card stays narrow and alone.
+- **Chart height.** To stretch the chart to its row, override `.chart-frame`'s `aspect-ratio`
+  and height bounds for this layout, and move `review_pages.py`'s `CHART_HEIGHT` to match.
 - `.content-wide` and the `.table-scroll` wrapper are reviewed. The scroll box stays only for
   widths where the table still can't fit.
 

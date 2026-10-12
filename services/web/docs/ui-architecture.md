@@ -50,13 +50,20 @@ described here updates this file in the same change.
     clients, then screenshots every page in both themes at four widths: phone 360px, tablet
     768px, desktop 1280px and wide 1920px (LY-1). A page entry can name an element to click
     once loaded, for a state only a click reaches, such as the transaction log's open delete
-    dialog. `--only` and `--width` narrow a run to some pages or widths. For each variant it
+    dialog, or each chart view (total return, the default, plus market value and growth, on both
+    chart pages). `--only` and `--width` narrow a run to some pages or widths. For each variant it
     also checks:
     - no sideways scroll, at every width: PF-4's table scrolled the page at tablet width for a
       whole task because the check only ran at phone width;
     - no table reaching past its card's content edge, unless it sits in a `.table-scroll` box,
       which is meant to scroll. A table that spills over its card doesn't always scroll the
       page (Transactions at 1280px didn't), so the first check alone misses it;
+    - every chart canvas filling its `.chart-frame` (within 1px), 280 to 480px tall (LY-3).
+      Comparing canvas to frame is the only check on the chart script and the CSS together,
+      since there's no JS test runner. Without `maintainAspectRatio: false` the canvas falls back
+      to 2:1 of its width, which at phone width is 144px inside a 280px frame. Where 2:1 of the
+      width already lands inside the bounds, as on an 880px card, the two agree and the check
+      can't tell;
     - WCAG AA contrast of every visible text element against the background actually behind
       it;
     - a visible focus indicator at every Tab stop, a date input's inner stops included;
@@ -81,7 +88,8 @@ described here updates this file in the same change.
     empty on each side (`/portfolio`, about 1070px wide, leaves about 425px), and the logo
     sits left of the cards.
     At 768px the account-holdings page's five tiles wrap four and one. LY-2 to LY-7 are
-    compared against this.
+    compared against this. After LY-3 added the two market-value pages: 196 of 208, the same 12
+    failures.
 - **Feedback and error states (UI-12).**
   - *Banners*: every message is one macro, `partials/_banner.html`, in the charter's ink rule
     (chapter II): an icon and a bold lead word carry the meaning, never color, so errors use
@@ -173,6 +181,23 @@ described here updates this file in the same change.
   labels use a small formatter in `portfolio_chart.js` that mirrors `formatting.py`'s
   `money`/`signed_money`. **Known sharp edge:** that is two copies of one convention, and no test
   ties them together (there's no JS test runner). A change to the convention must touch both.
+- **The chart's height comes from a `.chart-frame` around the canvas, not from its width (LY-3).**
+  Chart.js's default 2:1 aspect ratio ties height to width: about 150px at phone width, and about
+  775px once a chart runs the full content width. `portfolio_chart.js` turns that off
+  (`maintainAspectRatio: false`) and the frame sets the height: `aspect-ratio: 2 / 1` of the
+  frame's own width, held between 280px and 480px. On an 880px card that is the height the chart
+  always had (408px). The roadmap first asked for a `clamp()` on the viewport width; the frame's
+  width was chosen instead, because from LY-4 a chart in a column is much narrower than the window,
+  and a viewport-based height would put a 420px-wide chart at the 480px cap. Chart.js sizes the
+  canvas from its parent, so the frame is `position: relative` and holds only the canvas. **Sharp
+  edge:** the frame needs its explicit `width: 100%`. Left `auto`, `aspect-ratio` carries the
+  bounds across to the width: `min-height: 280px` became a 560px minimum width and every phone
+  page with a chart scrolled sideways, and `max-height` capped `/portfolio`'s chart at 960px wide
+  inside a 1008px card. A layout that wants another height (LY-4 stretches the chart to its row)
+  overrides `aspect-ratio` and the bounds on the frame, and moves `review_pages.py`'s
+  `CHART_HEIGHT` with them. At about 420px wide (LY-4's column) and at phone width, the x-axis
+  ticks thin out on their own (`autoSkipPadding`) and the view and range buttons wrap, so neither
+  needed changing.
 - **Theme (UI-3): a cookie, applied on the server.** The choice (`light` / `dark` / `system`,
   default `system`) is stored in a `stakehold_theme` cookie, set by `POST /theme`
   (`api/theme.py`). A Jinja2Templates context processor (`theme_context`, registered in

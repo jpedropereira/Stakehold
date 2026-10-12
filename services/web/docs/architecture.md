@@ -516,8 +516,8 @@ branded page with its own status, and an unhandled exception a branded 500 (UI-1
 - `cli.py` — `web serve` only, mirroring `auth serve`'s lazy-import-uvicorn shape.
 - `scripts/review_pages.py` (UI-13) — a developer tool, not part of the package and not an
   entry point of the service. It screenshots every page against fake clients and checks
-  contrast, focus, sideways scroll and tables overflowing their cards, at phone, tablet,
-  desktop and wide widths; see [`ui-architecture.md`](ui-architecture.md).
+  contrast, focus, sideways scroll, tables overflowing their cards and chart sizing, at phone,
+  tablet, desktop and wide widths; see [`ui-architecture.md`](ui-architecture.md).
   Playwright comes from the workspace `dev` group.
 
 ## Deployment

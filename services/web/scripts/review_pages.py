@@ -1,4 +1,4 @@
-"""Screenshot every web page in both themes at every width, and check each one (UI-13, LY-1).
+"""Screenshot every web page in both themes at every width, and check each one (UI-13, LY-1, LY-3).
 
     uv run python services/web/scripts/review_pages.py [--out DIR] [--only NAME ...]
         [--width NAME ...]
@@ -10,6 +10,7 @@ For a person to review, not a pixel-diff gate: the screenshots land in services/
 
 - no sideways scroll;
 - no table wider than the card that holds it, unless it sits in a .table-scroll box;
+- every chart filling its .chart-frame, at a height within CHART_HEIGHT;
 - WCAG AA contrast for every piece of visible text against what's actually behind it;
 - a visible focus indicator on everything Tab reaches, and Tab never getting stuck;
 - no console errors, CSP violations included.
@@ -58,11 +59,20 @@ PAGES = [
     Page("portfolio", "/portfolio", "admin"),
     # The first holding's per-account breakdown, opened.
     Page("portfolio-breakdown", "/portfolio", "admin", click="details summary"),
+    Page(
+        "portfolio-market-value", "/portfolio", "admin", click="[data-chart-view=market_value_eur]"
+    ),
     Page("portfolio-growth", "/portfolio", "admin", click="[data-chart-view=growth_pct]"),
     Page("accounts", "/accounts", "admin"),
     Page("accounts-delete-dialog", "/accounts", "admin", click="a[data-confirm]"),
     Page("accounts-delete", "/accounts/delete?account=main", "admin"),
     Page("account-holdings", "/accounts/holdings?account=main", "admin"),
+    Page(
+        "account-holdings-market-value",
+        "/accounts/holdings?account=main",
+        "admin",
+        click="[data-chart-view=market_value_eur]",
+    ),
     Page(
         "account-holdings-growth",
         "/accounts/holdings?account=main",
@@ -203,6 +213,35 @@ _TABLE_OVERFLOW_JS = """
       const cls = names ? "." + names.split(/\\s+/).join(".") : "";
       failures.push(
         `table${cls} ${Math.round(rect.width)}px in a ${Math.round(right - left)}px card`);
+    }
+  }
+  return failures;
+}
+"""
+
+# The chart's agreed height bounds (LY-3). A layout that stretches the chart (LY-4) moves these.
+CHART_HEIGHT = (280, 480)
+
+# Run in the page. Every chart canvas that doesn't fill its .chart-frame, which means Chart.js is
+# sizing it from its own width rather than from the frame, or whose height is outside the bounds.
+# Returns one entry per failure.
+_CHART_SIZE_JS = """
+([low, high]) => {
+  const failures = [];
+  for (const canvas of document.querySelectorAll("canvas")) {
+    const frame = canvas.parentElement;
+    const rect = canvas.getBoundingClientRect();
+    if (!frame.classList.contains("chart-frame")) {
+      failures.push(`#${canvas.id} isn't in a .chart-frame`);
+      continue;
+    }
+    const box = frame.getBoundingClientRect();
+    if (Math.abs(rect.width - box.width) > 1 || Math.abs(rect.height - box.height) > 1) {
+      failures.push(
+        `#${canvas.id} is ${Math.round(rect.width)}x${Math.round(rect.height)}px` +
+        ` in a ${Math.round(box.width)}x${Math.round(box.height)}px frame`);
+    } else if (rect.height < low - 1 || rect.height > high + 1) {
+      failures.push(`#${canvas.id} is ${Math.round(rect.height)}px tall, not ${low}-${high}px`);
     }
   }
   return failures;
@@ -660,6 +699,7 @@ def _review(browser, base_url, page_spec, theme, width_name, out) -> list[str]:
     if not page.evaluate("document.documentElement.scrollWidth <= window.innerWidth"):
         problems.append("scrolls sideways")
     problems += [f"table overflows its card: {f}" for f in page.evaluate(_TABLE_OVERFLOW_JS)]
+    problems += [f"chart: {f}" for f in page.evaluate(_CHART_SIZE_JS, list(CHART_HEIGHT))]
     problems += [f"contrast: {f}" for f in page.evaluate(_CONTRAST_JS)]
     problems += [f"focus: {p}" for p in _focus_problems(page)]
     problems += [f"console: {line}" for line in console]

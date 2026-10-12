@@ -831,6 +831,22 @@ img.logo-on-dark {
 }
 
 
+/* The chart's height comes from here, not from the canvas (portfolio_chart.js turns Chart.js's
+   own aspect ratio off). 2:1 of the card's width keeps today's height on an 880px card, and the
+   bounds stop it going squat on a phone or taller than the screen at full width. Width-relative
+   rather than a viewport clamp(): a chart in a column (LY-4) isn't as wide as the window. Chart.js
+   sizes the canvas from its parent, so the frame is positioned and holds only the canvas. A
+   layout that wants another height overrides aspect-ratio and the bounds here. The explicit
+   width matters: left auto, aspect-ratio turns min-height into a 560px minimum width, and a
+   phone scrolls sideways. */
+.chart-frame {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 2 / 1;
+  min-height: 280px;
+  max-height: 480px;
+}
+
 /* Rendered hidden: without the chart script the buttons would do nothing, so the script shows
    them. An explicit rule, because a display value here would otherwise override [hidden]. */
 .chart-controls {
