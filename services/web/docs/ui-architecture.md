@@ -125,7 +125,7 @@ described here updates this file in the same change.
   `<script>` block with real logic — this codebase has never had one, and adding the first here
   would either be silently blocked by the browser or force a CSP weakening this task's own
   no-CDN framing argues against. The chart's numeric data is embedded via a non-executable
-  `<script type="application/json">` data island in `account_holdings.html` (inspected as data, not run
+  `<script type="application/json">` data island in `account_holdings.html` (and, since PF-6, `portfolio.html`) (inspected as data, not run
   as script — needs no `script-src` permission to be read); the logic (`getComputedStyle(...)
   .getPropertyValue('--gain')` etc., and the `Chart` instantiation) lives in a same-origin
   `static/portfolio_chart.js`, loaded exactly like vendored htmx. `test_templates.py`'s new
@@ -145,7 +145,8 @@ described here updates this file in the same change.
   stopped updating still shows its final stretch rather than an empty chart. Total return is a
   delta, so its line keeps the gain/loss segment colors, and so does growth. Growth counts from
   inception, so a shorter range crops its line rather than restarting it at zero; a `null` (a
-  date growth didn't cover) is a gap. The Growth % button is only rendered when growth loaded,
+  date growth didn't cover) is a gap. On `/accounts/holdings` the Growth % button is only rendered
+  when growth loaded; `/portfolio`'s series carries growth on every point, so there it always is,
   and its tick and tooltip labels mirror `formatting.pct`. Market value is a level, so it's drawn in
   `--text`, because forest and oxblood mean gains and losses only, and gold is kept for controls.
   The buttons are in the template, not built by the script. They ship `hidden`, because without JS
@@ -220,9 +221,13 @@ described here updates this file in the same change.
   figures sit on a muted line under the EUR ones and only off EUR, where they'd repeat the EUR
   figure; a ticker recorded in different currencies reads "Mixed currencies" there, and the
   breakdown shows each account's own. Weight is over priced holdings only, the per-account
-  page's rule: a holding waiting for prices isn't counted as worth zero. The table has nine
-  columns in the 880px card, so it takes the transactions table's tighter cells and 13px
-  figures. Adding Portfolio made five nav links for an admin, so the phone nav's gap tightened
+  page's rule: a holding waiting for prices isn't counted as worth zero. With PF-6's Growth %
+  the table has ten columns, about 875px wide even with the transactions table's tighter cells
+  and 13px figures, more than the 880px card holds inside its padding. So `/portfolio` takes the
+  full content width (`.content-wide` on its as-of line, tiles and cards), and the table sits in
+  a focusable `.table-scroll` region: between about 600px, where it stacks, and 990px, where it
+  fits, it scrolls in its box. Before that box, PF-4's nine columns already made the whole page
+  scroll sideways at tablet widths, which `review_pages.py` (desktop and phone only) can't see. Adding Portfolio made five nav links for an admin, so the phone nav's gap tightened
   and it wraps rather than scrolls on anything narrower than 360px.
 - **The account switcher is a plain GET form, with no htmx enhancement.** The form submits
   `?account=` back to the current path, so switching keeps the visitor on Holdings,

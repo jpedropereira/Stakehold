@@ -54,6 +54,7 @@ PAGES = [
     Page("portfolio", "/portfolio", "admin"),
     # The first holding's per-account breakdown, opened.
     Page("portfolio-breakdown", "/portfolio", "admin", click="details summary"),
+    Page("portfolio-growth", "/portfolio", "admin", click="[data-chart-view=growth_pct]"),
     Page("accounts", "/accounts", "admin"),
     Page("accounts-delete-dialog", "/accounts", "admin", click="a[data-confirm]"),
     Page("accounts-delete", "/accounts/delete?account=main", "admin"),
@@ -200,14 +201,18 @@ def _fakes():
         HoldingAccount,
         Holdings,
         HoldingsTotals,
+        PortfolioReturns,
+        PortfolioSeriesPoint,
         Position,
         Return,
+        TickerGrowth,
         TickerLookup,
         TickerMapping,
         TrackedTicker,
         Transaction,
         UnmappedInstrument,
     )
+    from web.portfolio_view import aggregate_portfolio_returns
 
     users = {
         "admin-tok": AuthUser("u1", "ann@example.com", "Ann", is_admin=True),
@@ -366,6 +371,28 @@ def _fakes():
 
         async def list_growth(self, *, user_id, account_label):
             return growth()
+
+        async def list_portfolio_returns(self, *, user_id):
+            """The per-account page's year of history and growth, as portfolio's one series
+            across accounts. NEWCO.DE is unpriced, so it has no growth and its cell shows "—"."""
+            growth_by_date = {g.price_date: g.growth_pct for g in growth()}
+            series = tuple(
+                PortfolioSeriesPoint(
+                    p.price_date,
+                    p.market_value_eur,
+                    p.cost_basis_eur,
+                    p.dividends_received_eur,
+                    p.total_return_eur,
+                    p.total_return_pct,
+                    growth_by_date[p.price_date],
+                )
+                for p in aggregate_portfolio_returns(history())
+            )
+            by_ticker = (
+                TickerGrowth("AAPL", Decimal("-0.0412")),
+                TickerGrowth("VWCE.DE", Decimal("0.1186")),
+            )
+            return PortfolioReturns(series=series, by_ticker=by_ticker)
 
         async def list_transactions(self, *, user_id, account_label):
             return [

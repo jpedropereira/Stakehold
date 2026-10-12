@@ -34,8 +34,8 @@ The previous chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archi
   computed on read from the existing snapshots. web makes one call rather than two per account,
   and PF-5's time series needs a server-side path anyway, since fetching every account's full
   return history into web is what UI-11 avoided as too expensive.
-- **Chart.** The returns-over-time chart for the whole portfolio is a later task in this chunk
-  (PF-5, PF-6), after the holdings table.
+- **Chart.** The returns-over-time chart for the whole portfolio came after the holdings table
+  (PF-5, PF-6).
 - **Returns as a percentage.** The combined page offers the same percentage views as the
   per-account page after #65:
   - per row, unrealized and total return % over cost basis (PF-1, PF-4), plus that holding's
@@ -76,7 +76,7 @@ The previous chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archi
 | PF-3 | [web: portfolio client for `/holdings`](#pf-3-web-portfolio-client-for-holdings) | PF-1 | done |
 | PF-4 | [web: `/portfolio` combined page](#pf-4-web-portfolio-combined-page) | PF-2, PF-3 | done |
 | PF-5 | [portfolio: cross-account return series](#pf-5-portfolio-cross-account-return-series) | PF-1 | done |
-| PF-6 | [web: returns chart on `/portfolio`](#pf-6-web-returns-chart-on-portfolio) | PF-4, PF-5 | ready |
+| PF-6 | [web: returns chart on `/portfolio`](#pf-6-web-returns-chart-on-portfolio) | PF-4, PF-5 | done |
 
 ## Tasks
 
@@ -304,7 +304,35 @@ Files: `returns/performance.py`, `holdings/flows.py`, `jobs.py`, `api/{routes,mo
 
 ### PF-6. web: returns chart on `/portfolio`
 
-**Status:** ready
+**Status:** done
+
+As built:
+- `portfolio_client` gained `list_portfolio_returns` (`GET /returns/portfolio`, no `start` or
+  `end`: the range buttons crop on the client) and `PortfolioReturns`, `PortfolioSeriesPoint`
+  and `TickerGrowth`.
+- `api/portfolio.py` makes it a fourth concurrent call, degrading on its own.
+- `portfolio_view.build_portfolio_holdings` takes `by_ticker` and sets each row's `growth_pct`,
+  None unless the row is `priced`. `build_portfolio_chart_payload` builds the island straight
+  from the series, in the per-account island's shape, so `static/portfolio_chart.js` is reused
+  unchanged.
+- The page adds:
+  - a "Growth since inception" tile between Total return and Dividends,
+  - a Growth % column after Total return,
+  - a "Returns over time" card under the holdings, with the Total return, Market value and
+    Growth % views and the 1M/6M/1Y/All ranges.
+- **Changed from the spec below:** a failed call can't just drop the Growth % button. The
+  chart, the tile and the column all come from that one call, so the chart card shows its own
+  notice instead, and the tile and every growth cell show "—". The rest of the page is
+  unaffected, and no "may be incomplete" banner shows. With a series, the Growth % button always
+  shows, since every point carries growth. An empty series reads "No return history yet".
+- **Layout:** ten columns don't fit the 880px card, so `/portfolio` takes the full content
+  width (`.content-wide`), and the table sits in a focusable `.table-scroll` region. Between
+  phone and desktop widths it scrolls in its box. This also fixes PF-4's nine-column table,
+  which made the whole page scroll sideways at tablet widths.
+- `review_pages.py` gained a `portfolio-growth` page (all 96 checks pass). The integration test
+  checks that portfolio's real empty series reads "No return history yet".
+
+The original spec follows.
 
 Reuse `static/portfolio_chart.js` and the JSON data island pattern, fed from PF-5 through a new
 client method. The island carries `market_value_eur`, `total_return_eur` and `growth_pct`, as

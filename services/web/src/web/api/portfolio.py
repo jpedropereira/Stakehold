@@ -10,9 +10,12 @@ for the combined page. The query string is passed on as it arrived, so an encode
 encoded, and the target path is fixed, so it can't send the visitor off the site.
 
 The combined page sums nothing itself: portfolio's GET /holdings (PF-1) does, so this is one
-call however many accounts there are. On its own router, like overview.py, because routes.py is
-close to the repo's 64KB file limit; it renders through routes.py's _render, so a cookie set
-earlier in the request still reaches the response.
+call however many accounts there are. Its chart, growth tile and Growth % column (PF-6) come from
+one more, GET /returns/portfolio (PF-5), so if that fails all three go and nothing else does.
+
+On its own router, like overview.py, because routes.py is close to the repo's 64KB file limit;
+it renders through routes.py's _render, so a cookie set earlier in the request still reaches
+the response.
 """
 
 import asyncio
@@ -35,10 +38,15 @@ from web.portfolio_client.base import (
     Account,
     Holdings,
     PortfolioClient,
+    PortfolioReturns,
     UnmappedInstrument,
 )
 from web.portfolio_client.errors import PortfolioClientError
-from web.portfolio_view import build_portfolio_holdings, unmapped_across_brokers
+from web.portfolio_view import (
+    build_portfolio_chart_payload,
+    build_portfolio_holdings,
+    unmapped_across_brokers,
+)
 from web.settings import Settings
 from web.ticker_status import holding_price_note, load_statuses
 
@@ -47,7 +55,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _INCOMPLETE = "Can't reach the portfolio service right now — this page may be incomplete."
-_HOLDINGS_UNAVAILABLE = "Can't reach the portfolio service right now, so they can't be shown."
+# Under its card's own heading, so it serves both the holdings card and the chart card.
+_UNAVAILABLE = "Can't reach the portfolio service right now, so they can't be shown."
 
 
 @dataclass(frozen=True)
@@ -56,13 +65,14 @@ class _PortfolioViewData:
     accounts: list[Account] | None
     holdings: Holdings | None
     unmapped: list[UnmappedInstrument] | None
+    returns: PortfolioReturns | None
 
 
 async def _load_portfolio_view(
     portfolio_client: PortfolioClient, user_id: str
 ) -> _PortfolioViewData:
-    """The user's accounts, holdings and unmapped instruments, concurrently, each degrading on
-    its own.
+    """The user's accounts, holdings, unmapped instruments and return series, concurrently, each
+    degrading on its own.
 
     The account list is fetched only to tell a user with no accounts (the first-run card) from
     one whose accounts hold nothing yet: /holdings answers both with an empty list.
@@ -71,6 +81,7 @@ async def _load_portfolio_view(
         "accounts": portfolio_client.list_accounts(user_id=user_id),
         "holdings": portfolio_client.list_holdings(user_id=user_id),
         "unmapped instruments": portfolio_client.list_unmapped_instruments(user_id=user_id),
+        "returns": portfolio_client.list_portfolio_returns(user_id=user_id),
     }
     results = dict(
         zip(calls, await asyncio.gather(*calls.values(), return_exceptions=True), strict=True)
@@ -85,6 +96,7 @@ async def _load_portfolio_view(
         accounts=results["accounts"],
         holdings=results["holdings"],
         unmapped=results["unmapped instruments"],
+        returns=results["returns"],
     )
 
 
@@ -107,7 +119,11 @@ async def portfolio(
     csrf_token = ensure_csrf_cookie(request, response, cookie_secure=settings.cookie_secure)
 
     view = await _load_portfolio_view(portfolio_client, user.user_id)
-    rows = [] if view.holdings is None else build_portfolio_holdings(view.holdings.holdings)
+    series = () if view.returns is None else view.returns.series
+    by_ticker = () if view.returns is None else view.returns.by_ticker
+    rows = (
+        [] if view.holdings is None else build_portfolio_holdings(view.holdings.holdings, by_ticker)
+    )
     # An unpriced holding says where its ticker's loading stands (ticker onboarding, TK-9).
     unpriced = [r.holding.canonical_ticker for r in rows if not r.holding.priced]
     statuses = await load_statuses(portfolio_client, unpriced)
@@ -123,8 +139,13 @@ async def portfolio(
             "first_run": view.accounts == [],
             "rows": rows,
             "totals": None if view.holdings is None else view.holdings.totals,
-            "holdings_error": _HOLDINGS_UNAVAILABLE if view.holdings is None else None,
+            "holdings_error": _UNAVAILABLE if view.holdings is None else None,
+            # A returns failure has its own notice in the chart card, as holdings' does.
             "error": _INCOMPLETE if view.accounts is None or view.unmapped is None else None,
+            "returns_error": _UNAVAILABLE if view.returns is None else None,
+            "chart_payload": build_portfolio_chart_payload(series),
+            # The latest growth for its tile; None (shown as "—") without a series.
+            "growth_pct": series[-1].growth_pct if series else None,
             "price_notes": {t: holding_price_note(statuses.get(t)) for t in unpriced},
             "unmapped": unmapped_across_brokers(view.unmapped or []),
         },

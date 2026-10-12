@@ -1,12 +1,14 @@
 """GET /portfolio: every holding summed across the user's accounts (PF-4) -- the tiles from
 portfolio's totals, the holdings table with its per-account breakdown, holdings still waiting
-for prices, instruments waiting for a mapping, and the empty and error states. The old
+for prices, instruments waiting for a mapping, and the empty and error states -- and (PF-6) the
+growth tile, the Growth % column and the returns chart, all fed by one call. The old
 /portfolio?account=X redirect is tested with the page it points at, in
 test_account_holdings_page.py.
 
 Like test_home_page.py, it carries its own minimal fakes: only the calls this one page makes.
 """
 
+import json
 import re
 from datetime import date
 from decimal import Decimal
@@ -25,6 +27,9 @@ from web.portfolio_client.base import (
     HoldingAccount,
     Holdings,
     HoldingsTotals,
+    PortfolioReturns,
+    PortfolioSeriesPoint,
+    TickerGrowth,
     UnmappedInstrument,
 )
 from web.portfolio_client.errors import PortfolioUnavailable
@@ -57,6 +62,8 @@ class FakePortfolioClient:
         self.list_holdings_error: Exception | None = None
         self.unmapped: list[UnmappedInstrument] = []
         self.list_unmapped_instruments_error: Exception | None = None
+        self.portfolio_returns = PortfolioReturns(series=(), by_ticker=())
+        self.list_portfolio_returns_error: Exception | None = None
         # {ticker: status} data-store reports for tickers it tracks directly (TK-9).
         self.tracked_statuses: dict[str, str] = {}
         self.list_tracked_tickers_error: Exception | None = None
@@ -79,6 +86,12 @@ class FakePortfolioClient:
         if self.list_unmapped_instruments_error:
             raise self.list_unmapped_instruments_error
         return self.unmapped
+
+    async def list_portfolio_returns(self, *, user_id):
+        self.calls.append(("list_portfolio_returns", user_id))
+        if self.list_portfolio_returns_error:
+            raise self.list_portfolio_returns_error
+        return self.portfolio_returns
 
     async def list_tracked_tickers(self, *, requested_by=None, statuses=None, tickers=None):
         self.calls.append(("list_tracked_tickers", tuple(tickers or ())))
@@ -655,4 +668,202 @@ def test_page_asks_portfolio_for_this_users_data(client):
         ("list_accounts", "u1"),
         ("list_holdings", "u1"),
         ("list_unmapped_instruments", "u1"),
+        ("list_portfolio_returns", "u1"),
     }
+
+
+# --- growth and the returns chart (PF-6) ------------------------------------------------------
+
+
+def _point(day, *, value="1200", total="200", growth="0.15"):
+    return PortfolioSeriesPoint(
+        price_date=date(2026, 1, day),
+        market_value_eur=Decimal(value),
+        cost_basis_eur=Decimal("1000"),
+        dividends_received_eur=Decimal("0"),
+        total_return_eur=Decimal(total),
+        total_return_pct=Decimal(total) / Decimal("1000"),
+        growth_pct=Decimal(growth),
+    )
+
+
+def _returns(*points, by_ticker=()):
+    return PortfolioReturns(
+        series=points,
+        by_ticker=tuple(TickerGrowth(t, Decimal(g)) for t, g in by_ticker),
+    )
+
+
+def _with_a_priced_holding(fake_portfolio):
+    fake_portfolio.holdings = Holdings(holdings=(_holding(),), totals=_totals())
+
+
+def test_growth_tile_shows_the_series_last_point(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_priced_holding(fake_portfolio)
+    fake_portfolio.portfolio_returns = _returns(
+        _point(5, growth="0.02"), _point(6, growth="-0.0315")
+    )
+
+    tile = _tile(_page(test_client), "Growth since inception")
+
+    assert "−3.15%" in tile
+    assert "loss" in tile
+
+
+@pytest.mark.parametrize("failed", [True, False], ids=["call-failed", "no-history-yet"])
+def test_growth_tile_is_a_dash_without_a_series(client, failed):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_priced_holding(fake_portfolio)
+    if failed:
+        fake_portfolio.list_portfolio_returns_error = PortfolioUnavailable("down")
+
+    tile = _tile(_page(test_client), "Growth since inception")
+
+    assert "—" in tile
+
+
+def test_growth_column_shows_each_holdings_growth(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.holdings = Holdings(
+        holdings=(_holding("IWDA.AS"), _holding("VWCE.DE")), totals=_totals()
+    )
+    fake_portfolio.portfolio_returns = _returns(
+        _point(6), by_ticker=[("IWDA.AS", "0.1234"), ("VWCE.DE", "-0.05")]
+    )
+
+    html = _page(test_client)
+
+    assert "<th" in html and ">Growth %</th>" in html
+    iwda = _cell(_holding_row(html, "IWDA.AS"), "Growth %")
+    assert "+12.34%" in iwda and "gain" in iwda
+    assert "−5.00%" in _cell(_holding_row(html, "VWCE.DE"), "Growth %")
+
+
+def test_growth_column_is_a_dash_for_a_ticker_with_no_growth(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_priced_holding(fake_portfolio)
+    fake_portfolio.portfolio_returns = _returns(_point(6), by_ticker=[("OTHER.AS", "0.1")])
+
+    assert "—" in _cell(_holding_row(_page(test_client), "IWDA.AS"), "Growth %")
+
+
+def test_growth_column_is_a_dash_when_the_call_fails_and_the_table_still_renders(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_priced_holding(fake_portfolio)
+    fake_portfolio.list_portfolio_returns_error = PortfolioUnavailable("down")
+
+    row = _holding_row(_page(test_client), "IWDA.AS")
+
+    assert "—" in _cell(row, "Growth %")
+    assert "€1,200.00" in _cell(row, "Market value")
+
+
+def test_a_partly_priced_holding_shows_no_growth(client):
+    """portfolio has growth for the ticker (one account is priced), but the holding isn't
+    priced in every account, so that growth isn't the holding's."""
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.holdings = Holdings(holdings=(_holding(value=None),), totals=None)
+    fake_portfolio.portfolio_returns = _returns(_point(6), by_ticker=[("IWDA.AS", "0.4")])
+
+    row = _holding_row(_page(test_client), "IWDA.AS")
+
+    assert _cell(row, "Growth %") is None
+    assert "+40.00%" not in row
+
+
+def _chart_card(html):
+    match = re.search(r"<h1>Returns over time</h1>.*?</section>", html, re.S)
+    return None if match is None else match.group(0)
+
+
+def test_chart_data_island_carries_the_series(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_priced_holding(fake_portfolio)
+    fake_portfolio.portfolio_returns = _returns(
+        _point(5, value="1100", total="100", growth="0.1"),
+        _point(6, value="1200", total="200", growth="0.15"),
+    )
+
+    card = _chart_card(_page(test_client))
+
+    island = re.search(
+        r'<script id="returns-chart-data" type="application/json">(.*?)</script>', card, re.S
+    )
+    assert json.loads(island.group(1)) == [
+        {
+            "date": "2026-01-05",
+            "market_value_eur": 1100.0,
+            "total_return_eur": 100.0,
+            "growth_pct": 0.1,
+        },
+        {
+            "date": "2026-01-06",
+            "market_value_eur": 1200.0,
+            "total_return_eur": 200.0,
+            "growth_pct": 0.15,
+        },
+    ]
+    assert '<canvas id="returns-chart"' in card
+    assert '<script src="/static/portfolio_chart.js" defer></script>' in card
+
+
+def test_chart_offers_every_view_and_range(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_priced_holding(fake_portfolio)
+    fake_portfolio.portfolio_returns = _returns(_point(6))
+
+    card = _chart_card(_page(test_client))
+
+    views = re.findall(r'data-chart-view="(\w+)"', card)
+    assert views == ["total_return_eur", "market_value_eur", "growth_pct"]
+    assert re.findall(r'data-chart-range="(\d+)"', card) == ["1", "6", "12", "0"]
+    # Hidden until the script shows them: without it, they'd do nothing.
+    assert '<div class="chart-controls" hidden>' in card
+
+
+def test_no_return_history_yet_says_so(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_priced_holding(fake_portfolio)
+
+    card = _chart_card(_page(test_client))
+
+    assert "No return history yet" in card
+    assert "<canvas" not in card
+
+
+def test_a_returns_failure_shows_a_notice_in_the_chart_card_only(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_priced_holding(fake_portfolio)
+    fake_portfolio.list_portfolio_returns_error = PortfolioUnavailable("down")
+
+    html = _page(test_client)
+
+    card = _chart_card(html)
+    assert "Couldn't load your returns" in card
+    assert "<canvas" not in card
+    assert "No return history yet" not in card
+    # The rest of the page loaded, so it isn't flagged as incomplete.
+    assert "Couldn't load everything" not in html
+    assert _holding_row(html, "IWDA.AS")
+
+
+def test_no_chart_on_the_first_run_card(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.list_accounts_result = []
+
+    html = _page(test_client)
+
+    assert "No accounts yet" in html
+    assert _chart_card(html) is None

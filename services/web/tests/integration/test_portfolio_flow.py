@@ -413,7 +413,9 @@ async def test_portfolio_page_with_no_accounts_shows_the_first_run_card(web_clie
 async def test_portfolio_page_sums_a_ticker_held_in_two_accounts(web_client_with_data_store):
     """PF-3's client against portfolio's real GET /holdings: the same ticker bought in two
     accounts is one row, its units summed, with both accounts in its breakdown. No prices exist
-    in this suite, so the row waits for them rather than showing a partial value."""
+    in this suite, so the row waits for them rather than showing a partial value -- and (PF-6)
+    portfolio's real GET /returns/portfolio answers with no series yet, which the chart card
+    reads as no history rather than as a failure."""
     web_client = web_client_with_data_store
     for label, ref, quantity in (("main", "buy-1", "10"), ("isa", "buy-2", "5")):
         _create_account(web_client, label=label)
@@ -445,3 +447,5 @@ async def test_portfolio_page_sums_a_ticker_held_in_two_accounts(web_client_with
     assert "<summary>In 2 accounts</summary>" in response.text
     assert 'href="/accounts/holdings?account=isa"' in response.text
     assert 'href="/accounts/holdings?account=main"' in response.text
+    assert "No return history yet" in response.text
+    assert "Couldn't load your returns" not in response.text

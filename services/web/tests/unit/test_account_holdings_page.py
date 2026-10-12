@@ -25,6 +25,7 @@ from web.portfolio_client.base import (
     Account,
     GrowthPoint,
     Holdings,
+    PortfolioReturns,
     Position,
     Return,
     UnmappedInstrument,
@@ -121,6 +122,9 @@ class FakePortfolioClient:
     async def list_holdings(self, *, user_id):
         # Only for the bare /portfolio check below; the combined page has its own tests.
         return Holdings(holdings=(), totals=None)
+
+    async def list_portfolio_returns(self, *, user_id):
+        return PortfolioReturns(series=(), by_ticker=())
 
 
 def _settings() -> Settings:
