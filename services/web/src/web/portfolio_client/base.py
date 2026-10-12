@@ -69,6 +69,68 @@ class GrowthPoint:
 
 
 @dataclass(frozen=True)
+class HoldingAccount:
+    """One account's share of a Holding, mirroring portfolio's HoldingAccountResponse. The value
+    fields are None while that account has no return row for the ticker yet."""
+
+    account_label: str
+    quantity: Decimal
+    native_currency: str
+    average_cost_native: Decimal
+    cost_basis_eur: Decimal
+    market_value_native: Decimal | None
+    market_value_eur: Decimal | None
+    unrealized_return_eur: Decimal | None
+
+
+@dataclass(frozen=True)
+class Holding:
+    """One ticker summed across every account with an open position in it, mirroring
+    portfolio's HoldingResponse. The value fields are None unless `priced` (every account has a
+    return row, so no partial sum is ever shown); the native ones are None when
+    `mixed_currency`. The pcts are fractions."""
+
+    canonical_ticker: str
+    quantity: Decimal
+    average_cost_eur: Decimal | None
+    cost_basis_eur: Decimal
+    native_currency: str | None
+    mixed_currency: bool
+    average_cost_native: Decimal | None
+    market_value_native: Decimal | None
+    priced: bool
+    price_date: date | None
+    market_value_eur: Decimal | None
+    unrealized_return_eur: Decimal | None
+    unrealized_return_pct: Decimal | None
+    dividends_received_eur: Decimal | None
+    total_return_eur: Decimal | None
+    total_return_pct: Decimal | None
+    accounts: tuple[HoldingAccount, ...]
+
+
+@dataclass(frozen=True)
+class HoldingsTotals:
+    """Every account's latest return rows summed, closed tickers included, mirroring portfolio's
+    HoldingsTotalsResponse: the home page's rule, so the two pages' totals agree."""
+
+    price_date: date
+    market_value_eur: Decimal
+    cost_basis_eur: Decimal
+    dividends_received_eur: Decimal
+    total_return_eur: Decimal
+    total_return_pct: Decimal | None
+
+
+@dataclass(frozen=True)
+class Holdings:
+    """portfolio's HoldingsResponse. `totals` is None while no account has a return row."""
+
+    holdings: tuple[Holding, ...]
+    totals: HoldingsTotals | None
+
+
+@dataclass(frozen=True)
 class Transaction:
     """One row of an account's transaction log, mirroring portfolio's TransactionResponse.
     Amounts are signed cash flows (a BUY's is negative), quantity is signed (a SELL's is
@@ -264,6 +326,10 @@ class PortfolioClient(Protocol):
 
     # One account-level point per priced day, oldest first. Empty while there are no prices yet.
     async def list_growth(self, *, user_id: str, account_label: str) -> list[GrowthPoint]: ...
+
+    # Every account's open positions summed per ticker, by ticker, plus totals on the home
+    # page's rule. Empty (no holdings, totals None) for a user with no accounts.
+    async def list_holdings(self, *, user_id: str) -> Holdings: ...
 
     async def list_ticker_mappings(self) -> list[TickerMapping]: ...
 
