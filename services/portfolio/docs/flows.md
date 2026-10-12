@@ -34,6 +34,7 @@ this file; references to sections that stayed in `architecture.md` name it.
 | Return listing | — (CLI has none) | `GET /returns`, `GET /returns/latest` | on demand | `return_snapshots`, optionally filtered by ticker/date range | — (read-only report) |
 | Holdings across accounts | — (CLI has none) | `GET /holdings?user_id=` | on demand (web's `/portfolio` page, PF-4) | `accounts` by `user_id`, then each account's latest `position_snapshots` and `return_snapshots` rows | — (computed on read, see "Holdings across accounts") |
 | Growth since inception | — (CLI has none) | `GET /returns/growth?user_id=&account_label=` (404 if the label didn't resolve) | on demand | `return_snapshots` and the account's `BUY`/`SELL` `transactions`, scoped through the resolved account; `ticker_mappings` | — (computed on read, see "Growth since inception") |
+| Portfolio return series | — (CLI has none) | `GET /returns/portfolio?user_id=[&start=&end=]` | on demand (web's `/portfolio` chart, PF-6) | `accounts` by `user_id`, then each account's full `return_snapshots` history and `BUY`/`SELL` `transactions`; `ticker_mappings` | — (computed on read, see "Portfolio return series") |
 
 **No separate `brokers` table** ever materialized — `schema.md` settled on `broker` as a plain
 string on `accounts`, so `account add` writes only to `accounts`, never a second table.
@@ -387,8 +388,8 @@ summed `dividends_received_eur`.
 - **Only `BUY`/`SELL` are flows.** A `DIVIDEND` already reaches growth through the rows, so
   counting its transaction too would count it twice. `DEPOSIT`/`WITHDRAWAL` move cash, which no
   table models, so growth measures the holdings, not the account's cash.
-- **A trade lands on its own ticker's first row dated on or after its UTC date**, the first day
-  that ticker's market value reflects it. One with no such row (an unmapped instrument, a ticker
+- **A trade lands on its own (account, ticker)'s first row dated on or after its UTC date**, the
+  first day that holding's market value reflects it. One with no such row (an unmapped instrument, a ticker
   still loading, a trade newer than the latest price) is left out rather than read as a loss.
 - **Sells keep their gain.** The proceeds are money out, so what a sold position made stays in
   the figure, unlike `total_return_eur`, which loses it (no `realized_gains` table yet).
@@ -423,6 +424,35 @@ latest return row, closed tickers included, so it matches web's home page; it is
 account has a return row yet. A user with no accounts gets `{"holdings": [], "totals": null}`,
 not a 404. The rules, and why the summing happens here, are in `architecture.md`'s "Holdings
 across accounts are summed here, on read".
+
+### Portfolio return series
+
+The whole portfolio's returns over time, and each ticker's growth, across every account a user
+holds. `holdings/flows.list_portfolio_returns` lists the user's accounts through
+`accounts/repository`, reads each one's full `return_snapshots` history and its money flows
+(`pipeline.list_trade_flows`, resolved with that account's own broker), and hands them all to
+`returns/performance.py` at once. The response is
+
+    {"series": [{price_date, market_value_eur, cost_basis_eur, dividends_received_eur,
+                 total_return_eur, total_return_pct, growth_pct}, ...],
+     "by_ticker": [{canonical_ticker, growth_pct}, ...]}
+
+- **`series`** has one point per date any (account, ticker) has a row. A holding with no row
+  that day holds its own last row, and before its first row it contributes nothing. The euros are
+  summed, `total_return_pct` is `total_return_eur / cost_basis_eur` from those sums (null when
+  the cost is 0), and `growth_pct` is the growth described above, over every account at once.
+- **`by_ticker`** is each ticker's last growth figure, over that ticker's rows and flows from
+  every account, sorted by ticker. Closed tickers are included, and the caller shows the ones it
+  needs.
+- **`start` and `end` crop `series` only**, after it is computed, so a shorter range never
+  restarts growth at zero. `by_ticker` ignores them.
+- **A sell in one account and a buy in another** are money out and money in, so moving a
+  holding between accounts doesn't move growth.
+
+A user with no accounts, or no rows yet, gets `{"series": [], "by_ticker": []}`, not a 404. It
+inherits every known limit of "Growth since inception" above. Why it is computed here, and why
+the forward-fill is in Python, is in `architecture.md`'s "Across accounts it is still one
+time-weighted figure".
 
 ## HTTP API
 
@@ -503,6 +533,10 @@ account-level series, `[{price_date, growth_pct}]`, where a ticker with no row o
 last value (the forward-fill web's chart already used). It combines tickers here rather than in
 web because its money flows need `mappings.resolve`; see "Growth since inception" above.
 `growth_pct` is a fraction (`0.1234` is +12.34%), like `total_return_pct`.
+
+`GET /returns/portfolio` answers it the same way across every account a user holds, keyed on
+(account, ticker) so one ticker in two accounts stays two series until they are summed. It
+returns the summed EUR figures along with growth; see "Portfolio return series" above.
 
 `GET /holdings` sums across accounts rather than across dates: one row per ticker from each
 account's latest rows, so no calendar question arises. See "Holdings across accounts" above.

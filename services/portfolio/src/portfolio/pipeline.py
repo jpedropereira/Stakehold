@@ -332,6 +332,14 @@ def list_growth(
     """
     account = _resolve_account(conn, user_id=user_id, account_label=account_label)
     snapshots = returns_repository.list_snapshots(conn, account_id=account.id)
+    return compute_growth(snapshots, list_trade_flows(conn, account, mappings=mappings))
+
+
+def list_trade_flows(conn, account: Account, *, mappings: TickerMappings) -> list[TradeFlow]:
+    """The money this account's BUY/SELL rows moved, each resolved to its ticker through the
+    account's own broker -- the flows list_growth and holdings/flows.list_portfolio_returns hand
+    to returns/performance.py. `account` must already be resolved for the user: this reads by
+    its id and checks nothing."""
     flows = []
     for txn in transactions_repository.list_by_account(
         conn, account.id, transaction_types=_POSITION_MOVING_TYPES
@@ -343,12 +351,13 @@ def list_growth(
             continue
         flows.append(
             TradeFlow(
+                account_id=account.id,
                 canonical_ticker=ticker,
                 date=txn.trade_datetime.astimezone(UTC).date(),
                 eur_amount=txn.eur_amount,
             )
         )
-    return compute_growth(snapshots, flows)
+    return flows
 
 
 # How far a typed BUY/SELL amount may differ from price * quantity + fees and still be kept:
