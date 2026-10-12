@@ -1,16 +1,17 @@
 # Tasks
 
-Roadmap for the portfolio-view chunk: one page that shows everything a user holds across all of
-their accounts, summed per ticker. 120 units of IWDA in account A and 20 in account B show as 140
-units of IWDA, with a per-account breakdown on request. A returns-over-time chart for the whole
-portfolio follows the holdings table.
+Roadmap for the screen-layout chunk: making the web UI use a desktop screen instead of stacking
+every page into one narrow centred column. Today every data page is capped at 880px inside a
+1120px page box. A 1280px screen leaves about 400px empty, a 1920px one more than 1000px, and the
+holdings pages put the table above the chart, so seeing both means scrolling past one.
 The previous chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archive/):
 [walking skeleton](docs/roadmap-archive/walking-skeleton.md),
-[UI/UX](docs/roadmap-archive/ui-ux.md) and
-[ticker onboarding](docs/roadmap-archive/ticker-onboarding.md).
+[UI/UX](docs/roadmap-archive/ui-ux.md),
+[ticker onboarding](docs/roadmap-archive/ticker-onboarding.md) and
+[portfolio view](docs/roadmap-archive/portfolio-view.md).
 
-**Task IDs are prefixed `PF-`** so they can't be confused with the walking-skeleton's bare
-"task N" references, the UI chunk's `UI-N` or the ticker-onboarding chunk's `TK-N`.
+**Task IDs are prefixed `LY-`** so they can't be confused with the walking-skeleton's bare
+"task N" references or the earlier chunks' `UI-N`, `TK-N` and `PF-N`.
 
 **Status** is one of:
 - `done`: implemented, tested, merged.
@@ -19,351 +20,218 @@ The previous chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archi
 
 ## Agreed requirements
 
-- **URLs.** The combined view lives at `/portfolio`, with its own top-level "Portfolio" nav link.
-  The per-account holdings page moves from `/portfolio?account=X` to
-  `/accounts/holdings?account=X`, and old links redirect.
-- **Matching.** Holdings merge on `canonical_ticker`. Different listings of one security (e.g.
-  `IWDA.AS` and `SWDA.L`) stay as separate rows.
-- **Columns.** Each row shows units, average cost (EUR), market value (EUR), weight, unrealized
-  return and total return (€ and %), growth since inception (%), native-currency figures, and a
-  per-account breakdown.
-- **Mixed currencies.** If two accounts recorded a ticker in different trade currencies, the
-  row's native cells read "Mixed currencies" and the breakdown shows each account's own native
-  figures. EUR figures are always summed.
-- **Summing happens in the portfolio service**, in a new read-only `GET /holdings?user_id`,
-  computed on read from the existing snapshots. web makes one call rather than two per account,
-  and PF-5's time series needs a server-side path anyway, since fetching every account's full
-  return history into web is what UI-11 avoided as too expensive.
-- **Chart.** The returns-over-time chart for the whole portfolio came after the holdings table
-  (PF-5, PF-6).
-- **Returns as a percentage.** The combined page offers the same percentage views as the
-  per-account page after #65:
-  - per row, unrealized and total return % over cost basis (PF-1, PF-4), plus that holding's
-    growth since inception %, time-weighted across every account holding it (PF-5, PF-6),
-  - for the whole portfolio, the total return % tile, plus a "Growth since inception" tile and a
-    "Growth %" chart toggle. Growth is time-weighted, so money added or taken out doesn't move it
-    (PF-5, PF-6).
-
-  Growth is computed by portfolio, as #65's `GET /returns/growth` is for one account, because
-  its money flows need `mappings.resolve`.
+- **Designed for screens up to 1920px.** Content grows with the window up to 1600px, then
+  centres. That leaves about 160px each side on a 1920px screen, and table rows on wider
+  screens stay short enough to read.
+- **Holdings pages put the table and the chart side by side** (`/portfolio` and
+  `/accounts/holdings`). On a wide screen, the holdings table and the returns chart sit in two
+  columns, the table wider, with the as-of line and summary tiles spanning both above them.
+  Below a breakpoint they stack as they do today.
+- **`/portfolio` keeps all ten columns.** On laptops (1280–1440px), where the ten columns and the
+  chart don't fit side by side, the cards stack at full width. Compacting the table, with € and %
+  in one cell or hidden columns, was considered and rejected, because it changes how returns
+  read.
+- **Overview (`/`) gets the same treatment.** Its tiles span the top. Below them, the accounts
+  list sits beside the cross-account returns chart, the same chart `/portfolio` shows (LY-6).
+- **Wide tables use the content width.** Transactions, Tickers and the admin mapping tables
+  fill the content width instead of the 880px card. Transactions no longer overflows its card.
+- **Out of scope for this chunk:** putting forms beside the list they add to (Accounts, Add
+  transaction, Add a ticker, Add or change a mapping). Forms keep their narrow cards. See
+  Deferred.
 
 ## Constraints that apply to every task
 
-- **No schema change is planned.** Everything is computed on read from `position_snapshots` and
-  `return_snapshots`. If a task turns out to need a table or column, stop and agree it with the
-  user first, per `.claude/rules/data-schema.md`.
-- **User isolation stays in `accounts/repository.py`.** The cross-account read lists the user's
-  accounts through it, and never queries snapshots by `user_id` in some new way.
-- **Percentages are recomputed from summed EUR figures and never averaged**, the same rule as
-  web's `aggregate_portfolio_returns`. Cross-account sums are keyed on (account, ticker) until the
-  final merge, so the same ticker in two accounts can't collapse into one account's row. That
-  collapse is the bug UI-11 documented.
-- **Call path stays web → portfolio → data-store.** New pages get their own routers, as
-  `api/portfolio_page.py` already does, so web's `api/routes.py` (56 KB) stays under 64 KB.
-- **Tests first**, per `.claude/rules/testing.md`. Each service's `docs/architecture.md` (and
-  web's `docs/ui-architecture.md`) is updated in the same change whenever a task is
-  architectural, per `.claude/rules/architecture.md`.
-- **Brand.** Forest and oxblood are used only on gain and loss figures, every number is set in
-  `--font-mono`, and tables stack below 600 px. Copy follows chapter IV of the charter.
+- **web only.** Templates, `static/web.css`, `static/portfolio_chart.js`,
+  `scripts/review_pages.py` and the web routes. No portfolio or data-store change and no schema
+  change. If a task turns out to need one, stop and agree it first.
+- **Phone layout doesn't regress.** Tables still stack at 600px and below
+  (`docs/ui-architecture.md`, "Stacked tables"). No width in the review set may scroll the page
+  sideways.
+- **DOM order is reading order.** Columns are placed with CSS grid, never by reordering markup,
+  so screen readers and keyboard users meet the page in the same order at every width. On the
+  holdings pages that order is tiles, then table, then chart.
+- **Breakpoints are named once.** CSS custom properties can't be used in `@media`, so every
+  breakpoint value is listed in a comment at the top of `web.css` next to `--content-max`, and
+  each media query cites it by name.
+- **Brand.** Tokens only (no hex values), every number in `--font-mono`, gold the only accent,
+  and forest and oxblood only on gains and losses. More room is not a reason to add decoration.
+- **Tests first**, per `.claude/rules/testing.md`. CSS layout can't be asserted in a unit test,
+  so tests cover what is in the markup: which cards a page renders, in what order, inside which
+  layout container, and error isolation for anything a page newly loads. Each task is verified
+  visually with `review_pages.py` at every width in LY-1's set. Its screenshots are refreshed in
+  the same change.
+- **Docs in the same change.** `services/web/docs/ui-architecture.md` holds the layout reasoning.
+  Statements that become false are rewritten, including the PF-4/PF-6 note on `/portfolio`'s
+  `.content-wide` and `.table-scroll`. `web.css` (27 KB) stays under 64 KB.
 
 ## Status table
 
 | ID | Task | Depends on | Status |
 |----|------|-------------|--------|
-| PF-0 | [Roadmap housekeeping](#pf-0-roadmap-housekeeping) | — | done |
-| PF-1 | [portfolio: `GET /holdings` across accounts](#pf-1-portfolio-get-holdings-across-accounts) | — | done |
-| PF-2 | [web: move per-account holdings to `/accounts/holdings`](#pf-2-web-move-per-account-holdings-to-accountsholdings) | — | done |
-| PF-3 | [web: portfolio client for `/holdings`](#pf-3-web-portfolio-client-for-holdings) | PF-1 | done |
-| PF-4 | [web: `/portfolio` combined page](#pf-4-web-portfolio-combined-page) | PF-2, PF-3 | done |
-| PF-5 | [portfolio: cross-account return series](#pf-5-portfolio-cross-account-return-series) | PF-1 | done |
-| PF-6 | [web: returns chart on `/portfolio`](#pf-6-web-returns-chart-on-portfolio) | PF-4, PF-5 | done |
+| LY-0 | [Roadmap housekeeping](#ly-0-roadmap-housekeeping) | — | done |
+| LY-1 | [Review at tablet and wide widths](#ly-1-review-at-tablet-and-wide-widths) | — | ready |
+| LY-2 | [Wider content and wide tables](#ly-2-wider-content-and-wide-tables) | LY-1 | blocked |
+| LY-3 | [Chart sized by its container](#ly-3-chart-sized-by-its-container) | LY-1 | blocked |
+| LY-4 | [`/portfolio`: table and chart side by side](#ly-4-portfolio-table-and-chart-side-by-side) | LY-2, LY-3 | blocked |
+| LY-5 | [Account holdings: table and chart side by side](#ly-5-account-holdings-table-and-chart-side-by-side) | LY-4 | blocked |
+| LY-6 | [Overview: two-column layout](#ly-6-overview-two-column-layout) | LY-4 | blocked |
+| LY-7 | [Retire the 880px column](#ly-7-retire-the-880px-column) | LY-5, LY-6 | blocked |
 
 ## Tasks
 
-### PF-0. Roadmap housekeeping
+### LY-0. Roadmap housekeeping
 
 **Status:** done
 
-The ticker-onboarding chunk moved verbatim (apart from relative links) to
-[`docs/roadmap-archive/ticker-onboarding.md`](docs/roadmap-archive/ticker-onboarding.md), and this
-file was started. The Deferred list is carried over, except for the cross-account return series,
-which PF-5 and PF-6 now cover.
+The portfolio-view chunk moved to
+[`docs/roadmap-archive/portfolio-view.md`](docs/roadmap-archive/portfolio-view.md). Its content is
+verbatim apart from relative links. This file was then started. The Deferred list is carried
+over whole, and its Known limitations stay with that chunk, since they describe its features.
 
-### PF-1. portfolio: `GET /holdings` across accounts
+### LY-1. Review at tablet and wide widths
 
-**Status:** done
+**Status:** ready
 
-`GET /holdings?user_id` returns `{"holdings": [...], "totals": {...} | null}`, computed on read.
-`holdings/aggregator.py` is the pure `aggregate_holdings(per_account) -> HoldingsResult`, and
-`holdings/flows.py`'s `list_holdings` is the orchestration around it: it lists the user's
-accounts through `accounts/repository` and reads each one's latest position and return rows
-through the existing `list_latest_snapshots`. `jobs.get_holdings` and the route call it.
-`list_holdings` went into `holdings/flows.py` rather than `pipeline.py` (50.9 KB), where PF-5's
-orchestration is planned too.
+`scripts/review_pages.py` screenshots at 1280px and 360px only, so it can't see the problem
+this chunk fixes or the regressions it could cause. The empty sides only show at 1920px.
+Between 600px and about 990px, `/portfolio` used to scroll the whole page sideways, and the
+script missed it (ui-architecture.md, PF-4 note).
 
-Aggregation rules, as built:
-- **Rows.** A ticker gets a row if any account has an open position in it, `quantity != 0`. That
-  is web's `filter_open_positions` rule: it keeps a negative quantity (a replay anomaly) visible.
-  The task first said `> 0`, which isn't what web does. Only open positions feed the row.
-- **Joined on (account, ticker).** Units and cost come from each account's position, values from
-  that account's own latest return row, as web's `build_holdings` joins them.
-- **Summed per ticker:** `quantity`, `cost_basis_eur`, and, when priced, `market_value_eur`,
-  `unrealized_return_eur`, `dividends_received_eur` and `total_return_eur`.
-- **Average cost** is `sum(cost_basis_eur) / sum(quantity)`, null when the units net to 0.
-- **Percentages** are `sum(return) / sum(cost)`, null when the cost is 0.
-- **Native figures.** If every account agrees on `native_currency`, `average_cost_native` is
-  weighted by quantity and `market_value_native` is summed. Otherwise both are null and the row
-  reads `mixed_currency = true`.
-- **Unpriced holdings.** If any contributing account has no return row yet, the row still counts
-  its units and cost, its value fields are null and it reads `priced = false`.
-- **Price date** is the newest return date among the row's accounts.
-- **Breakdown.** `accounts` lists every account holding it, in label order: `account_label`,
-  `quantity`, `native_currency`, `average_cost_native`, `cost_basis_eur`, `market_value_native`,
-  `market_value_eur` and `unrealized_return_eur`. `market_value_native` was added so the
-  breakdown can show each account's own native figures, as the mixed-currencies requirement says.
-- **Matching the home page.** Closed positions' dividends do count today: web's
-  `summarize_latest_returns` sums every latest return row, closed tickers included, and the home
-  page sums those per account. Totals built from the open rows would leave them out, so the
-  response carries a separate `totals` (market value, cost basis, dividends, total return € and
-  %, price date) on the home page's rule. It is null when no account has a return row.
+- Widths become phone 360, tablet 768, desktop 1280 and wide 1920. Add 1440 if LY-4's
+  breakpoint lands near it.
+- The no-sideways-scroll check runs at every width, not just phone.
+- New check: no table is wider than the card that holds it, unless it sits in a `.table-scroll`
+  region. That catches the Transactions table, which overflows its card at 1280px today.
+- Refresh the committed screenshots. Several are stale; `portfolio-*-desktop.png` predates
+  PF-6's chart.
 
-Tests: `tests/unit/holdings/test_{aggregator,flows}.py`, `tests/unit/test_jobs_holdings.py`,
-`tests/unit/api/test_routes_holdings.py`, and `tests/integration/test_holdings.py` (two accounts
-summed, another user's account never included, no accounts gives an empty result).
+This task changes no page. Its output is the baseline that later tasks are compared against.
 
-Files: new `holdings/{__init__,aggregator,flows}.py`, `jobs.py`, `api/{routes,models}.py`;
-`docs/architecture.md`, `docs/flows.md`. portfolio has no `README.md`.
+Files: `scripts/review_pages.py`, `screenshots/`, `docs/ui-architecture.md` (the review section).
 
-### PF-2. web: move per-account holdings to `/accounts/holdings`
+### LY-2. Wider content and wide tables
 
-**Status:** done
+**Status:** blocked (LY-1)
 
-- The router `api/portfolio_page.py` (which held the `GET /portfolio` handler and
-  `_load_portfolio_view`, moved out of `routes.py` in #65) is now `api/holdings.py`, serving
-  `/accounts/holdings`. The loader is `_load_holdings_view`.
-- `templates/portfolio.html` is now `account_holdings.html`.
-- `GET /portfolio?account=X` answers with a 308 to `/accounts/holdings?account=X`, passing the
-  query string on unchanged and asking nobody who is logged in (the target page does). It lives
-  in a new `api/portfolio.py`, so PF-4 extends that file rather than moving the route. Without
-  `account`, `/portfolio` is still a 422 until PF-4.
-- Every link now points at the new URL: the home page's account rows, the account label on
-  `/accounts`, "View holdings" after an import, `partials/_account_header.html` (Holdings) and
-  `scripts/review_pages.py`. A unit test checks that no template links to `/portfolio`.
-  - Two items in the original list needed no change. The account switcher submits to the
-    current path, so it moved with the page. No deletion redirect pointed at `/portfolio`.
+The layout foundation, applied first to the pages that are just one wide table.
 
-Files: `api/{portfolio_page→holdings,portfolio,app}.py`,
-`templates/{portfolio→account_holdings,home,accounts,transactions_import,transactions}.html`,
-`partials/_account_header.html`, `scripts/review_pages.py`; `docs/architecture.md`,
-`docs/ui-architecture.md`, `docs/smoke-test.md`.
+- **Raise `--content-max`** from 1120px to 1600px. The site header shares the variable, so the logo and nav line up
+  with the content edge again. Today the logo sits about 110px left of the cards.
+- **Width tiers instead of one-off `max-width: 880px` rules.** There are three: *narrow* (auth
+  cards, 380px), *form* (560px), and *full* (the content width). Today `.card-wide`, `.as-of`,
+  `.summary-tiles` and `.account-header` each repeat 880px. They become tiers. The holdings
+  pages and Overview keep 880px until LY-4 to LY-6 lay them out. Otherwise they would turn into
+  stretched, stacked pages for a while, with a 1600px chart about 800px tall.
+- **Full width for Transactions, Tickers and the two admin mapping tables.** Text columns
+  (instrument, name, reference) take the spare width, and numeric columns stay tight. The
+  truncated transaction reference can then show in full. The admin page's form card stays
+  narrow, as agreed.
+- **Account header** (heading, sub-nav, switcher) spans the full width on the account pages
+  that become full-width. It must line up with the cards under it, so on Holdings it stays at
+  880px until LY-5.
+- Page gutters scale with the window (`clamp()`), so a 1920px screen gets a margin, not 24px.
 
-### PF-3. web: portfolio client for `/holdings`
+Tests: the moved pages render their tables in a full-tier card. Verify with LY-1's checks: no
+overflow at any width, phone stacking unchanged.
 
-**Status:** done
+Files: `static/web.css`, `templates/{transactions,tickers,admin_mappings,base}.html`,
+`partials/_account_header.html`, `docs/ui-architecture.md`, `screenshots/`.
 
-`list_holdings(user_id)` on the `PortfolioClient` protocol and `HttpPortfolioClient`, calling
-PF-1's `GET /holdings` and returning `Holdings(holdings, totals)`: tuples of `Holding`, each with
-its `HoldingAccount` breakdown, and `HoldingsTotals` or None. Fields mirror PF-1's response
-models one for one, nullable where PF-1 serves null; Decimals arrive as strings. Portfolio's
-order (by ticker, breakdown by label) is kept. A malformed body, including a `priced` or
-`mixed_currency` that isn't a real boolean, is `PortfolioUnavailable`; no new error type.
+### LY-3. Chart sized by its container
 
-The task first said "the fake client used in tests gets the same method". There is no shared
-fake: each page's test file defines its own with only what that page calls, so PF-4's test file
-adds `list_holdings` to its fake.
+**Status:** blocked (LY-1)
 
-Tests: `tests/unit/test_portfolio_client_holdings.py`. No integration test yet, since no page
-calls it; PF-4's page test in `tests/integration/test_portfolio_flow.py` runs it against
-portfolio's real app.
+`portfolio_chart.js` uses Chart.js's default 2:1 aspect ratio, so its height is decided by its
+width. The chart is 880px wide today, so about 440px tall. That breaks either way once layouts
+change. Full width (stacked, about 1550px) makes it about 775px tall. Beside a table its height
+is unrelated to the table's.
 
-Files: `portfolio_client/{base,http_client}.py`; `docs/architecture.md` (the module list's
-`portfolio_client` entry, as web's doc has no endpoint table).
+- Set `maintainAspectRatio: false`, and let a wrapper around the `<canvas>` set the height. By
+  default that is a `clamp()` between a readable minimum (about 280px) and maximum (about
+  480px). A layout can override it; LY-4 has the chart stretch to its row.
+- Check that x-axis tick density and the range buttons still read well at about 420px wide (the
+  chart column) and at phone width.
+- On its own this changes nothing visible on today's 880px cards, apart from the height
+  `clamp()` gives. So it can merge before LY-4.
 
-### PF-4. web: `/portfolio` combined page
+Tests: the chart template renders the sizing wrapper on both pages that have a chart. Verify
+visually at all widths, in all three chart views.
 
-**Status:** done
+Files: `static/portfolio_chart.js`, `static/web.css`,
+`templates/{portfolio,account_holdings}.html`, `docs/ui-architecture.md` (chart section).
 
-As built:
-- `api/portfolio.py`'s one `/portfolio` handler keeps the 308 when `account` is present (an
-  empty `account` is a 422) and renders the combined page otherwise. It calls `require_user`
-  itself after the redirect check, so the redirect still makes no `auth` call. As a result,
-  overriding `require_user` doesn't reach the page, and the integration tests override
-  `get_auth_client` instead.
-- It calls `list_accounts`, `list_holdings` and `list_unmapped_instruments` concurrently, each
-  degrading on its own. The account list is there only because `/holdings` is empty both for no
-  accounts (the first-run card) and for accounts holding nothing ("No holdings yet").
-- A "Portfolio" nav link sits between Overview and Accounts. The phone nav's gap tightened, so
-  an admin's five links fit at 360px.
-- The page shows:
-  - the "Prices as of" line and four tiles (market value, cost basis, total return € and %,
-    dividends), from `totals`,
-  - the unmapped warning over the user's whole list, de-duplicated across brokers
-    (`portfolio_view.unmapped_across_brokers`). The markup moved into
-    `partials/_unmapped_notice.html`, which both holdings pages include,
-  - the holdings table: Ticker | Units | Avg cost | Market value | Weight | Unrealized € / % |
-    Total return € / %. Native figures are on a muted second line, only off EUR, and read
-    "Mixed currencies" when the accounts' currencies differ,
-  - under each row, a full-width breakdown row, including for single-account holdings: a
-    `<details>` ("In N accounts") holding a stackable table of each account's units, native
-    average cost, cost basis, market value and unrealized €, with links to that account's page.
-- Weight is computed over priced rows only (`portfolio_view.build_portfolio_holdings`).
-  Unpriced rows use `ticker_status.load_statuses`.
-- A failed `/holdings` shows a notice and no table or tiles. A failed account list is never the
-  first-run card.
-- PF-2's "no template links to `/portfolio`" test now checks for `/portfolio?`.
-- `scripts/review_pages.py` covers `portfolio` and `portfolio-breakdown` (opened).
-- Tests:
-  - `tests/unit/test_portfolio_page.py`,
-  - `tests/unit/test_portfolio_view.py`,
-  - `tests/unit/test_responsive_a11y.py`,
-  - `tests/unit/test_account_holdings_page.py`,
-  - two in `tests/integration/test_portfolio_flow.py`: no accounts, and one ticker bought in two
-    accounts showing as one row. These also cover PF-3's client against portfolio's real app.
+### LY-4. `/portfolio`: table and chart side by side
 
-Files: `api/portfolio.py`, `portfolio_view.py`, new `templates/portfolio.html` and
-`partials/_unmapped_notice.html`, `account_holdings.html`, `base.html`, `static/web.css`,
-`scripts/review_pages.py`; `docs/architecture.md`, `docs/ui-architecture.md`.
+**Status:** blocked (LY-2, LY-3)
 
-### PF-5. portfolio: cross-account return series
+- **Layout.** The as-of line and the five tiles span the full width, so all five tiles fit on
+  one row at 1280px and up. Below them is a two-column grid (`.split`, reused by LY-5 and LY-6).
+  The Holdings card is on the left, about 3fr, with a minimum of the table's natural width. The
+  Returns card is on the right, about 2fr, with a minimum of about 420px.
+- **Breakpoint.** The ten-column table needs about 875px inside its card, about 940px with
+  padding. With the chart's minimum and the gap, two columns need content of about 1400px, so a
+  viewport of about 1460px or more. Below that the cards stack, table first, at full width. At
+  1280px that is still a clear gain, 1232px against today's 880px. Measure the exact value in
+  this task. The table keeps all ten columns (see Agreed requirements).
+- **Tall tables.** Opening a holding's breakdown (`<details>`) makes the table much taller than
+  the chart. The Returns card is `position: sticky` in its column, so the chart stays in view
+  while the user scrolls the table. With both cards aligned to the top, the chart doesn't
+  stretch with the table.
+- **Error and empty states** still sit in their own card (holdings error with chart, chart
+  error with holdings, first run). The first-run welcome card stays narrow and alone.
+- `.content-wide` and the `.table-scroll` wrapper are reviewed. The scroll box stays only for
+  widths where the table still can't fit.
 
-**Status:** done
+Tests: both cards render inside the split container, holdings first. Each error state still
+renders the other card. First run renders neither.
 
-As built:
-- `returns/performance.py` keys rows and flows on (account, ticker), and `TradeFlow` gained
-  `account_id`. `compute_series` is the single pass, returning `PortfolioPoint`s with the summed
-  EUR figures, `total_return_pct` and `growth_pct`. `compute_growth` is now its growth-only
-  projection, so `GET /returns/growth` is unchanged and its existing tests pin that.
-  `compute_ticker_growth` gives `by_ticker`. It includes closed tickers, sorted by ticker.
-- `pipeline.list_trade_flows(conn, account, mappings=...)` was extracted from `list_growth`, so
-  both endpoints resolve trades through one function.
-- `holdings/flows.list_portfolio_returns` reads each account's full history (never ranged), then
-  crops `series` to `start`/`end`.
-- `jobs.get_portfolio_returns` logs "no rows in any account" differently from "no days in the
-  requested range".
-- Tests: `tests/unit/returns/test_performance.py`, `tests/unit/pipeline/test_pipeline_growth.py`,
-  `tests/unit/holdings/test_flows.py`, `tests/unit/test_jobs_portfolio_returns.py`,
-  `tests/unit/api/test_routes_returns.py`, `tests/integration/test_portfolio_returns.py`.
+Files: `templates/portfolio.html`, `static/web.css`, `docs/ui-architecture.md`, `screenshots/`.
 
-The original spec follows.
+### LY-5. Account holdings: table and chart side by side
 
-`GET /returns/portfolio?user_id[&start&end]` returns an object with two parts:
-- **`series`**, one point per date:
-  - summed market value, cost basis, dividends and total return in EUR,
-  - `total_return_pct`, recomputed from the sums,
-  - `growth_pct`, the whole portfolio's time-weighted growth since inception.
-- **`by_ticker`**, one `{canonical_ticker, growth_pct}` per ticker: that holding's latest
-  growth since inception across every account holding it.
+**Status:** blocked (LY-4)
 
-`start` and `end` only crop `series`. Growth is always computed from the first priced day, so a
-shorter range never restarts it at zero, and `by_ticker` ignores the range.
+The same `.split` on `/accounts/holdings`, after LY-4 has settled the pattern. Its table has
+seven cells, not ten, so the two-column breakpoint is lower. Measure it; it is expected to be
+about 1200px, so two columns already apply at 1280px. The account header, as-of line and tiles
+span both columns. The "Prices loading" row and the no-history state behave as on `/portfolio`.
 
-One series carries the EUR figures and growth together, so the chart needs one call and no join
-by date. #65's per-account page needed that join only because its euro series was built in web.
+Tests: as LY-4, for this page.
 
-**Why per-row growth lives here, not in PF-1's `/holdings`.** It needs each ticker's full
-history and its trades, the same read the series makes. `/holdings` reads only the latest rows
-and stays cheap. Keeping growth in a separate call also lets it fail on its own: the table still
-renders, and the growth cells show "—".
+Files: `templates/account_holdings.html`, `static/web.css`, `docs/ui-architecture.md`,
+`screenshots/`.
 
-**Growth across accounts.**
-- It reuses `returns/performance.py`'s `compute_growth`, run over every account's return rows
-  and `BUY`/`SELL` flows at once. It is never an average of per-account growth figures, which is
-  not a time-weighted return.
-- `compute_growth` groups rows and lands flows by `canonical_ticker` alone. Given two accounts'
-  rows, the same ticker would collapse into one forward-filled series, which is the bug UI-11
-  documented. So it must first be keyed on (account, ticker):
-  - `TradeFlow` gains `account_id`,
-  - the grouping and the flow lookup use the pair,
-  - existing `GET /returns/growth` results stay unchanged (a regression test pins this).
-- Each account's transactions resolve through `mappings.resolve` with that account's own broker,
-  as `pipeline.list_growth` does.
-- A sell in one account and a buy in another count as money out and money in. That is correct
-  for a time-weighted return, and a test should cover it.
-- **Per ticker:** `compute_growth` runs over that ticker's rows and flows from every account,
-  still keyed on (account, ticker), and the last point is the figure. A ticker sold out and
-  bought back holds flat while nothing is held, as account growth does.
+### LY-6. Overview: two-column layout
 
-**Forward-fill** happens in Python, in the same pass `compute_growth` already makes, rather than
-in SQL. Record why. No new table.
+**Status:** blocked (LY-4)
 
-**Placement.** `pipeline.py` (51 KB) and `jobs.py` (52 KB) are near the limit, so the
-orchestration goes in `holdings/flows.py`.
+Today Overview shows four tiles and a two-line accounts list, and nothing else.
 
-Tests:
-- one account, which matches `GET /returns/growth`,
-- the same ticker in two accounts, for both the portfolio series and `by_ticker`,
-- a ticker held in only one account, whose `by_ticker` figure matches that account's growth
-  over that ticker alone,
-- money moving between accounts,
-- `start` and `end` cropping `series` without changing any growth figure,
-- an account with no rows yet,
-- an integration test that checks another user's data doesn't leak in.
+- The tiles span the full width.
+- The accounts list is on the left and the cross-account returns chart on the right, in LY-4's
+  `.split`. The chart uses the same `portfolio_chart.js` and the same `list_portfolio_returns`
+  call that `/portfolio` already makes, so it needs no portfolio change. It is the existing chart,
+  not a new figure. Two alternatives were considered: a "largest holdings" preview, and a
+  one-column page with a wider accounts table. The chart was chosen.
+- A failed returns call must not hide the accounts list, and the reverse. It is the same
+  per-section error isolation `/portfolio` uses.
 
-Files: `returns/performance.py`, `holdings/flows.py`, `jobs.py`, `api/{routes,models}.py`;
-`docs/architecture.md`, `docs/flows.md`.
+Tests: Overview renders the chart and accounts list in the split container. Each failing call
+leaves the other section rendered. The first run shows the welcome card only.
 
-### PF-6. web: returns chart on `/portfolio`
+Files: `api/overview.py`, `templates/home.html`, `static/web.css`, `docs/ui-architecture.md`,
+`screenshots/`.
 
-**Status:** done
+### LY-7. Retire the 880px column
 
-As built:
-- `portfolio_client` gained `list_portfolio_returns` (`GET /returns/portfolio`, no `start` or
-  `end`: the range buttons crop on the client) and `PortfolioReturns`, `PortfolioSeriesPoint`
-  and `TickerGrowth`.
-- `api/portfolio.py` makes it a fourth concurrent call, degrading on its own.
-- `portfolio_view.build_portfolio_holdings` takes `by_ticker` and sets each row's `growth_pct`,
-  None unless the row is `priced`. `build_portfolio_chart_payload` builds the island straight
-  from the series, in the per-account island's shape, so `static/portfolio_chart.js` is reused
-  unchanged.
-- The page adds:
-  - a "Growth since inception" tile between Total return and Dividends,
-  - a Growth % column after Total return,
-  - a "Returns over time" card under the holdings, with the Total return, Market value and
-    Growth % views and the 1M/6M/1Y/All ranges.
-- **Changed from the spec below:** a failed call can't just drop the Growth % button. The
-  chart, the tile and the column all come from that one call, so the chart card shows its own
-  notice instead, and the tile and every growth cell show "—". The rest of the page is
-  unaffected, and no "may be incomplete" banner shows. With a series, the Growth % button always
-  shows, since every point carries growth. An empty series reads "No return history yet".
-- **Layout:** ten columns don't fit the 880px card, so `/portfolio` takes the full content
-  width (`.content-wide`), and the table sits in a focusable `.table-scroll` region. Between
-  phone and desktop widths it scrolls in its box. This also fixes PF-4's nine-column table,
-  which made the whole page scroll sideways at tablet widths.
-- `review_pages.py` gained a `portfolio-growth` page (all 96 checks pass). The integration test
-  checks that portfolio's real empty series reads "No return history yet".
+**Status:** blocked (LY-5, LY-6)
 
-The original spec follows.
+Once every data page uses a width tier, remove what is left of the old column: `.card-wide`,
+`.content-wide`, and any remaining `max-width: 880px`. Run a final `review_pages.py` sweep at
+every width, and check that `ui-architecture.md` no longer describes the 880px layout anywhere.
 
-Reuse `static/portfolio_chart.js` and the JSON data island pattern, fed from PF-5 through a new
-client method. The island carries `market_value_eur`, `total_return_eur` and `growth_pct`, as
-#65 defined it. `by_ticker` is joined onto the holdings table rows by `canonical_ticker`, in a
-pure function in `portfolio_view.py`.
-
-The toggles work as on the per-account page:
-- views: Total return, Market value, and Growth %,
-- ranges: 1M, 6M, 1Y and All.
-
-Growth figures:
-- The "Growth since inception" tile is added here, from the series' last point, because it
-  comes from the same call.
-- A "Growth %" column is added to the holdings table, after Total return.
-- A row shows "—" when it is unpriced or partly priced (`priced = false`, so a growth figure over
-  only some accounts is never shown as the holding's), or when `by_ticker` has no entry for it.
-- If the call fails, the tile and every growth cell show "—" and the Growth % button is dropped,
-  but the rest of the holdings table is unaffected.
-
-Files: `portfolio_client/*`, `portfolio_view.py`, `api/portfolio.py`, `templates/portfolio.html`;
-`docs/architecture.md`, `docs/ui-architecture.md`.
-
-## Known limitations
-
-- **Holdings merge only by `canonical_ticker`.** Different listings of one security stay as
-  separate rows.
-- **Portfolio growth inherits #65's limits** (`portfolio/docs/flows.md`, "Growth since
-  inception"):
-  - a dividend paid after a full close is missed,
-  - stale rows after a failed rebuild make growth dip,
-  - rows and transactions are two separate reads.
+Files: `static/web.css`, any template still using the old classes, `docs/ui-architecture.md`,
+`screenshots/`.
 
 ## Deferred
 
@@ -378,7 +246,9 @@ schema discussion per `.claude/rules/data-schema.md`):
 - Unmapped instruments per account, not per user (UI-7 filters by broker, so two accounts at one
   broker share a list).
 - Rescaling prices quoted in minor currency units (`GBp`, `ZAc`, `ILA`).
+- Merging different listings of one security (e.g. by ISIN) into one portfolio row.
 
 New in this chunk:
 
-- Merging different listings of one security (e.g. by ISIN) into one portfolio row.
+- Forms beside the list they add to (Accounts, Add transaction, Add a ticker, the admin mapping
+  form), on wide screens. Left out of this chunk by choice.
