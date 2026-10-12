@@ -926,7 +926,7 @@ def run_list_all_unmapped_instruments(*, settings: Settings | None = None) -> di
 
 
 def run_rebuild_returns_all(*, settings: Settings | None = None) -> dict[str, int | str]:
-    """run_rebuild_returns for every user with an account -- what the returns-refresh container
+    """run_rebuild_returns for every user with an account -- what the returns-refresh-all container
     runs on a schedule, so new prices from data-store's daily ingestion reach every holder's
     returns without anyone touching their account. See docs/flows.md's "Returns follow
     new prices".
@@ -995,10 +995,10 @@ def run_refresh_ready_tickers(
     within minutes, not at the next 6-hourly `rebuild-returns --all`.
 
     Stateless on purpose: a time window, not a "last seen" checkpoint, so it needs no table of
-    its own. The returns-refresh-ready container runs it more often than the window is long, so
-    every ticker falls inside at least one run; a ticker caught twice is rebuilt twice, which is
-    a harmless re-upsert. If the sweep is down for longer than the window, the 6-hourly refresh
-    still catches the ticker up. Each account is isolated, as in run_rebuild_returns_all.
+    its own. The returns-refresh-new-tickers container runs it more often than the window is
+    long, so every ticker falls inside at least one run; a ticker caught twice is rebuilt twice,
+    which is a harmless re-upsert. If the sweep is down for longer than the window, the 6-hourly
+    refresh still catches the ticker up. Each account is isolated, as in run_rebuild_returns_all.
     """
     configure_logging()
     settings = settings or load_settings()
