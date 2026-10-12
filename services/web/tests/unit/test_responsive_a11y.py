@@ -81,7 +81,7 @@ class FakePortfolioClient:
         return self.holdings
 
     async def list_portfolio_returns(self, *, user_id):
-        return PortfolioReturns(series=(), by_ticker=())
+        return PortfolioReturns(series=())
 
     async def list_unmapped_instruments(self, *, user_id):
         return []
@@ -90,9 +90,6 @@ class FakePortfolioClient:
         return self.positions
 
     async def list_returns(self, *, user_id, account_label):
-        return []
-
-    async def list_growth(self, *, user_id, account_label):
         return []
 
     async def list_tracked_tickers(self, *, requested_by=None, statuses=None, tickers=None):
@@ -314,7 +311,6 @@ _PORTFOLIO_LABELS = [
     "Unrealized return (%)",
     "Total return",
     "Total return (%)",
-    "Growth %",
 ]
 
 
@@ -344,7 +340,7 @@ def test_portfolio_table_can_stack_at_phone_width(client):
     breakdown_cells = re.findall(
         r'<tr role="row" class="breakdown-row">\s*(<td\b[^>]*>)', page_html
     )
-    assert [_attr(c, "colspan") for c in breakdown_cells] == ["10", "10"]
+    assert [_attr(c, "colspan") for c in breakdown_cells] == ["9", "9"]
     assert all(_attr(c, "role") == "cell" for c in breakdown_cells)
     inner = [t for t in _tags(page_html, "table") if "breakdown-table" in (_attr(t, "class") or "")]
     assert len(inner) == 2
@@ -646,11 +642,7 @@ def test_review_script_covers_every_chart_view_on_both_chart_pages():
     reviewed = {(page.path.split("?", 1)[0], page.click) for page in _review_script().PAGES}
 
     for path in ("/portfolio", "/accounts/holdings"):
-        for click in (
-            None,
-            "[data-chart-view=market_value_eur]",
-            "[data-chart-view=growth_pct]",
-        ):
+        for click in (None, "[data-chart-view=market_value_eur]"):
             assert (path, click) in reviewed, f"{path} not reviewed with click {click}"
 
 

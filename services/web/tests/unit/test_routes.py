@@ -215,10 +215,7 @@ class FakePortfolioClient:
 
     # Overview's returns chart (LY-6): no history, so it shows its empty state.
     async def list_portfolio_returns(self, *, user_id):
-        return PortfolioReturns(series=(), by_ticker=())
-
-    async def list_growth(self, *, user_id, account_label):
-        return []
+        return PortfolioReturns(series=())
 
     async def list_ticker_mappings(self):
         self.calls.append(("list_ticker_mappings",))

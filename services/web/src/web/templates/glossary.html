@@ -43,47 +43,9 @@
       percentage is that amount ÷ cost basis, so it measures what <em>your money</em> made, and
       depends on when and how much you bought.</dd>
 
-    <dt id="growth">Growth % <span class="glossary-alias">(Growth since inception)</span></dt>
-    <dd>How the investment itself has performed since your first buy. It is time-weighted: each
-      day's return is worked out and the days are chained together, so buying or selling never
-      moves it by itself. Only prices and dividends do. Use it to compare a holding with a
-      benchmark or with another holding, without your buy timing in the way.</dd>
-
     <dt id="prices-as-of">Prices as of</dt>
     <dd>The trading day of the latest closing price used. Prices update daily, and returns are
       recalculated a few times a day.</dd>
   </dl>
-</section>
-
-<section class="card glossary" id="total-return-vs-growth">
-  <h2>Total return % and Growth %</h2>
-  <p>They are equal when you bought once and the holding paid no dividends. They differ when you
-    bought at different times. Say you buy one unit at <span class="mono">€100</span>, the price
-    rises to <span class="mono">€150</span> and you buy one more, then the price falls to
-    <span class="mono">€120</span>:</p>
-  <table class="positions-table glossary-example">
-    <thead>
-      <tr>
-        <th>Figure</th>
-        <th class="num">Value</th>
-        <th>Why</th>
-      </tr>
-    </thead>
-    <tbody>
-      <tr>
-        <td>Growth %</td>
-        <td class="num"><span class="mono gain">+20.00%</span></td>
-        <td><span class="mono">+50%</span> then <span class="mono">−20%</span>: the investment
-          is up from where you started.</td>
-      </tr>
-      <tr>
-        <td>Total return %</td>
-        <td class="num"><span class="mono loss">−4.00%</span></td>
-        <td>You paid <span class="mono">€250</span> and hold <span class="mono">€240</span>: the
-          second unit was bought near the top.</td>
-      </tr>
-    </tbody>
-  </table>
-  <p>Growth % says how the investment did. Total return % says how your money in it did.</p>
 </section>
 {% endblock %}

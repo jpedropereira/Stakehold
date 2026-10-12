@@ -76,9 +76,8 @@
   {% if returns_error %}
   {% call banner("error") %}<strong>Couldn't load your returns.</strong> {{ returns_error }}{% endcall %}
   {% elif chart_payload %}
-  {# /portfolio's chart, from the same series across every account: growth is on every point,
-     so its button always shows. #}
-  {{ returns_chart(chart_payload, true) }}
+  {# /portfolio's chart, from the same series across every account. #}
+  {{ returns_chart(chart_payload) }}
   {% else %}
   <p class="entry-empty">No return history yet — returns appear once Stakehold has prices for your holdings' dates. {{ freshness }}</p>
   {% endif %}

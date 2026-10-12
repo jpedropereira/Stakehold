@@ -899,7 +899,7 @@ img.logo-on-dark {
 }
 
 /* Figures line up on their decimal side. Two classes, to outrank the left-aligned cell rule. */
-:is(.holdings-table, .transactions-table, .glossary-example) .num {
+:is(.holdings-table, .transactions-table) .num {
   text-align: right;
   white-space: nowrap;
 }
@@ -1284,13 +1284,4 @@ img.logo-on-dark {
 
 .glossary-terms dd {
   margin: var(--space-1) 0 0;
-}
-
-.glossary-alias {
-  font-weight: 400;
-  color: var(--text-muted);
-}
-
-.glossary-example {
-  margin: var(--space-4) 0;
 }

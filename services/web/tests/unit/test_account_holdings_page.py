@@ -23,7 +23,6 @@ from web.auth_client.base import AuthResult, AuthUser
 from web.auth_client.errors import SessionInvalid
 from web.portfolio_client.base import (
     Account,
-    GrowthPoint,
     Holdings,
     PortfolioReturns,
     Position,
@@ -66,8 +65,6 @@ class FakePortfolioClient:
         self.list_latest_returns_error: Exception | None = None
         self.list_unmapped_instruments_result: list = []
         self.list_unmapped_instruments_error: Exception | None = None
-        self.list_growth_result: list = []
-        self.list_growth_error: Exception | None = None
         self.list_accounts_error: Exception | None = None
         # {ticker: status} data-store reports for tickers it tracks directly (TK-9).
         self.tracked_statuses: dict[str, str] = {}
@@ -107,12 +104,6 @@ class FakePortfolioClient:
             if ticker in self.tracked_statuses
         ]
 
-    async def list_growth(self, *, user_id, account_label):
-        self.calls.append(("list_growth", user_id, account_label))
-        if self.list_growth_error:
-            raise self.list_growth_error
-        return self.list_growth_result
-
     async def list_latest_returns(self, *, user_id, account_label):
         self.calls.append(("list_latest_returns", user_id, account_label))
         if self.list_latest_returns_error:
@@ -124,7 +115,7 @@ class FakePortfolioClient:
         return Holdings(holdings=(), totals=None)
 
     async def list_portfolio_returns(self, *, user_id):
-        return PortfolioReturns(series=(), by_ticker=())
+        return PortfolioReturns(series=())
 
 
 def _settings() -> Settings:
@@ -285,7 +276,7 @@ def test_holdings_page_account_not_found_sets_csrf_cookie(client):
     assert f'value="{csrf_token}"' in response.text
 
 
-def test_holdings_page_fetches_positions_returns_latest_returns_and_growth(client):
+def test_holdings_page_fetches_positions_returns_and_latest_returns(client):
     test_client, _, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)
 
@@ -294,7 +285,6 @@ def test_holdings_page_fetches_positions_returns_latest_returns_and_growth(clien
     assert response.status_code == 200
     user_id = _logged_in_user().user_id
     assert sorted(fake_portfolio.calls) == [
-        ("list_growth", user_id, "main"),
         ("list_latest_returns", user_id, "main"),
         ("list_positions", user_id, "main"),
         ("list_returns", user_id, "main"),
@@ -437,18 +427,8 @@ def test_holdings_page_chart_payload_carries_the_euro_series(client):
 
     assert 'id="returns-chart"' in response.text
     assert _chart_payload(response.text) == [
-        {
-            "date": "2026-01-05",
-            "market_value_eur": 1600.0,
-            "total_return_eur": 100.0,
-            "growth_pct": None,
-        },
-        {
-            "date": "2026-01-06",
-            "market_value_eur": 1450.0,
-            "total_return_eur": -50.0,
-            "growth_pct": None,
-        },
+        {"date": "2026-01-05", "market_value_eur": 1600.0, "total_return_eur": 100.0},
+        {"date": "2026-01-06", "market_value_eur": 1450.0, "total_return_eur": -50.0},
     ]
 
 
@@ -788,101 +768,21 @@ def test_an_unanswered_status_call_still_says_waiting_for_prices(client):
     ]
 
 
-# --- growth since inception ---
+# --- no growth figure ---
 
 
-def _growth(*pairs):
-    return [GrowthPoint(price_date=d, growth_pct=Decimal(g)) for d, g in pairs]
-
-
-def _with_returns_and_growth(fake_portfolio, growth):
-    fake_portfolio.list_returns_result = [
-        _return_row(price_date=date(2026, 1, 5), market_value="1500", cost_basis="1500"),
-        _return_row(price_date=date(2026, 1, 6), market_value="1685", cost_basis="1500"),
-    ]
-    fake_portfolio.list_latest_returns_result = [
-        _return_row(price_date=date(2026, 1, 6), market_value="1685", cost_basis="1500")
-    ]
-    fake_portfolio.list_growth_result = growth
-
-
-def test_holdings_page_chart_payload_carries_growth_per_date(client):
+def test_holdings_page_shows_no_growth_figure_or_view(client):
+    """Growth since inception was removed; it belongs to a future backtesting module."""
     test_client, _, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)
-    _with_returns_and_growth(
-        fake_portfolio, _growth((date(2026, 1, 5), "0E-8"), (date(2026, 1, 6), "0.1234"))
-    )
+    fake_portfolio.list_returns_result = [_return_row()]
+    fake_portfolio.list_latest_returns_result = [_return_row()]
 
     response = test_client.get("/accounts/holdings", params={"account": "main"})
 
-    assert [p["growth_pct"] for p in _chart_payload(response.text)] == [0.0, 0.1234]
-
-
-def test_holdings_page_offers_the_growth_view_when_there_is_growth(client):
-    test_client, _, fake_auth, fake_portfolio = client
-    _logged_in(test_client, fake_auth)
-    _with_returns_and_growth(fake_portfolio, _growth((date(2026, 1, 6), "0.1234")))
-
-    response = test_client.get("/accounts/holdings", params={"account": "main"})
-
-    assert re.search(
-        r'<button type="button" class="btn btn-ghost" data-chart-view="growth_pct" '
-        r'aria-pressed="false">Growth %</button>',
-        response.text,
-    )
-
-
-def test_holdings_page_tiles_show_the_latest_growth_as_a_gain(client):
-    test_client, _, fake_auth, fake_portfolio = client
-    _logged_in(test_client, fake_auth)
-    _with_returns_and_growth(
-        fake_portfolio, _growth((date(2026, 1, 5), "0"), (date(2026, 1, 6), "0.1234"))
-    )
-
-    response = test_client.get("/accounts/holdings", params={"account": "main"})
-
-    assert (
-        _tile(response.text, "Growth since inception") == '<span class="mono gain">+12.34%</span>'
-    )
-
-
-def test_holdings_page_tiles_show_negative_growth_as_a_loss(client):
-    test_client, _, fake_auth, fake_portfolio = client
-    _logged_in(test_client, fake_auth)
-    _with_returns_and_growth(fake_portfolio, _growth((date(2026, 1, 6), "-0.0525")))
-
-    response = test_client.get("/accounts/holdings", params={"account": "main"})
-
-    assert _tile(response.text, "Growth since inception") == '<span class="mono loss">−5.25%</span>'
-
-
-def test_holdings_page_degrades_when_growth_is_unavailable(client):
-    test_client, _, fake_auth, fake_portfolio = client
-    _logged_in(test_client, fake_auth)
-    _with_returns_and_growth(fake_portfolio, [])
-    fake_portfolio.list_growth_error = PortfolioUnavailable("boom")
-
-    response = test_client.get("/accounts/holdings", params={"account": "main"})
-
-    assert response.status_code == 200
-    assert "Can&#39;t reach the portfolio service" in response.text
-    # Only growth is missing: the other figures and the euro chart still show.
-    assert _tile(response.text, "Growth since inception") == '<span class="mono">—</span>'
-    assert _tile(response.text, "Market value") == '<span class="mono">€1,685.00</span>'
-    assert 'id="returns-chart"' in response.text
+    assert _tile(response.text, "Market value") is not None
+    assert "Growth" not in response.text
     assert 'data-chart-view="growth_pct"' not in response.text
-    assert [p["growth_pct"] for p in _chart_payload(response.text)] == [None, None]
-
-
-def test_holdings_page_account_not_found_from_growth_renders_404(client):
-    test_client, _, fake_auth, fake_portfolio = client
-    _logged_in(test_client, fake_auth)
-    fake_portfolio.list_growth_error = AccountNotFound("missing")
-
-    response = test_client.get("/accounts/holdings", params={"account": "main"})
-
-    assert response.status_code == 404
-    assert "doesn't exist" in response.text
 
 
 # --- the old URL: GET /portfolio?account=X (PF-2) ---------------------------
@@ -1102,7 +1002,6 @@ def test_each_figure_header_and_tile_links_to_its_glossary_entry(client):
         ("unrealized-return", "Unrealized return"),
         ("cost-basis", "Cost basis"),
         ("total-return", "Total return"),
-        ("growth", "Growth since inception"),
         ("dividends", "Dividends received"),
     } <= links
 

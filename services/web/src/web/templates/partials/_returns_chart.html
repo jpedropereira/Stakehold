@@ -1,15 +1,12 @@
 {# The returns chart (static/portfolio_chart.js) with its view and range buttons, fed from a
    JSON island. Shared by /portfolio, /accounts/holdings and Overview; each page keeps its own
-   error and empty states around it. The Growth % button shows only where every point has
-   growth. The buttons stay hidden until the script has drawn the chart. #}
-{% macro returns_chart(payload, show_growth) -%}
+   error and empty states around it. The buttons stay hidden until the script has drawn the
+   chart. #}
+{% macro returns_chart(payload) -%}
 <div class="chart-controls" hidden>
   <div class="chart-toggle" role="group" aria-label="Chart view">
     <button type="button" class="btn btn-ghost" data-chart-view="total_return_eur" aria-pressed="true">Total return</button>
     <button type="button" class="btn btn-ghost" data-chart-view="market_value_eur" aria-pressed="false">Market value</button>
-    {% if show_growth %}
-    <button type="button" class="btn btn-ghost" data-chart-view="growth_pct" aria-pressed="false">Growth %</button>
-    {% endif %}
   </div>
   <div class="chart-toggle" role="group" aria-label="Date range">
     {% for months, label in [(1, "1M"), (6, "6M"), (12, "1Y"), (0, "All")] %}

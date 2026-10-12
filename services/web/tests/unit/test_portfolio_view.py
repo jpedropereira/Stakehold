@@ -3,12 +3,10 @@ from decimal import Decimal
 
 from web.portfolio_client.base import (
     Account,
-    GrowthPoint,
     Holding,
     PortfolioSeriesPoint,
     Position,
     Return,
-    TickerGrowth,
     UnmappedInstrument,
 )
 from web.portfolio_view import (
@@ -773,54 +771,20 @@ def _point(price_date, market_value, total_return):
     )
 
 
-def test_chart_payload_joins_growth_onto_each_date():
+def test_chart_payload_is_the_charts_data_island_shape():
     points = [
         _point(date(2026, 1, 5), "1000", "0"),
         _point(date(2026, 1, 6), "1100", "100"),
     ]
-    growth = [
-        GrowthPoint(price_date=date(2026, 1, 5), growth_pct=Decimal("0E-8")),
-        GrowthPoint(price_date=date(2026, 1, 6), growth_pct=Decimal("0.12345678")),
+
+    assert build_chart_payload(points) == [
+        {"date": "2026-01-05", "market_value_eur": 1000.0, "total_return_eur": 0.0},
+        {"date": "2026-01-06", "market_value_eur": 1100.0, "total_return_eur": 100.0},
     ]
-
-    assert build_chart_payload(points, growth) == [
-        {
-            "date": "2026-01-05",
-            "market_value_eur": 1000.0,
-            "total_return_eur": 0.0,
-            "growth_pct": 0.0,
-        },
-        {
-            "date": "2026-01-06",
-            "market_value_eur": 1100.0,
-            "total_return_eur": 100.0,
-            "growth_pct": 0.12345678,
-        },
-    ]
-
-
-def test_chart_payload_has_no_growth_for_a_date_growth_does_not_cover():
-    # e.g. the growth call failed, or the two reads straddled a rebuild.
-    points = [_point(date(2026, 1, 5), "1000", "0"), _point(date(2026, 1, 6), "1100", "100")]
-    growth = [GrowthPoint(price_date=date(2026, 1, 6), growth_pct=Decimal("0.1"))]
-
-    payload = build_chart_payload(points, growth)
-
-    assert [p["growth_pct"] for p in payload] == [None, 0.1]
-
-
-def test_chart_payload_ignores_growth_for_a_date_with_no_chart_point():
-    points = [_point(date(2026, 1, 6), "1100", "100")]
-    growth = [
-        GrowthPoint(price_date=date(2026, 1, 5), growth_pct=Decimal("0")),
-        GrowthPoint(price_date=date(2026, 1, 6), growth_pct=Decimal("0.1")),
-    ]
-
-    assert [p["date"] for p in build_chart_payload(points, growth)] == ["2026-01-06"]
 
 
 def test_chart_payload_of_nothing_is_empty():
-    assert build_chart_payload([], []) == []
+    assert build_chart_payload([]) == []
 
 
 # --- build_portfolio_holdings (PF-4) ---------------------------------------------
@@ -857,8 +821,8 @@ def test_build_portfolio_holdings_weights_each_row_by_market_value():
     rows = build_portfolio_holdings([a, b])
 
     assert rows == [
-        PortfolioHoldingRow(holding=a, weight=Decimal("0.75"), growth_pct=None),
-        PortfolioHoldingRow(holding=b, weight=Decimal("0.25"), growth_pct=None),
+        PortfolioHoldingRow(holding=a, weight=Decimal("0.75")),
+        PortfolioHoldingRow(holding=b, weight=Decimal("0.25")),
     ]
 
 
@@ -905,51 +869,10 @@ def test_unmapped_across_brokers_of_nothing_is_empty():
     assert unmapped_across_brokers([]) == []
 
 
-# --- growth on /portfolio's rows, and its chart (PF-6) -----------------------------
+# --- /portfolio's chart (PF-6) ---------------------------------------------------
 
 
-def _growth(ticker: str, pct: str) -> TickerGrowth:
-    return TickerGrowth(canonical_ticker=ticker, growth_pct=Decimal(pct))
-
-
-def test_build_portfolio_holdings_joins_each_tickers_growth():
-    rows = build_portfolio_holdings(
-        [_holding("A.AS", "3000"), _holding("B.AS", "1000")],
-        [_growth("B.AS", "-0.05"), _growth("A.AS", "0.12")],
-    )
-
-    assert [r.growth_pct for r in rows] == [Decimal("0.12"), Decimal("-0.05")]
-
-
-def test_build_portfolio_holdings_shows_no_growth_for_an_unpriced_holding():
-    """priced is false while any account holding it has no return row, so a growth figure would
-    cover only some of the holding: it is never shown as the holding's."""
-    rows = build_portfolio_holdings([_holding("NEW.DE", None)], [_growth("NEW.DE", "0.30")])
-
-    assert rows[0].growth_pct is None
-
-
-def test_build_portfolio_holdings_shows_no_growth_for_a_ticker_portfolio_has_none_for():
-    rows = build_portfolio_holdings([_holding("A.AS", "1000")], [_growth("B.AS", "0.10")])
-
-    assert rows[0].growth_pct is None
-
-
-def test_build_portfolio_holdings_without_growth_shows_none_on_every_row():
-    """The growth call failed, or hasn't anything yet."""
-    rows = build_portfolio_holdings([_holding("A.AS", "1000"), _holding("B.AS", "1000")])
-
-    assert [r.growth_pct for r in rows] == [None, None]
-
-
-def test_build_portfolio_holdings_ignores_growth_for_a_closed_ticker():
-    """by_ticker covers every ticker with return rows, closed ones too; only held ones are rows."""
-    rows = build_portfolio_holdings([_holding("A.AS", "1000")], [_growth("SOLD.AS", "0.40")])
-
-    assert [r.holding.canonical_ticker for r in rows] == ["A.AS"]
-
-
-def _series_point(day: int, value: str, total: str, growth: str) -> PortfolioSeriesPoint:
+def _series_point(day: int, value: str, total: str) -> PortfolioSeriesPoint:
     return PortfolioSeriesPoint(
         price_date=date(2026, 1, day),
         market_value_eur=Decimal(value),
@@ -957,29 +880,18 @@ def _series_point(day: int, value: str, total: str, growth: str) -> PortfolioSer
         dividends_received_eur=Decimal("0"),
         total_return_eur=Decimal(total),
         total_return_pct=None,
-        growth_pct=Decimal(growth),
     )
 
 
 def test_build_portfolio_chart_payload_is_the_charts_data_island_shape():
     series = [
-        _series_point(5, "1000.50", "0.50", "0.0005"),
-        _series_point(6, "990", "-10", "-0.01"),
+        _series_point(5, "1000.50", "0.50"),
+        _series_point(6, "990", "-10"),
     ]
 
     assert build_portfolio_chart_payload(series) == [
-        {
-            "date": "2026-01-05",
-            "market_value_eur": 1000.5,
-            "total_return_eur": 0.5,
-            "growth_pct": 0.0005,
-        },
-        {
-            "date": "2026-01-06",
-            "market_value_eur": 990.0,
-            "total_return_eur": -10.0,
-            "growth_pct": -0.01,
-        },
+        {"date": "2026-01-05", "market_value_eur": 1000.5, "total_return_eur": 0.5},
+        {"date": "2026-01-06", "market_value_eur": 990.0, "total_return_eur": -10.0},
     ]
 
 

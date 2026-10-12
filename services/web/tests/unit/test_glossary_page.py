@@ -30,7 +30,6 @@ ENTRIES = (
     "unrealized-return",
     "dividends",
     "total-return",
-    "growth",
     "prices-as-of",
 )
 
@@ -129,14 +128,13 @@ def test_no_nav_item_is_marked_current(client):
     assert 'aria-current="page"' not in html
 
 
-def test_total_return_and_growth_say_how_they_differ(client):
-    """The two percentages the holdings table shows side by side: the page must tell them
-    apart, which is why it exists."""
+def test_total_return_says_it_includes_dividends(client):
+    """The two percentages the holdings table shows side by side, unrealized and total return,
+    differ by dividends: the page must say so."""
     test_client, fake_auth = client
     _logged_in(test_client, fake_auth)
 
     html = test_client.get("/glossary").text
 
-    assert 'id="total-return-vs-growth"' in html
-    assert "time-weighted" in _entry(html, "growth").lower()
     assert "dividends" in _entry(html, "total-return").lower()
+    assert "growth" not in html.lower()

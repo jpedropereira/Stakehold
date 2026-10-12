@@ -1,7 +1,7 @@
 """GET /portfolio: every holding summed across the user's accounts (PF-4) -- the tiles from
 portfolio's totals, the holdings table with its per-account breakdown, holdings still waiting
 for prices, instruments waiting for a mapping, and the empty and error states -- and (PF-6) the
-growth tile, the Growth % column and the returns chart, all fed by one call. The old
+returns chart, fed by one call. The old
 /portfolio?account=X redirect is tested with the page it points at, in
 test_account_holdings_page.py.
 
@@ -29,7 +29,6 @@ from web.portfolio_client.base import (
     HoldingsTotals,
     PortfolioReturns,
     PortfolioSeriesPoint,
-    TickerGrowth,
     UnmappedInstrument,
 )
 from web.portfolio_client.errors import PortfolioUnavailable
@@ -62,7 +61,7 @@ class FakePortfolioClient:
         self.list_holdings_error: Exception | None = None
         self.unmapped: list[UnmappedInstrument] = []
         self.list_unmapped_instruments_error: Exception | None = None
-        self.portfolio_returns = PortfolioReturns(series=(), by_ticker=())
+        self.portfolio_returns = PortfolioReturns(series=())
         self.list_portfolio_returns_error: Exception | None = None
         # {ticker: status} data-store reports for tickers it tracks directly (TK-9).
         self.tracked_statuses: dict[str, str] = {}
@@ -673,10 +672,10 @@ def test_page_asks_portfolio_for_this_users_data(client):
     }
 
 
-# --- growth and the returns chart (PF-6) ------------------------------------------------------
+# --- the returns chart (PF-6) ------------------------------------------------------------------
 
 
-def _point(day, *, value="1200", total="200", growth="0.15"):
+def _point(day, *, value="1200", total="200"):
     return PortfolioSeriesPoint(
         price_date=date(2026, 1, day),
         market_value_eur=Decimal(value),
@@ -684,99 +683,28 @@ def _point(day, *, value="1200", total="200", growth="0.15"):
         dividends_received_eur=Decimal("0"),
         total_return_eur=Decimal(total),
         total_return_pct=Decimal(total) / Decimal("1000"),
-        growth_pct=Decimal(growth),
     )
 
 
-def _returns(*points, by_ticker=()):
-    return PortfolioReturns(
-        series=points,
-        by_ticker=tuple(TickerGrowth(t, Decimal(g)) for t, g in by_ticker),
-    )
+def _returns(*points):
+    return PortfolioReturns(series=points)
 
 
 def _with_a_priced_holding(fake_portfolio):
     fake_portfolio.holdings = Holdings(holdings=(_holding(),), totals=_totals())
 
 
-def test_growth_tile_shows_the_series_last_point(client):
+def test_page_shows_no_growth_tile_or_column(client):
+    """Growth since inception was removed; it belongs to a future backtesting module."""
     test_client, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)
     _with_a_priced_holding(fake_portfolio)
-    fake_portfolio.portfolio_returns = _returns(
-        _point(5, growth="0.02"), _point(6, growth="-0.0315")
-    )
-
-    tile = _tile(_page(test_client), "Growth since inception")
-
-    assert "−3.15%" in tile
-    assert "loss" in tile
-
-
-@pytest.mark.parametrize("failed", [True, False], ids=["call-failed", "no-history-yet"])
-def test_growth_tile_is_a_dash_without_a_series(client, failed):
-    test_client, fake_auth, fake_portfolio = client
-    _logged_in(test_client, fake_auth)
-    _with_a_priced_holding(fake_portfolio)
-    if failed:
-        fake_portfolio.list_portfolio_returns_error = PortfolioUnavailable("down")
-
-    tile = _tile(_page(test_client), "Growth since inception")
-
-    assert "—" in tile
-
-
-def test_growth_column_shows_each_holdings_growth(client):
-    test_client, fake_auth, fake_portfolio = client
-    _logged_in(test_client, fake_auth)
-    fake_portfolio.holdings = Holdings(
-        holdings=(_holding("IWDA.AS"), _holding("VWCE.DE")), totals=_totals()
-    )
-    fake_portfolio.portfolio_returns = _returns(
-        _point(6), by_ticker=[("IWDA.AS", "0.1234"), ("VWCE.DE", "-0.05")]
-    )
+    fake_portfolio.portfolio_returns = _returns(_point(6))
 
     html = _page(test_client)
 
-    assert re.search(r"<th[^>]*>(?:<a [^>]*>)?Growth %(?:</a>)?</th>", html)
-    iwda = _cell(_holding_row(html, "IWDA.AS"), "Growth %")
-    assert "+12.34%" in iwda and "gain" in iwda
-    assert "−5.00%" in _cell(_holding_row(html, "VWCE.DE"), "Growth %")
-
-
-def test_growth_column_is_a_dash_for_a_ticker_with_no_growth(client):
-    test_client, fake_auth, fake_portfolio = client
-    _logged_in(test_client, fake_auth)
-    _with_a_priced_holding(fake_portfolio)
-    fake_portfolio.portfolio_returns = _returns(_point(6), by_ticker=[("OTHER.AS", "0.1")])
-
-    assert "—" in _cell(_holding_row(_page(test_client), "IWDA.AS"), "Growth %")
-
-
-def test_growth_column_is_a_dash_when_the_call_fails_and_the_table_still_renders(client):
-    test_client, fake_auth, fake_portfolio = client
-    _logged_in(test_client, fake_auth)
-    _with_a_priced_holding(fake_portfolio)
-    fake_portfolio.list_portfolio_returns_error = PortfolioUnavailable("down")
-
-    row = _holding_row(_page(test_client), "IWDA.AS")
-
-    assert "—" in _cell(row, "Growth %")
-    assert "€1,200.00" in _cell(row, "Market value")
-
-
-def test_a_partly_priced_holding_shows_no_growth(client):
-    """portfolio has growth for the ticker (one account is priced), but the holding isn't
-    priced in every account, so that growth isn't the holding's."""
-    test_client, fake_auth, fake_portfolio = client
-    _logged_in(test_client, fake_auth)
-    fake_portfolio.holdings = Holdings(holdings=(_holding(value=None),), totals=None)
-    fake_portfolio.portfolio_returns = _returns(_point(6), by_ticker=[("IWDA.AS", "0.4")])
-
-    row = _holding_row(_page(test_client), "IWDA.AS")
-
-    assert _cell(row, "Growth %") is None
-    assert "+40.00%" not in row
+    assert _tile(html, "Market value") is not None
+    assert "Growth" not in html
 
 
 def _chart_card(html):
@@ -789,8 +717,8 @@ def test_chart_data_island_carries_the_series(client):
     _logged_in(test_client, fake_auth)
     _with_a_priced_holding(fake_portfolio)
     fake_portfolio.portfolio_returns = _returns(
-        _point(5, value="1100", total="100", growth="0.1"),
-        _point(6, value="1200", total="200", growth="0.15"),
+        _point(5, value="1100", total="100"),
+        _point(6, value="1200", total="200"),
     )
 
     card = _chart_card(_page(test_client))
@@ -799,18 +727,8 @@ def test_chart_data_island_carries_the_series(client):
         r'<script id="returns-chart-data" type="application/json">(.*?)</script>', card, re.S
     )
     assert json.loads(island.group(1)) == [
-        {
-            "date": "2026-01-05",
-            "market_value_eur": 1100.0,
-            "total_return_eur": 100.0,
-            "growth_pct": 0.1,
-        },
-        {
-            "date": "2026-01-06",
-            "market_value_eur": 1200.0,
-            "total_return_eur": 200.0,
-            "growth_pct": 0.15,
-        },
+        {"date": "2026-01-05", "market_value_eur": 1100.0, "total_return_eur": 100.0},
+        {"date": "2026-01-06", "market_value_eur": 1200.0, "total_return_eur": 200.0},
     ]
     assert '<canvas id="returns-chart"' in card
     assert '<script src="/static/portfolio_chart.js" defer></script>' in card
@@ -840,7 +758,7 @@ def test_chart_offers_every_view_and_range(client):
     card = _chart_card(_page(test_client))
 
     views = re.findall(r'data-chart-view="(\w+)"', card)
-    assert views == ["total_return_eur", "market_value_eur", "growth_pct"]
+    assert views == ["total_return_eur", "market_value_eur"]
     assert re.findall(r'data-chart-range="(\d+)"', card) == ["1", "6", "12", "0"]
     # Hidden until the script shows them: without it, they'd do nothing.
     assert '<div class="chart-controls" hidden>' in card
@@ -999,9 +917,7 @@ def test_each_figure_header_and_tile_links_to_its_glossary_entry(client):
         ("weight", "Weight"),
         ("unrealized-return", "Unrealized return"),
         ("total-return", "Total return"),
-        ("growth", "Growth %"),
         ("cost-basis", "Cost basis"),
-        ("growth", "Growth since inception"),
         ("dividends", "Dividends received"),
     } <= links
 

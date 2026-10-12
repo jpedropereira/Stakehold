@@ -27,11 +27,6 @@
     <p class="tile-value">{{ delta(summary.total_return_eur) }} {{ delta(summary.total_return_pct, "pct") }}</p>
   </div>
   <div class="tile">
-    {# Time-weighted: money added or taken out doesn't move it, unlike the total return's %. #}
-    <p class="tile-label">{{ term("Growth since inception", "growth") }}</p>
-    <p class="tile-value">{{ delta(growth_pct, "pct") }}</p>
-  </div>
-  <div class="tile">
     <p class="tile-label">{{ term("Dividends received", "dividends") }}</p>
     <p class="tile-value"><span class="mono">{{ summary.dividends_received_eur | money }}</span></p>
   </div>
@@ -88,7 +83,7 @@
 <section class="card card-wide split-aside">
   <h1>Returns over time</h1>
   {% if return_points %}
-  {{ returns_chart(chart_payload, growth_pct is not none) }}
+  {{ returns_chart(chart_payload) }}
   {% else %}
   <p class="entry-empty">No return history yet — returns appear once Stakehold has prices for your holdings' dates. {{ freshness }}</p>
   {% endif %}

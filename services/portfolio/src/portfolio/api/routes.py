@@ -38,7 +38,6 @@ from portfolio.api.models import (
     AccountResponse,
     AccountWriteResponse,
     BrokerResponse,
-    GrowthResponse,
     HoldingsResponse,
     PortfolioReturnsResponse,
     PositionResponse,
@@ -486,15 +485,6 @@ def list_latest_returns(
     settings: Settings = Depends(get_settings),
 ) -> list[dict]:
     return jobs.get_latest_returns(user_id=user_id, account_label=account_label, settings=settings)
-
-
-@router.get("/returns/growth", response_model=list[GrowthResponse])
-def list_growth(
-    user_id: UUID = Query(...),
-    account_label: str = Query(...),
-    settings: Settings = Depends(get_settings),
-) -> list[dict]:
-    return jobs.get_growth(user_id=user_id, account_label=account_label, settings=settings)
 
 
 @router.get("/returns/portfolio", response_model=PortfolioReturnsResponse)

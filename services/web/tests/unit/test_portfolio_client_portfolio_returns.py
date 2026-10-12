@@ -1,5 +1,5 @@
 """HttpPortfolioClient.list_portfolio_returns: portfolio's GET /returns/portfolio (PF-5) -- the
-request it sends, how the series and the per-ticker growth are parsed, and which failures become
+request it sends, how the series is parsed, and which failures become
 which error. The JSON is written out in the shape portfolio's PortfolioReturnsResponse serves."""
 
 from datetime import date
@@ -7,11 +7,7 @@ from decimal import Decimal
 
 import httpx
 import pytest
-from web.portfolio_client.base import (
-    PortfolioReturns,
-    PortfolioSeriesPoint,
-    TickerGrowth,
-)
+from web.portfolio_client.base import PortfolioReturns, PortfolioSeriesPoint
 from web.portfolio_client.errors import InvalidPortfolioRequest, PortfolioUnavailable
 from web.portfolio_client.http_client import HttpPortfolioClient
 
@@ -35,23 +31,15 @@ def _point(price_date="2026-01-06", **changes):
         "dividends_received_eur": "0E-8",
         "total_return_eur": "2500.0000",
         "total_return_pct": "0.21739130",
-        "growth_pct": "0.18000000",
         **changes,
     }
 
 
-def _body(series=None, by_ticker=None):
-    return {
-        "series": [_point()] if series is None else series,
-        "by_ticker": (
-            [{"canonical_ticker": "IWDA.AS", "growth_pct": "0.18000000"}]
-            if by_ticker is None
-            else by_ticker
-        ),
-    }
+def _body(series=None):
+    return {"series": [_point()] if series is None else series}
 
 
-async def test_list_portfolio_returns_calls_the_endpoint_and_parses_the_series_and_growth():
+async def test_list_portfolio_returns_calls_the_endpoint_and_parses_the_series():
     captured = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -79,10 +67,8 @@ async def test_list_portfolio_returns_calls_the_endpoint_and_parses_the_series_a
                 dividends_received_eur=Decimal("0"),
                 total_return_eur=Decimal("2500"),
                 total_return_pct=Decimal("0.21739130"),
-                growth_pct=Decimal("0.18"),
             ),
         ),
-        by_ticker=(TickerGrowth(canonical_ticker="IWDA.AS", growth_pct=Decimal("0.18")),),
     )
 
 
@@ -105,12 +91,10 @@ async def test_list_portfolio_returns_keeps_portfolios_order():
 
 
 async def test_list_portfolio_returns_with_no_return_rows_yet():
-    body = {"series": [], "by_ticker": []}
+    body = {"series": []}
     client = _client(lambda request: httpx.Response(200, json=body))
 
-    assert await client.list_portfolio_returns(user_id=USER_ID) == PortfolioReturns(
-        series=(), by_ticker=()
-    )
+    assert await client.list_portfolio_returns(user_id=USER_ID) == PortfolioReturns(series=())
 
 
 async def test_list_portfolio_returns_rejected_request_raises_invalid_portfolio_request():
@@ -143,21 +127,17 @@ def _without(d, key):
     "body",
     [
         pytest.param([], id="body-is-a-list"),
-        pytest.param({"series": []}, id="missing-by-ticker"),
-        pytest.param({"by_ticker": []}, id="missing-series"),
-        pytest.param(_body(series=[_without(_point(), "growth_pct")]), id="point-missing-growth"),
+        pytest.param({}, id="missing-series"),
+        pytest.param(
+            _body(series=[_without(_point(), "market_value_eur")]), id="point-missing-a-field"
+        ),
         pytest.param(
             _body(series=[_without(_point(), "total_return_pct")]),
             id="point-missing-a-nullable-field",
         ),
-        pytest.param(_body(series=[_point(growth_pct=None)]), id="null-growth"),
+        pytest.param(_body(series=[_point(market_value_eur=None)]), id="null-market-value"),
         pytest.param(_body(series=[_point(market_value_eur="lots")]), id="non-numeric-decimal"),
         pytest.param(_body(series=[_point("not-a-date")]), id="bad-price-date"),
-        pytest.param(_body(by_ticker=[{"growth_pct": "0.1"}]), id="growth-missing-ticker"),
-        pytest.param(
-            _body(by_ticker=[{"canonical_ticker": "IWDA.AS", "growth_pct": "x"}]),
-            id="non-numeric-ticker-growth",
-        ),
     ],
 )
 async def test_list_portfolio_returns_malformed_body_raises_portfolio_unavailable(body):

@@ -1,10 +1,10 @@
 """The cross-account return series against live Postgres: holdings/flows.list_portfolio_returns's
-real accounts, return_snapshots and transactions reads, and GET /returns/portfolio through a real
+real accounts and return_snapshots reads, and GET /returns/portfolio through a real
 create_app() -- the secret check and the JSON shape.
 
 Seeds through the real CLI stack. Every add-transaction chains a positions and returns rebuild,
 so serving prices from a stub DataStoreClient (monkeypatched in for jobs.HttpDataStoreClient,
-the same convention test_growth.py uses) is enough to leave return rows behind.
+the same convention test_rebuild_returns.py uses) is enough to leave return rows behind.
 """
 
 import os
@@ -14,7 +14,7 @@ from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
-from portfolio import cli, jobs, pipeline
+from portfolio import cli, jobs
 from portfolio.api.app import create_app
 from portfolio.datastore_client.base import PricePoint, TickerInfo
 from portfolio.holdings import flows
@@ -117,8 +117,7 @@ def _seed_two_users():
 
 def _portfolio_returns(pg_connect, user_id, **kw):
     with pg_connect() as conn:
-        mappings = pipeline.load_ticker_mappings(conn)
-        return flows.list_portfolio_returns(conn, user_id=user_id, mappings=mappings, **kw)
+        return flows.list_portfolio_returns(conn, user_id=user_id, **kw)
 
 
 def test_two_accounts_are_summed_and_no_one_elses_leak_in(pg_connect):
@@ -131,36 +130,24 @@ def test_two_accounts_are_summed_and_no_one_elses_leak_in(pg_connect):
         (D1, Decimal("13300"), Decimal("13300")),
         (D2, Decimal("14000"), Decimal("13300")),
     ]
-    growth = (Decimal(100) / Decimal(95) - 1).quantize(Decimal("0.00000001"))
-    assert result.series[-1].growth_pct == growth
     assert result.series[-1].total_return_eur == Decimal("700")
-    assert [(t.canonical_ticker, t.growth_pct) for t in result.by_ticker] == [("IWDA.AS", growth)]
 
 
-def test_one_account_matches_its_own_growth(pg_connect):
+def test_one_account_is_its_own_series(pg_connect):
     _, other = _seed_two_users()
 
     result = _portfolio_returns(pg_connect, other)
-    with pg_connect() as conn:
-        mappings = pipeline.load_ticker_mappings(conn)
-        account_growth = pipeline.list_growth(
-            conn, user_id=other, account_label="A", mappings=mappings
-        )
 
-    assert [(p.price_date, p.growth_pct) for p in result.series] == [
-        (g.price_date, g.growth_pct) for g in account_growth
-    ]
     assert [p.market_value_eur for p in result.series] == [Decimal("665"), Decimal("700")]
 
 
-def test_a_range_crops_the_series_without_restarting_growth(pg_connect):
+def test_a_range_crops_the_series(pg_connect):
     owner, _ = _seed_two_users()
 
     full = _portfolio_returns(pg_connect, owner)
     cropped = _portfolio_returns(pg_connect, owner, start=D2)
 
     assert cropped.series == full.series[1:]
-    assert cropped.by_ticker == full.by_ticker
 
 
 @pytest.fixture
@@ -191,8 +178,6 @@ def test_get_returns_portfolio_serves_the_series(client):
     assert [(p["price_date"], Decimal(p["market_value_eur"])) for p in body["series"]] == [
         ("2026-01-05", Decimal("13300"))
     ]
-    assert [t["canonical_ticker"] for t in body["by_ticker"]] == ["IWDA.AS"]
-    assert Decimal(body["by_ticker"][0]["growth_pct"]) == Decimal("0.05263158")
 
 
 def test_get_returns_portfolio_for_a_user_with_no_accounts_is_empty(client):
@@ -205,7 +190,7 @@ def test_get_returns_portfolio_for_a_user_with_no_accounts_is_empty(client):
     )
 
     assert response.status_code == 200
-    assert response.json() == {"series": [], "by_ticker": []}
+    assert response.json() == {"series": []}
 
 
 def test_get_returns_portfolio_needs_the_internal_secret(client):

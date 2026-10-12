@@ -153,11 +153,8 @@ layer as `pipeline.py`, orchestration over domain modules, and follows the same 
 its own. It sits beside it rather than in it because `pipeline.py` is near the 64 KB file limit,
 and every flow there is per account while these span all of a user's accounts. It holds PF-1's
 `list_holdings` and PF-5's `list_portfolio_returns`. `jobs.get_holdings` and
-`jobs.get_portfolio_returns` call it the way the other `get_*` jobs call `pipeline.py`. Its one
-call into `pipeline.py` is `list_trade_flows`, which turns an account's `BUY`/`SELL` rows into
-money flows through `mappings.resolve`. `list_growth` uses the same function, so the per-account and
-cross-account growth figures can't resolve trades differently. Nothing in `pipeline.py` imports
-`holdings/`, so the dependency still points one way.
+`jobs.get_portfolio_returns` call it the way the other `get_*` jobs call `pipeline.py`. It
+doesn't call into `pipeline.py` at all, and nothing in `pipeline.py` imports `holdings/`.
 
 **Built as of task 5** — `add_account`, `list_accounts`, `add_manual_transaction`. `pipeline.py`
 (not a per-flow `service.py`) is where the `with transaction(conn):` boundary lives, the role
@@ -274,7 +271,7 @@ the ticker may still be fully computable from its `BUY`/`SELL` rows regardless.
 | `ticker_mapping/` | `base.py` (the `TickerMappings` lookup) + `repository.py` | `base.py` holds the in-memory lookup every rebuild resolves through, `resolve(kind, identifier, broker)`; `repository.py` persists the global `ticker_mappings` table and loads it into that lookup once per run (`load_all`), so a rebuild resolves every row against one consistent set rather than querying per row. No `*_source.py` — mappings are entered by an admin, not fetched. Until the admin page existed this was a YAML file and `loader.py`; see the cross-cutting decision on ticker-mapping storage. |
 | `transactions/` | `base.py` (the `CanonicalTransaction` record shape) + `repository.py` | `base.py` here holds a **data shape**, not a `Protocol` — the contract is "what a normalized transaction looks like," which multiple producers (`broker_import` parsers, manual CLI entry) must fill in, not a swappable behavior one class implements. |
 | `positions/` | `calculator.py` (pure) + `repository.py` | **Built at task 7.** Same shape as data-store's `returns/`: no `base.py`, no `*_source.py` — the input is this service's own `transactions` and `ticker_mapping` tables, not an external provider. One deliberate deviation from "repositories never commit": `positions/repository.py` still never commits, but `pipeline.rebuild_positions` opens the `with transaction(conn):` boundary once *per `(account, canonical_ticker)` pair* rather than once per flow, because `schema.md`'s delete-then-insert contract requires each pair's replacement to be atomic on its own, not the whole rebuild run. |
-| `returns/` | `calculator.py` (pure) + `performance.py` (pure) + `repository.py` | **Built at task 8.** Same shape again, plus one more thing to disclose: it also needs prices and FX rates from `datastore_client`. Those are fetched by `pipeline.py` and handed into `calculator.py` as plain data — the calculator itself stays pure and knows nothing about HTTP, keeping it as unit-testable as data-store's `returns/calculator.py`. A second thing to disclose, surfaced only once `return_snapshots`' original mark-to-market-only design turned out not to account for dividend income: `calculator.py` also takes a `DividendEvent` sequence per pair, needing no `datastore_client` call at all (`transactions.eur_amount` is already frozen in EUR) — but resolving which `DIVIDEND` transactions belong to which ticker is `pipeline.rebuild_returns`'s job, via the same `mappings.resolve` `rebuild_positions` already uses for `BUY`/`SELL`. `returns/` is therefore not quite as decoupled from `ticker_mapping/` as `position_snapshots` being pre-resolved might suggest. **`performance.py` added with the growth-since-inception view**: pure functions over stored `return_snapshots` rows and `BUY`/`SELL` money flows (already resolved to tickers by `pipeline.py`), returning time-weighted growth per priced day. Since PF-5 it keys everything on (account, ticker), so it serves one account (`compute_growth`) or every account a user holds (`compute_series`, which also sums the EUR figures, and `compute_ticker_growth`). It writes nothing; see "Growth since inception is computed on read" below. |
+| `returns/` | `calculator.py` (pure) + `performance.py` (pure) + `repository.py` | **Built at task 8.** Same shape again, plus one more thing to disclose: it also needs prices and FX rates from `datastore_client`. Those are fetched by `pipeline.py` and handed into `calculator.py` as plain data — the calculator itself stays pure and knows nothing about HTTP, keeping it as unit-testable as data-store's `returns/calculator.py`. A second thing to disclose, surfaced only once `return_snapshots`' original mark-to-market-only design turned out not to account for dividend income: `calculator.py` also takes a `DividendEvent` sequence per pair, needing no `datastore_client` call at all (`transactions.eur_amount` is already frozen in EUR) — but resolving which `DIVIDEND` transactions belong to which ticker is `pipeline.rebuild_returns`'s job, via the same `mappings.resolve` `rebuild_positions` already uses for `BUY`/`SELL`. `returns/` is therefore not quite as decoupled from `ticker_mapping/` as `position_snapshots` being pre-resolved might suggest. **`performance.py`**: one pure function, `compute_series`, that sums stored `return_snapshots` rows from every account a user holds into one series per priced day, keyed on (account, ticker) and forward-filled per pair. It writes nothing; see "The portfolio series is summed here, on read" below. It once also computed time-weighted growth since inception (`GET /returns/growth`, plus `growth_pct`/`by_ticker` on `GET /returns/portfolio`); that was removed, see "Growth since inception was removed" below. |
 | `holdings/` | `aggregator.py` (pure) + `flows.py` (orchestration) | **Built at PF-1, extended at PF-5.** No `repository.py` and no table of its own: it reads `positions/` and `returns/` latest rows through their repositories and sums them per ticker across a user's accounts, on read. PF-5's cross-account return series is orchestrated here too, with `returns/performance.py` as its pure part. `aggregator.py` is pure, like the calculators. `flows.py` is the orchestration around it, kept out of `pipeline.py` (see Layering). Rows stay keyed on (account, ticker) until the final merge, so the same ticker in two accounts can't collapse into one account's row, the bug UI-11 documented in web's `aggregate_portfolio_returns`. See "Holdings across accounts are summed here, on read" below. |
 | `datastore_client/` | `base.py` (a `DataStoreClient` Protocol) + `http_client.py` | This is the `*_source.py` role, but the "provider" is another in-house service's read API rather than a third party. **`get_fx_rate` built at task 14**, pulled forward from its original task 8 slot because a cash-ledger import needed it. **`get_price_series`, `get_fx_rate_series`, and `get_ticker_info` built at task 8** — see [`flows.md`](flows.md)'s "Cross-service prerequisite". `get_fx_rate_series` is a range-returning sibling of `get_fx_rate`, not a replacement: `returns/calculator.py` needs a whole date range's rates per `(account, ticker)` pair, and repeating a single-date `get_fx_rate` call per priced day would cost one HTTP round trip per day instead of one per pair; `get_fx_rate` itself is untouched and still serves `import_cashflow`'s single-date lookup. **`lookup_ticker` and `add_`/`list_`/`update_tracked_ticker` built at TK-7** (ticker onboarding): pure pass-throughs that share one `_tracked_request`, mapping `data-store`'s meaningful refusals to `TickerRequestRefused` and anything else to `DataStoreApiError`. |
 
@@ -555,30 +552,26 @@ simpler to reason about freshness, but gets slower as transaction history grows,
 forced the API to either replay history per request or build its own cache — reinventing
 materialization anyway, just less deliberately.
 
-**Growth since inception is computed on read, the one figure that is.** The time-weighted
-growth `returns/performance.py` produces, served by `GET /returns/growth`, is not stored. It is one linear pass over rows that are
-already materialized (the same `return_snapshots` read `GET /returns` serves) plus the account's
-`BUY`/`SELL` rows: no history replay and no `datastore_client` call, so the cost the decision
-above guards against doesn't arise. Storing it would mean a new table (a schema sign-off) and one
-more thing every rebuild must keep in step, for a figure that is cheap to derive. *Rejected:
-computing it in `web` from `/returns` and `/transactions`* — turning a transaction's ISIN or
-SYMBOL into a ticker is `mappings.resolve`, which lives here; web would need a copy of it. *Known
-cost:* the read grows with an account's history, like `GET /returns` does. If it gets slow, the
-fix is a `growth_snapshots` table written by `rebuild-returns`, after the user signs off its schema.
+**The portfolio series is summed here, on read (PF-5).** `GET /returns/portfolio` sums every
+account's `return_snapshots` rows per date. Nothing is stored: it is one linear pass over rows
+that are already materialized, with no history replay and no `datastore_client` call, so the cost
+the decision above guards against doesn't arise. Rows are keyed on (account, ticker): keyed on
+the ticker alone, as they were before PF-5, the same ticker in two accounts would collapse into
+one forward-filled series, the bug UI-11 documented in web. *Why the forward-fill is in Python,
+not SQL:* it needs a calendar join per (account, ticker) pair to express in SQL. *Known cost:*
+the read is every return row the user has, one query per account, with no range applied, since a
+pair last priced before `start` must still carry its value into the range. `start`/`end` crop
+only the response.
 
-**Across accounts it is still one time-weighted figure (PF-5).** `GET /returns/portfolio` runs
-the same pass over every account's rows and flows at once, never averaging per-account growth
-figures, which would not be a time-weighted return. That only works because rows and flows are
-keyed on (account, ticker): keyed on the ticker alone, as they were before PF-5, the same ticker
-in two accounts would collapse into one forward-filled series, the bug UI-11 documented in web.
-Per-ticker growth (`by_ticker`) is the same pass over one ticker's rows and flows from every
-account. The response also carries the summed EUR figures per day, built in the same pass, so
-web's chart needs one call and no join by date. *Why the forward-fill is in Python, not SQL:* the
-pass already exists for growth, flows must land on each pair's own next row (a calendar join per
-pair in SQL), and one implementation keeps the chart's euros and its growth on the same rows.
-*Known cost:* the read is every return row and every trade the user has, two queries per account,
-with no range applied, since growth always runs from the first priced day. `start`/`end` crop only
-the response. The `growth_snapshots` fix above would cover this too.
+**Growth since inception was removed.** Portfolio used to compute a time-weighted growth figure
+on read (`returns/performance.py`'s `compute_growth`/`compute_ticker_growth`, served by
+`GET /returns/growth` and as `growth_pct`/`by_ticker` on `GET /returns/portfolio`), shown by web
+as a tile, a column and a chart view. The user didn't want it in the portfolio views:
+performance analysis of that kind will live in a dedicated backtesting module instead. With it
+went the only reason for these reads to touch `transactions` and `ticker_mappings`
+(`pipeline.list_trade_flows`), so the portfolio series now reads `return_snapshots` alone. The
+formula and its known limits are in git history (and `docs/roadmap-archive/portfolio-view.md`)
+if the backtesting module wants them.
 
 **Holdings across accounts are summed here, on read (PF-1).** `GET /holdings` sums each user's
 latest position and return rows per ticker. Nothing is stored: it reads the same latest rows

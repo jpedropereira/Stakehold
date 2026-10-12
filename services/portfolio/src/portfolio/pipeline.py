@@ -39,7 +39,6 @@ from portfolio.positions import repository as positions_repository
 from portfolio.positions.calculator import PositionSnapshot, replay
 from portfolio.returns import repository as returns_repository
 from portfolio.returns.calculator import DividendEvent, ReturnSnapshot, compute_returns
-from portfolio.returns.performance import GrowthPoint, TradeFlow, compute_growth
 from portfolio.ticker_mapping import repository as ticker_mapping_repository
 from portfolio.ticker_mapping.base import MAPPED_KINDS, TickerMappings
 from portfolio.ticker_mapping.repository import TickerMappingRow
@@ -314,50 +313,6 @@ def list_latest_returns(conn, *, user_id: UUID, account_label: str) -> list[Retu
     Raises AccountNotFound if account_label doesn't resolve for this user."""
     account = _resolve_account(conn, user_id=user_id, account_label=account_label)
     return returns_repository.list_latest_snapshots(conn, account.id)
-
-
-def list_growth(
-    conn, *, user_id: UUID, account_label: str, mappings: TickerMappings
-) -> list[GrowthPoint]:
-    """This account's time-weighted growth since inception, one point per priced day --
-    returns/performance.py's compute_growth over the account's return_snapshots rows and the
-    money its BUY/SELL rows moved. See docs/flows.md's "Growth since inception".
-
-    Only BUY/SELL are flows. A DIVIDEND already reaches growth through the rows'
-    dividends_received_eur, so counting its transaction too would count it twice; deposits and
-    withdrawals move cash, which isn't modelled. Each trade resolves to its ticker through the
-    same mappings.resolve rebuild_positions uses, so it lands on the rows its own position fed.
-    One that doesn't resolve has no position and no rows, and is left out. Raises
-    AccountNotFound if account_label doesn't resolve for this user.
-    """
-    account = _resolve_account(conn, user_id=user_id, account_label=account_label)
-    snapshots = returns_repository.list_snapshots(conn, account_id=account.id)
-    return compute_growth(snapshots, list_trade_flows(conn, account, mappings=mappings))
-
-
-def list_trade_flows(conn, account: Account, *, mappings: TickerMappings) -> list[TradeFlow]:
-    """The money this account's BUY/SELL rows moved, each resolved to its ticker through the
-    account's own broker -- the flows list_growth and holdings/flows.list_portfolio_returns hand
-    to returns/performance.py. `account` must already be resolved for the user: this reads by
-    its id and checks nothing."""
-    flows = []
-    for txn in transactions_repository.list_by_account(
-        conn, account.id, transaction_types=_POSITION_MOVING_TYPES
-    ):
-        ticker = mappings.resolve(
-            txn.instrument_identifier_kind, txn.instrument_identifier, broker=account.broker
-        )
-        if ticker is None:
-            continue
-        flows.append(
-            TradeFlow(
-                account_id=account.id,
-                canonical_ticker=ticker,
-                date=txn.trade_datetime.astimezone(UTC).date(),
-                eur_amount=txn.eur_amount,
-            )
-        )
-    return flows
 
 
 # How far a typed BUY/SELL amount may differ from price * quantity + fees and still be kept:
