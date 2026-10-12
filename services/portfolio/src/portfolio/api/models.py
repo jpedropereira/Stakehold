@@ -115,6 +115,31 @@ class GrowthResponse(BaseModel):
     growth_pct: Decimal
 
 
+class PortfolioReturnPointResponse(BaseModel):
+    """Every account's (account, ticker) rows summed for one day. The pcts are fractions, as in
+    ReturnResponse; total_return_pct is null when nothing has a cost."""
+
+    price_date: date
+    market_value_eur: Decimal
+    cost_basis_eur: Decimal
+    dividends_received_eur: Decimal
+    total_return_eur: Decimal
+    total_return_pct: Decimal | None
+    growth_pct: Decimal
+
+
+class TickerGrowthResponse(BaseModel):
+    canonical_ticker: str
+    growth_pct: Decimal
+
+
+class PortfolioReturnsResponse(BaseModel):
+    # Cropped to start/end; growth still runs from the first priced day.
+    series: list[PortfolioReturnPointResponse]
+    # Latest growth per ticker across every account holding it; ignores start/end.
+    by_ticker: list[TickerGrowthResponse]
+
+
 class HoldingAccountResponse(BaseModel):
     """One account's share of a holding. The value fields are null while that account has no
     return row for the ticker yet."""

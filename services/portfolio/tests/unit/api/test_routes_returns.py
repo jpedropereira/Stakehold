@@ -1,4 +1,5 @@
 import uuid
+from datetime import date
 
 import pytest
 from portfolio import jobs
@@ -182,3 +183,80 @@ def test_list_growth_lets_an_unknown_account_reach_the_404_handler(monkeypatch, 
         client.get(
             "/returns/growth", params={"user_id": str(uuid.uuid4()), "account_label": "nope"}
         )
+
+
+# --- GET /returns/portfolio ---
+
+_PORTFOLIO_RETURNS = {
+    "series": [
+        {
+            "price_date": "2026-01-06",
+            "market_value_eur": "2200.0000",
+            "cost_basis_eur": "2000.0000",
+            "dividends_received_eur": "0.0000",
+            "total_return_eur": "200.0000",
+            "total_return_pct": "0.10000000",
+            "growth_pct": "0.10000000",
+        }
+    ],
+    "by_ticker": [{"canonical_ticker": "IWDA.AS", "growth_pct": "0.10000000"}],
+}
+
+
+def test_portfolio_returns_passes_the_range_through_and_returns_the_jobs_own_dict(
+    monkeypatch, client
+):
+    captured = {}
+
+    def fake_get_portfolio_returns(**kw):
+        captured.update(kw)
+        return _PORTFOLIO_RETURNS
+
+    monkeypatch.setattr(jobs, "get_portfolio_returns", fake_get_portfolio_returns)
+    user_id = uuid.uuid4()
+
+    response = client.get(
+        "/returns/portfolio",
+        params={"user_id": str(user_id), "start": "2026-01-01", "end": "2026-02-01"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == _PORTFOLIO_RETURNS
+    assert captured["user_id"] == user_id
+    assert captured["start"] == date(2026, 1, 1)
+    assert captured["end"] == date(2026, 2, 1)
+
+
+def test_portfolio_returns_range_is_optional(monkeypatch, client):
+    captured = {}
+
+    def fake_get_portfolio_returns(**kw):
+        captured.update(kw)
+        return {"series": [], "by_ticker": []}
+
+    monkeypatch.setattr(jobs, "get_portfolio_returns", fake_get_portfolio_returns)
+
+    response = client.get("/returns/portfolio", params={"user_id": str(uuid.uuid4())})
+
+    assert response.status_code == 200
+    assert response.json() == {"series": [], "by_ticker": []}
+    assert captured["start"] is None
+    assert captured["end"] is None
+
+
+def test_portfolio_returns_serves_a_null_pct_when_nothing_has_cost(monkeypatch, client):
+    body = {
+        "series": [{**_PORTFOLIO_RETURNS["series"][0], "total_return_pct": None}],
+        "by_ticker": [],
+    }
+    monkeypatch.setattr(jobs, "get_portfolio_returns", lambda **kw: body)
+
+    response = client.get("/returns/portfolio", params={"user_id": str(uuid.uuid4())})
+
+    assert response.json()["series"][0]["total_return_pct"] is None
+
+
+def test_portfolio_returns_requires_user_id(client):
+    response = client.get("/returns/portfolio")
+
+    assert response.status_code == 422

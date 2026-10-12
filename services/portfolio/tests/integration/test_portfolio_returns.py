@@ -1,0 +1,214 @@
+"""The cross-account return series against live Postgres: holdings/flows.list_portfolio_returns's
+real accounts, return_snapshots and transactions reads, and GET /returns/portfolio through a real
+create_app() -- the secret check and the JSON shape.
+
+Seeds through the real CLI stack. Every add-transaction chains a positions and returns rebuild,
+so serving prices from a stub DataStoreClient (monkeypatched in for jobs.HttpDataStoreClient,
+the same convention test_growth.py uses) is enough to leave return rows behind.
+"""
+
+import os
+import uuid
+from datetime import date
+from decimal import Decimal
+
+import pytest
+from fastapi.testclient import TestClient
+from portfolio import cli, jobs, pipeline
+from portfolio.api.app import create_app
+from portfolio.datastore_client.base import PricePoint, TickerInfo
+from portfolio.holdings import flows
+from portfolio.settings import Settings
+
+pytestmark = pytest.mark.integration
+
+_ISIN = "IE00B4L5Y983"
+_SECRET = "integration-test-secret"  # pragma: allowlist secret
+D1 = date(2026, 1, 5)
+D2 = date(2026, 1, 6)
+
+
+class StubDataStoreClient:
+    def __init__(self, price_series):
+        self._price_series = price_series
+
+    def get_price_series(self, ticker, start, end):
+        return [p for p in self._price_series.get(ticker, []) if start <= p.date <= end]
+
+    def get_fx_rate_series(self, base, quote, start, end):
+        return []
+
+    def get_ticker_info(self, ticker):
+        return TickerInfo(exists=True, has_returns=True)
+
+
+@pytest.fixture(autouse=True)
+def _ticker_mappings(seed_mapping):
+    seed_mapping("ISIN", _ISIN, "IWDA.AS")
+
+
+@pytest.fixture(autouse=True)
+def _serve_prices(monkeypatch):
+    monkeypatch.setenv("DATASTORE_API_URL", "http://stub-datastore")
+    monkeypatch.setenv("INTERNAL_API_SECRET", "stub-secret")  # pragma: allowlist secret
+    prices = {
+        "IWDA.AS": [
+            PricePoint(date=D1, split_adjusted_close=Decimal("95.00")),
+            PricePoint(date=D2, split_adjusted_close=Decimal("100.00")),
+        ]
+    }
+    monkeypatch.setattr(
+        jobs,
+        "HttpDataStoreClient",
+        lambda base_url, internal_api_secret: StubDataStoreClient(prices),
+    )
+
+
+def _add_account(user_id, label):
+    assert (
+        cli.main(["account", "add", "--user", str(user_id), "--broker", "acme", "--label", label])
+        == 0
+    )
+
+
+def _buy(user_id, label, *, ref, quantity, amount):
+    exit_code = cli.main(
+        [
+            "add-transaction",
+            "--user",
+            str(user_id),
+            "--account",
+            label,
+            "--ref",
+            ref,
+            "--type",
+            "BUY",
+            "--datetime",
+            "2026-01-05T10:00:00+00:00",
+            "--currency",
+            "EUR",
+            "--instrument",
+            _ISIN,
+            "--instrument-kind",
+            "ISIN",
+            "--quantity",
+            quantity,
+            "--price",
+            "95.00",
+            "--amount",
+            amount,
+        ]
+    )
+    assert exit_code == 0
+
+
+def _seed_two_users():
+    """User U: 120 IWDA in A and 20 in B, all bought at 95 on D1. User V: 7 IWDA in an account
+    also labelled A, which must never reach U's result."""
+    owner, other = uuid.uuid4(), uuid.uuid4()
+    _add_account(owner, "A")
+    _add_account(owner, "B")
+    _add_account(other, "A")
+    _buy(owner, "A", ref="a", quantity="120", amount="-11400.00")
+    _buy(owner, "B", ref="b", quantity="20", amount="-1900.00")
+    _buy(other, "A", ref="v", quantity="7", amount="-665.00")
+    return owner, other
+
+
+def _portfolio_returns(pg_connect, user_id, **kw):
+    with pg_connect() as conn:
+        mappings = pipeline.load_ticker_mappings(conn)
+        return flows.list_portfolio_returns(conn, user_id=user_id, mappings=mappings, **kw)
+
+
+def test_two_accounts_are_summed_and_no_one_elses_leak_in(pg_connect):
+    owner, _ = _seed_two_users()
+
+    result = _portfolio_returns(pg_connect, owner)
+
+    # 140 units: 13300 at 95, 14000 at 100. V's 7 units would add 665 / 700.
+    assert [(p.price_date, p.market_value_eur, p.cost_basis_eur) for p in result.series] == [
+        (D1, Decimal("13300"), Decimal("13300")),
+        (D2, Decimal("14000"), Decimal("13300")),
+    ]
+    growth = (Decimal(100) / Decimal(95) - 1).quantize(Decimal("0.00000001"))
+    assert result.series[-1].growth_pct == growth
+    assert result.series[-1].total_return_eur == Decimal("700")
+    assert [(t.canonical_ticker, t.growth_pct) for t in result.by_ticker] == [("IWDA.AS", growth)]
+
+
+def test_one_account_matches_its_own_growth(pg_connect):
+    _, other = _seed_two_users()
+
+    result = _portfolio_returns(pg_connect, other)
+    with pg_connect() as conn:
+        mappings = pipeline.load_ticker_mappings(conn)
+        account_growth = pipeline.list_growth(
+            conn, user_id=other, account_label="A", mappings=mappings
+        )
+
+    assert [(p.price_date, p.growth_pct) for p in result.series] == [
+        (g.price_date, g.growth_pct) for g in account_growth
+    ]
+    assert [p.market_value_eur for p in result.series] == [Decimal("665"), Decimal("700")]
+
+
+def test_a_range_crops_the_series_without_restarting_growth(pg_connect):
+    owner, _ = _seed_two_users()
+
+    full = _portfolio_returns(pg_connect, owner)
+    cropped = _portfolio_returns(pg_connect, owner, start=D2)
+
+    assert cropped.series == full.series[1:]
+    assert cropped.by_ticker == full.by_ticker
+
+
+@pytest.fixture
+def client():
+    settings = Settings(
+        database_url=os.environ["PORTFOLIO_DATABASE_URL"],
+        admin_database_url=os.environ["APP_POSTGRES_ADMIN_DATABASE_URL"],
+        datastore_api_url=None,
+        internal_api_secret=None,
+        api_internal_secret=_SECRET,
+        api_host="0.0.0.0",  # noqa
+        api_port=8002,
+    )
+    return TestClient(create_app(settings))
+
+
+def test_get_returns_portfolio_serves_the_series(client):
+    owner, _ = _seed_two_users()
+
+    response = client.get(
+        "/returns/portfolio",
+        params={"user_id": str(owner), "end": "2026-01-05"},
+        headers={"X-Internal-Secret": _SECRET},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [(p["price_date"], Decimal(p["market_value_eur"])) for p in body["series"]] == [
+        ("2026-01-05", Decimal("13300"))
+    ]
+    assert [t["canonical_ticker"] for t in body["by_ticker"]] == ["IWDA.AS"]
+    assert Decimal(body["by_ticker"][0]["growth_pct"]) == Decimal("0.05263158")
+
+
+def test_get_returns_portfolio_for_a_user_with_no_accounts_is_empty(client):
+    _seed_two_users()
+
+    response = client.get(
+        "/returns/portfolio",
+        params={"user_id": str(uuid.uuid4())},
+        headers={"X-Internal-Secret": _SECRET},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"series": [], "by_ticker": []}
+
+
+def test_get_returns_portfolio_needs_the_internal_secret(client):
+    response = client.get("/returns/portfolio", params={"user_id": str(uuid.uuid4())})
+
+    assert response.status_code == 401

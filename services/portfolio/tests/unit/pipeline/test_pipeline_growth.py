@@ -1,5 +1,6 @@
-"""pipeline.list_growth against the fake repositories in conftest.py: which transactions become
-money flows, how each resolves to a ticker, and that the account is resolved for this user.
+"""pipeline.list_growth and pipeline.list_trade_flows against the fake repositories in
+conftest.py: which transactions become money flows, how each resolves to a ticker, and that the
+account is resolved for this user.
 The growth arithmetic itself is tests/unit/returns/test_performance.py's job.
 """
 
@@ -11,7 +12,7 @@ import pytest
 from portfolio import pipeline
 from portfolio.errors import AccountNotFound
 from portfolio.returns.calculator import ReturnSnapshot
-from portfolio.returns.performance import GrowthPoint
+from portfolio.returns.performance import GrowthPoint, TradeFlow
 from portfolio.ticker_mapping.base import TickerMappings
 from portfolio.transactions.base import CanonicalTransaction
 
@@ -268,3 +269,43 @@ def test_another_users_account_is_not_found(repos, returns_repo, conn):
 
     with pytest.raises(AccountNotFound):
         pipeline.list_growth(conn, user_id=uuid.uuid4(), account_label="m", mappings=_NO_MAPPINGS)
+
+
+def test_list_trade_flows_tags_each_flow_with_its_account_and_uses_its_broker(repos, conn):
+    accounts_repo, transactions_repo, _ = repos
+    user_id = uuid.uuid4()
+    account = _seed_account(accounts_repo, user_id=user_id, broker="globex")
+    other = _seed_account(accounts_repo, user_id=user_id, label="other")
+    transactions_repo.saved.extend(
+        [
+            _txn(
+                account.id,
+                ref="buy",
+                instrument_identifier="IWDA",
+                instrument_identifier_kind="SYMBOL",
+            ),
+            _txn(account.id, ref="sell", on=D2, transaction_type="SELL", amount="1100"),
+            _txn(account.id, ref="div", on=D2, transaction_type="DIVIDEND", amount="20"),
+            _txn(other.id, ref="other-buy"),
+        ]
+    )
+    mappings = TickerMappings(
+        isin={}, symbol={"globex": {"IWDA": "IWDA.AS"}, "acme": {"IWDA": "OTHER.AS"}}
+    )
+
+    flows = pipeline.list_trade_flows(conn, account, mappings=mappings)
+
+    assert flows == [
+        TradeFlow(
+            account_id=account.id,
+            canonical_ticker="IWDA.AS",
+            date=D1,
+            eur_amount=Decimal("-1000"),
+        ),
+        TradeFlow(
+            account_id=account.id,
+            canonical_ticker="IWDA.AS",
+            date=D2,
+            eur_amount=Decimal("1100"),
+        ),
+    ]

@@ -1299,3 +1299,48 @@ def get_holdings(*, user_id: UUID, settings: Settings | None = None) -> dict:
     else:
         logger.info("get-holdings: done, no open holdings in any account.")
     return asdict(result)
+
+
+def get_portfolio_returns(
+    *,
+    user_id: UUID,
+    start: date | None = None,
+    end: date | None = None,
+    settings: Settings | None = None,
+) -> dict:
+    """This user's whole-portfolio return series and each ticker's growth, across every account
+    (see holdings/flows.list_portfolio_returns). Read-only: never triggers a rebuild."""
+    configure_logging()
+    settings = settings or load_settings()
+    conn = get_connection(settings.database_url)
+    try:
+        logger.info(
+            "get-portfolio-returns: computing returns across accounts for user %s.", user_id
+        )
+        mappings = pipeline.load_ticker_mappings(conn)
+        result = holdings_flows.list_portfolio_returns(
+            conn, user_id=user_id, mappings=mappings, start=start, end=end
+        )
+    finally:
+        conn.close()
+
+    if result.series:
+        logger.info(
+            "get-portfolio-returns: done, %d day(s), %s to %s; growth for %d ticker(s).",
+            len(result.series),
+            result.series[0].price_date,
+            result.series[-1].price_date,
+            len(result.by_ticker),
+        )
+    elif result.by_ticker:
+        logger.info(
+            "get-portfolio-returns: done, no days in the requested range; growth for %d "
+            "ticker(s).",
+            len(result.by_ticker),
+        )
+    else:
+        logger.info(
+            "get-portfolio-returns: done, no return rows in any account yet, so no series to "
+            "report."
+        )
+    return asdict(result)

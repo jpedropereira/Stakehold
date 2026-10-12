@@ -75,7 +75,7 @@ The previous chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archi
 | PF-2 | [web: move per-account holdings to `/accounts/holdings`](#pf-2-web-move-per-account-holdings-to-accountsholdings) | — | done |
 | PF-3 | [web: portfolio client for `/holdings`](#pf-3-web-portfolio-client-for-holdings) | PF-1 | ready |
 | PF-4 | [web: `/portfolio` combined page](#pf-4-web-portfolio-combined-page) | PF-2, PF-3 | blocked |
-| PF-5 | [portfolio: cross-account return series](#pf-5-portfolio-cross-account-return-series) | PF-1 | ready |
+| PF-5 | [portfolio: cross-account return series](#pf-5-portfolio-cross-account-return-series) | PF-1 | done |
 | PF-6 | [web: returns chart on `/portfolio`](#pf-6-web-returns-chart-on-portfolio) | PF-4, PF-5 | blocked |
 
 ## Tasks
@@ -201,7 +201,25 @@ Files: `api/portfolio.py`, `portfolio_view.py`, new `templates/portfolio.html`,
 
 ### PF-5. portfolio: cross-account return series
 
-**Status:** ready
+**Status:** done
+
+As built:
+- `returns/performance.py` keys rows and flows on (account, ticker), and `TradeFlow` gained
+  `account_id`. `compute_series` is the single pass, returning `PortfolioPoint`s with the summed
+  EUR figures, `total_return_pct` and `growth_pct`. `compute_growth` is now its growth-only
+  projection, so `GET /returns/growth` is unchanged and its existing tests pin that.
+  `compute_ticker_growth` gives `by_ticker`. It includes closed tickers, sorted by ticker.
+- `pipeline.list_trade_flows(conn, account, mappings=...)` was extracted from `list_growth`, so
+  both endpoints resolve trades through one function.
+- `holdings/flows.list_portfolio_returns` reads each account's full history (never ranged), then
+  crops `series` to `start`/`end`.
+- `jobs.get_portfolio_returns` logs "no rows in any account" differently from "no days in the
+  requested range".
+- Tests: `tests/unit/returns/test_performance.py`, `tests/unit/pipeline/test_pipeline_growth.py`,
+  `tests/unit/holdings/test_flows.py`, `tests/unit/test_jobs_portfolio_returns.py`,
+  `tests/unit/api/test_routes_returns.py`, `tests/integration/test_portfolio_returns.py`.
+
+The original spec follows.
 
 `GET /returns/portfolio?user_id[&start&end]` returns an object with two parts:
 - **`series`**, one point per date:
