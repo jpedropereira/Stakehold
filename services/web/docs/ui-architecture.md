@@ -70,6 +70,10 @@ described here updates this file in the same change.
       to 2:1 of its width, which at phone width is 144px inside a 280px frame. Where 2:1 of the
       width already lands inside the bounds, as on an 880px card, the two agree and the check
       can't tell;
+    - every summary tile's figure on one line, inside its tile's content box. At a 160px tile
+      minimum, `+€1,450.78` broke after its sign at phone and tablet, and unsigned six-digit
+      figures ran up to 18px into the tile's padding. Neither scrolls anything or leaves the
+      tile, so the overflow checks above couldn't see them;
     - WCAG AA contrast of every visible text element against the background actually behind
       it;
     - a visible focus indicator at every Tab stop, a date input's inner stops included;
@@ -101,9 +105,17 @@ described here updates this file in the same change.
     stacked at 1440px and below. After LY-5: 260 of 260. Account holdings is two columns at
     1280px and up, stacked at tablet and phone. After LY-6, which added Overview's two chart
     views: 280 of 280. Overview is two columns at desktop, laptop and wide, and stacked at
-    tablet and phone. At tablet its four tiles are the width they were before (the 720px
-    content was already under the old 880px cap), and the fake data's Total return figure wraps
-    after its sign.
+    tablet and phone. The tile-figure check (below) then came in with its fix: 280 of 280.
+- **A summary tile is sized by its headline figure.** The figure is 22px mono, about 13px a
+  character, and never splits across lines (`white-space: nowrap`): "+" alone above "€1,450.78"
+  reads as two values. The tiles' grid minimum is 200px, 152px inside the padding, which holds
+  11 characters ("+€14,206.48"). It was 160px, chosen so the account page's five tiles fit one
+  row at 880px; that held only 8 characters. The cost: a phone shows one tile per row rather
+  than two by two, and tablet fits three a row. From desktop width the full-width pages still
+  fit five on one row. Shrinking the figure to fit was rejected, as the headline size
+  is where the numbers do the talking. **Known limitation:** a figure past 11 characters (a
+  seven-digit total, `€1,234,567.89`) still runs into the padding on the narrowest tiles;
+  `review_pages.py` would flag it only if the fake data had one.
 - **Feedback and error states (UI-12).**
   - *Banners*: every message is one macro, `partials/_banner.html`, in the charter's ink rule
     (chapter II): an icon and a bold lead word carry the meaning, never color, so errors use
