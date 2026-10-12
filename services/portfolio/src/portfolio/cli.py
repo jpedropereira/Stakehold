@@ -422,7 +422,7 @@ def _build_parser() -> argparse.ArgumentParser:
     returns_scope.add_argument(
         "--all",
         action="store_true",
-        help="Every user's accounts (what the returns-refresh container runs on a schedule)",
+        help="Every user's accounts (what the returns-refresh-all container runs on a schedule)",
     )
     returns_parser.add_argument(
         "--account", help="The --label of one account to rebuild; omit to rebuild every account"
@@ -433,7 +433,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "refresh-ready-tickers",
         help=(
             "Rebuild returns for every account holding a ticker data-store finished loading "
-            "recently (what the returns-refresh-ready container runs every few minutes)"
+            "recently (what the returns-refresh-new-tickers container runs every few minutes)"
         ),
     )
     ready_parser.add_argument(

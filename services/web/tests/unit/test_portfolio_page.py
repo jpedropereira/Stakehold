@@ -199,7 +199,8 @@ def _totals(**changes):
 def _tile(html, label):
     """The value markup of the summary tile labelled `label`, or None if there's no such tile."""
     match = re.search(
-        rf'<p class="tile-label">{re.escape(label)}</p>\s*<p class="tile-value">(.*?)</p>',
+        rf'<p class="tile-label">(?:<a [^>]*>)?{re.escape(label)}(?:</a>)?</p>'
+        r'\s*<p class="tile-value">(.*?)</p>',
         html,
         re.S,
     )
@@ -892,3 +893,54 @@ def test_first_run_has_no_split_only_the_narrow_welcome_card(client):
     assert 'class="split"' not in html
     assert '<section class="card card-narrow">' in html
     assert "<h1>Holdings</h1>" not in html
+
+
+# --- glossary links ---------------------------------------------------------------------------
+
+
+def _glossary_links(html):
+    """(label, anchor) for every figure label that links to its glossary entry."""
+    return set(re.findall(r'<a class="term-link" href="/glossary#([\w-]+)">(.*?)</a>', html))
+
+
+def test_each_figure_header_and_tile_links_to_its_glossary_entry(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_priced_holding(fake_portfolio)
+
+    links = _glossary_links(_page(test_client))
+
+    assert {
+        ("units", "Units"),
+        ("avg-cost", "Avg cost"),
+        ("market-value", "Market value"),
+        ("weight", "Weight"),
+        ("unrealized-return", "Unrealized return"),
+        ("total-return", "Total return"),
+        ("cost-basis", "Cost basis"),
+        ("dividends", "Dividends received"),
+    } <= links
+
+
+def test_every_glossary_link_lands_on_an_entry(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_priced_holding(fake_portfolio)
+
+    anchors = {anchor for anchor, _ in _glossary_links(_page(test_client))}
+    glossary = test_client.get("/glossary").text
+
+    assert anchors
+    assert {a for a in anchors if f'<dt id="{a}"' not in glossary} == set()
+
+
+def test_holdings_card_links_to_the_glossary_for_phone_widths(client):
+    """At phone width the table's headers are hidden and its data-labels can't be links, so
+    the card carries one plain link to the whole glossary."""
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_priced_holding(fake_portfolio)
+
+    holdings, _ = _split(_page(test_client))
+
+    assert '<a href="/glossary">What these figures mean</a>' in holdings

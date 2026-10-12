@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Glossary — Stakehold{% endblock %}
+{% block content %}
+{# Each term's id is the anchor the holdings pages link to (/glossary#<id>), from their column
+   headers and tile labels: renaming one breaks those links, and their tests say so. Every
+   amount is in euros unless it says otherwise. #}
+<section class="card glossary">
+  <h1>Glossary</h1>
+  <p class="entry-subtitle">What each figure on your holdings means. Amounts are in euros unless
+    a figure says otherwise.</p>
+  <dl class="glossary-terms">
+    <dt id="units">Units</dt>
+    <dd>How many shares of the holding you own. An account's own page calls this Quantity.</dd>
+
+    <dt id="avg-cost">Avg cost</dt>
+    <dd>What you paid per unit, averaged over your buys and including fees. Each buy is converted
+      to euros at the exchange rate on the day you made it, so the euro average and the
+      trading-currency average aren't linked by any single rate.</dd>
+
+    <dt id="cost-basis">Cost basis</dt>
+    <dd>What you paid for the units you still hold: units × avg cost. Exchange rates moving
+      after a buy don't change it.</dd>
+
+    <dt id="market-value">Market value</dt>
+    <dd>What the units you hold are worth at the latest closing price. The smaller line beneath
+      is the same value in the currency the holding trades in. It says “Mixed currencies” when
+      your accounts hold the ticker in different currencies.</dd>
+
+    <dt id="weight">Weight</dt>
+    <dd>The holding's share of the market value of all your priced holdings. A holding still
+      waiting for prices has no weight, and isn't counted as worth zero.</dd>
+
+    <dt id="unrealized-return">Unrealized return</dt>
+    <dd>Market value − cost basis: how much the price has moved since you bought. It leaves out
+      dividends. The percentage is that amount ÷ cost basis.</dd>
+
+    <dt id="dividends">Dividends received</dt>
+    <dd>The dividends paid to you, net of withholding tax where your broker records the tax
+      against the dividend.</dd>
+
+    <dt id="total-return">Total return</dt>
+    <dd>Unrealized return + dividends received: what the holding has made for you so far. The
+      percentage is that amount ÷ cost basis, so it measures what <em>your money</em> made, and
+      depends on when and how much you bought.</dd>
+
+    <dt id="prices-as-of">Prices as of</dt>
+    <dd>The trading day of the latest closing price used. Prices update daily, and returns are
+      recalculated a few times a day.</dd>
+  </dl>
+</section>
+{% endblock %}

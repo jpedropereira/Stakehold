@@ -1,9 +1,9 @@
 {% extends "base.html" %}
 {% from "partials/_delta.html" import delta %}
+{% from "partials/_term.html" import term %}
 {% from "partials/_banner.html" import banner %}
 {% from "partials/_returns_chart.html" import returns_chart %}
 {% block title %}Overview — Stakehold{% endblock %}
-{% block page_width %} page-full{% endblock %}
 {% set freshness = "Prices update daily; returns are recalculated a few times a day." %}
 {% block content %}
 {# First run only when the list actually loaded: an outage must never read as "no accounts". #}
@@ -19,19 +19,19 @@
 <p class="as-of">Prices as of <span class="mono">{{ totals.price_date | date }}</span>. {{ freshness }}</p>
 <section class="summary-tiles" aria-label="All accounts">
   <div class="tile">
-    <p class="tile-label">Market value</p>
+    <p class="tile-label">{{ term("Market value", "market-value") }}</p>
     <p class="tile-value"><span class="mono">{{ totals.market_value_eur | money }}</span></p>
   </div>
   <div class="tile">
-    <p class="tile-label">Cost basis</p>
+    <p class="tile-label">{{ term("Cost basis", "cost-basis") }}</p>
     <p class="tile-value"><span class="mono">{{ totals.cost_basis_eur | money }}</span></p>
   </div>
   <div class="tile">
-    <p class="tile-label">Total return</p>
+    <p class="tile-label">{{ term("Total return", "total-return") }}</p>
     <p class="tile-value">{{ delta(totals.total_return_eur) }} {{ delta(totals.total_return_pct, "pct") }}</p>
   </div>
   <div class="tile">
-    <p class="tile-label">Dividends received</p>
+    <p class="tile-label">{{ term("Dividends received", "dividends") }}</p>
     <p class="tile-value"><span class="mono">{{ totals.dividends_received_eur | money }}</span></p>
   </div>
 </section>
@@ -48,6 +48,7 @@
   {% if list_error %}
   {% call banner("error") %}<strong>Couldn't load your accounts.</strong> {{ list_error }}{% endcall %}
   {% else %}
+  <p class="glossary-link"><a href="/glossary">What these figures mean</a></p>
   <ul class="account-list">
     {% for row in rows %}
     <li class="account-row">

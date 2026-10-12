@@ -29,8 +29,8 @@ this file; references to sections that stayed in `architecture.md` name it.
 | Positions rebuild | `rebuild-positions --user <id> [--account <label>]` | `POST /positions/rebuild` | automatically after every transaction write that saves rows (see "Positions and returns follow every transaction write") and, for each affected account, after every ticker-mapping change | `transactions`, `ticker_mappings` | `position_snapshots` |
 | Position listing | — (CLI has none) | `GET /positions` | on demand | `position_snapshots`, latest row per ticker | — (read-only report) |
 | Returns rebuild | `rebuild-returns --user <id> [--account <label>]` | `POST /returns/rebuild` | automatically after every positions rebuild that follows a write or a mapping change (see "Positions and returns follow every transaction write") | `position_snapshots`, `transactions` (`DIVIDEND` rows), `ticker_mappings`, `data-store` read API | `return_snapshots` |
-| Returns refresh, every user | `rebuild-returns --all` | — | every `PORTFOLIO_RETURNS_REFRESH_SECONDS` (default 6h), by the `returns-refresh` container (see "Returns follow new prices") | as for one user, for each user with an account | `return_snapshots` |
-| Returns refresh, newly ready tickers | `refresh-ready-tickers --window-minutes N` | — | every 5 minutes with a 10-minute window, by the `returns-refresh-ready` container | `data-store`'s `GET /tracked-tickers?status=ready` (`ready_at` inside the window), then `position_snapshots` joined to `accounts` for the accounts holding them | `return_snapshots`, for those accounts only |
+| Returns refresh, every user | `rebuild-returns --all` | — | every `PORTFOLIO_RETURNS_REFRESH_SECONDS` (default 6h), by the `returns-refresh-all` container (see "Returns follow new prices") | as for one user, for each user with an account | `return_snapshots` |
+| Returns refresh, newly ready tickers | `refresh-ready-tickers --window-minutes N` | — | every 5 minutes with a 10-minute window, by the `returns-refresh-new-tickers` container | `data-store`'s `GET /tracked-tickers?status=ready` (`ready_at` inside the window), then `position_snapshots` joined to `accounts` for the accounts holding them | `return_snapshots`, for those accounts only |
 | Return listing | — (CLI has none) | `GET /returns`, `GET /returns/latest` | on demand | `return_snapshots`, optionally filtered by ticker/date range | — (read-only report) |
 | Holdings across accounts | — (CLI has none) | `GET /holdings?user_id=` | on demand (web's `/portfolio` page, PF-4) | `accounts` by `user_id`, then each account's latest `position_snapshots` and `return_snapshots` rows | — (computed on read, see "Holdings across accounts") |
 | Portfolio return series | — (CLI has none) | `GET /returns/portfolio?user_id=[&start=&end=]` | on demand (web's `/portfolio` chart, PF-6) | `accounts` by `user_id`, then each account's full `return_snapshots` history | — (computed on read, see "Portfolio return series") |
@@ -216,7 +216,7 @@ ticker's rebuild (`positions_rebuild: partial`), but the transaction was still s
 ### Returns follow new prices
 
 Every day data-store's `daily_pipeline` DAG ingests new closes, which moves every holder's return
-whether or not they touched their account. The `returns-refresh` container
+whether or not they touched their account. The `returns-refresh-all` container
 (`docker-compose.stakehold-net.yml`) runs `rebuild-returns --all` in a loop, every
 `PORTFOLIO_RETURNS_REFRESH_SECONDS` (default six hours). `jobs.run_rebuild_returns_all` runs
 `run_rebuild_returns` for each user with an account, isolated per user: one raising is logged and
@@ -237,8 +237,8 @@ can record the holding while data-store is still loading it (see "Manual entry s
 `data-store` ticker"). Its returns are blocked until prices land, and waiting up to six hours
 after that for `rebuild-returns --all` would make the loading message a lie.
 
-- The `returns-refresh-ready` container runs `refresh-ready-tickers` every five minutes. It asks
-  data-store for tickers marked `ready` in the last ten minutes, and rebuilds only the accounts
+- The `returns-refresh-new-tickers` container runs `refresh-ready-tickers` every five minutes. It
+  asks data-store for tickers marked `ready` in the last ten minutes, and rebuilds only the accounts
   whose positions hold one, across all users.
 - **It's stateless on purpose**: a time window, not a "last seen" checkpoint, so it needs no
   table of its own. The window is twice the interval, so every ticker falls inside at least one
