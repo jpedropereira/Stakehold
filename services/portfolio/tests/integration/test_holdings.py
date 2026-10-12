@@ -4,7 +4,7 @@ create_app() -- the secret check and the JSON shape.
 
 Seeds through the real CLI stack. Every add-transaction chains a positions and returns rebuild,
 so serving prices from a stub DataStoreClient (monkeypatched in for jobs.HttpDataStoreClient,
-the same convention test_growth.py uses) is enough to leave return rows behind.
+the same convention test_rebuild_returns.py uses) is enough to leave return rows behind.
 """
 
 import os

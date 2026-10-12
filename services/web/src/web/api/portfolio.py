@@ -10,8 +10,8 @@ for the combined page. The query string is passed on as it arrived, so an encode
 encoded, and the target path is fixed, so it can't send the visitor off the site.
 
 The combined page sums nothing itself: portfolio's GET /holdings (PF-1) does, so this is one
-call however many accounts there are. Its chart, growth tile and Growth % column (PF-6) come from
-one more, GET /returns/portfolio (PF-5), so if that fails all three go and nothing else does.
+call however many accounts there are. Its chart (PF-6) comes from one more,
+GET /returns/portfolio (PF-5), so if that fails only the chart goes.
 
 On its own router, like overview.py, because routes.py is close to the repo's 64KB file limit;
 it renders through routes.py's _render, so a cookie set earlier in the request still reaches
@@ -120,10 +120,7 @@ async def portfolio(
 
     view = await _load_portfolio_view(portfolio_client, user.user_id)
     series = () if view.returns is None else view.returns.series
-    by_ticker = () if view.returns is None else view.returns.by_ticker
-    rows = (
-        [] if view.holdings is None else build_portfolio_holdings(view.holdings.holdings, by_ticker)
-    )
+    rows = [] if view.holdings is None else build_portfolio_holdings(view.holdings.holdings)
     # An unpriced holding says where its ticker's loading stands (ticker onboarding, TK-9).
     unpriced = [r.holding.canonical_ticker for r in rows if not r.holding.priced]
     statuses = await load_statuses(portfolio_client, unpriced)
@@ -144,8 +141,6 @@ async def portfolio(
             "error": _INCOMPLETE if view.accounts is None or view.unmapped is None else None,
             "returns_error": _UNAVAILABLE if view.returns is None else None,
             "chart_payload": build_portfolio_chart_payload(series),
-            # The latest growth for its tile; None (shown as "—") without a series.
-            "growth_pct": series[-1].growth_pct if series else None,
             "price_notes": {t: holding_price_note(statuses.get(t)) for t in unpriced},
             "unmapped": unmapped_across_brokers(view.unmapped or []),
         },

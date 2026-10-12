@@ -61,14 +61,12 @@ PAGES = [
     Page("signup", "/signup", "anon"),
     Page("overview", "/", "admin"),
     Page("overview-market-value", "/", "admin", click="[data-chart-view=market_value_eur]"),
-    Page("overview-growth", "/", "admin", click="[data-chart-view=growth_pct]"),
     Page("portfolio", "/portfolio", "admin"),
     # The first holding's per-account breakdown, opened.
     Page("portfolio-breakdown", "/portfolio", "admin", click="details summary"),
     Page(
         "portfolio-market-value", "/portfolio", "admin", click="[data-chart-view=market_value_eur]"
     ),
-    Page("portfolio-growth", "/portfolio", "admin", click="[data-chart-view=growth_pct]"),
     Page("accounts", "/accounts", "admin"),
     Page("accounts-delete-dialog", "/accounts", "admin", click="a[data-confirm]"),
     Page("accounts-delete", "/accounts/delete?account=main", "admin"),
@@ -78,12 +76,6 @@ PAGES = [
         "/accounts/holdings?account=main",
         "admin",
         click="[data-chart-view=market_value_eur]",
-    ),
-    Page(
-        "account-holdings-growth",
-        "/accounts/holdings?account=main",
-        "admin",
-        click="[data-chart-view=growth_pct]",
     ),
     Page("transactions", "/transactions?account=main", "admin"),
     Page(
@@ -312,7 +304,6 @@ def _fakes():
     from web.portfolio_client.base import (
         Account,
         Broker,
-        GrowthPoint,
         Holding,
         HoldingAccount,
         Holdings,
@@ -321,7 +312,6 @@ def _fakes():
         PortfolioSeriesPoint,
         Position,
         Return,
-        TickerGrowth,
         TickerLookup,
         TickerMapping,
         TrackedTicker,
@@ -380,17 +370,6 @@ def _fakes():
                 on = today - timedelta(days=back)
                 rows.append(latest(ticker, quantity, cost, Decimal(value) * drift, on))
         return rows
-
-    def growth():
-        """A year of growth since inception on the same dates, from a loss to a gain, so the
-        Growth % view shows both colors."""
-        return [
-            GrowthPoint(
-                today - timedelta(days=back),
-                Decimal(str(round(0.12 - back / 2000 + 0.05 * math.sin(back / 30), 6))),
-            )
-            for back in range(365, -1, -1)
-        ]
 
     def tracked(ticker, name, status, *, origin="config", requested_by=None, error=None):
         requested = datetime(2026, 9, 1, tzinfo=timezone.utc)
@@ -485,13 +464,9 @@ def _fakes():
         async def list_returns(self, *, user_id, account_label):
             return history()
 
-        async def list_growth(self, *, user_id, account_label):
-            return growth()
-
         async def list_portfolio_returns(self, *, user_id):
-            """The per-account page's year of history and growth, as portfolio's one series
-            across accounts. NEWCO.DE is unpriced, so it has no growth and its cell shows "—"."""
-            growth_by_date = {g.price_date: g.growth_pct for g in growth()}
+            """The per-account page's year of history, as portfolio's one series across
+            accounts."""
             series = tuple(
                 PortfolioSeriesPoint(
                     p.price_date,
@@ -500,15 +475,10 @@ def _fakes():
                     p.dividends_received_eur,
                     p.total_return_eur,
                     p.total_return_pct,
-                    growth_by_date[p.price_date],
                 )
                 for p in aggregate_portfolio_returns(history())
             )
-            by_ticker = (
-                TickerGrowth("AAPL", Decimal("-0.0412")),
-                TickerGrowth("VWCE.DE", Decimal("0.1186")),
-            )
-            return PortfolioReturns(series=series, by_ticker=by_ticker)
+            return PortfolioReturns(series=series)
 
         async def list_transactions(self, *, user_id, account_label):
             return [

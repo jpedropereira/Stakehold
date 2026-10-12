@@ -52,7 +52,7 @@ described here updates this file in the same change.
     just under the split breakpoint (1480px), so the stacked side of it is reviewed as well as
     the two-column side. A page entry can name an element to click
     once loaded, for a state only a click reaches, such as the transaction log's open delete
-    dialog, or each chart view (total return, the default, plus market value and growth, on all
+    dialog, or each chart view (total return, the default, plus market value, on all
     three chart pages). `--only` and `--width` narrow a run to some pages or widths. For each variant it
     also checks:
     - no sideways scroll, at every width: PF-4's table scrolled the page at tablet width for a
@@ -189,17 +189,13 @@ described here updates this file in the same change.
   restyle itself, so it re-reads them and redraws on `stakehold:themechange` (the header toggle)
   and on a `prefers-color-scheme` change.
 - **The chart's view toggle and date ranges (UI-6) work client-side over the one data island.**
-  The island carries `market_value_eur`, `total_return_eur` and `growth_pct` per day, so
-  switching between "Total return", "Market value" and "Growth %", or between 1M / 6M / 1Y / All,
-  never makes a request. A range
-  counts back from the *last data point's* date, not from today, so an account whose prices
+  The island carries `market_value_eur` and `total_return_eur` per day, so switching between
+  "Total return" and "Market value", or between 1M / 6M / 1Y / All, never makes a request. A
+  range counts back from the *last data point's* date, not from today, so an account whose prices
   stopped updating still shows its final stretch rather than an empty chart. Total return is a
-  delta, so its line keeps the gain/loss segment colors, and so does growth. Growth counts from
-  inception, so a shorter range crops its line rather than restarting it at zero; a `null` (a
-  date growth didn't cover) is a gap. On `/accounts/holdings` the Growth % button is only rendered
-  when growth loaded; `/portfolio`'s and Overview's series carries growth on every point, so there
-  it always is,
-  and its tick and tooltip labels mirror `formatting.pct`. Market value is a level, so it's drawn in
+  delta, so its line keeps the gain/loss segment colors. (A third view, "Growth %", time-weighted
+  growth since inception, was removed along with its tiles and column; that kind of analysis is
+  left to a future backtesting module.) Market value is a level, so it's drawn in
   `--text`, because forest and oxblood mean gains and losses only, and gold is kept for controls.
   The buttons are in the template, not built by the script: one macro,
   `partials/_returns_chart.html`, shared by the three chart pages, with the frame, island and
@@ -318,7 +314,9 @@ described here updates this file in the same change.
     the split breakpoint is 1480px, a few pixels of slack. Wider, the spare width splits 3:2:
     at 1920px the columns are about 946px and 630px. Below 1480px the cards stack at full
     width, as before, so a 1280–1440px laptop gets a 1200–1350px table card rather than the old
-    880px one. All ten columns stay (agreed requirement). The table's width depends on the data
+    880px one. All ten columns stay (agreed requirement). Measured with PF-6's Growth % column,
+    since removed: with nine columns the table is narrower, so the breakpoint has more slack than
+    stated here (not re-measured). The table's width depends on the data
     (longer figures, a longer ticker); if real data outgrows the 940px minimum, the table
     scrolls in its `.table-scroll` box rather than the page, and `review_pages.py` flags it
     for the fake data.
@@ -403,8 +401,9 @@ described here updates this file in the same change.
   figure; a ticker recorded in different currencies reads "Mixed currencies" there, and the
   breakdown shows each account's own. Weight is over priced holdings only, the per-account
   page's rule: a holding waiting for prices isn't counted as worth zero. With PF-6's Growth %
-  the table has ten columns, about 875px wide even with the transactions table's tighter cells
-  and 13px figures, more than the 880px card holds inside its padding. So `/portfolio` takes the
+  the table had ten columns, about 875px wide even with the transactions table's tighter cells
+  and 13px figures, more than the 880px card holds inside its padding. Growth % has since been
+  removed, leaving nine, but nine already overflowed before PF-6 (below), so the layout stays. So `/portfolio` takes the
   full content width (a `page-full` page since LY-2; before it, `.content-wide` on its as-of
   line, tiles and cards), and the table sits in a focusable `.table-scroll` region. Stacked,
   between about 600px, where it stacks, and about 1000px, where it fits a full-width card, it

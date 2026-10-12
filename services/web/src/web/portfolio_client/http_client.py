@@ -8,7 +8,6 @@ from web.portfolio_client.base import (
     AccountDeleteResult,
     AccountWriteResult,
     Broker,
-    GrowthPoint,
     Holding,
     HoldingAccount,
     Holdings,
@@ -17,7 +16,6 @@ from web.portfolio_client.base import (
     PortfolioSeriesPoint,
     Position,
     Return,
-    TickerGrowth,
     TickerLookup,
     TickerMapping,
     TickerMappingWriteResult,
@@ -239,16 +237,6 @@ def _return(item: dict) -> Return:
         raise PortfolioUnavailable(f"malformed portfolio response: {exc}") from exc
 
 
-def _growth_point(item: dict) -> GrowthPoint:
-    try:
-        return GrowthPoint(
-            price_date=date.fromisoformat(item["price_date"]),
-            growth_pct=Decimal(item["growth_pct"]),
-        )
-    except (KeyError, TypeError, ValueError, InvalidOperation) as exc:
-        raise PortfolioUnavailable(f"malformed portfolio response: {exc}") from exc
-
-
 def _bool(item: dict, key: str) -> bool:
     """A flag that must be a real JSON boolean. A string "false" is truthy, and misreading
     `priced` would show a partial sum as the holding's value."""
@@ -330,16 +318,8 @@ def _portfolio_returns(body: dict) -> PortfolioReturns:
                     dividends_received_eur=Decimal(item["dividends_received_eur"]),
                     total_return_eur=Decimal(item["total_return_eur"]),
                     total_return_pct=_opt_decimal(item["total_return_pct"]),
-                    growth_pct=Decimal(item["growth_pct"]),
                 )
                 for item in body["series"]
-            ),
-            by_ticker=tuple(
-                TickerGrowth(
-                    canonical_ticker=item["canonical_ticker"],
-                    growth_pct=Decimal(item["growth_pct"]),
-                )
-                for item in body["by_ticker"]
             ),
         )
     except (KeyError, TypeError, ValueError, InvalidOperation) as exc:
@@ -580,14 +560,6 @@ class HttpPortfolioClient:
         if response.status_code != 200:
             _raise_for_status(response)
         return [_return(item) for item in _json_body(response)]
-
-    async def list_growth(self, *, user_id: str, account_label: str) -> list[GrowthPoint]:
-        response = await self._request(
-            "GET", "/returns/growth", params={"user_id": user_id, "account_label": account_label}
-        )
-        if response.status_code != 200:
-            _raise_for_status(response)
-        return [_growth_point(item) for item in _json_body(response)]
 
     async def list_holdings(self, *, user_id: str) -> Holdings:
         response = await self._request("GET", "/holdings", params={"user_id": user_id})

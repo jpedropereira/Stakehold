@@ -60,15 +60,6 @@ class Return:
 
 
 @dataclass(frozen=True)
-class GrowthPoint:
-    """One day of an account's time-weighted growth since inception, mirroring portfolio's
-    GrowthResponse. growth_pct is a fraction: 0.1234 is +12.34%."""
-
-    price_date: date
-    growth_pct: Decimal
-
-
-@dataclass(frozen=True)
 class HoldingAccount:
     """One account's share of a Holding, mirroring portfolio's HoldingAccountResponse. The value
     fields are None while that account has no return row for the ticker yet."""
@@ -133,8 +124,7 @@ class Holdings:
 @dataclass(frozen=True)
 class PortfolioSeriesPoint:
     """One day of the whole portfolio across every account, mirroring portfolio's
-    PortfolioReturnPointResponse. The pcts are fractions; growth_pct is time-weighted since the
-    first priced day, so money added or taken out doesn't move it."""
+    PortfolioReturnPointResponse. total_return_pct is a fraction."""
 
     price_date: date
     market_value_eur: Decimal
@@ -142,25 +132,13 @@ class PortfolioSeriesPoint:
     dividends_received_eur: Decimal
     total_return_eur: Decimal
     total_return_pct: Decimal | None
-    growth_pct: Decimal
-
-
-@dataclass(frozen=True)
-class TickerGrowth:
-    """One ticker's latest growth since inception across every account holding it, mirroring
-    portfolio's TickerGrowthResponse."""
-
-    canonical_ticker: str
-    growth_pct: Decimal
 
 
 @dataclass(frozen=True)
 class PortfolioReturns:
-    """portfolio's PortfolioReturnsResponse (PF-5). Both are empty while no account has a return
-    row. by_ticker covers closed tickers too."""
+    """portfolio's PortfolioReturnsResponse (PF-5). Empty while no account has a return row."""
 
     series: tuple[PortfolioSeriesPoint, ...]
-    by_ticker: tuple[TickerGrowth, ...]
 
 
 @dataclass(frozen=True)
@@ -357,15 +335,12 @@ class PortfolioClient(Protocol):
     # One row per ticker, its most recent price_date. Includes closed tickers.
     async def list_latest_returns(self, *, user_id: str, account_label: str) -> list[Return]: ...
 
-    # One account-level point per priced day, oldest first. Empty while there are no prices yet.
-    async def list_growth(self, *, user_id: str, account_label: str) -> list[GrowthPoint]: ...
-
     # Every account's open positions summed per ticker, by ticker, plus totals on the home
     # page's rule. Empty (no holdings, totals None) for a user with no accounts.
     async def list_holdings(self, *, user_id: str) -> Holdings: ...
 
-    # The whole portfolio's daily series and each ticker's growth, across every account. The
-    # full history: the chart's ranges crop it on the client. Empty for a user with no accounts.
+    # The whole portfolio's daily series, across every account. The full history: the chart's
+    # ranges crop it on the client. Empty for a user with no accounts.
     async def list_portfolio_returns(self, *, user_id: str) -> PortfolioReturns: ...
 
     async def list_ticker_mappings(self) -> list[TickerMapping]: ...

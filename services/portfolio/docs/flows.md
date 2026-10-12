@@ -33,8 +33,7 @@ this file; references to sections that stayed in `architecture.md` name it.
 | Returns refresh, newly ready tickers | `refresh-ready-tickers --window-minutes N` | — | every 5 minutes with a 10-minute window, by the `returns-refresh-ready` container | `data-store`'s `GET /tracked-tickers?status=ready` (`ready_at` inside the window), then `position_snapshots` joined to `accounts` for the accounts holding them | `return_snapshots`, for those accounts only |
 | Return listing | — (CLI has none) | `GET /returns`, `GET /returns/latest` | on demand | `return_snapshots`, optionally filtered by ticker/date range | — (read-only report) |
 | Holdings across accounts | — (CLI has none) | `GET /holdings?user_id=` | on demand (web's `/portfolio` page, PF-4) | `accounts` by `user_id`, then each account's latest `position_snapshots` and `return_snapshots` rows | — (computed on read, see "Holdings across accounts") |
-| Growth since inception | — (CLI has none) | `GET /returns/growth?user_id=&account_label=` (404 if the label didn't resolve) | on demand | `return_snapshots` and the account's `BUY`/`SELL` `transactions`, scoped through the resolved account; `ticker_mappings` | — (computed on read, see "Growth since inception") |
-| Portfolio return series | — (CLI has none) | `GET /returns/portfolio?user_id=[&start=&end=]` | on demand (web's `/portfolio` chart, PF-6) | `accounts` by `user_id`, then each account's full `return_snapshots` history and `BUY`/`SELL` `transactions`; `ticker_mappings` | — (computed on read, see "Portfolio return series") |
+| Portfolio return series | — (CLI has none) | `GET /returns/portfolio?user_id=[&start=&end=]` | on demand (web's `/portfolio` chart, PF-6) | `accounts` by `user_id`, then each account's full `return_snapshots` history | — (computed on read, see "Portfolio return series") |
 
 **No separate `brokers` table** ever materialized — `schema.md` settled on `broker` as a plain
 string on `accounts`, so `account add` writes only to `accounts`, never a second table.
@@ -371,44 +370,6 @@ for a non-English export — are documented in that plugin's own `docs/architect
 for the same reason as the extension points in [`broker-import.md`](broker-import.md): those specifics are exactly what stays out of
 this repo.
 
-### Growth since inception
-
-How much an account's holdings have grown since its first priced day, as a percentage, without
-money going in or out moving the figure: a time-weighted return. `pipeline.list_growth` reads the
-account's `return_snapshots` rows and its `BUY`/`SELL` transactions, resolves each trade to its
-ticker through `mappings.resolve` (as `rebuild_positions` does), and hands both to
-`returns/performance.py`'s `compute_growth`. Each day's return is
-
-    r_d = (MV_d + Div_d + Out_d − MV_{d−1} − In_d) / (MV_{d−1} + In_d)
-
-with buys (`In`, fees included) counted at the start of the day and sells (`Out`, the proceeds)
-at its end, and growth is the product of `1 + r_d` minus 1. `Div_d` is the day's change in the
-summed `dividends_received_eur`.
-
-- **Only `BUY`/`SELL` are flows.** A `DIVIDEND` already reaches growth through the rows, so
-  counting its transaction too would count it twice. `DEPOSIT`/`WITHDRAWAL` move cash, which no
-  table models, so growth measures the holdings, not the account's cash.
-- **A trade lands on its own (account, ticker)'s first row dated on or after its UTC date**, the
-  first day that holding's market value reflects it. One with no such row (an unmapped instrument, a ticker
-  still loading, a trade newer than the latest price) is left out rather than read as a loss.
-- **Sells keep their gain.** The proceeds are money out, so what a sold position made stays in
-  the figure, unlike `total_return_eur`, which loses it (no `realized_gains` table yet).
-
-*Why sells count at the end of the day:* a sell-out's own row has a zero market value, so
-proceeds counted at the start would leave nothing, or less than nothing, to divide by. *Why it
-isn't stored:* see `architecture.md`'s "Growth since inception is computed on read".
-*Rejected: a money-weighted return (XIRR)* — it lets the timing of deposits shape the figure,
-which is what this view exists to remove, and gives one rate per period rather than a series.
-
-*Known limits:*
-- **A dividend paid after a position has fully closed is missed**, since the ticker has no
-  return row after its closing day to carry it.
-- **Stale rows after a failed rebuild.** A backdated trade on a ticker whose returns rebuild then
-  failed counts as a flow that its stale rows don't reflect yet, so growth dips until the next
-  refresh rebuilds them.
-- **Two separate reads.** The rows and the transactions are two queries, so a write landing
-  between them can skew one response the same way; the next read is right.
-
 ### Holdings across accounts
 
 Everything a user holds, summed per `canonical_ticker` across all of their accounts: 120 IWDA in
@@ -427,32 +388,24 @@ across accounts are summed here, on read".
 
 ### Portfolio return series
 
-The whole portfolio's returns over time, and each ticker's growth, across every account a user
-holds. `holdings/flows.list_portfolio_returns` lists the user's accounts through
-`accounts/repository`, reads each one's full `return_snapshots` history and its money flows
-(`pipeline.list_trade_flows`, resolved with that account's own broker), and hands them all to
-`returns/performance.py` at once. The response is
+The whole portfolio's returns over time, across every account a user holds.
+`holdings/flows.list_portfolio_returns` lists the user's accounts through `accounts/repository`,
+reads each one's full `return_snapshots` history, and hands it all to `returns/performance.py`
+at once. The response is
 
     {"series": [{price_date, market_value_eur, cost_basis_eur, dividends_received_eur,
-                 total_return_eur, total_return_pct, growth_pct}, ...],
-     "by_ticker": [{canonical_ticker, growth_pct}, ...]}
+                 total_return_eur, total_return_pct}, ...]}
 
 - **`series`** has one point per date any (account, ticker) has a row. A holding with no row
   that day holds its own last row, and before its first row it contributes nothing. The euros are
   summed, `total_return_pct` is `total_return_eur / cost_basis_eur` from those sums (null when
-  the cost is 0), and `growth_pct` is the growth described above, over every account at once.
-- **`by_ticker`** is each ticker's last growth figure, over that ticker's rows and flows from
-  every account, sorted by ticker. Closed tickers are included, and the caller shows the ones it
-  needs.
-- **`start` and `end` crop `series` only**, after it is computed, so a shorter range never
-  restarts growth at zero. `by_ticker` ignores them.
-- **A sell in one account and a buy in another** are money out and money in, so moving a
-  holding between accounts doesn't move growth.
+  the cost is 0).
+- **`start` and `end` crop `series` only**, after it is computed, so a holding last priced
+  before `start` still carries its value into the range.
 
-A user with no accounts, or no rows yet, gets `{"series": [], "by_ticker": []}`, not a 404. It
-inherits every known limit of "Growth since inception" above. Why it is computed here, and why
-the forward-fill is in Python, is in `architecture.md`'s "Across accounts it is still one
-time-weighted figure".
+A user with no accounts, or no rows yet, gets `{"series": []}`, not a 404. Why it is computed
+here, and why the forward-fill is in Python, is in `architecture.md`'s "The portfolio series is
+summed here, on read".
 
 ## HTTP API
 
@@ -528,15 +481,10 @@ on different trading calendars, so summing across them is a real design question
 a date one ticker priced and another didn't — not a serialization detail, and it's left to task
 12 (the view UI), where the chart's actual shape will settle the question.
 
-`GET /returns/growth` is the one exception, and answers that question for itself: it returns one
-account-level series, `[{price_date, growth_pct}]`, where a ticker with no row on a date holds its
-last value (the forward-fill web's chart already used). It combines tickers here rather than in
-web because its money flows need `mappings.resolve`; see "Growth since inception" above.
-`growth_pct` is a fraction (`0.1234` is +12.34%), like `total_return_pct`.
-
-`GET /returns/portfolio` answers it the same way across every account a user holds, keyed on
-(account, ticker) so one ticker in two accounts stays two series until they are summed. It
-returns the summed EUR figures along with growth; see "Portfolio return series" above.
+`GET /returns/portfolio` is the one exception, and answers that question for itself across every
+account a user holds: a ticker with no row on a date holds its last value (the forward-fill web's
+chart already used), keyed on (account, ticker) so one ticker in two accounts stays two series
+until they are summed. It returns the summed EUR figures; see "Portfolio return series" above.
 
 `GET /holdings` sums across accounts rather than across dates: one row per ticker from each
 account's latest rows, so no calendar question arises. See "Holdings across accounts" above.

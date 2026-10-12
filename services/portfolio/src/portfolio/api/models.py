@@ -109,12 +109,6 @@ class ReturnResponse(BaseModel):
     total_return_pct: Decimal | None
 
 
-class GrowthResponse(BaseModel):
-    price_date: date
-    # A fraction, not a percentage: 0.1234 is +12.34%, the same convention as total_return_pct.
-    growth_pct: Decimal
-
-
 class PortfolioReturnPointResponse(BaseModel):
     """Every account's (account, ticker) rows summed for one day. The pcts are fractions, as in
     ReturnResponse; total_return_pct is null when nothing has a cost."""
@@ -125,19 +119,11 @@ class PortfolioReturnPointResponse(BaseModel):
     dividends_received_eur: Decimal
     total_return_eur: Decimal
     total_return_pct: Decimal | None
-    growth_pct: Decimal
-
-
-class TickerGrowthResponse(BaseModel):
-    canonical_ticker: str
-    growth_pct: Decimal
 
 
 class PortfolioReturnsResponse(BaseModel):
-    # Cropped to start/end; growth still runs from the first priced day.
+    # Cropped to start/end.
     series: list[PortfolioReturnPointResponse]
-    # Latest growth per ticker across every account holding it; ignores start/end.
-    by_ticker: list[TickerGrowthResponse]
 
 
 class HoldingAccountResponse(BaseModel):

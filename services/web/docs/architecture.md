@@ -228,14 +228,12 @@ this file for size. It counts as part of this document under `.claude/rules/arch
   positions) for the "current holdings" table, but keeps a negative quantity visible — that's a
   replay anomaly `positions/calculator.py` warns about but still computes, not a modeled short
   position, and hiding it would hide the thing a user most needs to notice.
-- **Growth since inception comes from `portfolio`, not from `portfolio_view`.** Unlike the euro
-  series, it can't be built from `/returns` alone: a time-weighted return has to take out the
-  money each buy or sell moved, and turning a transaction's ISIN or symbol into the ticker its
-  rows are under is `portfolio`'s ticker mappings. So `GET /returns/growth` returns one
-  account-level series and `build_chart_payload` only joins it onto the aggregated points by
-  date. A date it doesn't cover gets `null`, drawn as a gap, never as zero. It is a separate
-  call that degrades on its own, like the other four. The "Total return" tile's % is unchanged
-  (return over current cost basis); the two answer different questions and both are shown.
+- **No growth since inception in the portfolio views.** A time-weighted growth figure (from
+  `portfolio`'s `GET /returns/growth` and `GET /returns/portfolio`) used to show as a tile on
+  `/accounts/holdings` and `/portfolio`, a Growth % column on `/portfolio`, and a chart view on
+  all three chart pages. It was removed at the user's request: that kind of performance analysis
+  belongs to a dedicated backtesting module, not yet built. The "Total return" tile's % (return
+  over current cost basis) is the only percentage the views show.
 - **`GET /accounts/holdings` is per-account, read-only, and never triggers a rebuild.** It reads
   `portfolio`'s `account_label`-scoped positions/returns endpoints, so the view is one page per
   account (linked from `accounts.html` and the home overview). The page across accounts is
@@ -277,10 +275,7 @@ this file for size. It counts as part of this document under `.claude/rules/arch
   unless every account holding it has a return row (portfolio's rule, so no partial sum is
   shown); unpriced holdings ask `ticker_status.load_statuses` where their prices stand.
   PF-6 adds a fourth concurrent call, `GET /returns/portfolio` (PF-5). It alone feeds the chart,
-  the growth tile and the Growth % column, so a failure blanks those three (a notice in the
-  chart card, "—" elsewhere) and nothing else. A row's growth is "—" unless it is priced:
-  portfolio has a ticker's growth once any account has return rows, and a figure over only some
-  of the accounts isn't the holding's. The chart's island is portfolio's series as served
+  so a failure shows a notice in the chart card and nothing else. The chart's island is portfolio's series as served
   (`build_portfolio_chart_payload`), never web's own aggregation, which groups by ticker alone.
 - **The overview's totals (UI-11) sum each account's own summary.** `GET /` fetches the
   account list, then one `GET /returns/latest` per account, concurrently. Each account is reduced
@@ -392,8 +387,8 @@ this file for size. It counts as part of this document under `.claude/rules/arch
 | `POST /accounts/delete` | `require_user`, CSRF-checked; posted by both the dialog and the page. Calls `portfolio`'s `DELETE /accounts` with the visitor's own `user_id`, which removes the account and everything recorded in it, then redirects to `/accounts?deleted=1&transactions=<transactions_deleted>`. Nothing is rebuilt afterwards, so there are no rebuild statuses. A 404 (`AccountNotFound`) redirects with `deleted=0`; any other failure, a CSRF mismatch included, re-renders the confirmation page with the error |
 | `GET /transactions/delete` | `require_user`; required `account` and `ref` query params (`ref` is the row's `broker_transaction_ref`, which with the account is what identifies a transaction to `portfolio`). The no-JS confirmation page each Delete link on the log points to (`api/deletion.py`): the transaction's date, type, instrument, amount and reference, a "can't be undone" warning, and a form posting to `POST /transactions/delete`. `portfolio` has no single-transaction read, so the account's log is fetched (with `GET /accounts` for the header, concurrently) and searched. An unknown account is a 404 like the log's; a row that's gone redirects to the log with `deleted=0`; a failed fetch shows a notice and no form, since the visitor would be confirming a delete they can't see. With JS, `confirm_dialog.js` opens the same confirmation as a dialog on the log instead (see [`ui-architecture.md`](ui-architecture.md)) |
 | `POST /transactions/delete` | `require_user`, CSRF-checked; posted by both the dialog and the page. Calls `portfolio`'s `DELETE /transactions` with the visitor's own `user_id`, then redirects to `/transactions?account=<label>&deleted=1&positions=<status>&returns=<status>`. POST rather than DELETE because a plain HTML form can't send DELETE. A 404 (the account or the row is gone; `TransactionNotFound`) redirects with `deleted=0` rather than showing an error: the visitor wanted the row gone. Any other failure, a CSRF mismatch included, re-renders the confirmation page with the error, so a delete started from the dialog can be retried from there |
-| `GET /accounts/holdings` | `require_user`; required `account` query param; fetches `portfolio`'s `GET /positions`, `GET /returns`, `GET /returns/latest`, `GET /returns/growth` and `GET /instruments/unmapped` concurrently. Renders a "Prices as of" line and summary tiles (market value, cost basis, total return € and %, growth since inception, dividends; `portfolio_view.summarize_latest_returns`, and the last growth point), a holdings table of open positions joined to their latest return row (quantity, average cost, market value, weight, unrealized return; `portfolio_view.build_holdings`), and a Chart.js chart of the per-ticker series aggregated into one portfolio-level series (`portfolio_view.aggregate_portfolio_returns`), with growth joined on by date (`portfolio_view.build_chart_payload`), a total return / market value / growth % toggle and date ranges. A failed growth call shows the tile as "—" and drops the Growth % button, not the chart. `GET /accounts` is fetched concurrently for the account header. `AccountNotFound` on any call, or a label missing from a successfully loaded account list, renders `account_not_found.html` with a 404; any other failure degrades only the part that call feeds, mirroring `GET /accounts`'s own pattern. Pending states: "Waiting for prices" on a holding with no return row, and a notice listing the instruments waiting for a ticker mapping at this account's broker (UI-7). No writes, no rebuild trigger. |
-| `GET /portfolio` | `api/portfolio.py`. With `account`: no auth, a 308 to `/accounts/holdings` with the query string passed on unchanged (PF-2); an empty `account` is the branded 422. Without it: the login check, then the nav's "Portfolio" (PF-4), every holding summed across accounts from `portfolio`'s `GET /holdings`, with tiles from its totals, a per-account breakdown per row, and the user's unmapped instruments; and (PF-6) from `GET /returns/portfolio`, a growth tile, a Growth % column and the per-account page's chart (see "Key decisions") |
+| `GET /accounts/holdings` | `require_user`; required `account` query param; fetches `portfolio`'s `GET /positions`, `GET /returns`, `GET /returns/latest` and `GET /instruments/unmapped` concurrently. Renders a "Prices as of" line and summary tiles (market value, cost basis, total return € and %, dividends; `portfolio_view.summarize_latest_returns`), a holdings table of open positions joined to their latest return row (quantity, average cost, market value, weight, unrealized return; `portfolio_view.build_holdings`), and a Chart.js chart of the per-ticker series aggregated into one portfolio-level series (`portfolio_view.aggregate_portfolio_returns`, `portfolio_view.build_chart_payload`), with a total return / market value toggle and date ranges. `GET /accounts` is fetched concurrently for the account header. `AccountNotFound` on any call, or a label missing from a successfully loaded account list, renders `account_not_found.html` with a 404; any other failure degrades only the part that call feeds, mirroring `GET /accounts`'s own pattern. Pending states: "Waiting for prices" on a holding with no return row, and a notice listing the instruments waiting for a ticker mapping at this account's broker (UI-7). No writes, no rebuild trigger. |
+| `GET /portfolio` | `api/portfolio.py`. With `account`: no auth, a 308 to `/accounts/holdings` with the query string passed on unchanged (PF-2); an empty `account` is the branded 422. Without it: the login check, then the nav's "Portfolio" (PF-4), every holding summed across accounts from `portfolio`'s `GET /holdings`, with tiles from its totals, a per-account breakdown per row, and the user's unmapped instruments; and (PF-6) from `GET /returns/portfolio`, the per-account page's chart (see "Key decisions") |
 
 Every POST error (wrong credentials, a duplicate email, a tripped throttle, `auth`/`portfolio`
 being unreachable, a CSRF mismatch, or a `portfolio` validation failure) re-renders the form with
@@ -444,10 +439,8 @@ branded page with its own status, and an unhandled exception a branded 500 (UI-1
   that doesn't resolve and a reference that isn't in it alike, and either way there is nothing of
   the visitor's to delete, so the client maps every 404 on this call to that one error rather than
   guessing from the message. The account delete added `delete_account` (`DELETE /accounts`) and
-  its `AccountDeleteResult`; its 404 is the existing `AccountNotFound`. The growth-since-inception
-  view added `list_growth` (`GET /returns/growth`) and its `GrowthPoint`: one account-level
-  series `portfolio` computes, since its money flows need `portfolio`'s ticker mappings. A 404
-  is the existing `AccountNotFound`. PF-3 added `list_holdings` (`GET /holdings`) and its
+  its `AccountDeleteResult`; its 404 is the existing `AccountNotFound`. (A `list_growth` call for
+  `GET /returns/growth` existed until growth since inception was removed.) PF-3 added `list_holdings` (`GET /holdings`) and its
   `Holdings`/`Holding`/`HoldingAccount`/`HoldingsTotals`, which mirror PF-1's response field for
   field. The summing across accounts is `portfolio`'s, so the combined page makes one call
   rather than one per account. `priced` and `mixed_currency` must be real JSON booleans or the
@@ -455,7 +448,7 @@ branded page with its own status, and an unhandled exception a branded 500 (UI-1
   would show a partial sum as the holding's value. No new error type was needed, since
   `/holdings` has no 404 (a user with no accounts gets an empty result). PF-6 added
   `list_portfolio_returns` (`GET /returns/portfolio`, the full series: the chart's ranges crop
-  on the client) and its `PortfolioReturns`/`PortfolioSeriesPoint`/`TickerGrowth`; no 404
+  on the client) and its `PortfolioReturns`/`PortfolioSeriesPoint`; no 404
   either.
 - `rebuild_outcome.py` (UI-7) — pure. Turns the two rebuild statuses into the confirmation
   banner's one sentence; see "Key decisions".
@@ -464,7 +457,7 @@ branded page with its own status, and an unhandled exception a branded 500 (UI-1
   `summarize_latest_returns` and `build_holdings` with its `HoldingRow`, and (UI-7)
   `unmapped_for_broker` (see "Key decisions"), and (UI-11) `summarize_accounts` with its
   `AccountOverview`, for `GET /`, and (PF-4) `build_portfolio_holdings` (weight over priced
-  rows only; PF-6 joins each row's growth) and `unmapped_across_brokers`, and (PF-6)
+  rows only) and `unmapped_across_brokers`, and (PF-6)
   `build_portfolio_chart_payload`, for `GET /portfolio`. No FastAPI/httpx dependency, tested in isolation, mirroring how `portfolio`'s own
   `returns/calculator.py` is a pure function.
 - `formatting.py` (UI-5) — pure display formatters (`money`, `signed_money`, `qty`, `pct`,
@@ -473,7 +466,7 @@ branded page with its own status, and an unhandled exception a branded 500 (UI-1
   `routes.py` is near the 64KB file limit. It renders through `routes._render`, so the
   `_finish` header merge stays in one place.
 - `api/holdings.py` — `GET /accounts/holdings`, one account's holdings, tiles and chart, on its
-  own router for the same file-size reason. Moved out of `routes.py` unchanged when the growth
+  own router for the same file-size reason. Moved out of `routes.py` unchanged when the (since removed) growth
   view was added (as `api/portfolio_page.py`, serving `/portfolio`; PF-2 renamed both); it still
   renders through `routes._render` and shares `routes.py`'s account-page header helpers with the
   transactions and import pages.

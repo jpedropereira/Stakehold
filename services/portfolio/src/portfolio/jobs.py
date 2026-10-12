@@ -1245,38 +1245,6 @@ def get_latest_returns(
     return [asdict(snapshot) for snapshot in returns]
 
 
-def get_growth(
-    *, user_id: UUID, account_label: str, settings: Settings | None = None
-) -> list[dict]:
-    """This account's time-weighted growth since inception, one point per priced day (see
-    pipeline.list_growth). Raises AccountNotFound if account_label doesn't resolve for this
-    user."""
-    configure_logging()
-    settings = settings or load_settings()
-    conn = get_connection(settings.database_url)
-    try:
-        logger.info(
-            "get-growth: computing growth for account %r (user %s).", account_label, user_id
-        )
-        mappings = pipeline.load_ticker_mappings(conn)
-        points = pipeline.list_growth(
-            conn, user_id=user_id, account_label=account_label, mappings=mappings
-        )
-    finally:
-        conn.close()
-
-    if points:
-        logger.info(
-            "get-growth: done, %d day(s), %s to %s.",
-            len(points),
-            points[0].price_date,
-            points[-1].price_date,
-        )
-    else:
-        logger.info("get-growth: done, no return rows yet, so no growth to report.")
-    return [asdict(point) for point in points]
-
-
 def get_holdings(*, user_id: UUID, settings: Settings | None = None) -> dict:
     """Everything this user holds, summed per ticker across all their accounts, plus the
     portfolio totals (see holdings/flows.list_holdings). Read-only: never triggers a rebuild."""
@@ -1308,8 +1276,8 @@ def get_portfolio_returns(
     end: date | None = None,
     settings: Settings | None = None,
 ) -> dict:
-    """This user's whole-portfolio return series and each ticker's growth, across every account
-    (see holdings/flows.list_portfolio_returns). Read-only: never triggers a rebuild."""
+    """This user's whole-portfolio return series across every account (see
+    holdings/flows.list_portfolio_returns). Read-only: never triggers a rebuild."""
     configure_logging()
     settings = settings or load_settings()
     conn = get_connection(settings.database_url)
@@ -1317,27 +1285,19 @@ def get_portfolio_returns(
         logger.info(
             "get-portfolio-returns: computing returns across accounts for user %s.", user_id
         )
-        mappings = pipeline.load_ticker_mappings(conn)
-        result = holdings_flows.list_portfolio_returns(
-            conn, user_id=user_id, mappings=mappings, start=start, end=end
-        )
+        result = holdings_flows.list_portfolio_returns(conn, user_id=user_id, start=start, end=end)
     finally:
         conn.close()
 
     if result.series:
         logger.info(
-            "get-portfolio-returns: done, %d day(s), %s to %s; growth for %d ticker(s).",
+            "get-portfolio-returns: done, %d day(s), %s to %s.",
             len(result.series),
             result.series[0].price_date,
             result.series[-1].price_date,
-            len(result.by_ticker),
         )
-    elif result.by_ticker:
-        logger.info(
-            "get-portfolio-returns: done, no days in the requested range; growth for %d "
-            "ticker(s).",
-            len(result.by_ticker),
-        )
+    elif start is not None or end is not None:
+        logger.info("get-portfolio-returns: done, no days in the requested range.")
     else:
         logger.info(
             "get-portfolio-returns: done, no return rows in any account yet, so no series to "

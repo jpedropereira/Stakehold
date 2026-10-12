@@ -48,7 +48,7 @@ class FakePortfolioClient:
         self.list_accounts_error: Exception | None = None
         # Per account label: a list of rows, or an exception to raise.
         self.latest_returns: dict[str, list[Return] | Exception] = {}
-        self.portfolio_returns = PortfolioReturns(series=(), by_ticker=())
+        self.portfolio_returns = PortfolioReturns(series=())
         self.list_portfolio_returns_error: Exception | None = None
         self.calls: list[tuple] = []
 
@@ -307,7 +307,7 @@ def test_overview_is_the_current_nav_entry(client):
 # --- layout: accounts list and returns chart side by side (LY-6) --------------------------------
 
 
-def _point(day, *, value="1200", total="200", growth="0.15"):
+def _point(day, *, value="1200", total="200"):
     return PortfolioSeriesPoint(
         price_date=date(2026, 1, day),
         market_value_eur=Decimal(value),
@@ -315,12 +315,11 @@ def _point(day, *, value="1200", total="200", growth="0.15"):
         dividends_received_eur=Decimal("0"),
         total_return_eur=Decimal(total),
         total_return_pct=Decimal(total) / Decimal("1000"),
-        growth_pct=Decimal(growth),
     )
 
 
 def _returns(*points):
-    return PortfolioReturns(series=points, by_ticker=())
+    return PortfolioReturns(series=points)
 
 
 def _split(html):
@@ -380,8 +379,8 @@ def test_chart_data_island_carries_the_series(client):
     _logged_in(test_client, fake_auth)
     _two_accounts(fake_portfolio)
     fake_portfolio.portfolio_returns = _returns(
-        _point(5, value="1100", total="100", growth="0.1"),
-        _point(6, value="1200", total="200", growth="0.15"),
+        _point(5, value="1100", total="100"),
+        _point(6, value="1200", total="200"),
     )
 
     _, returns = _split(test_client.get("/").text)
@@ -390,18 +389,8 @@ def test_chart_data_island_carries_the_series(client):
         r'<script id="returns-chart-data" type="application/json">(.*?)</script>', returns, re.S
     )
     assert json.loads(island.group(1)) == [
-        {
-            "date": "2026-01-05",
-            "market_value_eur": 1100.0,
-            "total_return_eur": 100.0,
-            "growth_pct": 0.1,
-        },
-        {
-            "date": "2026-01-06",
-            "market_value_eur": 1200.0,
-            "total_return_eur": 200.0,
-            "growth_pct": 0.15,
-        },
+        {"date": "2026-01-05", "market_value_eur": 1100.0, "total_return_eur": 100.0},
+        {"date": "2026-01-06", "market_value_eur": 1200.0, "total_return_eur": 200.0},
     ]
     assert re.search(
         r'<div class="chart-frame">\s*<canvas id="returns-chart"[^>]*></canvas>\s*</div>', returns
@@ -418,7 +407,7 @@ def test_chart_offers_every_view_and_range(client):
     _, returns = _split(test_client.get("/").text)
 
     views = re.findall(r'data-chart-view="(\w+)"', returns)
-    assert views == ["total_return_eur", "market_value_eur", "growth_pct"]
+    assert views == ["total_return_eur", "market_value_eur"]
     assert re.findall(r'data-chart-range="(\d+)"', returns) == ["1", "6", "12", "0"]
     assert '<div class="chart-controls" hidden>' in returns
 

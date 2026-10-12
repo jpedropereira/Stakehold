@@ -24,7 +24,6 @@ from web.api.routes import (
 )
 from web.auth_client.base import AuthUser
 from web.portfolio_client.base import (
-    GrowthPoint,
     PortfolioClient,
     Position,
     Return,
@@ -58,7 +57,6 @@ class _HoldingsViewData:
     returns: list[Return]
     latest_returns: list[Return]
     unmapped: list[UnmappedInstrument]
-    growth: list[GrowthPoint]
     # Which calls degraded, so the page doesn't read a failed call's empty list as "none yet".
     failed: frozenset[str]
     error: str | None
@@ -67,8 +65,8 @@ class _HoldingsViewData:
 async def _load_holdings_view(
     portfolio_client: PortfolioClient, user_id: str, account_label: str
 ) -> _HoldingsViewData:
-    """Fetches this account's positions, return history, latest returns and growth since
-    inception, plus the user's unmapped instruments (UI-7), concurrently, tolerating any of them
+    """Fetches this account's positions, return history and latest returns, plus the user's
+    unmapped instruments (UI-7), concurrently, tolerating any of them
     failing independently -- except AccountNotFound, which is re-raised rather than degraded: a
     bad account_label has nothing partial to show for any call, so the caller renders a distinct
     404 instead of the generic "service unavailable" banner."""
@@ -79,7 +77,6 @@ async def _load_holdings_view(
             user_id=user_id, account_label=account_label
         ),
         "unmapped instruments": portfolio_client.list_unmapped_instruments(user_id=user_id),
-        "growth": portfolio_client.list_growth(user_id=user_id, account_label=account_label),
     }
     results = dict(
         zip(calls, await asyncio.gather(*calls.values(), return_exceptions=True), strict=True)
@@ -101,7 +98,6 @@ async def _load_holdings_view(
         returns=results["returns"],
         latest_returns=results["latest returns"],
         unmapped=results["unmapped instruments"],
-        growth=results["growth"],
         failed=frozenset(failed),
         error=_PORTFOLIO_VIEW_ERROR if failed else None,
     )
@@ -157,9 +153,7 @@ async def account_holdings_page(
                 view.unmapped, header["account"].broker if header["account"] else None
             ),
             "return_points": return_points,
-            "chart_payload": build_chart_payload(return_points, view.growth),
-            # The latest growth figure for its tile; None (shown as "—") if growth didn't load.
-            "growth_pct": view.growth[-1].growth_pct if view.growth else None,
+            "chart_payload": build_chart_payload(return_points),
             "error": view.error,
             **_account_page_context("holdings"),
             **header,

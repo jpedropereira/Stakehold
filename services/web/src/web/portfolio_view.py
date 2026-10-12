@@ -6,9 +6,9 @@ combining N per-ticker daily return series into one portfolio-level series for t
 (portfolio/docs/architecture.md's "Returns are served per ticker" note explicitly leaves this to
 task 12), (UI-6) the summary tiles and the holdings table built from /returns/latest, and
 (UI-11) the home overview's per-account rows and cross-account totals, the chart's data
-island, with portfolio's time-weighted growth joined on, and (PF-4, PF-6) the /portfolio page's
-rows with their weights and growth, and its chart's island. No I/O, no FastAPI, no
-httpx -- mirrors how portfolio/returns/calculator.py is a pure function tested in isolation.
+island, and (PF-4, PF-6) the /portfolio page's rows with their weights, and its chart's island.
+No I/O, no FastAPI, no httpx -- mirrors how portfolio/returns/calculator.py is a pure function
+tested in isolation.
 """
 
 from collections.abc import Sequence
@@ -18,12 +18,10 @@ from decimal import Decimal
 
 from web.portfolio_client.base import (
     Account,
-    GrowthPoint,
     Holding,
     PortfolioSeriesPoint,
     Position,
     Return,
-    TickerGrowth,
     UnmappedInstrument,
 )
 
@@ -119,28 +117,14 @@ def aggregate_portfolio_returns(returns: Sequence[Return]) -> list[PortfolioRetu
     return points
 
 
-def build_chart_payload(
-    points: Sequence[PortfolioReturnPoint], growth: Sequence[GrowthPoint]
-) -> list[dict]:
-    """The chart's data island (static/portfolio_chart.js): one entry per aggregated point, with
-    portfolio's growth since inception for that date joined on.
-
-    Growth is a separate read computed by portfolio, so it is joined by date, never by position.
-    A date it doesn't cover (the growth call failed, or the two reads straddled a rebuild) gets
-    None, which the chart draws as a gap rather than as zero. Floats, because this is JSON for
-    a canvas; the tiles keep the Decimals.
-    """
-    growth_by_date = {g.price_date: g.growth_pct for g in growth}
+def build_chart_payload(points: Sequence[PortfolioReturnPoint]) -> list[dict]:
+    """The chart's data island (static/portfolio_chart.js): one entry per aggregated point.
+    Floats, because this is JSON for a canvas; the tiles keep the Decimals."""
     return [
         {
             "date": point.price_date.isoformat(),
             "market_value_eur": float(point.market_value_eur),
             "total_return_eur": float(point.total_return_eur),
-            "growth_pct": (
-                None
-                if point.price_date not in growth_by_date
-                else float(growth_by_date[point.price_date])
-            ),
         }
         for point in points
     ]
@@ -261,37 +245,26 @@ def build_holdings(
 
 @dataclass(frozen=True)
 class PortfolioHoldingRow:
-    """One row of /portfolio: a holding summed across accounts by portfolio, its weight, and
-    its growth since inception across those accounts (PF-6)."""
+    """One row of /portfolio: a holding summed across accounts by portfolio, and its weight."""
 
     holding: Holding
     weight: Decimal | None
-    growth_pct: Decimal | None
 
 
-def build_portfolio_holdings(
-    holdings: Sequence[Holding], by_ticker: Sequence[TickerGrowth] = ()
-) -> list[PortfolioHoldingRow]:
-    """Each holding with its share of the summed market value of the *priced* holdings, and its
-    growth from portfolio's by_ticker, in portfolio's order.
+def build_portfolio_holdings(holdings: Sequence[Holding]) -> list[PortfolioHoldingRow]:
+    """Each holding with its share of the summed market value of the *priced* holdings, in
+    portfolio's order.
 
     build_holdings' rule: an unpriced holding (portfolio marks a holding priced only when every
     account holding it has a return row) has no weight and isn't counted as worth zero in the
     others'. Divided by the rows' own sum, not by portfolio's totals, which also count closed
     tickers and so needn't match the rows. If the priced rows sum to zero, every weight is None.
-
-    Growth is joined on canonical_ticker and is None unless the holding is priced: portfolio
-    has a figure as soon as one account has return rows, and a growth over only some of the
-    accounts holding a ticker isn't that holding's. It is also None when portfolio has no
-    figure for the ticker, or by_ticker is empty because its call failed.
     """
     total = sum((h.market_value_eur for h in holdings if h.priced), _ZERO)
-    growth = {g.canonical_ticker: g.growth_pct for g in by_ticker}
     return [
         PortfolioHoldingRow(
             holding=h,
             weight=None if not h.priced or total == _ZERO else h.market_value_eur / total,
-            growth_pct=growth.get(h.canonical_ticker) if h.priced else None,
         )
         for h in holdings
     ]
@@ -299,14 +272,12 @@ def build_portfolio_holdings(
 
 def build_portfolio_chart_payload(series: Sequence[PortfolioSeriesPoint]) -> list[dict]:
     """/portfolio's chart island, in build_chart_payload's shape so static/portfolio_chart.js
-    serves both pages. portfolio's series already carries growth on every point, so there is
-    nothing to join."""
+    serves both pages."""
     return [
         {
             "date": point.price_date.isoformat(),
             "market_value_eur": float(point.market_value_eur),
             "total_return_eur": float(point.total_return_eur),
-            "growth_pct": float(point.growth_pct),
         }
         for point in series
     ]
