@@ -1,5 +1,5 @@
 """Screenshot every web page in both themes at every width, and check each one (UI-13, LY-1, LY-3,
-LY-4).
+LY-4, LY-6).
 
     uv run python services/web/scripts/review_pages.py [--out DIR] [--only NAME ...]
         [--width NAME ...]
@@ -59,6 +59,8 @@ PAGES = [
     Page("login", "/login", "anon"),
     Page("signup", "/signup", "anon"),
     Page("overview", "/", "admin"),
+    Page("overview-market-value", "/", "admin", click="[data-chart-view=market_value_eur]"),
+    Page("overview-growth", "/", "admin", click="[data-chart-view=growth_pct]"),
     Page("portfolio", "/portfolio", "admin"),
     # The first holding's per-account breakdown, opened.
     Page("portfolio-breakdown", "/portfolio", "admin", click="details summary"),
