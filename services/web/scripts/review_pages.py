@@ -14,6 +14,7 @@ For a person to review, not a pixel-diff gate: the screenshots land in services/
 - no table wider than the card that holds it, unless it sits in a .table-scroll box;
 - no .table-scroll box that scrolls while its .split shows two columns;
 - every chart filling its .chart-frame, at a height within CHART_HEIGHT;
+- every summary tile figure on one line, inside its tile's content box;
 - WCAG AA contrast for every piece of visible text against what's actually behind it;
 - a visible focus indicator on everything Tab reaches, and Tab never getting stuck;
 - no console errors, CSP violations included.
@@ -236,6 +237,29 @@ _SPLIT_SCROLL_JS = """
     if (columns > 1 && box.scrollWidth > box.clientWidth + 1) {
       const label = box.getAttribute("aria-label") || "table";
       failures.push(`${label}: ${box.scrollWidth}px in a ${box.clientWidth}px box`);
+    }
+  }
+  return failures;
+}
+"""
+
+# Run in the page. Every summary tile figure that wraps onto a second line or reaches past its
+# tile's content edge. A signed figure can break after its sign ("+" alone on a line), and an
+# unsigned one has nowhere to break, so it runs into the tile's padding instead; the overflow
+# checks above see neither, since the tile still holds it. Returns one entry per failure.
+_TILE_FIGURE_JS = """
+() => {
+  const failures = [];
+  for (const figure of document.querySelectorAll(".tile-value .mono")) {
+    const tile = figure.closest(".tile");
+    const style = getComputedStyle(tile);
+    const edge = tile.getBoundingClientRect().right - parseFloat(style.paddingRight);
+    const label = tile.querySelector(".tile-label")?.textContent.trim() || "tile";
+    if (figure.getClientRects().length > 1) {
+      failures.push(`${label}: ${figure.textContent} wraps`);
+    } else if (figure.getBoundingClientRect().right > edge + 1) {
+      const over = Math.round(figure.getBoundingClientRect().right - edge);
+      failures.push(`${label}: ${figure.textContent} runs ${over}px past its tile's content`);
     }
   }
   return failures;
@@ -724,6 +748,7 @@ def _review(browser, base_url, page_spec, theme, width_name, out) -> list[str]:
     problems += [f"table overflows its card: {f}" for f in page.evaluate(_TABLE_OVERFLOW_JS)]
     problems += [f"table scrolls in two columns: {f}" for f in page.evaluate(_SPLIT_SCROLL_JS)]
     problems += [f"chart: {f}" for f in page.evaluate(_CHART_SIZE_JS, list(CHART_HEIGHT))]
+    problems += [f"tile figure: {f}" for f in page.evaluate(_TILE_FIGURE_JS)]
     problems += [f"contrast: {f}" for f in page.evaluate(_CONTRAST_JS)]
     problems += [f"focus: {p}" for p in _focus_problems(page)]
     problems += [f"console: {line}" for line in console]

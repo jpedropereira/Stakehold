@@ -1014,8 +1014,11 @@ img.logo-on-dark {
 /* Four headline figures, wrapping to two rows (or one column) as the width shrinks. */
 .summary-tiles {
   display: grid;
-  /* 160px lets the account page's five tiles share one row at the 880px card width. */
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  /* A tile fits its headline figure, not the other way round: 22px mono is about 13px a
+     character, so 200px (152px inside the padding) holds 11 of them, "+€14,206.48". At 160px a
+     signed figure split after its sign and an unsigned one ran into the padding. A phone shows
+     one tile per row; a full-width page still fits five from desktop width. */
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: var(--space-4);
   width: 100%;
   max-width: var(--page-wide);
@@ -1041,6 +1044,11 @@ img.logo-on-dark {
 
 .tile-value .mono:first-child {
   font-size: 22px;
+}
+
+/* A figure is never split across lines: "+" alone above "€1,450.78" reads as two values. */
+.tile-value .mono {
+  white-space: nowrap;
 }
 
 /* A second figure (total return's percentage) sits under the first, at the ordinary size. */
