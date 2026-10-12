@@ -906,7 +906,14 @@ img.logo-on-dark {
 
 /* ---- the combined portfolio (PF-4) ---- */
 
-/* Nine columns in the 880px card: the transactions table's tighter cells and smaller figures. */
+/* /portfolio takes the full content width rather than the account pages' 880px: its table's
+   ten columns (PF-6) need about 875px inside the card. Below that (between phone and desktop
+   width) the table scrolls in its .table-scroll box. */
+.content-wide {
+  max-width: none;
+}
+
+/* Ten columns: the transactions table's tighter cells and smaller figures. */
 .portfolio-table th,
 .portfolio-table td {
   padding-inline: var(--space-2);

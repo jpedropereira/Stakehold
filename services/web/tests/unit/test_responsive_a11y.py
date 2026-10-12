@@ -33,6 +33,7 @@ from web.portfolio_client.base import (
     Holding,
     HoldingAccount,
     Holdings,
+    PortfolioReturns,
     Position,
     Return,
     TickerMapping,
@@ -76,6 +77,9 @@ class FakePortfolioClient:
 
     async def list_holdings(self, *, user_id):
         return self.holdings
+
+    async def list_portfolio_returns(self, *, user_id):
+        return PortfolioReturns(series=(), by_ticker=())
 
     async def list_unmapped_instruments(self, *, user_id):
         return []
@@ -305,6 +309,7 @@ _PORTFOLIO_LABELS = [
     "Unrealized return (%)",
     "Total return",
     "Total return (%)",
+    "Growth %",
 ]
 
 
@@ -334,11 +339,27 @@ def test_portfolio_table_can_stack_at_phone_width(client):
     breakdown_cells = re.findall(
         r'<tr role="row" class="breakdown-row">\s*(<td\b[^>]*>)', page_html
     )
-    assert [_attr(c, "colspan") for c in breakdown_cells] == ["9", "9"]
+    assert [_attr(c, "colspan") for c in breakdown_cells] == ["10", "10"]
     assert all(_attr(c, "role") == "cell" for c in breakdown_cells)
     inner = [t for t in _tags(page_html, "table") if "breakdown-table" in (_attr(t, "class") or "")]
     assert len(inner) == 2
     assert all("stack-table" in _attr(t, "class") and _attr(t, "role") == "table" for t in inner)
+
+
+def test_portfolio_table_scrolls_in_its_own_named_region(client):
+    """Ten columns don't fit between phone and desktop width, where the table doesn't stack yet:
+    it scrolls in a box a keyboard can reach and a screen reader can name, not the page."""
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.holdings = Holdings(holdings=(_combined_holding("AAPL"),), totals=None)
+
+    page_html = test_client.get("/portfolio").text
+
+    region = re.search(r'(<div class="table-scroll"[^>]*>)\s*<table class="([^"]*)"', page_html)
+    assert region and "portfolio-table" in region.group(2)
+    assert _attr(region.group(1), "tabindex") == "0"
+    assert _attr(region.group(1), "role") == "region"
+    assert _attr(region.group(1), "aria-label") == "Holdings"
 
 
 def test_portfolio_waiting_for_prices_cell_is_labelled(client):

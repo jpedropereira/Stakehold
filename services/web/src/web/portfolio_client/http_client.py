@@ -13,8 +13,11 @@ from web.portfolio_client.base import (
     HoldingAccount,
     Holdings,
     HoldingsTotals,
+    PortfolioReturns,
+    PortfolioSeriesPoint,
     Position,
     Return,
+    TickerGrowth,
     TickerLookup,
     TickerMapping,
     TickerMappingWriteResult,
@@ -316,6 +319,33 @@ def _holdings(body: dict) -> Holdings:
         raise PortfolioUnavailable(f"malformed portfolio response: {exc}") from exc
 
 
+def _portfolio_returns(body: dict) -> PortfolioReturns:
+    try:
+        return PortfolioReturns(
+            series=tuple(
+                PortfolioSeriesPoint(
+                    price_date=date.fromisoformat(item["price_date"]),
+                    market_value_eur=Decimal(item["market_value_eur"]),
+                    cost_basis_eur=Decimal(item["cost_basis_eur"]),
+                    dividends_received_eur=Decimal(item["dividends_received_eur"]),
+                    total_return_eur=Decimal(item["total_return_eur"]),
+                    total_return_pct=_opt_decimal(item["total_return_pct"]),
+                    growth_pct=Decimal(item["growth_pct"]),
+                )
+                for item in body["series"]
+            ),
+            by_ticker=tuple(
+                TickerGrowth(
+                    canonical_ticker=item["canonical_ticker"],
+                    growth_pct=Decimal(item["growth_pct"]),
+                )
+                for item in body["by_ticker"]
+            ),
+        )
+    except (KeyError, TypeError, ValueError, InvalidOperation) as exc:
+        raise PortfolioUnavailable(f"malformed portfolio response: {exc}") from exc
+
+
 def _transaction(item: dict) -> Transaction:
     try:
         return Transaction(
@@ -564,6 +594,12 @@ class HttpPortfolioClient:
         if response.status_code != 200:
             _raise_for_status(response)
         return _holdings(_json_body(response))
+
+    async def list_portfolio_returns(self, *, user_id: str) -> PortfolioReturns:
+        response = await self._request("GET", "/returns/portfolio", params={"user_id": user_id})
+        if response.status_code != 200:
+            _raise_for_status(response)
+        return _portfolio_returns(_json_body(response))
 
     async def list_ticker_mappings(self) -> list[TickerMapping]:
         response = await self._request("GET", "/ticker-mappings")

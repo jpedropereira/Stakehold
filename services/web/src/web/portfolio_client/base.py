@@ -131,6 +131,39 @@ class Holdings:
 
 
 @dataclass(frozen=True)
+class PortfolioSeriesPoint:
+    """One day of the whole portfolio across every account, mirroring portfolio's
+    PortfolioReturnPointResponse. The pcts are fractions; growth_pct is time-weighted since the
+    first priced day, so money added or taken out doesn't move it."""
+
+    price_date: date
+    market_value_eur: Decimal
+    cost_basis_eur: Decimal
+    dividends_received_eur: Decimal
+    total_return_eur: Decimal
+    total_return_pct: Decimal | None
+    growth_pct: Decimal
+
+
+@dataclass(frozen=True)
+class TickerGrowth:
+    """One ticker's latest growth since inception across every account holding it, mirroring
+    portfolio's TickerGrowthResponse."""
+
+    canonical_ticker: str
+    growth_pct: Decimal
+
+
+@dataclass(frozen=True)
+class PortfolioReturns:
+    """portfolio's PortfolioReturnsResponse (PF-5). Both are empty while no account has a return
+    row. by_ticker covers closed tickers too."""
+
+    series: tuple[PortfolioSeriesPoint, ...]
+    by_ticker: tuple[TickerGrowth, ...]
+
+
+@dataclass(frozen=True)
 class Transaction:
     """One row of an account's transaction log, mirroring portfolio's TransactionResponse.
     Amounts are signed cash flows (a BUY's is negative), quantity is signed (a SELL's is
@@ -330,6 +363,10 @@ class PortfolioClient(Protocol):
     # Every account's open positions summed per ticker, by ticker, plus totals on the home
     # page's rule. Empty (no holdings, totals None) for a user with no accounts.
     async def list_holdings(self, *, user_id: str) -> Holdings: ...
+
+    # The whole portfolio's daily series and each ticker's growth, across every account. The
+    # full history: the chart's ranges crop it on the client. Empty for a user with no accounts.
+    async def list_portfolio_returns(self, *, user_id: str) -> PortfolioReturns: ...
 
     async def list_ticker_mappings(self) -> list[TickerMapping]: ...
 
