@@ -815,6 +815,21 @@ def test_chart_data_island_carries_the_series(client):
     assert '<script src="/static/portfolio_chart.js" defer></script>' in card
 
 
+def test_chart_canvas_sits_alone_in_its_sizing_frame(client):
+    # LY-3: the frame, not the canvas's width, sets the chart's height, and Chart.js measures the
+    # canvas's parent, so the frame must hold nothing else.
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_priced_holding(fake_portfolio)
+    fake_portfolio.portfolio_returns = _returns(_point(6))
+
+    card = _chart_card(_page(test_client))
+
+    assert re.search(
+        r'<div class="chart-frame">\s*<canvas id="returns-chart"[^>]*></canvas>\s*</div>', card
+    )
+
+
 def test_chart_offers_every_view_and_range(client):
     test_client, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)

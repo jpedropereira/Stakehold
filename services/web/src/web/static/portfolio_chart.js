@@ -100,6 +100,8 @@ document.addEventListener("DOMContentLoaded", () => {
     type: "line",
     data: { labels: [], datasets: [{ data: [], borderWidth: 2 }] },
     options: {
+      // The .chart-frame around the canvas sets the height (web.css), not the canvas's width.
+      maintainAspectRatio: false,
       interaction: { mode: "index", intersect: false },
       plugins: {
         legend: { display: false },

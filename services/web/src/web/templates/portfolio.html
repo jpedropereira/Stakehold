@@ -156,7 +156,9 @@
       {% endfor %}
     </div>
   </div>
-  <canvas id="returns-chart" role="img" aria-label="Portfolio total return over time"></canvas>
+  <div class="chart-frame">
+    <canvas id="returns-chart" role="img" aria-label="Portfolio total return over time"></canvas>
+  </div>
   <script id="returns-chart-data" type="application/json">{{ chart_payload | tojson }}</script>
   <script src="/static/vendor/chart.min.js" defer></script>
   <script src="/static/portfolio_chart.js" defer></script>
