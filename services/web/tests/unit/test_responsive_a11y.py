@@ -488,14 +488,13 @@ def test_wide_table_pages_take_the_full_content_width(client, path, is_admin):
     [
         "/",
         "/accounts",
-        "/accounts/holdings?account=main",
         "/transactions/new?account=main",
         "/transactions/import?account=main",
     ],
 )
 def test_other_pages_keep_the_default_width(client, path):
-    """Holdings and Overview keep the 880px column until LY-5 and LY-6 lay them out; forms keep
-    their own cards."""
+    """Overview keeps the 880px column until LY-6 lays it out; forms keep their own cards.
+    Account holdings went full width in LY-5 (test_account_holdings_page.py)."""
     test_client, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)
 

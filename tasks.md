@@ -73,7 +73,7 @@ The previous chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archi
 | LY-2 | [Wider content and wide tables](#ly-2-wider-content-and-wide-tables) | LY-1 | done |
 | LY-3 | [Chart sized by its container](#ly-3-chart-sized-by-its-container) | LY-1 | done |
 | LY-4 | [`/portfolio`: table and chart side by side](#ly-4-portfolio-table-and-chart-side-by-side) | LY-2, LY-3 | done |
-| LY-5 | [Account holdings: table and chart side by side](#ly-5-account-holdings-table-and-chart-side-by-side) | LY-4 | ready |
+| LY-5 | [Account holdings: table and chart side by side](#ly-5-account-holdings-table-and-chart-side-by-side) | LY-4 | done |
 | LY-6 | [Overview: two-column layout](#ly-6-overview-two-column-layout) | LY-4 | ready |
 | LY-7 | [Retire the 880px column](#ly-7-retire-the-880px-column) | LY-5, LY-6 | blocked |
 
@@ -244,7 +244,7 @@ Done as:
 
 ### LY-5. Account holdings: table and chart side by side
 
-**Status:** ready
+**Status:** done
 
 The same `.split` on `/accounts/holdings`, after LY-4 has settled the pattern. Its table has
 seven cells, not ten, so the two-column breakpoint is lower. Measure it; it is expected to be
@@ -257,6 +257,21 @@ Tests: as LY-4, for this page.
 
 Files: `templates/account_holdings.html`, `static/web.css`, `docs/ui-architecture.md`,
 `screenshots/`.
+
+Done as:
+- Breakpoint measured: the table is 640px, so its column's minimum is 704px with padding, and
+  the chart's stays 420px. Two columns from a 1240px window (about 1221px needed, plus room for
+  a classic 15px scrollbar), so 1280px is two columns, about 708px and 472px. 3:2 above that,
+  as on `/portfolio`.
+- The page became a `page-full` page, so the account header, as-of line and tiles span both
+  columns. The 880px interim now covers only Overview and the account form pages.
+- The container is `split split-account`. The modifier's rules come after `.split`'s, so from
+  1480px its minimum wins. The 4:3 chart frame and the sticky aside are repeated in its own
+  queries, because a breakpoint can't be a custom property.
+- No `.table-scroll` box: stacked, the table fits its full-width card at every width above
+  the stack breakpoint.
+- `test_responsive_a11y.py` no longer lists the page among those keeping the 880px column.
+  `review_pages.py` needed no change: 260 of 260.
 
 ### LY-6. Overview: two-column layout
 
@@ -281,7 +296,7 @@ Files: `api/overview.py`, `templates/home.html`, `static/web.css`, `docs/ui-arch
 
 ### LY-7. Retire the 880px column
 
-**Status:** blocked (LY-5, LY-6)
+**Status:** blocked (LY-6)
 
 Once every data page uses a width tier, remove what is left of the old column: the 880px
 default of `--page-wide` (full becomes the default, so the `page_width` block may go too) and

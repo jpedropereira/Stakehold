@@ -947,3 +947,127 @@ def test_no_template_links_to_the_old_portfolio_url():
     ]
 
     assert offenders == []
+
+
+# --- layout: table and chart side by side (LY-5) ------------------------------------------------
+
+
+def _page(test_client, account="main"):
+    return test_client.get("/accounts/holdings", params={"account": account}).text
+
+
+def _split(html):
+    """The two-column container's two cards, in document order, or None without it. Neither
+    card nests a <section>, so each one ends at its first </section>. Repeated from
+    test_portfolio_page.py (test files can't import each other), for this page's modifier."""
+    match = re.search(
+        r'<div class="split split-account">\s*(<section class="[^"]*">.*?</section>)\s*'
+        r'(<section class="[^"]*">.*?</section>)\s*</div>',
+        html,
+        re.S,
+    )
+    return None if match is None else match.groups()
+
+
+def _with_a_priced_holding(fake_portfolio):
+    fake_portfolio.list_positions_result = [_position(ticker="AAPL")]
+    fake_portfolio.list_latest_returns_result = [_return_row(ticker="AAPL")]
+    fake_portfolio.list_returns_result = [_return_row(ticker="AAPL")]
+
+
+def test_holdings_and_chart_cards_share_the_split_holdings_first(client):
+    # DOM order is reading order: CSS grid places the columns, the markup never reorders them.
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_priced_holding(fake_portfolio)
+
+    holdings, returns = _split(_page(test_client))
+
+    assert "<h1>Holdings</h1>" in holdings
+    assert _holding_cells(holdings, "AAPL")
+    assert "<h1>Returns over time</h1>" in returns
+    assert '<canvas id="returns-chart"' in returns
+    # The chart card is the one that stays in view beside a tall table.
+    assert re.match(r'<section class="[^"]*\bsplit-aside\b', returns)
+
+
+def test_holdings_page_is_a_full_width_page(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_priced_holding(fake_portfolio)
+
+    assert re.search(r'<main id="main" class="page page-full"', _page(test_client))
+
+
+def test_account_header_as_of_line_and_tiles_span_the_page_above_the_split(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_priced_holding(fake_portfolio)
+
+    html = _page(test_client)
+
+    split_at = html.index('<div class="split split-account">')
+    assert html.index('class="account-header"') < split_at
+    assert html.index('class="as-of"') < split_at
+    assert html.index('class="summary-tiles"') < split_at
+    assert not any('class="tile"' in card for card in _split(html))
+
+
+def test_a_positions_failure_keeps_both_cards_in_the_split(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.list_positions_error = PortfolioUnavailable("boom")
+    fake_portfolio.list_returns_result = [_return_row()]
+
+    html = _page(test_client)
+    holdings, returns = _split(html)
+
+    assert html.index("Can&#39;t reach the portfolio service") < html.index('class="split ')
+    assert "No positions yet" in holdings
+    assert '<canvas id="returns-chart"' in returns
+
+
+def test_a_returns_failure_keeps_both_cards_in_the_split(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_priced_holding(fake_portfolio)
+    fake_portfolio.list_returns_error = PortfolioUnavailable("boom")
+
+    holdings, returns = _split(_page(test_client))
+
+    assert _holding_cells(holdings, "AAPL")
+    assert "No return history yet" in returns
+
+
+def test_empty_holdings_and_history_still_render_in_the_split(client):
+    test_client, _, fake_auth, _ = client
+    _logged_in(test_client, fake_auth)
+
+    holdings, returns = _split(_page(test_client))
+
+    assert "No positions yet" in holdings
+    assert "No return history yet" in returns
+
+
+def test_a_holding_waiting_for_prices_sits_in_the_split_holdings_card(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_priced_holding(fake_portfolio)
+    fake_portfolio.list_positions_result.append(_position(ticker="NEW"))
+    fake_portfolio.tracked_statuses = {"NEW": "pending"}
+
+    holdings, _ = _split(_page(test_client))
+
+    assert _holding_cells(holdings, "NEW")[3:] == [
+        '<span class="entry-empty">Prices loading</span>'
+    ]
+
+
+def test_an_unknown_account_has_no_split(client):
+    test_client, _, fake_auth, _ = client
+    _logged_in(test_client, fake_auth)
+
+    html = _page(test_client, account="nope")
+
+    assert "doesn't exist" in html
+    assert 'class="split' not in html

@@ -98,7 +98,8 @@ described here updates this file in the same change.
     failures. After LY-2: 208 of 208. Transactions fits its full-width card from about 1150px
     and scrolls in its box below that; the logo lines up with the content edge. After LY-4,
     which added the laptop width: 260 of 260. `/portfolio` is two columns at 1920px and
-    stacked at 1440px and below.
+    stacked at 1440px and below. After LY-5: 260 of 260. Account holdings is two columns at
+    1280px and up, stacked at tablet and phone.
 - **Feedback and error states (UI-12).**
   - *Banners*: every message is one macro, `partials/_banner.html`, in the charter's ink rule
     (chapter II): an icon and a bold lead word carry the meaning, never color, so errors use
@@ -266,11 +267,11 @@ described here updates this file in the same change.
     they can't drift apart, and the account header lines up with the cards under it without the
     partial needing a parameter. A class per element was the alternative; it would repeat the
     tier on every block of every page. Form and narrow cards keep their own width on a full
-    page (the admin mappings form). Full pages: Transactions, Tickers, admin mappings and
-    `/portfolio`. **Interim:** `--page-wide` defaults to 880px, the old single column, which
-    Holdings, Overview and the account form pages keep until LY-4 to LY-6 lay them out. Stretched
-    to full width first, they would have been long stacked pages with a 1600px chart. LY-7 makes
-    full the default.
+    page (the admin mappings form). Full pages: Transactions, Tickers, admin mappings,
+    `/portfolio` and account Holdings (LY-5). **Interim:** `--page-wide` defaults to 880px, the
+    old single column, which Overview and the account form pages keep until LY-6 lays Overview
+    out. Stretched to full width first, the holdings pages would have been long stacked pages
+    with a 1600px chart. LY-7 makes full the default.
   - *Breakpoints* are listed once, by name, in a comment by `--content-max`, because a custom
     property can't be used in `@media`; each media query's comment cites the name.
   - *Transactions* gets the spare width in its text columns: above the stack breakpoint the
@@ -284,7 +285,8 @@ described here updates this file in the same change.
     and still scrolled the page sideways at 768px.
 - **A holdings table and its chart share a row on a wide screen: `.split` (LY-4).** On
   `/portfolio` the as-of line and tiles span the page, and below them a `.split` grid holds the
-  Holdings card and the Returns card. LY-5 (account holdings) and LY-6 (Overview) reuse it.
+  Holdings card and the Returns card. Account holdings reuses it with a modifier,
+  `.split-account` (LY-5, below), and LY-6 (Overview) will reuse it too.
   - *Grid, not markup order*: the cards are in the markup in reading order, tiles then table
     then chart, and the grid places the columns. A screen reader or keyboard meets the page in
     the same order at every width, which moving the chart's markup to put it first would
@@ -316,6 +318,23 @@ described here updates this file in the same change.
     tall, so inside `.split` the frame is `aspect-ratio: 4 / 3`, held between 320px and 560px:
     about 470px at 1920px. Still from its own width, as LY-3 chose, never from the viewport or
     the table. `review_pages.py`'s `CHART_HEIGHT` moved to 280–560px to cover both layouts.
+  - *Account holdings, `.split-account` (LY-5)*: the account page's table has seven cells, not
+    ten, and is 640px at its natural width (measured on the review data, whose "Prices loading"
+    row spans four cells), so its column's minimum is 704px with padding. With the gap and the
+    chart's 420px that is 1148px of content, a window of about 1221px. The `split-account`
+    breakpoint is 1240px: the extra slack covers a classic 15px scrollbar, which `vw` gutters
+    count but the content box doesn't (headless Chromium has none, so the review can't see it).
+    A 1280px laptop gets two columns, about 708px and 472px; 1920px gets the same 3:2 as
+    `/portfolio`. The page is a `page-full` page, so the account header, as-of line and tiles
+    span both columns. The table needs no `.table-scroll` box: stacked, a full-width card fits
+    it from well before the stack breakpoint.
+    *A modifier, not new values on `.split`*: the container is `split split-account`, and the
+    modifier's rules come after `.split`'s, so from 1480px, where both apply, its 704px minimum
+    wins over `/portfolio`'s 940px. The chart frame's 4:3 and the sticky aside are repeated in
+    the modifier's own queries, because a breakpoint can't be a custom property, so each
+    breakpoint needs its own `@media` block. Folding the shared declarations into a
+    custom-property scheme would have rewritten LY-4's rules, which LY-6 is about to reuse.
+    The chart card is 470–580px tall here, so the `tall` breakpoint still holds.
 - **App shell (UI-4): the current page is marked on the server, and the account pages share one
   header.** Each route passes `nav_active` (`overview` / `portfolio` / `accounts` / `tickers` / `admin`) and, on the four
   account-scoped pages, `account_nav_active` (`holdings` / `transactions` / `add` / `import`). The templates turn these into `aria-current="page"`, and `web.css` styles

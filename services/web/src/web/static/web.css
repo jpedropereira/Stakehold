@@ -43,7 +43,8 @@
 
   /* Breakpoints. A custom property can't be used in @media, so each is named here and every
      media query cites its name:
-     - split (1480px): a holdings table and its chart share a row (.split);
+     - split (1480px): /portfolio's holdings table and its chart share a row (.split);
+     - split-account (1240px): an account's holdings table and its chart do (.split-account);
      - tall (640px of height): the chart card in a .split row stays in view (.split-aside);
      - stack (600px): tables stack into labelled rows (.stack-table);
      - phone (480px): the header and page give the content the width rather than the padding. */
@@ -253,8 +254,8 @@ img.logo-on-dark {
    centered row that overflows clips its first card off the left edge, unscrollable). */
 .page {
   /* The width the account header, as-of line, tiles and wide cards take (LY-2). 880px, the old
-     single column, until the holdings pages and Overview get their own layout (LY-4 to LY-6);
-     LY-7 makes the full width the default and removes it. */
+     single column, until Overview gets its own layout (LY-6); LY-7 makes the full width the
+     default and removes it. */
   --page-wide: 880px;
 
   display: flex;
@@ -265,14 +266,15 @@ img.logo-on-dark {
   padding-block: var(--space-8);
 }
 
-/* A page whose tables need the room: Transactions, Tickers, the admin mappings and /portfolio.
+/* A page whose tables need the room: Transactions, Tickers, the admin mappings and both holdings
+   pages.
    Set for the whole page (base.html's page_width block), not per block, so the blocks can't
    drift apart. Form and narrow cards keep their own width on it. */
 .page-full {
   --page-wide: none;
 }
 
-/* A holdings table beside its returns chart (LY-4; LY-5 and LY-6 reuse it). One column, the
+/* A holdings table beside its returns chart (LY-4; .split-account below, LY-6). One column, the
    cards stacked in reading order, until the split breakpoint; then two, placed by the grid, not
    by reordering the markup, so a screen reader or keyboard meets the table first at every width.
    The gap is the only space between the cards, stacked or not. The stacked column is explicit:
@@ -316,6 +318,36 @@ img.logo-on-dark {
    its own bottom until the table ran out, so it scrolls with the page. Breakpoints: split, tall. */
 @media (min-width: 1480px) and (min-height: 640px) {
   .split-aside {
+    position: sticky;
+    top: var(--space-5);
+  }
+}
+
+/* An account's holdings (LY-5): the same two columns, sooner. Its table has seven cells, not
+   /portfolio's ten, and is 640px at its natural width, so its column's minimum is 704px with
+   padding. With the gap and the chart's 420px that is 1148px of content, a window of about
+   1221px once the 3vw gutters are taken off; the breakpoint adds room for a classic 15px
+   scrollbar, so a 1280px laptop gets two columns. These rules come after the split ones on
+   purpose: the container is also a .split, so from 1480px both apply and these must win. The
+   chart frame and sticky declarations repeat .split's, because a breakpoint can't be a custom
+   property and each needs its own query. Breakpoint: split-account. */
+@media (min-width: 1240px) {
+  .split-account {
+    grid-template-columns: minmax(704px, 3fr) minmax(420px, 2fr);
+    align-items: start;
+  }
+
+  .split-account .chart-frame {
+    aspect-ratio: 4 / 3;
+    min-height: 320px;
+    max-height: 560px;
+  }
+}
+
+/* As .split-aside above: the chart card is about 450-580px tall here. Breakpoints:
+   split-account, tall. */
+@media (min-width: 1240px) and (min-height: 640px) {
+  .split-account > .split-aside {
     position: sticky;
     top: var(--space-5);
   }
