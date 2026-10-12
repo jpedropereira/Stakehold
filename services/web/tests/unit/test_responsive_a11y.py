@@ -486,21 +486,30 @@ def test_wide_table_pages_take_the_full_content_width(client, path, is_admin):
 @pytest.mark.parametrize(
     "path",
     [
-        "/",
         "/accounts",
         "/transactions/new?account=main",
         "/transactions/import?account=main",
     ],
 )
 def test_other_pages_keep_the_default_width(client, path):
-    """Overview keeps the 880px column until LY-6 lays it out; forms keep their own cards.
-    Account holdings went full width in LY-5 (test_account_holdings_page.py)."""
+    """Forms keep their own cards. Account holdings (LY-5, test_account_holdings_page.py) and
+    Overview (LY-6) went full width."""
     test_client, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)
 
     page_html = test_client.get(path).text
 
     assert _main_classes(page_html) == ["page"]
+
+
+def test_overview_takes_the_full_content_width(client):
+    """LY-6: the tiles span the content width, and the accounts list and chart share it below."""
+    test_client, fake_auth, _ = client
+    _logged_in(test_client, fake_auth)
+
+    page_html = test_client.get("/").text
+
+    assert _main_classes(page_html) == ["page", "page-full"]
 
 
 def test_wide_blocks_take_their_width_from_the_page():

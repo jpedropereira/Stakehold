@@ -2,12 +2,13 @@
 {% from "partials/_delta.html" import delta %}
 {% from "partials/_term.html" import term %}
 {% from "partials/_banner.html" import banner %}
+{% from "partials/_returns_chart.html" import returns_chart %}
 {% block title %}Overview — Stakehold{% endblock %}
+{% block page_width %} page-full{% endblock %}
+{% set freshness = "Prices update daily; returns are recalculated a few times a day." %}
 {% block content %}
 {# First run only when the list actually loaded: an outage must never read as "no accounts". #}
-{% if list_error %}
-{% call banner("error") %}<strong>Couldn't load your accounts.</strong> {{ list_error }}{% endcall %}
-{% elif not rows %}
+{% if not list_error and not rows %}
 <section class="card card-narrow">
   <h1>Welcome, {{ user.display_name }}.</h1>
   <p class="entry-subtitle">No accounts yet. Create one for each broker account you hold, then
@@ -16,7 +17,7 @@
 </section>
 {% else %}
 {% if totals %}
-<p class="as-of">Prices as of <span class="mono">{{ totals.price_date | date }}</span>. Prices update daily; returns are recalculated a few times a day.</p>
+<p class="as-of">Prices as of <span class="mono">{{ totals.price_date | date }}</span>. {{ freshness }}</p>
 <section class="summary-tiles" aria-label="All accounts">
   <div class="tile">
     <p class="tile-label">{{ term("Market value", "market-value") }}</p>
@@ -39,8 +40,15 @@
 {% if failed_count %}
 {% call banner("warning") %}<strong>Totals leave out {{ failed_count }} account{{ "s" if failed_count != 1 }} that couldn't be loaded.</strong>{% endcall %}
 {% endif %}
+{# Two columns from the overview-split breakpoint, the chart wider (web.css, .split-overview),
+   stacked below it. The markup keeps reading order, accounts then chart; the grid places the
+   columns. Each card shows its own failure, so one call failing never hides the other. #}
+<div class="split split-overview">
 <section class="card card-wide">
   <h1>Accounts</h1>
+  {% if list_error %}
+  {% call banner("error") %}<strong>Couldn't load your accounts.</strong> {{ list_error }}{% endcall %}
+  {% else %}
   <p class="glossary-link"><a href="/glossary">What these figures mean</a></p>
   <ul class="account-list">
     {% for row in rows %}
@@ -61,6 +69,21 @@
     </li>
     {% endfor %}
   </ul>
+  {% endif %}
 </section>
+
+<section class="card card-wide">
+  <h1>Returns over time</h1>
+  {% if returns_error %}
+  {% call banner("error") %}<strong>Couldn't load your returns.</strong> {{ returns_error }}{% endcall %}
+  {% elif chart_payload %}
+  {# /portfolio's chart, from the same series across every account: growth is on every point,
+     so its button always shows. #}
+  {{ returns_chart(chart_payload, true) }}
+  {% else %}
+  <p class="entry-empty">No return history yet — returns appear once Stakehold has prices for your holdings' dates. {{ freshness }}</p>
+  {% endif %}
+</section>
+</div>
 {% endif %}
 {% endblock %}

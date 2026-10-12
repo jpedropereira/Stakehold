@@ -1,4 +1,9 @@
-"""GET /: the overview across every account the user has (UI-11).
+"""GET /: the overview across every account the user has (UI-11), beside the cross-account
+returns chart (LY-6).
+
+The chart is /portfolio's, from the same GET /returns/portfolio call (PF-5). It runs alongside
+the account list and its per-account calls, and each side degrades on its own: a returns failure
+leaves the accounts list and tiles, an account-list failure leaves the chart.
 
 On its own router, like theme.py, because routes.py is close to the repo's 64KB file limit. It
 renders through routes.py's _render, so a cookie set earlier in the request (the CSRF cookie, a
@@ -13,9 +18,9 @@ from web.api.csrf import ensure_csrf_cookie
 from web.api.deps import get_portfolio_client, get_settings, get_templates, require_user
 from web.api.routes import _render
 from web.auth_client.base import AuthUser
-from web.portfolio_client.base import Account, PortfolioClient, Return
+from web.portfolio_client.base import Account, PortfolioClient, PortfolioReturns, Return
 from web.portfolio_client.errors import PortfolioClientError
-from web.portfolio_view import summarize_accounts
+from web.portfolio_view import build_portfolio_chart_payload, summarize_accounts
 from web.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -25,6 +30,8 @@ router = APIRouter()
 _ACCOUNTS_UNAVAILABLE = (
     "Can't reach the portfolio service right now, so your accounts can't be shown."
 )
+# Under the chart card's own heading, as on /portfolio.
+_RETURNS_UNAVAILABLE = "Can't reach the portfolio service right now, so they can't be shown."
 
 
 async def _load_overview(
@@ -65,6 +72,17 @@ async def _load_overview(
     return loaded, None
 
 
+async def _load_portfolio_returns(
+    portfolio_client: PortfolioClient, user_id: str
+) -> PortfolioReturns | None:
+    """The cross-account return series, or None if that call failed."""
+    try:
+        return await portfolio_client.list_portfolio_returns(user_id=user_id)
+    except PortfolioClientError as exc:
+        logger.exception("portfolio service unavailable listing returns.", exc_info=exc)
+        return None
+
+
 @router.get("/")
 async def home(
     request: Request,
@@ -75,8 +93,12 @@ async def home(
     portfolio_client: PortfolioClient = Depends(get_portfolio_client),
 ):
     csrf_token = ensure_csrf_cookie(request, response, cookie_secure=settings.cookie_secure)
-    loaded, list_error = await _load_overview(portfolio_client, user.user_id)
+    (loaded, list_error), returns = await asyncio.gather(
+        _load_overview(portfolio_client, user.user_id),
+        _load_portfolio_returns(portfolio_client, user.user_id),
+    )
     rows, totals = summarize_accounts(loaded)
+    series = () if returns is None else returns.series
     return _render(
         request,
         response,
@@ -90,5 +112,7 @@ async def home(
             "totals": totals,
             "failed_count": sum(1 for r in rows if r.failed),
             "list_error": list_error,
+            "returns_error": _RETURNS_UNAVAILABLE if returns is None else None,
+            "chart_payload": build_portfolio_chart_payload(series),
         },
     )

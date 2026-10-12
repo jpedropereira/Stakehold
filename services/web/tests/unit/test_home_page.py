@@ -1,10 +1,12 @@
 """GET /: the overview across every account (UI-11) -- headline totals and one row per account,
-each degrading on its own when its figures can't be loaded.
+each degrading on its own when its figures can't be loaded -- beside the cross-account returns
+chart (LY-6).
 
 Kept apart from test_routes.py, which is over the repo's 64KB file limit. Like
 test_portfolio_page.py, it carries its own minimal fakes: only the calls this one page makes.
 """
 
+import json
 import re
 from datetime import date
 from decimal import Decimal
@@ -16,7 +18,12 @@ from web.api.app import create_app
 from web.api.deps import get_auth_client, get_portfolio_client
 from web.auth_client.base import AuthResult, AuthUser
 from web.auth_client.errors import SessionInvalid
-from web.portfolio_client.base import Account, Return
+from web.portfolio_client.base import (
+    Account,
+    PortfolioReturns,
+    PortfolioSeriesPoint,
+    Return,
+)
 from web.portfolio_client.errors import AccountNotFound, PortfolioUnavailable
 from web.settings import Settings
 
@@ -41,6 +48,8 @@ class FakePortfolioClient:
         self.list_accounts_error: Exception | None = None
         # Per account label: a list of rows, or an exception to raise.
         self.latest_returns: dict[str, list[Return] | Exception] = {}
+        self.portfolio_returns = PortfolioReturns(series=(), by_ticker=())
+        self.list_portfolio_returns_error: Exception | None = None
         self.calls: list[tuple] = []
 
     async def list_accounts(self, *, user_id):
@@ -55,6 +64,12 @@ class FakePortfolioClient:
         if isinstance(result, Exception):
             raise result
         return result
+
+    async def list_portfolio_returns(self, *, user_id):
+        self.calls.append(("list_portfolio_returns", user_id))
+        if self.list_portfolio_returns_error:
+            raise self.list_portfolio_returns_error
+        return self.portfolio_returns
 
 
 def _settings() -> Settings:
@@ -290,6 +305,179 @@ def test_overview_is_the_current_nav_entry(client):
     html = test_client.get("/").text
 
     assert '<a href="/" aria-current="page"' in html
+
+
+# --- layout: accounts list and returns chart side by side (LY-6) --------------------------------
+
+
+def _point(day, *, value="1200", total="200", growth="0.15"):
+    return PortfolioSeriesPoint(
+        price_date=date(2026, 1, day),
+        market_value_eur=Decimal(value),
+        cost_basis_eur=Decimal("1000"),
+        dividends_received_eur=Decimal("0"),
+        total_return_eur=Decimal(total),
+        total_return_pct=Decimal(total) / Decimal("1000"),
+        growth_pct=Decimal(growth),
+    )
+
+
+def _returns(*points):
+    return PortfolioReturns(series=points, by_ticker=())
+
+
+def _split(html):
+    """The two-column container's two cards, in document order, or None without it. Neither
+    card nests a <section>, so each one ends at its first </section>."""
+    match = re.search(
+        r'<div class="split[^"]*">\s*(<section class="[^"]*">.*?</section>)\s*'
+        r'(<section class="[^"]*">.*?</section>)\s*</div>',
+        html,
+        re.S,
+    )
+    return None if match is None else match.groups()
+
+
+def test_accounts_and_chart_cards_share_the_split_accounts_first(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _two_accounts(fake_portfolio)
+    fake_portfolio.portfolio_returns = _returns(_point(6))
+
+    accounts, returns = _split(test_client.get("/").text)
+
+    assert "<h1>Accounts</h1>" in accounts and _account_row(accounts, "my isa")
+    assert "<h1>Returns over time</h1>" in returns and '<canvas id="returns-chart"' in returns
+
+
+def test_as_of_line_tiles_and_warning_span_the_page_above_the_split(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _two_accounts(fake_portfolio)
+    fake_portfolio.latest_returns["pension"] = PortfolioUnavailable("down")
+
+    html = test_client.get("/").text
+
+    assert 'class="page page-full"' in html
+    split_at = html.index('<div class="split')
+    assert html.index('class="as-of"') < split_at
+    assert html.index('class="summary-tiles"') < split_at
+    assert html.index("Totals leave out") < split_at
+    assert not any('class="tile"' in card for card in _split(html))
+
+
+def test_overview_loads_the_cross_account_series_once(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _two_accounts(fake_portfolio)
+
+    test_client.get("/")
+
+    assert [c for c in fake_portfolio.calls if c[0] == "list_portfolio_returns"] == [
+        ("list_portfolio_returns", "u1")
+    ]
+
+
+def test_chart_data_island_carries_the_series(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _two_accounts(fake_portfolio)
+    fake_portfolio.portfolio_returns = _returns(
+        _point(5, value="1100", total="100", growth="0.1"),
+        _point(6, value="1200", total="200", growth="0.15"),
+    )
+
+    _, returns = _split(test_client.get("/").text)
+
+    island = re.search(
+        r'<script id="returns-chart-data" type="application/json">(.*?)</script>', returns, re.S
+    )
+    assert json.loads(island.group(1)) == [
+        {
+            "date": "2026-01-05",
+            "market_value_eur": 1100.0,
+            "total_return_eur": 100.0,
+            "growth_pct": 0.1,
+        },
+        {
+            "date": "2026-01-06",
+            "market_value_eur": 1200.0,
+            "total_return_eur": 200.0,
+            "growth_pct": 0.15,
+        },
+    ]
+    assert re.search(
+        r'<div class="chart-frame">\s*<canvas id="returns-chart"[^>]*></canvas>\s*</div>', returns
+    )
+    assert '<script src="/static/portfolio_chart.js" defer></script>' in returns
+
+
+def test_chart_offers_every_view_and_range(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _two_accounts(fake_portfolio)
+    fake_portfolio.portfolio_returns = _returns(_point(6))
+
+    _, returns = _split(test_client.get("/").text)
+
+    views = re.findall(r'data-chart-view="(\w+)"', returns)
+    assert views == ["total_return_eur", "market_value_eur", "growth_pct"]
+    assert re.findall(r'data-chart-range="(\d+)"', returns) == ["1", "6", "12", "0"]
+    assert '<div class="chart-controls" hidden>' in returns
+
+
+def test_no_return_history_yet_says_so(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _two_accounts(fake_portfolio)
+
+    _, returns = _split(test_client.get("/").text)
+
+    assert "No return history yet" in returns
+    assert "<canvas" not in returns
+
+
+def test_a_returns_failure_shows_a_notice_in_the_chart_card_only(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _two_accounts(fake_portfolio)
+    fake_portfolio.list_portfolio_returns_error = PortfolioUnavailable("down")
+
+    response = test_client.get("/")
+
+    assert response.status_code == 200
+    html = response.text
+    accounts, returns = _split(html)
+    assert re.search(r"data-kind=\"error\">.*?Couldn't load your returns\.", returns, re.S)
+    assert "<canvas" not in returns and "No return history yet" not in returns
+    assert _account_row(accounts, "my isa") and "Couldn't load" not in accounts
+    assert "€2,800.00" in _tile(html, "Market value")
+
+
+def test_an_accounts_failure_keeps_the_chart_card(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.list_accounts_error = PortfolioUnavailable("down")
+    fake_portfolio.portfolio_returns = _returns(_point(6))
+
+    response = test_client.get("/")
+
+    assert response.status_code == 200
+    accounts, returns = _split(response.text)
+    assert re.search(r"data-kind=\"error\">.*?Couldn't load your accounts\.", accounts, re.S)
+    assert '<canvas id="returns-chart"' in returns
+
+
+def test_first_run_has_no_split_only_the_narrow_welcome_card(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.portfolio_returns = _returns(_point(6))
+
+    html = test_client.get("/").text
+
+    assert re.search(r'<section class="card card-narrow">\s*<h1>Welcome', html)
+    assert '<div class="split' not in html
+    assert "Returns over time" not in html and "<canvas" not in html
 
 
 def _glossary_links(html):

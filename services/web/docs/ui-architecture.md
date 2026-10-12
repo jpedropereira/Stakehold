@@ -52,8 +52,8 @@ described here updates this file in the same change.
     just under the split breakpoint (1480px), so the stacked side of it is reviewed as well as
     the two-column side. A page entry can name an element to click
     once loaded, for a state only a click reaches, such as the transaction log's open delete
-    dialog, or each chart view (total return, the default, plus market value and growth, on both
-    chart pages). `--only` and `--width` narrow a run to some pages or widths. For each variant it
+    dialog, or each chart view (total return, the default, plus market value and growth, on all
+    three chart pages). `--only` and `--width` narrow a run to some pages or widths. For each variant it
     also checks:
     - no sideways scroll, at every width: PF-4's table scrolled the page at tablet width for a
       whole task because the check only ran at phone width;
@@ -70,6 +70,10 @@ described here updates this file in the same change.
       to 2:1 of its width, which at phone width is 144px inside a 280px frame. Where 2:1 of the
       width already lands inside the bounds, as on an 880px card, the two agree and the check
       can't tell;
+    - every summary tile's figure on one line, inside its tile's content box. At a 160px tile
+      minimum, `+€1,450.78` broke after its sign at phone and tablet, and unsigned six-digit
+      figures ran up to 18px into the tile's padding. Neither scrolls anything or leaves the
+      tile, so the overflow checks above couldn't see them;
     - WCAG AA contrast of every visible text element against the background actually behind
       it;
     - a visible focus indicator at every Tab stop, a date input's inner stops included;
@@ -99,7 +103,19 @@ described here updates this file in the same change.
     and scrolls in its box below that; the logo lines up with the content edge. After LY-4,
     which added the laptop width: 260 of 260. `/portfolio` is two columns at 1920px and
     stacked at 1440px and below. After LY-5: 260 of 260. Account holdings is two columns at
-    1280px and up, stacked at tablet and phone.
+    1280px and up, stacked at tablet and phone. After LY-6, which added Overview's two chart
+    views: 280 of 280. Overview is two columns at desktop, laptop and wide, and stacked at
+    tablet and phone. The tile-figure check (below) then came in with its fix: 280 of 280.
+- **A summary tile is sized by its headline figure.** The figure is 22px mono, about 13px a
+  character, and never splits across lines (`white-space: nowrap`): "+" alone above "€1,450.78"
+  reads as two values. The tiles' grid minimum is 200px, 152px inside the padding, which holds
+  11 characters ("+€14,206.48"). It was 160px, chosen so the account page's five tiles fit one
+  row at 880px; that held only 8 characters. The cost: a phone shows one tile per row rather
+  than two by two, and tablet fits three a row. From desktop width the full-width pages still
+  fit five on one row. Shrinking the figure to fit was rejected, as the headline size
+  is where the numbers do the talking. **Known limitation:** a figure past 11 characters (a
+  seven-digit total, `€1,234,567.89`) still runs into the padding on the narrowest tiles;
+  `review_pages.py` would flag it only if the fake data had one.
 - **Feedback and error states (UI-12).**
   - *Banners*: every message is one macro, `partials/_banner.html`, in the charter's ink rule
     (chapter II): an icon and a bold lead word carry the meaning, never color, so errors use
@@ -181,10 +197,14 @@ described here updates this file in the same change.
   delta, so its line keeps the gain/loss segment colors, and so does growth. Growth counts from
   inception, so a shorter range crops its line rather than restarting it at zero; a `null` (a
   date growth didn't cover) is a gap. On `/accounts/holdings` the Growth % button is only rendered
-  when growth loaded; `/portfolio`'s series carries growth on every point, so there it always is,
+  when growth loaded; `/portfolio`'s and Overview's series carries growth on every point, so there
+  it always is,
   and its tick and tooltip labels mirror `formatting.pct`. Market value is a level, so it's drawn in
   `--text`, because forest and oxblood mean gains and losses only, and gold is kept for controls.
-  The buttons are in the template, not built by the script. They ship `hidden`, because without JS
+  The buttons are in the template, not built by the script: one macro,
+  `partials/_returns_chart.html`, shared by the three chart pages, with the frame, island and
+  scripts, so the pages can't drift apart (it went in with LY-6, which would have made a third
+  copy). Each page keeps its own error and empty states around it. The buttons ship `hidden`, because without JS
   they'd do nothing, and the script reveals them. Building them in JS would also put their classes
   outside `test_templates.py`'s template/CSS class check. Only the first draw animates: morphing
   one range into another, with a different point count, draws stray lines. Tooltip and y-axis
@@ -268,10 +288,10 @@ described here updates this file in the same change.
     partial needing a parameter. A class per element was the alternative; it would repeat the
     tier on every block of every page. Form and narrow cards keep their own width on a full
     page (the admin mappings form). Full pages: Transactions, Tickers, admin mappings,
-    `/portfolio` and account Holdings (LY-5). **Interim:** `--page-wide` defaults to 880px, the
-    old single column, which Overview and the account form pages keep until LY-6 lays Overview
-    out. Stretched to full width first, the holdings pages would have been long stacked pages
-    with a 1600px chart. LY-7 makes full the default.
+    `/portfolio`, account Holdings (LY-5) and Overview (LY-6). **Interim:** `--page-wide`
+    defaults to 880px, the old single column, which the account form pages keep. Stretched to
+    full width first, the holdings pages and Overview would have been long stacked pages with a
+    1600px chart. LY-7 makes full the default.
   - *Breakpoints* are listed once, by name, in a comment by `--content-max`, because a custom
     property can't be used in `@media`; each media query's comment cites the name.
   - *Transactions* gets the spare width in its text columns: above the stack breakpoint the
@@ -286,7 +306,8 @@ described here updates this file in the same change.
 - **A holdings table and its chart share a row on a wide screen: `.split` (LY-4).** On
   `/portfolio` the as-of line and tiles span the page, and below them a `.split` grid holds the
   Holdings card and the Returns card. Account holdings reuses it with a modifier,
-  `.split-account` (LY-5, below), and LY-6 (Overview) will reuse it too.
+  `.split-account` (LY-5, below), and Overview with another, `.split-overview` (LY-6, after
+  this entry).
   - *Grid, not markup order*: the cards are in the markup in reading order, tiles then table
     then chart, and the grid places the columns. A screen reader or keyboard meets the page in
     the same order at every width, which moving the chart's markup to put it first would
@@ -333,8 +354,29 @@ described here updates this file in the same change.
     wins over `/portfolio`'s 940px. The chart frame's 4:3 and the sticky aside are repeated in
     the modifier's own queries, because a breakpoint can't be a custom property, so each
     breakpoint needs its own `@media` block. Folding the shared declarations into a
-    custom-property scheme would have rewritten LY-4's rules, which LY-6 is about to reuse.
+    custom-property scheme would have rewritten LY-4's rules, which LY-6 then reused.
     The chart card is 470–580px tall here, so the `tall` breakpoint still holds.
+- **Overview's accounts list beside its returns chart: `.split-overview` (LY-6).** Overview
+  (`/`) is a full page: the as-of line, tiles and the "Totals leave out" warning span it, and
+  below them `.split` holds the Accounts card then the Returns card, accounts first in the
+  markup. The chart is `/portfolio`'s, from the same `GET /returns/portfolio` call, made
+  alongside the account list, so it needs no portfolio change.
+  - *Its own columns and breakpoint*: `/portfolio`'s 940px table minimum and 1480px breakpoint
+    would keep a short list stacked on every laptop. The modifier gives the chart the wider
+    column (2:3), since it is the page's one figure. The accounts column's minimum keeps an
+    account row on one line: 386px for the longest row in the review data, 450px with the card's
+    padding. With the chart's 420px and the 24px gap that is 894px of content, a window of
+    about 951px, or 967px with a classic 15px scrollbar (as LY-5 found); the "overview-split"
+    breakpoint is 980px. Rows wrap (`flex-wrap`), so a longer label or larger figures wrap the
+    row, never the page. As with `.split-account`, the modifier's rules come after `.split`'s,
+    so they win from 1480px, where both apply.
+  - *No sticky chart*: the list is shorter than the chart, so `.split-aside` would pin nothing.
+    The chart frame is the same 4:3, 320–560px as in `/portfolio`'s column.
+  - *Each card owns its failure*: an account-list failure is an error banner inside the
+    Accounts card and the chart still draws; a returns failure is a banner inside the Returns
+    card and the list and tiles still show. Before LY-6 an account-list failure was a banner
+    alone on the page. The first run (the list loaded and empty) is still the narrow welcome
+    card alone, with no chart.
 - **App shell (UI-4): the current page is marked on the server, and the account pages share one
   header.** Each route passes `nav_active` (`overview` / `portfolio` / `accounts` / `tickers` / `admin`) and, on the four
   account-scoped pages, `account_nav_active` (`holdings` / `transactions` / `add` / `import`). The templates turn these into `aria-current="page"`, and `web.css` styles

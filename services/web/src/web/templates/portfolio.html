@@ -2,6 +2,7 @@
 {% from "partials/_banner.html" import banner %}
 {% from "partials/_delta.html" import delta %}
 {% from "partials/_term.html" import term %}
+{% from "partials/_returns_chart.html" import returns_chart %}
 {% block title %}Portfolio — Stakehold{% endblock %}
 {% block page_width %} page-full{% endblock %}
 {% set freshness = "Prices update daily; returns are recalculated a few times a day." %}
@@ -152,24 +153,7 @@
   {% elif chart_payload %}
   {# The per-account page's chart (static/portfolio_chart.js), fed from portfolio's series
      across every account. Growth is on every point, so its button always shows. #}
-  <div class="chart-controls" hidden>
-    <div class="chart-toggle" role="group" aria-label="Chart view">
-      <button type="button" class="btn btn-ghost" data-chart-view="total_return_eur" aria-pressed="true">Total return</button>
-      <button type="button" class="btn btn-ghost" data-chart-view="market_value_eur" aria-pressed="false">Market value</button>
-      <button type="button" class="btn btn-ghost" data-chart-view="growth_pct" aria-pressed="false">Growth %</button>
-    </div>
-    <div class="chart-toggle" role="group" aria-label="Date range">
-      {% for months, label in [(1, "1M"), (6, "6M"), (12, "1Y"), (0, "All")] %}
-      <button type="button" class="btn btn-ghost" data-chart-range="{{ months }}" aria-pressed="{{ 'true' if months == 0 else 'false' }}">{{ label }}</button>
-      {% endfor %}
-    </div>
-  </div>
-  <div class="chart-frame">
-    <canvas id="returns-chart" role="img" aria-label="Portfolio total return over time"></canvas>
-  </div>
-  <script id="returns-chart-data" type="application/json">{{ chart_payload | tojson }}</script>
-  <script src="/static/vendor/chart.min.js" defer></script>
-  <script src="/static/portfolio_chart.js" defer></script>
+  {{ returns_chart(chart_payload, true) }}
   {% else %}
   <p class="entry-empty">No return history yet — returns appear once Stakehold has prices for your holdings' dates. {{ freshness }}</p>
   {% endif %}

@@ -45,6 +45,7 @@
      media query cites its name:
      - split (1480px): /portfolio's holdings table and its chart share a row (.split);
      - split-account (1240px): an account's holdings table and its chart do (.split-account);
+     - overview-split (980px): Overview's accounts list and its chart do (.split-overview);
      - tall (640px of height): the chart card in a .split row stays in view (.split-aside);
      - stack (600px): tables stack into labelled rows (.stack-table);
      - phone (480px): the header and page give the content the width rather than the padding. */
@@ -254,8 +255,8 @@ img.logo-on-dark {
    centered row that overflows clips its first card off the left edge, unscrollable). */
 .page {
   /* The width the account header, as-of line, tiles and wide cards take (LY-2). 880px, the old
-     single column, until Overview gets its own layout (LY-6); LY-7 makes the full width the
-     default and removes it. */
+     single column, which pages without a full-width layout still have; LY-7 makes the full
+     width the default and removes it. */
   --page-wide: 880px;
 
   display: flex;
@@ -266,20 +267,20 @@ img.logo-on-dark {
   padding-block: var(--space-8);
 }
 
-/* A page whose tables need the room: Transactions, Tickers, the admin mappings and both holdings
-   pages.
-   Set for the whole page (base.html's page_width block), not per block, so the blocks can't
-   drift apart. Form and narrow cards keep their own width on it. */
+/* A page that uses the room: Transactions, Tickers, the admin mappings, both holdings pages
+   and Overview. Set for the whole page (base.html's page_width block), not per block, so the
+   blocks can't drift apart. Form and narrow cards keep their own width on it. */
 .page-full {
   --page-wide: none;
 }
 
-/* A holdings table beside its returns chart (LY-4; .split-account below, LY-6). One column, the
-   cards stacked in reading order, until the split breakpoint; then two, placed by the grid, not
-   by reordering the markup, so a screen reader or keyboard meets the table first at every width.
-   The gap is the only space between the cards, stacked or not. The stacked column is explicit:
-   left auto, it grows to the card's min-content width, which counts the table inside its
-   .table-scroll box, and the page scrolls sideways at tablet and phone width. */
+/* A holdings table beside its returns chart (LY-4; .split-account and .split-overview below).
+   One column, the cards stacked in reading order, until the split breakpoint; then two, placed
+   by the grid, not by reordering the markup, so a screen reader or keyboard meets the table
+   first at every width. The gap is the only space between the cards, stacked or not. The
+   stacked column is explicit: left auto, it grows to the card's min-content width, which counts
+   the table inside its .table-scroll box, and the page scrolls sideways at tablet and phone
+   width. */
 .split {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -350,6 +351,29 @@ img.logo-on-dark {
   .split-account > .split-aside {
     position: sticky;
     top: var(--space-5);
+  }
+}
+
+/* Overview's accounts list beside its chart (LY-6). The list is short and its rows wrap, so it
+   needs far less than a holdings table: two columns come in at their own, lower breakpoint,
+   the chart wider (2:3), since it's the page's one figure. The accounts column's minimum keeps
+   a row on one line: label, broker and three figures are about 386px, 450px with the card's
+   padding. The chart's is 420px, as on /portfolio. With the gap that is 894px of content, a
+   window of about 951px once the 3vw gutters are taken off, 967px with a classic 15px
+   scrollbar; the breakpoint leaves a few pixels more. A longer label or larger figures wrap the
+   row, never the page. No .split-aside: the list is shorter than the chart, so there's nothing
+   for the chart to stay in view beside. Like .split-account's, these rules come after .split's
+   so they win from 1480px, where both apply. Breakpoint: overview-split. */
+@media (min-width: 980px) {
+  .split-overview {
+    grid-template-columns: minmax(450px, 2fr) minmax(420px, 3fr);
+    align-items: start;
+  }
+
+  .split-overview .chart-frame {
+    aspect-ratio: 4 / 3;
+    min-height: 320px;
+    max-height: 560px;
   }
 }
 
@@ -990,8 +1014,11 @@ img.logo-on-dark {
 /* Four headline figures, wrapping to two rows (or one column) as the width shrinks. */
 .summary-tiles {
   display: grid;
-  /* 160px lets the account page's five tiles share one row at the 880px card width. */
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  /* A tile fits its headline figure, not the other way round: 22px mono is about 13px a
+     character, so 200px (152px inside the padding) holds 11 of them, "+€14,206.48". At 160px a
+     signed figure split after its sign and an unsigned one ran into the padding. A phone shows
+     one tile per row; a full-width page still fits five from desktop width. */
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: var(--space-4);
   width: 100%;
   max-width: var(--page-wide);
@@ -1017,6 +1044,11 @@ img.logo-on-dark {
 
 .tile-value .mono:first-child {
   font-size: 22px;
+}
+
+/* A figure is never split across lines: "+" alone above "€1,450.78" reads as two values. */
+.tile-value .mono {
+  white-space: nowrap;
 }
 
 /* A second figure (total return's percentage) sits under the first, at the ordinary size. */
