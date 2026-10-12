@@ -1,5 +1,6 @@
-"""GET /portfolio: the account's holdings, summary tiles and return chart (task 12, UI-6), and
-what is still pending: holdings waiting for prices, instruments waiting for a mapping (UI-7).
+"""GET /accounts/holdings: one account's holdings, summary tiles and return chart (task 12,
+UI-6), and what is still pending: holdings waiting for prices, instruments waiting for a mapping
+(UI-7). The page lived at /portfolio?account=X until PF-2; that URL now redirects here.
 
 Kept apart from test_routes.py, which is over the repo's 64KB file limit. Like test_theme.py,
 it carries its own minimal fakes: only the calls this one page makes.
@@ -9,9 +10,11 @@ import json
 import re
 from datetime import date
 from decimal import Decimal
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import web
 from fastapi.testclient import TestClient
 from web import settings as settings_module
 from web.api.app import create_app
@@ -221,22 +224,24 @@ def _chart_payload(html):
     return json.loads(match.group(1))
 
 
-def test_portfolio_page_requires_login(client):
+def test_holdings_page_requires_login(client):
     test_client, _, _, _ = client
 
-    response = test_client.get("/portfolio", params={"account": "main"}, follow_redirects=False)
+    response = test_client.get(
+        "/accounts/holdings", params={"account": "main"}, follow_redirects=False
+    )
 
     assert response.status_code == 303
     assert response.headers["location"] == "/login"
 
 
-def test_portfolio_page_sets_csrf_cookie_and_supports_logout(client):
+def test_holdings_page_sets_csrf_cookie_and_supports_logout(client):
     test_client, _, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)
     fake_portfolio.list_positions_result = []
     fake_portfolio.list_returns_result = []
 
-    response = test_client.get("/portfolio", params={"account": "main"})
+    response = test_client.get("/accounts/holdings", params={"account": "main"})
 
     assert response.status_code == 200
     assert "site-nav" in response.text
@@ -254,13 +259,13 @@ def test_portfolio_page_sets_csrf_cookie_and_supports_logout(client):
     assert logout_call is not None
 
 
-def test_portfolio_page_account_not_found_sets_csrf_cookie(client):
+def test_holdings_page_account_not_found_sets_csrf_cookie(client):
     test_client, _, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)
     fake_portfolio.list_positions_error = AccountNotFound("missing")
     fake_portfolio.list_returns_result = []
 
-    response = test_client.get("/portfolio", params={"account": "missing"})
+    response = test_client.get("/accounts/holdings", params={"account": "missing"})
 
     assert response.status_code == 404
     assert "logout-form" in response.text
@@ -268,11 +273,11 @@ def test_portfolio_page_account_not_found_sets_csrf_cookie(client):
     assert f'value="{csrf_token}"' in response.text
 
 
-def test_portfolio_page_fetches_positions_returns_latest_returns_and_growth(client):
+def test_holdings_page_fetches_positions_returns_latest_returns_and_growth(client):
     test_client, _, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)
 
-    response = test_client.get("/portfolio", params={"account": "main"})
+    response = test_client.get("/accounts/holdings", params={"account": "main"})
 
     assert response.status_code == 200
     user_id = _logged_in_user().user_id
@@ -285,7 +290,7 @@ def test_portfolio_page_fetches_positions_returns_latest_returns_and_growth(clie
     ]
 
 
-def test_portfolio_page_renders_summary_tiles(client):
+def test_holdings_page_renders_summary_tiles(client):
     test_client, _, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)
     fake_portfolio.list_latest_returns_result = [
@@ -293,7 +298,7 @@ def test_portfolio_page_renders_summary_tiles(client):
         _return_row(ticker="MSFT", market_value="900", cost_basis="1000"),
     ]
 
-    response = test_client.get("/portfolio", params={"account": "main"})
+    response = test_client.get("/accounts/holdings", params={"account": "main"})
 
     assert _tile(response.text, "Market value") == '<span class="mono">€2,500.00</span>'
     assert _tile(response.text, "Cost basis") == '<span class="mono">€2,500.00</span>'
@@ -304,19 +309,19 @@ def test_portfolio_page_renders_summary_tiles(client):
     )
 
 
-def test_portfolio_page_colors_a_total_return_loss(client):
+def test_holdings_page_colors_a_total_return_loss(client):
     test_client, _, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)
     fake_portfolio.list_latest_returns_result = [_return_row(market_value="900", cost_basis="1000")]
 
-    response = test_client.get("/portfolio", params={"account": "main"})
+    response = test_client.get("/accounts/holdings", params={"account": "main"})
 
     assert _tile(response.text, "Total return") == (
         '<span class="mono loss">−€100.00</span> <span class="mono loss">−10.00%</span>'
     )
 
 
-def test_portfolio_page_says_which_date_prices_are_from(client):
+def test_holdings_page_says_which_date_prices_are_from(client):
     test_client, _, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)
     fake_portfolio.list_latest_returns_result = [
@@ -324,12 +329,12 @@ def test_portfolio_page_says_which_date_prices_are_from(client):
         _return_row(ticker="MSFT", price_date=date(2026, 10, 2)),
     ]
 
-    response = test_client.get("/portfolio", params={"account": "main"})
+    response = test_client.get("/accounts/holdings", params={"account": "main"})
 
     assert 'Prices as of <span class="mono">2026-10-06</span>' in response.text
 
 
-def test_portfolio_page_renders_holdings_with_value_weight_and_return(client):
+def test_holdings_page_renders_holdings_with_value_weight_and_return(client):
     test_client, _, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)
     fake_portfolio.list_positions_result = [
@@ -341,7 +346,7 @@ def test_portfolio_page_renders_holdings_with_value_weight_and_return(client):
         _return_row(ticker="MSFT", market_value="500", cost_basis="600"),
     ]
 
-    response = test_client.get("/portfolio", params={"account": "main"})
+    response = test_client.get("/accounts/holdings", params={"account": "main"})
 
     assert response.status_code == 200
     assert _holding_cells(response.text, "AAPL") == [
@@ -361,7 +366,7 @@ def test_portfolio_page_renders_holdings_with_value_weight_and_return(client):
     ]
 
 
-def test_portfolio_page_leaves_a_zero_return_uncolored(client):
+def test_holdings_page_leaves_a_zero_return_uncolored(client):
     test_client, _, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)
     fake_portfolio.list_positions_result = [_position()]
@@ -369,7 +374,7 @@ def test_portfolio_page_leaves_a_zero_return_uncolored(client):
         _return_row(market_value="1500", cost_basis="1500")
     ]
 
-    response = test_client.get("/portfolio", params={"account": "main"})
+    response = test_client.get("/accounts/holdings", params={"account": "main"})
 
     assert _holding_cells(response.text, "AAPL")[5:] == [
         '<span class="mono">€0.00</span>',
@@ -379,13 +384,13 @@ def test_portfolio_page_leaves_a_zero_return_uncolored(client):
     assert "mono loss" not in response.text
 
 
-def test_portfolio_page_shows_a_holding_with_no_return_row_yet(client):
+def test_holdings_page_shows_a_holding_with_no_return_row_yet(client):
     test_client, _, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)
     fake_portfolio.list_positions_result = [_position(ticker="AAPL"), _position(ticker="NEW")]
     fake_portfolio.list_latest_returns_result = [_return_row(ticker="AAPL")]
 
-    response = test_client.get("/portfolio", params={"account": "main"})
+    response = test_client.get("/accounts/holdings", params={"account": "main"})
 
     # One cell spanning market value, weight and both return columns, instead of four dashes.
     assert _holding_cells(response.text, "NEW")[3:] == [
@@ -395,12 +400,12 @@ def test_portfolio_page_shows_a_holding_with_no_return_row_yet(client):
     assert _holding_cells(response.text, "AAPL")[4] == '<span class="mono">100.00%</span>'
 
 
-def test_portfolio_page_omits_tiles_before_any_return_exists(client):
+def test_holdings_page_omits_tiles_before_any_return_exists(client):
     test_client, _, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)
     fake_portfolio.list_positions_result = [_position()]
 
-    response = test_client.get("/portfolio", params={"account": "main"})
+    response = test_client.get("/accounts/holdings", params={"account": "main"})
 
     assert response.status_code == 200
     assert _tile(response.text, "Market value") is None
@@ -408,7 +413,7 @@ def test_portfolio_page_omits_tiles_before_any_return_exists(client):
     assert "AAPL" in response.text
 
 
-def test_portfolio_page_chart_payload_carries_the_euro_series(client):
+def test_holdings_page_chart_payload_carries_the_euro_series(client):
     test_client, _, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)
     fake_portfolio.list_returns_result = [
@@ -416,7 +421,7 @@ def test_portfolio_page_chart_payload_carries_the_euro_series(client):
         _return_row(price_date=date(2026, 1, 6), market_value="1450", cost_basis="1500"),
     ]
 
-    response = test_client.get("/portfolio", params={"account": "main"})
+    response = test_client.get("/accounts/holdings", params={"account": "main"})
 
     assert 'id="returns-chart"' in response.text
     assert _chart_payload(response.text) == [
@@ -435,20 +440,20 @@ def test_portfolio_page_chart_payload_carries_the_euro_series(client):
     ]
 
 
-def test_portfolio_page_chart_controls_are_hidden_until_the_script_runs(client):
+def test_holdings_page_chart_controls_are_hidden_until_the_script_runs(client):
     # Without JS the buttons would do nothing, so they ship hidden and the chart script shows them.
     test_client, _, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)
     fake_portfolio.list_returns_result = [_return_row()]
 
-    response = test_client.get("/portfolio", params={"account": "main"})
+    response = test_client.get("/accounts/holdings", params={"account": "main"})
 
     assert '<div class="chart-controls" hidden>' in response.text
     for label in ("Total return", "Market value", "1M", "6M", "1Y", "All"):
         assert f">{label}</button>" in response.text
 
 
-def test_portfolio_page_filters_closed_positions(client):
+def test_holdings_page_filters_closed_positions(client):
     test_client, _, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)
     fake_portfolio.list_positions_result = [
@@ -457,20 +462,20 @@ def test_portfolio_page_filters_closed_positions(client):
     ]
     fake_portfolio.list_returns_result = []
 
-    response = test_client.get("/portfolio", params={"account": "main"})
+    response = test_client.get("/accounts/holdings", params={"account": "main"})
 
     assert response.status_code == 200
     assert "AAPL" in response.text
     assert "MSFT" not in response.text
 
 
-def test_portfolio_page_renders_empty_state_when_no_positions_or_returns(client):
+def test_holdings_page_renders_empty_state_when_no_positions_or_returns(client):
     test_client, _, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)
     fake_portfolio.list_positions_result = []
     fake_portfolio.list_returns_result = []
 
-    response = test_client.get("/portfolio", params={"account": "main"})
+    response = test_client.get("/accounts/holdings", params={"account": "main"})
 
     assert response.status_code == 200
     assert "No positions yet" in response.text
@@ -484,56 +489,56 @@ def test_the_empty_returns_state_no_longer_asks_for_a_manual_rebuild(client):
     test_client, _, fake_auth, _ = client
     _logged_in(test_client, fake_auth)
 
-    response = test_client.get("/portfolio", params={"account": "main"})
+    response = test_client.get("/accounts/holdings", params={"account": "main"})
 
     assert "rebuild-returns" not in response.text
     assert "returns appear once Stakehold has prices for your holdings' dates" in response.text
 
 
-def test_portfolio_page_account_not_found_renders_404(client):
+def test_holdings_page_account_not_found_renders_404(client):
     test_client, _, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)
     fake_portfolio.list_positions_error = AccountNotFound("missing")
     fake_portfolio.list_returns_result = []
 
-    response = test_client.get("/portfolio", params={"account": "missing"})
+    response = test_client.get("/accounts/holdings", params={"account": "missing"})
 
     assert response.status_code == 404
     assert "doesn't exist" in response.text
 
 
-def test_portfolio_page_degrades_when_positions_unavailable(client):
+def test_holdings_page_degrades_when_positions_unavailable(client):
     test_client, _, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)
     fake_portfolio.list_positions_error = PortfolioUnavailable("boom")
     fake_portfolio.list_returns_result = [_return_row()]
 
-    response = test_client.get("/portfolio", params={"account": "main"})
+    response = test_client.get("/accounts/holdings", params={"account": "main"})
 
     assert response.status_code == 200
     assert "Can&#39;t reach the portfolio service" in response.text
     assert 'id="returns-chart"' in response.text
 
 
-def test_portfolio_page_account_not_found_from_latest_returns_renders_404(client):
+def test_holdings_page_account_not_found_from_latest_returns_renders_404(client):
     test_client, _, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)
     fake_portfolio.list_latest_returns_error = AccountNotFound("missing")
 
-    response = test_client.get("/portfolio", params={"account": "main"})
+    response = test_client.get("/accounts/holdings", params={"account": "main"})
 
     assert response.status_code == 404
     assert "doesn't exist" in response.text
 
 
-def test_portfolio_page_degrades_when_latest_returns_unavailable(client):
+def test_holdings_page_degrades_when_latest_returns_unavailable(client):
     test_client, _, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)
     fake_portfolio.list_positions_result = [_position()]
     fake_portfolio.list_returns_result = [_return_row()]
     fake_portfolio.list_latest_returns_error = PortfolioUnavailable("boom")
 
-    response = test_client.get("/portfolio", params={"account": "main"})
+    response = test_client.get("/accounts/holdings", params={"account": "main"})
 
     assert response.status_code == 200
     assert "Can&#39;t reach the portfolio service" in response.text
@@ -545,13 +550,13 @@ def test_portfolio_page_degrades_when_latest_returns_unavailable(client):
     assert 'id="returns-chart"' in response.text
 
 
-def test_portfolio_page_degrades_when_returns_unavailable(client):
+def test_holdings_page_degrades_when_returns_unavailable(client):
     test_client, _, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)
     fake_portfolio.list_positions_result = [_position()]
     fake_portfolio.list_returns_error = PortfolioUnavailable("boom")
 
-    response = test_client.get("/portfolio", params={"account": "main"})
+    response = test_client.get("/accounts/holdings", params={"account": "main"})
 
     assert response.status_code == 200
     assert "Can&#39;t reach the portfolio service" in response.text
@@ -579,12 +584,12 @@ def test_mapping_notice_is_a_warning_banner(client):
     _logged_in(test_client, fake_auth)
     fake_portfolio.list_unmapped_instruments_result = [_unmapped("IE00B4L5Y983")]
 
-    html = test_client.get("/portfolio", params={"account": "main"}).text
+    html = test_client.get("/accounts/holdings", params={"account": "main"}).text
 
     assert re.search(r'<div id="unmapped-notice">\s*<div class="banner" data-kind="warning">', html)
 
 
-def test_portfolio_page_lists_instruments_waiting_for_a_mapping_at_this_broker(client):
+def test_holdings_page_lists_instruments_waiting_for_a_mapping_at_this_broker(client):
     test_client, _, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)
     fake_portfolio.list_positions_result = [_position()]
@@ -594,7 +599,7 @@ def test_portfolio_page_lists_instruments_waiting_for_a_mapping_at_this_broker(c
         _unmapped("US0000000001", broker="globex"),
     ]
 
-    response = test_client.get("/portfolio", params={"account": "main"})
+    response = test_client.get("/accounts/holdings", params={"account": "main"})
 
     notice = _mapping_notice(response.text)
     assert notice.startswith("Waiting for a ticker mapping:")
@@ -604,62 +609,62 @@ def test_portfolio_page_lists_instruments_waiting_for_a_mapping_at_this_broker(c
     assert "They appear as holdings once mapped." in notice
 
 
-def test_portfolio_page_shows_the_mapping_notice_with_no_holdings_yet(client):
+def test_holdings_page_shows_the_mapping_notice_with_no_holdings_yet(client):
     # The case that used to look like a bug: a buy saved, and nothing on the page.
     test_client, _, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)
     fake_portfolio.list_unmapped_instruments_result = [_unmapped("IE00B4L5Y983")]
 
-    response = test_client.get("/portfolio", params={"account": "main"})
+    response = test_client.get("/accounts/holdings", params={"account": "main"})
 
     assert "IE00B4L5Y983" in _mapping_notice(response.text)
     assert "No positions yet" in response.text
 
 
-def test_portfolio_page_mapping_notice_tells_a_regular_user_an_admin_maps_them(client):
+def test_holdings_page_mapping_notice_tells_a_regular_user_an_admin_maps_them(client):
     test_client, _, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)
     fake_portfolio.list_unmapped_instruments_result = [_unmapped("IE00B4L5Y983")]
 
-    response = test_client.get("/portfolio", params={"account": "main"})
+    response = test_client.get("/accounts/holdings", params={"account": "main"})
 
     notice = _mapping_notice(response.text)
     assert "An admin needs to map them." in notice
     assert "/admin/mappings" not in response.text
 
 
-def test_portfolio_page_mapping_notice_links_an_admin_to_the_mappings_page(client):
+def test_holdings_page_mapping_notice_links_an_admin_to_the_mappings_page(client):
     test_client, _, fake_auth, fake_portfolio = client
     admin = AuthUser(user_id="u1", email="ann@example.com", display_name="Ann", is_admin=True)
     fake_auth.validate_result = AuthResult(user=admin, set_cookie=SESSION_COOKIE)
     test_client.cookies.set("stakehold_session", "tok")
     fake_portfolio.list_unmapped_instruments_result = [_unmapped("IE00B4L5Y983")]
 
-    response = test_client.get("/portfolio", params={"account": "main"})
+    response = test_client.get("/accounts/holdings", params={"account": "main"})
 
     notice = _mapping_notice(response.text)
     assert '<a href="/admin/mappings">Map them</a>' in notice
     assert "An admin needs to map them." not in notice
 
 
-def test_portfolio_page_has_no_mapping_notice_when_everything_is_mapped(client):
+def test_holdings_page_has_no_mapping_notice_when_everything_is_mapped(client):
     test_client, _, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)
     fake_portfolio.list_unmapped_instruments_result = [_unmapped("X", broker="globex")]
 
-    response = test_client.get("/portfolio", params={"account": "main"})
+    response = test_client.get("/accounts/holdings", params={"account": "main"})
 
     assert _mapping_notice(response.text) is None
 
 
-def test_portfolio_page_degrades_when_unmapped_instruments_unavailable(client):
+def test_holdings_page_degrades_when_unmapped_instruments_unavailable(client):
     test_client, _, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)
     fake_portfolio.list_positions_result = [_position()]
     fake_portfolio.list_latest_returns_result = [_return_row()]
     fake_portfolio.list_unmapped_instruments_error = PortfolioUnavailable("boom")
 
-    response = test_client.get("/portfolio", params={"account": "main"})
+    response = test_client.get("/accounts/holdings", params={"account": "main"})
 
     assert response.status_code == 200
     assert "Can&#39;t reach the portfolio service" in response.text
@@ -667,14 +672,14 @@ def test_portfolio_page_degrades_when_unmapped_instruments_unavailable(client):
     assert _holding_cells(response.text, "AAPL")[3] == '<span class="mono">€1,600.00</span>'
 
 
-def test_portfolio_page_shows_no_mapping_notice_when_the_broker_is_unknown(client):
+def test_holdings_page_shows_no_mapping_notice_when_the_broker_is_unknown(client):
     # The account list failed, so the header degraded and the broker can't be matched.
     test_client, _, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)
     fake_portfolio.list_accounts_error = PortfolioUnavailable("boom")
     fake_portfolio.list_unmapped_instruments_result = [_unmapped("IE00B4L5Y983")]
 
-    response = test_client.get("/portfolio", params={"account": "main"})
+    response = test_client.get("/accounts/holdings", params={"account": "main"})
 
     assert response.status_code == 200
     assert _mapping_notice(response.text) is None
@@ -683,13 +688,13 @@ def test_portfolio_page_shows_no_mapping_notice_when_the_broker_is_unknown(clien
 _FRESHNESS = "Prices update daily; returns are recalculated a few times a day."
 
 
-def test_portfolio_page_says_prices_refresh_automatically(client):
+def test_holdings_page_says_prices_refresh_automatically(client):
     test_client, _, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)
     fake_portfolio.list_positions_result = [_position()]
     fake_portfolio.list_latest_returns_result = [_return_row()]
 
-    response = test_client.get("/portfolio", params={"account": "main"})
+    response = test_client.get("/accounts/holdings", params={"account": "main"})
 
     assert re.search(r'<p class="as-of">Prices as of .*?' + re.escape(_FRESHNESS), response.text)
 
@@ -699,7 +704,7 @@ def test_the_empty_returns_state_says_prices_refresh_automatically(client):
     _logged_in(test_client, fake_auth)
     fake_portfolio.list_positions_result = [_position()]
 
-    response = test_client.get("/portfolio", params={"account": "main"})
+    response = test_client.get("/accounts/holdings", params={"account": "main"})
 
     assert "No return history yet" in response.text
     assert _FRESHNESS in response.text
@@ -724,7 +729,7 @@ def test_a_holding_without_prices_says_where_its_ticker_stands(client, status, n
     fake_portfolio.list_latest_returns_result = [_return_row(ticker="AAPL")]
     fake_portfolio.tracked_statuses = {"NEW": status}
 
-    response = test_client.get("/portfolio", params={"account": "main"})
+    response = test_client.get("/accounts/holdings", params={"account": "main"})
 
     assert _holding_cells(response.text, "NEW")[3:] == [f'<span class="entry-empty">{note}</span>']
     # Only the holdings without prices are asked about.
@@ -737,7 +742,7 @@ def test_every_holding_priced_asks_nothing_about_loading(client):
     fake_portfolio.list_positions_result = [_position(ticker="AAPL")]
     fake_portfolio.list_latest_returns_result = [_return_row(ticker="AAPL")]
 
-    test_client.get("/portfolio", params={"account": "main"})
+    test_client.get("/accounts/holdings", params={"account": "main"})
 
     assert not [c for c in fake_portfolio.calls if c[0] == "list_tracked_tickers"]
 
@@ -748,7 +753,7 @@ def test_an_unanswered_status_call_still_says_waiting_for_prices(client):
     fake_portfolio.list_positions_result = [_position(ticker="NEW")]
     fake_portfolio.list_tracked_tickers_error = PortfolioUnavailable("down")
 
-    response = test_client.get("/portfolio", params={"account": "main"})
+    response = test_client.get("/accounts/holdings", params={"account": "main"})
 
     assert response.status_code == 200
     assert _holding_cells(response.text, "NEW")[3:] == [
@@ -774,24 +779,24 @@ def _with_returns_and_growth(fake_portfolio, growth):
     fake_portfolio.list_growth_result = growth
 
 
-def test_portfolio_page_chart_payload_carries_growth_per_date(client):
+def test_holdings_page_chart_payload_carries_growth_per_date(client):
     test_client, _, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)
     _with_returns_and_growth(
         fake_portfolio, _growth((date(2026, 1, 5), "0E-8"), (date(2026, 1, 6), "0.1234"))
     )
 
-    response = test_client.get("/portfolio", params={"account": "main"})
+    response = test_client.get("/accounts/holdings", params={"account": "main"})
 
     assert [p["growth_pct"] for p in _chart_payload(response.text)] == [0.0, 0.1234]
 
 
-def test_portfolio_page_offers_the_growth_view_when_there_is_growth(client):
+def test_holdings_page_offers_the_growth_view_when_there_is_growth(client):
     test_client, _, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)
     _with_returns_and_growth(fake_portfolio, _growth((date(2026, 1, 6), "0.1234")))
 
-    response = test_client.get("/portfolio", params={"account": "main"})
+    response = test_client.get("/accounts/holdings", params={"account": "main"})
 
     assert re.search(
         r'<button type="button" class="btn btn-ghost" data-chart-view="growth_pct" '
@@ -800,37 +805,37 @@ def test_portfolio_page_offers_the_growth_view_when_there_is_growth(client):
     )
 
 
-def test_portfolio_page_tiles_show_the_latest_growth_as_a_gain(client):
+def test_holdings_page_tiles_show_the_latest_growth_as_a_gain(client):
     test_client, _, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)
     _with_returns_and_growth(
         fake_portfolio, _growth((date(2026, 1, 5), "0"), (date(2026, 1, 6), "0.1234"))
     )
 
-    response = test_client.get("/portfolio", params={"account": "main"})
+    response = test_client.get("/accounts/holdings", params={"account": "main"})
 
     assert (
         _tile(response.text, "Growth since inception") == '<span class="mono gain">+12.34%</span>'
     )
 
 
-def test_portfolio_page_tiles_show_negative_growth_as_a_loss(client):
+def test_holdings_page_tiles_show_negative_growth_as_a_loss(client):
     test_client, _, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)
     _with_returns_and_growth(fake_portfolio, _growth((date(2026, 1, 6), "-0.0525")))
 
-    response = test_client.get("/portfolio", params={"account": "main"})
+    response = test_client.get("/accounts/holdings", params={"account": "main"})
 
     assert _tile(response.text, "Growth since inception") == '<span class="mono loss">−5.25%</span>'
 
 
-def test_portfolio_page_degrades_when_growth_is_unavailable(client):
+def test_holdings_page_degrades_when_growth_is_unavailable(client):
     test_client, _, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)
     _with_returns_and_growth(fake_portfolio, [])
     fake_portfolio.list_growth_error = PortfolioUnavailable("boom")
 
-    response = test_client.get("/portfolio", params={"account": "main"})
+    response = test_client.get("/accounts/holdings", params={"account": "main"})
 
     assert response.status_code == 200
     assert "Can&#39;t reach the portfolio service" in response.text
@@ -842,12 +847,76 @@ def test_portfolio_page_degrades_when_growth_is_unavailable(client):
     assert [p["growth_pct"] for p in _chart_payload(response.text)] == [None, None]
 
 
-def test_portfolio_page_account_not_found_from_growth_renders_404(client):
+def test_holdings_page_account_not_found_from_growth_renders_404(client):
     test_client, _, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)
     fake_portfolio.list_growth_error = AccountNotFound("missing")
 
-    response = test_client.get("/portfolio", params={"account": "main"})
+    response = test_client.get("/accounts/holdings", params={"account": "main"})
 
     assert response.status_code == 404
     assert "doesn't exist" in response.text
+
+
+# --- the old URL: GET /portfolio?account=X (PF-2) ---------------------------
+
+
+def test_old_portfolio_url_redirects_permanently_to_the_holdings_page(client):
+    test_client, _, fake_auth, _ = client
+    _logged_in(test_client, fake_auth)
+
+    response = test_client.get("/portfolio", params={"account": "main"}, follow_redirects=False)
+
+    assert response.status_code == 308
+    assert response.headers["location"] == "/accounts/holdings?account=main"
+
+
+def test_old_portfolio_url_keeps_an_encoded_label_as_it_was(client):
+    test_client, _, _, _ = client
+
+    response = test_client.get("/portfolio?account=my%20isa%20%26%20co", follow_redirects=False)
+
+    assert response.headers["location"] == "/accounts/holdings?account=my%20isa%20%26%20co"
+
+
+def test_old_portfolio_url_redirects_before_asking_who_is_logged_in(client):
+    """An anonymous visitor gets the 308, not the login redirect: the holdings page it points
+    at asks for the login, so the redirect itself needs no auth call."""
+    test_client, _, _, _ = client
+
+    response = test_client.get("/portfolio", params={"account": "main"}, follow_redirects=False)
+
+    assert response.status_code == 308
+
+
+def test_old_portfolio_url_lands_on_the_holdings_page(client):
+    test_client, _, fake_auth, _ = client
+    _logged_in(test_client, fake_auth)
+
+    response = test_client.get("/portfolio", params={"account": "main"})
+
+    assert response.status_code == 200
+    assert str(response.url).endswith("/accounts/holdings?account=main")
+    assert 'class="account-header"' in response.text
+
+
+def test_portfolio_without_an_account_is_still_a_bad_request(client):
+    test_client, _, fake_auth, _ = client
+    _logged_in(test_client, fake_auth)
+
+    response = test_client.get("/portfolio", follow_redirects=False)
+
+    assert response.status_code == 422
+
+
+def test_no_template_links_to_the_old_portfolio_url():
+    """Every link goes straight to /accounts/holdings rather than through the redirect. PF-4
+    narrows this to /portfolio?account once /portfolio becomes the combined page."""
+    templates = Path(web.__file__).parent / "templates"
+    offenders = [
+        str(path.relative_to(templates))
+        for path in sorted(templates.rglob("*.html"))
+        if 'href="/portfolio' in path.read_text() or '"/portfolio"' in path.read_text()
+    ]
+
+    assert offenders == []

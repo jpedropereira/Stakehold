@@ -13,7 +13,7 @@
     {% else %}
     {% call banner("success") %}<strong>Imported <span class="mono">{{ imported | qty }}</span> transaction(s).</strong>{% if outcome %} {{ outcome }}{% endif %}{% endcall %}
     {% endif %}
-    <p class="next-steps"><a href="/portfolio{{ account_query }}">View holdings</a> <a href="/transactions{{ account_query }}">View transactions</a></p>
+    <p class="next-steps"><a href="/accounts/holdings{{ account_query }}">View holdings</a> <a href="/transactions{{ account_query }}">View transactions</a></p>
   </div>
   {% endif %}
   {# Outside the form: a full-page error re-render must show its message even when the form

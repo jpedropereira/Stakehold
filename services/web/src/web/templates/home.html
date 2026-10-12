@@ -43,7 +43,7 @@
   <ul class="account-list">
     {% for row in rows %}
     <li class="account-row">
-      <a class="account-label" href="/portfolio?account={{ row.account.account_label | urlencode }}">{{ row.account.account_label }}<span class="visually-hidden"> holdings</span></a>
+      <a class="account-label" href="/accounts/holdings?account={{ row.account.account_label | urlencode }}">{{ row.account.account_label }}<span class="visually-hidden"> holdings</span></a>
       <span class="account-broker">{{ row.account.broker }}</span>
       <span class="account-figures">
         {% if row.summary %}

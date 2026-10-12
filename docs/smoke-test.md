@@ -131,7 +131,7 @@ docker compose -f services/portfolio/docker-compose.yml exec api \
   uv run --frozen portfolio rebuild-returns   --user <uuid>
 ```
 
-4. Back in the browser: `/portfolio?account=<label>` (via the "View portfolio" link on
+4. Back in the browser: `/accounts/holdings?account=<label>` (via the account's label on
    `/accounts`) to confirm positions and the returns chart render.
 
 ## Tearing down

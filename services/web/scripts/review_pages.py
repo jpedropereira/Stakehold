@@ -54,9 +54,12 @@ PAGES = [
     Page("accounts", "/accounts", "admin"),
     Page("accounts-delete-dialog", "/accounts", "admin", click="a[data-confirm]"),
     Page("accounts-delete", "/accounts/delete?account=main", "admin"),
-    Page("portfolio", "/portfolio?account=main", "admin"),
+    Page("account-holdings", "/accounts/holdings?account=main", "admin"),
     Page(
-        "portfolio-growth", "/portfolio?account=main", "admin", click="[data-chart-view=growth_pct]"
+        "account-holdings-growth",
+        "/accounts/holdings?account=main",
+        "admin",
+        click="[data-chart-view=growth_pct]",
     ),
     Page("transactions", "/transactions?account=main", "admin"),
     Page(
@@ -74,7 +77,7 @@ PAGES = [
     Page("admin", "/admin", "admin"),
     Page("admin-mappings", "/admin/mappings", "admin"),
     Page("forbidden", "/admin", "user"),
-    Page("account-not-found", "/portfolio?account=nope", "admin"),
+    Page("account-not-found", "/accounts/holdings?account=nope", "admin"),
     Page("not-found", "/no-such-page", "anon"),
 ]
 

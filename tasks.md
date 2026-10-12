@@ -72,7 +72,7 @@ The previous chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archi
 |----|------|-------------|--------|
 | PF-0 | [Roadmap housekeeping](#pf-0-roadmap-housekeeping) | — | done |
 | PF-1 | [portfolio: `GET /holdings` across accounts](#pf-1-portfolio-get-holdings-across-accounts) | — | done |
-| PF-2 | [web: move per-account holdings to `/accounts/holdings`](#pf-2-web-move-per-account-holdings-to-accountsholdings) | — | ready |
+| PF-2 | [web: move per-account holdings to `/accounts/holdings`](#pf-2-web-move-per-account-holdings-to-accountsholdings) | — | done |
 | PF-3 | [web: portfolio client for `/holdings`](#pf-3-web-portfolio-client-for-holdings) | PF-1 | ready |
 | PF-4 | [web: `/portfolio` combined page](#pf-4-web-portfolio-combined-page) | PF-2, PF-3 | blocked |
 | PF-5 | [portfolio: cross-account return series](#pf-5-portfolio-cross-account-return-series) | PF-1 | ready |
@@ -136,20 +136,26 @@ Files: new `holdings/{__init__,aggregator,flows}.py`, `jobs.py`, `api/{routes,mo
 
 ### PF-2. web: move per-account holdings to `/accounts/holdings`
 
-**Status:** ready
+**Status:** done
 
-- Rename the router `api/portfolio_page.py` (which already holds the `GET /portfolio` handler
-  and `_load_portfolio_view`, moved out of `routes.py` in #65) to `api/holdings.py`, and serve it
-  at `/accounts/holdings`.
-- Rename `templates/portfolio.html` to `account_holdings.html`.
-- `GET /portfolio?account=X` answers with a 308 to `/accounts/holdings?account=X`. PF-4 keeps
-  that redirect whenever an `account` parameter is present.
-- Update every link: the home page's account rows, `partials/_account_header.html` (Holdings),
-  the account switcher form, deletion redirects, and `scripts/review_pages.py`.
+- The router `api/portfolio_page.py` (which held the `GET /portfolio` handler and
+  `_load_portfolio_view`, moved out of `routes.py` in #65) is now `api/holdings.py`, serving
+  `/accounts/holdings`. The loader is `_load_holdings_view`.
+- `templates/portfolio.html` is now `account_holdings.html`.
+- `GET /portfolio?account=X` answers with a 308 to `/accounts/holdings?account=X`, passing the
+  query string on unchanged and asking nobody who is logged in (the target page does). It lives
+  in a new `api/portfolio.py`, so PF-4 extends that file rather than moving the route. Without
+  `account`, `/portfolio` is still a 422 until PF-4.
+- Every link now points at the new URL: the home page's account rows, the account label on
+  `/accounts`, "View holdings" after an import, `partials/_account_header.html` (Holdings) and
+  `scripts/review_pages.py`. A unit test checks that no template links to `/portfolio`.
+  - Two items in the original list needed no change. The account switcher submits to the
+    current path, so it moved with the page. No deletion redirect pointed at `/portfolio`.
 
-Files: `api/{portfolio_page→holdings,routes,app}.py`, `templates/{account_holdings,home}.html`,
+Files: `api/{portfolio_page→holdings,portfolio,app}.py`,
+`templates/{portfolio→account_holdings,home,accounts,transactions_import,transactions}.html`,
 `partials/_account_header.html`, `scripts/review_pages.py`; `docs/architecture.md`,
-`docs/ui-architecture.md`.
+`docs/ui-architecture.md`, `docs/smoke-test.md`.
 
 ### PF-3. web: portfolio client for `/holdings`
 
@@ -163,10 +169,12 @@ Files: `portfolio_client/{base,http_client}.py`; `docs/architecture.md` (endpoin
 
 ### PF-4. web: `/portfolio` combined page
 
-**Status:** blocked (PF-2, PF-3)
+**Status:** blocked (PF-3)
 
-- A new router, `api/portfolio.py`, and a "Portfolio" nav link (`nav_active="portfolio"`) placed
-  between Overview and Accounts.
+- Extend `api/portfolio.py` (PF-2 created it with only the redirect): one `/portfolio` handler
+  that keeps the 308 when `account` is present and renders the combined page otherwise.
+  Narrow PF-2's "no template links to `/portfolio`" test to `/portfolio?account`.
+- A "Portfolio" nav link (`nav_active="portfolio"`) placed between Overview and Accounts.
 - **The page shows:**
   - the "Prices as of" line and the summary tiles from PF-1's `totals`, not computed from the
     rows, so they match the home page (closed positions' dividends count): market value,
@@ -188,7 +196,7 @@ Files: `portfolio_client/{base,http_client}.py`; `docs/architecture.md` (endpoin
   - client error: a notice, never an empty table.
 - Add the page to `scripts/review_pages.py`.
 
-Files: new `api/portfolio.py`, `api/app.py`, `portfolio_view.py`, new `templates/portfolio.html`,
+Files: `api/portfolio.py`, `portfolio_view.py`, new `templates/portfolio.html`,
 `base.html`, `scripts/review_pages.py`; `docs/architecture.md`, `docs/ui-architecture.md`.
 
 ### PF-5. portfolio: cross-account return series
