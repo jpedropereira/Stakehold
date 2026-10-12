@@ -429,7 +429,13 @@ branded page with its own status, and an unhandled exception a branded 500 (UI-1
   its `AccountDeleteResult`; its 404 is the existing `AccountNotFound`. The growth-since-inception
   view added `list_growth` (`GET /returns/growth`) and its `GrowthPoint`: one account-level
   series `portfolio` computes, since its money flows need `portfolio`'s ticker mappings. A 404
-  is the existing `AccountNotFound`.
+  is the existing `AccountNotFound`. PF-3 added `list_holdings` (`GET /holdings`) and its
+  `Holdings`/`Holding`/`HoldingAccount`/`HoldingsTotals`, which mirror PF-1's response field for
+  field. The summing across accounts is `portfolio`'s, so the combined page makes one call
+  rather than one per account. `priced` and `mixed_currency` must be real JSON booleans or the
+  response is `PortfolioUnavailable`: a string `"false"` is truthy, and misreading `priced`
+  would show a partial sum as the holding's value. No new error type was needed, since
+  `/holdings` has no 404 (a user with no accounts gets an empty result).
 - `rebuild_outcome.py` (UI-7) — pure. Turns the two rebuild statuses into the confirmation
   banner's one sentence; see "Key decisions".
 - `portfolio_view.py` (task 12) — pure, I/O-free reshaping of what `routes.py` fetches for
