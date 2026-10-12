@@ -9,6 +9,10 @@ from web.portfolio_client.base import (
     AccountWriteResult,
     Broker,
     GrowthPoint,
+    Holding,
+    HoldingAccount,
+    Holdings,
+    HoldingsTotals,
     Position,
     Return,
     TickerLookup,
@@ -237,6 +241,76 @@ def _growth_point(item: dict) -> GrowthPoint:
         return GrowthPoint(
             price_date=date.fromisoformat(item["price_date"]),
             growth_pct=Decimal(item["growth_pct"]),
+        )
+    except (KeyError, TypeError, ValueError, InvalidOperation) as exc:
+        raise PortfolioUnavailable(f"malformed portfolio response: {exc}") from exc
+
+
+def _bool(item: dict, key: str) -> bool:
+    """A flag that must be a real JSON boolean. A string "false" is truthy, and misreading
+    `priced` would show a partial sum as the holding's value."""
+    value = item[key]
+    if not isinstance(value, bool):
+        raise TypeError(f"{key} is not a boolean")
+    return value
+
+
+def _opt_date(value) -> date | None:
+    return None if value is None else date.fromisoformat(value)
+
+
+def _holding_account(item: dict) -> HoldingAccount:
+    return HoldingAccount(
+        account_label=item["account_label"],
+        quantity=Decimal(item["quantity"]),
+        native_currency=item["native_currency"],
+        average_cost_native=Decimal(item["average_cost_native"]),
+        cost_basis_eur=Decimal(item["cost_basis_eur"]),
+        market_value_native=_opt_decimal(item["market_value_native"]),
+        market_value_eur=_opt_decimal(item["market_value_eur"]),
+        unrealized_return_eur=_opt_decimal(item["unrealized_return_eur"]),
+    )
+
+
+def _holding(item: dict) -> Holding:
+    return Holding(
+        canonical_ticker=item["canonical_ticker"],
+        quantity=Decimal(item["quantity"]),
+        average_cost_eur=_opt_decimal(item["average_cost_eur"]),
+        cost_basis_eur=Decimal(item["cost_basis_eur"]),
+        native_currency=item["native_currency"],
+        mixed_currency=_bool(item, "mixed_currency"),
+        average_cost_native=_opt_decimal(item["average_cost_native"]),
+        market_value_native=_opt_decimal(item["market_value_native"]),
+        priced=_bool(item, "priced"),
+        price_date=_opt_date(item["price_date"]),
+        market_value_eur=_opt_decimal(item["market_value_eur"]),
+        unrealized_return_eur=_opt_decimal(item["unrealized_return_eur"]),
+        unrealized_return_pct=_opt_decimal(item["unrealized_return_pct"]),
+        dividends_received_eur=_opt_decimal(item["dividends_received_eur"]),
+        total_return_eur=_opt_decimal(item["total_return_eur"]),
+        total_return_pct=_opt_decimal(item["total_return_pct"]),
+        accounts=tuple(_holding_account(a) for a in item["accounts"]),
+    )
+
+
+def _holdings_totals(item: dict) -> HoldingsTotals:
+    return HoldingsTotals(
+        price_date=date.fromisoformat(item["price_date"]),
+        market_value_eur=Decimal(item["market_value_eur"]),
+        cost_basis_eur=Decimal(item["cost_basis_eur"]),
+        dividends_received_eur=Decimal(item["dividends_received_eur"]),
+        total_return_eur=Decimal(item["total_return_eur"]),
+        total_return_pct=_opt_decimal(item["total_return_pct"]),
+    )
+
+
+def _holdings(body: dict) -> Holdings:
+    try:
+        totals = body["totals"]
+        return Holdings(
+            holdings=tuple(_holding(item) for item in body["holdings"]),
+            totals=None if totals is None else _holdings_totals(totals),
         )
     except (KeyError, TypeError, ValueError, InvalidOperation) as exc:
         raise PortfolioUnavailable(f"malformed portfolio response: {exc}") from exc
@@ -484,6 +558,12 @@ class HttpPortfolioClient:
         if response.status_code != 200:
             _raise_for_status(response)
         return [_growth_point(item) for item in _json_body(response)]
+
+    async def list_holdings(self, *, user_id: str) -> Holdings:
+        response = await self._request("GET", "/holdings", params={"user_id": user_id})
+        if response.status_code != 200:
+            _raise_for_status(response)
+        return _holdings(_json_body(response))
 
     async def list_ticker_mappings(self) -> list[TickerMapping]:
         response = await self._request("GET", "/ticker-mappings")

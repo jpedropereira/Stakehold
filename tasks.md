@@ -73,8 +73,8 @@ The previous chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archi
 | PF-0 | [Roadmap housekeeping](#pf-0-roadmap-housekeeping) | — | done |
 | PF-1 | [portfolio: `GET /holdings` across accounts](#pf-1-portfolio-get-holdings-across-accounts) | — | done |
 | PF-2 | [web: move per-account holdings to `/accounts/holdings`](#pf-2-web-move-per-account-holdings-to-accountsholdings) | — | done |
-| PF-3 | [web: portfolio client for `/holdings`](#pf-3-web-portfolio-client-for-holdings) | PF-1 | ready |
-| PF-4 | [web: `/portfolio` combined page](#pf-4-web-portfolio-combined-page) | PF-2, PF-3 | blocked |
+| PF-3 | [web: portfolio client for `/holdings`](#pf-3-web-portfolio-client-for-holdings) | PF-1 | done |
+| PF-4 | [web: `/portfolio` combined page](#pf-4-web-portfolio-combined-page) | PF-2, PF-3 | ready |
 | PF-5 | [portfolio: cross-account return series](#pf-5-portfolio-cross-account-return-series) | PF-1 | done |
 | PF-6 | [web: returns chart on `/portfolio`](#pf-6-web-returns-chart-on-portfolio) | PF-4, PF-5 | blocked |
 
@@ -159,17 +159,29 @@ Files: `api/{portfolio_page→holdings,portfolio,app}.py`,
 
 ### PF-3. web: portfolio client for `/holdings`
 
-**Status:** ready
+**Status:** done
 
-`list_holdings(user_id)` on the `PortfolioClient` protocol and its HTTP implementation, returning
-PF-1's `{holdings, totals}` shape: the `Holding`, `HoldingAccount` and `HoldingsTotals` models
-(nullable fields as PF-1 serves them; Decimals arrive as strings). The fake client used in tests gets the same method.
+`list_holdings(user_id)` on the `PortfolioClient` protocol and `HttpPortfolioClient`, calling
+PF-1's `GET /holdings` and returning `Holdings(holdings, totals)`: tuples of `Holding`, each with
+its `HoldingAccount` breakdown, and `HoldingsTotals` or None. Fields mirror PF-1's response
+models one for one, nullable where PF-1 serves null; Decimals arrive as strings. Portfolio's
+order (by ticker, breakdown by label) is kept. A malformed body, including a `priced` or
+`mixed_currency` that isn't a real boolean, is `PortfolioUnavailable`; no new error type.
 
-Files: `portfolio_client/{base,http_client}.py`; `docs/architecture.md` (endpoint table).
+The task first said "the fake client used in tests gets the same method". There is no shared
+fake: each page's test file defines its own with only what that page calls, so PF-4's test file
+adds `list_holdings` to its fake.
+
+Tests: `tests/unit/test_portfolio_client_holdings.py`. No integration test yet, since no page
+calls it; PF-4's page test in `tests/integration/test_portfolio_flow.py` runs it against
+portfolio's real app.
+
+Files: `portfolio_client/{base,http_client}.py`; `docs/architecture.md` (the module list's
+`portfolio_client` entry, as web's doc has no endpoint table).
 
 ### PF-4. web: `/portfolio` combined page
 
-**Status:** blocked (PF-3)
+**Status:** ready
 
 - Extend `api/portfolio.py` (PF-2 created it with only the redirect): one `/portfolio` handler
   that keeps the 308 when `account` is present and renders the combined page otherwise.
@@ -279,7 +291,7 @@ Files: `returns/performance.py`, `holdings/flows.py`, `jobs.py`, `api/{routes,mo
 
 ### PF-6. web: returns chart on `/portfolio`
 
-**Status:** blocked (PF-4, PF-5)
+**Status:** blocked (PF-4)
 
 Reuse `static/portfolio_chart.js` and the JSON data island pattern, fed from PF-5 through a new
 client method. The island carries `market_value_eur`, `total_return_eur` and `growth_pct`, as
