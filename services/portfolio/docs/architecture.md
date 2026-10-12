@@ -395,8 +395,8 @@ of its own:
 | `.env.example` | yes | Template, matching data-store's convention |
 
 `PORTFOLIO_RETURNS_REFRESH_SECONDS` (default `21600`) isn't a `settings.py` setting: only the
-`returns-refresh` container's shell loop reads it, between runs of `rebuild-returns --all`. Set it
-in the environment `docker compose` runs with, like the other compose-level variables.
+`returns-refresh-all` container's shell loop reads it, between runs of `rebuild-returns --all`.
+Set it in the environment `docker compose` runs with, like the other compose-level variables.
 
 No YAML config for broker parsing — the broker registry is code (a new broker is a new file plus
 one registry line), not data, since unlike data-store's exchange-suffix mapping there's no
@@ -415,7 +415,7 @@ flowchart TB
     subgraph pf["portfolio"]
         PCLI["portfolio CLI"]
         PAPI["portfolio HTTP API<br/><i>built (task 9)</i>"]
-        PREF["returns-refresh<br/><i>loop: rebuild-returns --all</i>"]
+        PREF["returns-refresh-all<br/><i>loop: rebuild-returns --all</i>"]
         PJOBS["jobs.py"]
     end
 
@@ -502,8 +502,8 @@ from that README, so the repo still never names a plugin (see "Extension points"
 rejected:
 - An extra Compose build context pointing at the plugin's source checkout. Every
   `docker-compose*.yml` that builds this image tag (`api`, `db-init`, and the `stakehold-net`
-  overlay's `returns-refresh`) would have to repeat it, and a build that missed it would silently
-  overwrite the shared tag with a plugin-less image.
+  overlay's `returns-refresh-all`) would have to repeat it, and a build that missed it would
+  silently overwrite the shared tag with a plugin-less image.
 - An auto-loaded `docker-compose.override.yml`. The stack is started with explicit `-f` flags,
   which skip auto-loading.
 
