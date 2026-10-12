@@ -24,6 +24,7 @@ from web.auth_client.errors import SessionInvalid
 from web.portfolio_client.base import (
     Account,
     GrowthPoint,
+    Holdings,
     Position,
     Return,
     UnmappedInstrument,
@@ -116,6 +117,10 @@ class FakePortfolioClient:
         if self.list_latest_returns_error:
             raise self.list_latest_returns_error
         return self.list_latest_returns_result
+
+    async def list_holdings(self, *, user_id):
+        # Only for the bare /portfolio check below; the combined page has its own tests.
+        return Holdings(holdings=(), totals=None)
 
 
 def _settings() -> Settings:
@@ -900,23 +905,26 @@ def test_old_portfolio_url_lands_on_the_holdings_page(client):
     assert 'class="account-header"' in response.text
 
 
-def test_portfolio_without_an_account_is_still_a_bad_request(client):
+def test_portfolio_without_an_account_is_the_combined_page(client):
+    """PF-4: the bare /portfolio is the page across every account (test_portfolio_page.py)."""
     test_client, _, fake_auth, _ = client
     _logged_in(test_client, fake_auth)
 
     response = test_client.get("/portfolio", follow_redirects=False)
 
-    assert response.status_code == 422
+    assert response.status_code == 200
+    assert "No holdings yet" in response.text
 
 
 def test_no_template_links_to_the_old_portfolio_url():
-    """Every link goes straight to /accounts/holdings rather than through the redirect. PF-4
-    narrows this to /portfolio?account once /portfolio becomes the combined page."""
+    """Every link to one account's holdings goes straight to /accounts/holdings rather than
+    through the redirect. The bare /portfolio is the combined page (PF-4), so only
+    /portfolio?account is the old URL."""
     templates = Path(web.__file__).parent / "templates"
     offenders = [
         str(path.relative_to(templates))
         for path in sorted(templates.rglob("*.html"))
-        if 'href="/portfolio' in path.read_text() or '"/portfolio"' in path.read_text()
+        if "/portfolio?" in path.read_text()
     ]
 
     assert offenders == []

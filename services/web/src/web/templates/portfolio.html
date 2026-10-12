@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+{% from "partials/_banner.html" import banner %}
+{% from "partials/_delta.html" import delta %}
+{% block title %}Portfolio — Stakehold{% endblock %}
+{# A holding's figure in its own currency, on a muted line under the EUR one: only off EUR,
+   where it would repeat the EUR figure, and "Mixed currencies" when accounts recorded the
+   ticker in different currencies (the breakdown shows each one's own). #}
+{% macro native_line(holding, value) -%}
+{%- if holding.mixed_currency %}<span class="native-amount">Mixed currencies</span>
+{%- elif holding.native_currency != "EUR" and value is not none %}<span class="mono native-amount">{{ value | native_money(holding.native_currency) }}</span>
+{%- endif %}
+{%- endmacro %}
+{% block content %}
+{% if error %}
+{% call banner("error") %}<strong>Couldn't load everything.</strong> {{ error }}{% endcall %}
+{% endif %}
+
+{% if first_run %}
+<section class="card card-narrow">
+  <h1>Welcome, {{ user.display_name }}.</h1>
+  <p class="entry-subtitle">No accounts yet. Create one for each broker account you hold, then
+    add or import its transactions. Your holdings across every account appear here.</p>
+  <a href="/accounts" class="btn btn-primary">Create an account</a>
+</section>
+{% else %}
+{# From portfolio's totals, not the rows: they also count closed positions' dividends, the
+   home page's rule, so the two pages agree. #}
+{% if totals %}
+<p class="as-of">Prices as of <span class="mono">{{ totals.price_date | date }}</span>. Prices update daily; returns are recalculated a few times a day.</p>
+<section class="summary-tiles" aria-label="All accounts">
+  <div class="tile">
+    <p class="tile-label">Market value</p>
+    <p class="tile-value"><span class="mono">{{ totals.market_value_eur | money }}</span></p>
+  </div>
+  <div class="tile">
+    <p class="tile-label">Cost basis</p>
+    <p class="tile-value"><span class="mono">{{ totals.cost_basis_eur | money }}</span></p>
+  </div>
+  <div class="tile">
+    <p class="tile-label">Total return</p>
+    <p class="tile-value">{{ delta(totals.total_return_eur) }} {{ delta(totals.total_return_pct, "pct") }}</p>
+  </div>
+  <div class="tile">
+    <p class="tile-label">Dividends received</p>
+    <p class="tile-value"><span class="mono">{{ totals.dividends_received_eur | money }}</span></p>
+  </div>
+</section>
+{% endif %}
+
+<section class="card card-wide">
+  <h1>Holdings</h1>
+  {% include "partials/_unmapped_notice.html" %}
+  {% if holdings_error %}
+  {% call banner("error") %}<strong>Couldn't load your holdings.</strong> {{ holdings_error }}{% endcall %}
+  {% elif rows %}
+  {# Stacks at phone width like the per-account table (web.css, .stack-table), with the same
+     explicit roles and data-labels. Each holding is followed by a breakdown row: one cell
+     spanning the table, holding a <details> with the accounts, so it opens without JS. #}
+  <table class="positions-table holdings-table portfolio-table stack-table" role="table">
+    <thead role="rowgroup">
+      <tr role="row">
+        <th role="columnheader">Ticker</th>
+        <th class="num" role="columnheader">Units</th>
+        <th class="num" role="columnheader">Avg cost</th>
+        <th class="num" role="columnheader">Market value</th>
+        <th class="num" role="columnheader">Weight</th>
+        <th class="num" role="columnheader" colspan="2">Unrealized return</th>
+        <th class="num" role="columnheader" colspan="2">Total return</th>
+      </tr>
+    </thead>
+    <tbody role="rowgroup">
+      {% for row in rows %}
+      {% set holding = row.holding %}
+      <tr role="row" class="holding-row">
+        <td role="cell"><span class="mono">{{ holding.canonical_ticker }}</span></td>
+        <td class="num" role="cell" data-label="Units"><span class="mono">{{ holding.quantity | qty }}</span></td>
+        <td class="num" role="cell" data-label="Avg cost"><span class="mono">{{ holding.average_cost_eur | money }}</span>{{ native_line(holding, holding.average_cost_native) }}</td>
+        {% if not holding.priced %}
+        <td class="num" role="cell" data-label="Market value" colspan="6"><span class="entry-empty">{{ price_notes[holding.canonical_ticker] }}</span></td>
+        {% else %}
+        <td class="num" role="cell" data-label="Market value"><span class="mono">{{ holding.market_value_eur | money }}</span>{{ native_line(holding, holding.market_value_native) }}</td>
+        <td class="num" role="cell" data-label="Weight"><span class="mono">{{ row.weight | share }}</span></td>
+        <td class="num" role="cell" data-label="Unrealized return">{{ delta(holding.unrealized_return_eur) }}</td>
+        <td class="num" role="cell" data-label="Unrealized return (%)">{{ delta(holding.unrealized_return_pct, "pct") }}</td>
+        <td class="num" role="cell" data-label="Total return">{{ delta(holding.total_return_eur) }}</td>
+        <td class="num" role="cell" data-label="Total return (%)">{{ delta(holding.total_return_pct, "pct") }}</td>
+        {% endif %}
+      </tr>
+      <tr role="row" class="breakdown-row">
+        <td role="cell" colspan="9">
+          <details>
+            <summary>In {{ holding.accounts | length }} account{{ "s" if holding.accounts | length != 1 }}</summary>
+            <table class="positions-table breakdown-table stack-table" role="table">
+              <thead role="rowgroup">
+                <tr role="row">
+                  <th role="columnheader">Account</th>
+                  <th class="num" role="columnheader">Units</th>
+                  <th class="num" role="columnheader">Avg cost</th>
+                  <th class="num" role="columnheader">Cost basis</th>
+                  <th class="num" role="columnheader">Market value</th>
+                  <th class="num" role="columnheader">Unrealized return</th>
+                </tr>
+              </thead>
+              <tbody role="rowgroup">
+                {% for part in holding.accounts %}
+                <tr role="row">
+                  <td role="cell"><a href="/accounts/holdings?account={{ part.account_label | urlencode }}">{{ part.account_label }}</a></td>
+                  <td class="num" role="cell" data-label="Units"><span class="mono">{{ part.quantity | qty }}</span></td>
+                  <td class="num" role="cell" data-label="Avg cost"><span class="mono">{{ part.average_cost_native | native_money(part.native_currency) }}</span></td>
+                  <td class="num" role="cell" data-label="Cost basis"><span class="mono">{{ part.cost_basis_eur | money }}</span></td>
+                  <td class="num" role="cell" data-label="Market value"><span class="mono">{{ part.market_value_eur | money }}</span></td>
+                  <td class="num" role="cell" data-label="Unrealized return">{{ delta(part.unrealized_return_eur) }}</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </details>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="entry-empty">No holdings yet — they appear here as soon as one of your accounts records a buy.</p>
+  {% endif %}
+</section>
+{% endif %}
+{% endblock %}

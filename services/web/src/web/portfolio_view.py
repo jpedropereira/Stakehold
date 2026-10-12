@@ -5,8 +5,9 @@ the /accounts/holdings view: filtering closed positions out of a "current holdin
 combining N per-ticker daily return series into one portfolio-level series for the chart
 (portfolio/docs/architecture.md's "Returns are served per ticker" note explicitly leaves this to
 task 12), (UI-6) the summary tiles and the holdings table built from /returns/latest, and
-(UI-11) the home overview's per-account rows and cross-account totals, and the chart's data
-island, with portfolio's time-weighted growth joined on. No I/O, no FastAPI, no
+(UI-11) the home overview's per-account rows and cross-account totals, the chart's data
+island, with portfolio's time-weighted growth joined on, and (PF-4) the /portfolio page's rows
+with their weights. No I/O, no FastAPI, no
 httpx -- mirrors how portfolio/returns/calculator.py is a pure function tested in isolation.
 """
 
@@ -18,6 +19,7 @@ from decimal import Decimal
 from web.portfolio_client.base import (
     Account,
     GrowthPoint,
+    Holding,
     Position,
     Return,
     UnmappedInstrument,
@@ -255,6 +257,33 @@ def build_holdings(
     ]
 
 
+@dataclass(frozen=True)
+class PortfolioHoldingRow:
+    """One row of /portfolio: a holding summed across accounts by portfolio, and its weight."""
+
+    holding: Holding
+    weight: Decimal | None
+
+
+def build_portfolio_holdings(holdings: Sequence[Holding]) -> list[PortfolioHoldingRow]:
+    """Each holding with its share of the summed market value of the *priced* holdings, in
+    portfolio's order.
+
+    build_holdings' rule: an unpriced holding (portfolio marks a holding priced only when every
+    account holding it has a return row) has no weight and isn't counted as worth zero in the
+    others'. Divided by the rows' own sum, not by portfolio's totals, which also count closed
+    tickers and so needn't match the rows. If the priced rows sum to zero, every weight is None.
+    """
+    total = sum((h.market_value_eur for h in holdings if h.priced), _ZERO)
+    return [
+        PortfolioHoldingRow(
+            holding=h,
+            weight=None if not h.priced or total == _ZERO else h.market_value_eur / total,
+        )
+        for h in holdings
+    ]
+
+
 def unmapped_for_broker(
     unmapped: Sequence[UnmappedInstrument], broker: str | None
 ) -> list[UnmappedInstrument]:
@@ -268,3 +297,13 @@ def unmapped_for_broker(
     if broker is None:
         return []
     return sorted((u for u in unmapped if u.broker == broker), key=lambda u: (u.kind, u.identifier))
+
+
+def unmapped_across_brokers(unmapped: Sequence[UnmappedInstrument]) -> list[UnmappedInstrument]:
+    """Every unmapped instrument of the user's, for /portfolio, which spans every broker: sorted,
+    and once per (kind, identifier). Two brokers can report the same symbol, and the warning
+    names what needs mapping, not where it came from, so the first one seen is kept."""
+    seen: dict[tuple[str, str], UnmappedInstrument] = {}
+    for u in unmapped:
+        seen.setdefault((u.kind, u.identifier), u)
+    return [seen[key] for key in sorted(seen)]

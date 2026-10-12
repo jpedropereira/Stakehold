@@ -904,6 +904,53 @@ img.logo-on-dark {
   overflow-x: auto;
 }
 
+/* ---- the combined portfolio (PF-4) ---- */
+
+/* Nine columns in the 880px card: the transactions table's tighter cells and smaller figures. */
+.portfolio-table th,
+.portfolio-table td {
+  padding-inline: var(--space-2);
+}
+
+.portfolio-table .mono {
+  font-size: 13px;
+}
+
+/* A holding's figure in its own currency (or "Mixed currencies"), under the EUR one. */
+.portfolio-table .native-amount {
+  display: block;
+  font: var(--text-caption);
+  color: var(--text-muted);
+}
+
+.portfolio-table .mono.native-amount {
+  font-family: var(--font-mono);
+}
+
+/* A holding and its breakdown read as one: no rule between them, and the breakdown sits close
+   under the figures. */
+.portfolio-table .holding-row td {
+  border-bottom: none;
+}
+
+.portfolio-table .breakdown-row > td {
+  padding-top: 0;
+}
+
+.breakdown-row summary {
+  font: var(--text-caption);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.breakdown-table {
+  margin-top: var(--space-2);
+}
+
+.breakdown-table tr:last-child td {
+  border-bottom: none;
+}
+
 /* ---- stacked tables (UI-13) ---- */
 
 /* The holdings and transactions tables at phone width: each row becomes a block with the
@@ -965,6 +1012,24 @@ img.logo-on-dark {
     flex-basis: 100%;
   }
 
+  .portfolio-table .native-amount {
+    flex-basis: 100%;
+  }
+
+  /* The holding and its breakdown stay one block, with one rule after the pair. */
+  .portfolio-table .holding-row {
+    padding-bottom: 0;
+    border-bottom: none;
+  }
+
+  /* The breakdown's cell holds the <details>, not a "label  figure" line: no flex, no
+     heading weight, and its accounts stack as rows of their own. */
+  .portfolio-table .breakdown-row > td {
+    display: block;
+    font-weight: normal;
+    text-align: left;
+  }
+
   /* A whole line to itself now, so the reference can show more of itself. */
   .transactions-table .reference {
     max-width: 24ch;
@@ -983,9 +1048,13 @@ img.logo-on-dark {
     justify-content: space-between;
   }
 
+  /* Five links for an admin since PF-4 added Portfolio: a tighter gap keeps them on one line
+     at 360px, and they wrap rather than scroll sideways on anything narrower. */
   .site-nav {
     order: 1;
     flex-basis: 100%;
+    flex-wrap: wrap;
+    gap: var(--space-1) var(--space-3);
     margin-left: 0;
   }
 

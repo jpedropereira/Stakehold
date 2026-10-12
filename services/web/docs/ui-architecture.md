@@ -196,7 +196,7 @@ described here updates this file in the same change.
     `/transactions/new` and `/transactions/import`, the account is lost from the query and the
     GET answers 422. The htmx path doesn't navigate, so it's unaffected.
 - **App shell (UI-4): the current page is marked on the server, and the account pages share one
-  header.** Each route passes `nav_active` (`overview` / `accounts` / `admin`) and, on the four
+  header.** Each route passes `nav_active` (`overview` / `portfolio` / `accounts` / `tickers` / `admin`) and, on the four
   account-scoped pages, `account_nav_active` (`holdings` / `transactions` / `add` / `import`). The templates turn these into `aria-current="page"`, and `web.css` styles
   that attribute rather than a class. The mark a screen reader announces and the one a sighted
   visitor sees therefore come from one source and can't disagree, and no script works out "where
@@ -209,6 +209,21 @@ described here updates this file in the same change.
   header and no switcher, because an outage must not tell the visitor a real account doesn't
   exist. POST routes load the header lazily (`extra_context_loader`), so only a full-page error
   re-render pays for that call, never a successful write.
+- **`/portfolio`'s per-account breakdown is a `<details>` in a row of its own under each
+  holding (PF-4).** One cell spans the table and holds a small table of the accounts, so the
+  breakdown opens with no script (nothing to add under the strict CSP) and stays keyboard and
+  screen-reader native. A row of its own, rather than a `<details>` in the ticker cell, gives the
+  accounts the table's full width on desktop; at phone width the main row stacks as the
+  per-account table does, the breakdown cell drops the stacked "label  figure" layout, and its
+  inner table stacks too, one block per account. Every holding has one, single-account ones
+  included, since it says which account holds it and links to that account's holdings. Native
+  figures sit on a muted line under the EUR ones and only off EUR, where they'd repeat the EUR
+  figure; a ticker recorded in different currencies reads "Mixed currencies" there, and the
+  breakdown shows each account's own. Weight is over priced holdings only, the per-account
+  page's rule: a holding waiting for prices isn't counted as worth zero. The table has nine
+  columns in the 880px card, so it takes the transactions table's tighter cells and 13px
+  figures. Adding Portfolio made five nav links for an admin, so the phone nav's gap tightened
+  and it wraps rather than scrolls on anything narrower than 360px.
 - **The account switcher is a plain GET form, with no htmx enhancement.** The form submits
   `?account=` back to the current path, so switching keeps the visitor on Holdings,
   Transactions, Add or Import. An htmx `hx-get` swapping the response into `<body>` was planned and rejected. htmx

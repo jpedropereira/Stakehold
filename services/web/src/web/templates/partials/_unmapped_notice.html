@@ -1,0 +1,13 @@
+{# Instruments waiting for a ticker mapping (UI-7), on both holdings pages. An unmapped
+   instrument has no position at all, so it can't be a row of the holdings table. The charter's
+   own warning example. The id lets tests find the notice among the banners. Needs `unmapped`
+   and `user`. #}
+{% from "partials/_banner.html" import banner %}
+{% if unmapped %}
+<div id="unmapped-notice">
+{% call banner("warning") %}<strong>Waiting for a ticker mapping:</strong>
+  {% for instrument in unmapped %}<span class="mono">{{ instrument.kind }} {{ instrument.identifier }}</span>{% if not loop.last %}, {% endif %}{% endfor %}.
+  They appear as holdings once mapped.
+  {% if user.is_admin %}<a href="/admin/mappings">Map them</a>{% else %}An admin needs to map them.{% endif %}{% endcall %}
+</div>
+{% endif %}

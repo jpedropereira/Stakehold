@@ -74,9 +74,9 @@ The previous chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archi
 | PF-1 | [portfolio: `GET /holdings` across accounts](#pf-1-portfolio-get-holdings-across-accounts) | — | done |
 | PF-2 | [web: move per-account holdings to `/accounts/holdings`](#pf-2-web-move-per-account-holdings-to-accountsholdings) | — | done |
 | PF-3 | [web: portfolio client for `/holdings`](#pf-3-web-portfolio-client-for-holdings) | PF-1 | done |
-| PF-4 | [web: `/portfolio` combined page](#pf-4-web-portfolio-combined-page) | PF-2, PF-3 | ready |
+| PF-4 | [web: `/portfolio` combined page](#pf-4-web-portfolio-combined-page) | PF-2, PF-3 | done |
 | PF-5 | [portfolio: cross-account return series](#pf-5-portfolio-cross-account-return-series) | PF-1 | done |
-| PF-6 | [web: returns chart on `/portfolio`](#pf-6-web-returns-chart-on-portfolio) | PF-4, PF-5 | blocked |
+| PF-6 | [web: returns chart on `/portfolio`](#pf-6-web-returns-chart-on-portfolio) | PF-4, PF-5 | ready |
 
 ## Tasks
 
@@ -181,35 +181,48 @@ Files: `portfolio_client/{base,http_client}.py`; `docs/architecture.md` (the mod
 
 ### PF-4. web: `/portfolio` combined page
 
-**Status:** ready
+**Status:** done
 
-- Extend `api/portfolio.py` (PF-2 created it with only the redirect): one `/portfolio` handler
-  that keeps the 308 when `account` is present and renders the combined page otherwise.
-  Narrow PF-2's "no template links to `/portfolio`" test to `/portfolio?account`.
-- A "Portfolio" nav link (`nav_active="portfolio"`) placed between Overview and Accounts.
-- **The page shows:**
-  - the "Prices as of" line and the summary tiles from PF-1's `totals`, not computed from the
-    rows, so they match the home page (closed positions' dividends count): market value,
-    cost basis, total return € and % (over cost basis), and dividends. The growth tile comes
-    with PF-6, since it needs PF-5's series,
-  - the unmapped-instruments warning, covering the user's whole list rather than one broker's,
-  - the holdings table: Ticker | Units | Avg cost (EUR + native) | Market value (EUR + native) |
-    Weight | Unrealized € / % | Total return € / %. PF-6 adds a Growth % column.
-- **Breakdown.** Each row has a `<details>` per-account breakdown, so it works without JS and
-  under the CSP.
-- **Unpriced rows** reuse TK-9's `ticker_status.load_statuses`: "Prices loading" or "Prices
-  couldn't be loaded".
-- **Weight** is computed over priced rows only.
-- **View model.** It is built by pure functions in `portfolio_view.py`, and formatting goes
-  through the existing filters.
-- **Empty and error states:**
-  - no accounts: the first-run card,
-  - accounts but no holdings: "No holdings yet",
-  - client error: a notice, never an empty table.
-- Add the page to `scripts/review_pages.py`.
+As built:
+- `api/portfolio.py`'s one `/portfolio` handler keeps the 308 when `account` is present (an
+  empty `account` is a 422) and renders the combined page otherwise. It calls `require_user`
+  itself after the redirect check, so the redirect still makes no `auth` call. As a result,
+  overriding `require_user` doesn't reach the page, and the integration tests override
+  `get_auth_client` instead.
+- It calls `list_accounts`, `list_holdings` and `list_unmapped_instruments` concurrently, each
+  degrading on its own. The account list is there only because `/holdings` is empty both for no
+  accounts (the first-run card) and for accounts holding nothing ("No holdings yet").
+- A "Portfolio" nav link sits between Overview and Accounts. The phone nav's gap tightened, so
+  an admin's five links fit at 360px.
+- The page shows:
+  - the "Prices as of" line and four tiles (market value, cost basis, total return € and %,
+    dividends), from `totals`,
+  - the unmapped warning over the user's whole list, de-duplicated across brokers
+    (`portfolio_view.unmapped_across_brokers`). The markup moved into
+    `partials/_unmapped_notice.html`, which both holdings pages include,
+  - the holdings table: Ticker | Units | Avg cost | Market value | Weight | Unrealized € / % |
+    Total return € / %. Native figures are on a muted second line, only off EUR, and read
+    "Mixed currencies" when the accounts' currencies differ,
+  - under each row, a full-width breakdown row, including for single-account holdings: a
+    `<details>` ("In N accounts") holding a stackable table of each account's units, native
+    average cost, cost basis, market value and unrealized €, with links to that account's page.
+- Weight is computed over priced rows only (`portfolio_view.build_portfolio_holdings`).
+  Unpriced rows use `ticker_status.load_statuses`.
+- A failed `/holdings` shows a notice and no table or tiles. A failed account list is never the
+  first-run card.
+- PF-2's "no template links to `/portfolio`" test now checks for `/portfolio?`.
+- `scripts/review_pages.py` covers `portfolio` and `portfolio-breakdown` (opened).
+- Tests:
+  - `tests/unit/test_portfolio_page.py`,
+  - `tests/unit/test_portfolio_view.py`,
+  - `tests/unit/test_responsive_a11y.py`,
+  - `tests/unit/test_account_holdings_page.py`,
+  - two in `tests/integration/test_portfolio_flow.py`: no accounts, and one ticker bought in two
+    accounts showing as one row. These also cover PF-3's client against portfolio's real app.
 
-Files: `api/portfolio.py`, `portfolio_view.py`, new `templates/portfolio.html`,
-`base.html`, `scripts/review_pages.py`; `docs/architecture.md`, `docs/ui-architecture.md`.
+Files: `api/portfolio.py`, `portfolio_view.py`, new `templates/portfolio.html` and
+`partials/_unmapped_notice.html`, `account_holdings.html`, `base.html`, `static/web.css`,
+`scripts/review_pages.py`; `docs/architecture.md`, `docs/ui-architecture.md`.
 
 ### PF-5. portfolio: cross-account return series
 
@@ -291,7 +304,7 @@ Files: `returns/performance.py`, `holdings/flows.py`, `jobs.py`, `api/{routes,mo
 
 ### PF-6. web: returns chart on `/portfolio`
 
-**Status:** blocked (PF-4)
+**Status:** ready
 
 Reuse `static/portfolio_chart.js` and the JSON data island pattern, fed from PF-5 through a new
 client method. The island carries `market_value_eur`, `total_return_eur` and `growth_pct`, as
