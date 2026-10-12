@@ -23,13 +23,16 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 from web import settings as settings_module
-from web.api import deletion, overview, routes, tickers
+from web.api import deletion, holdings, overview, portfolio, routes, tickers
 from web.api.app import create_app
 from web.api.deps import get_auth_client, get_portfolio_client
 from web.auth_client.base import AuthResult, AuthUser
 from web.auth_client.errors import SessionInvalid
 from web.portfolio_client.base import (
     Account,
+    Holding,
+    HoldingAccount,
+    Holdings,
     Position,
     Return,
     TickerMapping,
@@ -66,9 +69,13 @@ class FakePortfolioClient:
         self.transactions: list[Transaction] = []
         self.mappings: list[TickerMapping] = []
         self.unmapped: list[UnmappedInstrument] = []
+        self.holdings = Holdings(holdings=(), totals=None)
 
     async def list_accounts(self, *, user_id):
         return self.list_accounts_result
+
+    async def list_holdings(self, *, user_id):
+        return self.holdings
 
     async def list_unmapped_instruments(self, *, user_id):
         return []
@@ -256,6 +263,100 @@ def test_holdings_waiting_for_prices_cell_is_labelled(client):
     assert "Waiting for prices" in waiting
 
 
+def _combined_holding(ticker, *, priced=True) -> Holding:
+    value = Decimal("1600") if priced else None
+    account = HoldingAccount(
+        account_label="main",
+        quantity=Decimal("10"),
+        native_currency="EUR",
+        average_cost_native=Decimal("150"),
+        cost_basis_eur=Decimal("1500"),
+        market_value_native=value,
+        market_value_eur=value,
+        unrealized_return_eur=None if value is None else Decimal("100"),
+    )
+    return Holding(
+        canonical_ticker=ticker,
+        quantity=Decimal("10"),
+        average_cost_eur=Decimal("150"),
+        cost_basis_eur=Decimal("1500"),
+        native_currency="EUR",
+        mixed_currency=False,
+        average_cost_native=Decimal("150"),
+        market_value_native=value,
+        priced=priced,
+        price_date=date(2026, 1, 5) if priced else None,
+        market_value_eur=value,
+        unrealized_return_eur=None if value is None else Decimal("100"),
+        unrealized_return_pct=None if value is None else Decimal("0.0667"),
+        dividends_received_eur=None if value is None else Decimal("0"),
+        total_return_eur=None if value is None else Decimal("100"),
+        total_return_pct=None if value is None else Decimal("0.0667"),
+        accounts=(account,),
+    )
+
+
+_PORTFOLIO_LABELS = [
+    "Units",
+    "Avg cost",
+    "Market value",
+    "Weight",
+    "Unrealized return",
+    "Unrealized return (%)",
+    "Total return",
+    "Total return (%)",
+]
+
+
+def _rows_with_class(page_html, css_class):
+    return re.findall(rf'<tr role="row" class="{css_class}">(.*?)</tr>', page_html, re.S)
+
+
+def test_portfolio_table_can_stack_at_phone_width(client):
+    """/portfolio's main rows are labelled like the per-account table's. Each is followed by a
+    breakdown row whose single cell spans the table and holds a stackable table of its own."""
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.holdings = Holdings(
+        holdings=(_combined_holding("AAPL"), _combined_holding("MSFT")), totals=None
+    )
+
+    page_html = test_client.get("/portfolio").text
+
+    outer = _tags(page_html, "table")[0]
+    assert "stack-table" in _attr(outer, "class") and _attr(outer, "role") == "table"
+    rows = _rows_with_class(page_html, "holding-row")
+    assert len(rows) == 2
+    for row in rows:
+        cells = re.findall(r"<td\b[^>]*>", row)
+        assert _attr(cells[0], "data-label") is None
+        assert [_attr(c, "data-label") for c in cells[1:]] == _PORTFOLIO_LABELS
+    breakdown_cells = re.findall(
+        r'<tr role="row" class="breakdown-row">\s*(<td\b[^>]*>)', page_html
+    )
+    assert [_attr(c, "colspan") for c in breakdown_cells] == ["9", "9"]
+    assert all(_attr(c, "role") == "cell" for c in breakdown_cells)
+    inner = [t for t in _tags(page_html, "table") if "breakdown-table" in (_attr(t, "class") or "")]
+    assert len(inner) == 2
+    assert all("stack-table" in _attr(t, "class") and _attr(t, "role") == "table" for t in inner)
+
+
+def test_portfolio_waiting_for_prices_cell_is_labelled(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.holdings = Holdings(
+        holdings=(_combined_holding("AAPL"), _combined_holding("MSFT", priced=False)),
+        totals=None,
+    )
+
+    page_html = test_client.get("/portfolio").text
+
+    waiting = next(r for r in _rows_with_class(page_html, "holding-row") if "MSFT" in r)
+    labels = [_attr(c, "data-label") for c in re.findall(r"<td\b[^>]*>", waiting)]
+    assert labels == [None, "Units", "Avg cost", "Market value"]
+    assert "Waiting for prices" in waiting
+
+
 def test_transactions_table_can_stack_at_phone_width(client):
     test_client, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)
@@ -353,7 +454,14 @@ def test_review_script_covers_every_page():
     """A page added later can't silently miss the screenshot and contrast review."""
     page_routes = {
         route.path
-        for router in (routes.router, overview.router, deletion.router, tickers.router)
+        for router in (
+            routes.router,
+            overview.router,
+            deletion.router,
+            tickers.router,
+            holdings.router,
+            portfolio.router,
+        )
         for route in router.routes
         if "GET" in route.methods
     }

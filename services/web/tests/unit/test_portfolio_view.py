@@ -4,6 +4,7 @@ from decimal import Decimal
 from web.portfolio_client.base import (
     Account,
     GrowthPoint,
+    Holding,
     Position,
     Return,
     UnmappedInstrument,
@@ -11,13 +12,16 @@ from web.portfolio_client.base import (
 from web.portfolio_view import (
     AccountOverview,
     HoldingRow,
+    PortfolioHoldingRow,
     PortfolioReturnPoint,
     aggregate_portfolio_returns,
     build_chart_payload,
     build_holdings,
+    build_portfolio_holdings,
     filter_open_positions,
     summarize_accounts,
     summarize_latest_returns,
+    unmapped_across_brokers,
     unmapped_for_broker,
 )
 
@@ -814,3 +818,85 @@ def test_chart_payload_ignores_growth_for_a_date_with_no_chart_point():
 
 def test_chart_payload_of_nothing_is_empty():
     assert build_chart_payload([], []) == []
+
+
+# --- build_portfolio_holdings (PF-4) ---------------------------------------------
+
+
+def _holding(ticker: str, market_value: str | None) -> Holding:
+    """A holding as portfolio's GET /holdings serves it; unpriced when market_value is None."""
+    priced = market_value is not None
+    value = None if market_value is None else Decimal(market_value)
+    return Holding(
+        canonical_ticker=ticker,
+        quantity=Decimal("10"),
+        average_cost_eur=Decimal("100"),
+        cost_basis_eur=Decimal("1000"),
+        native_currency="EUR",
+        mixed_currency=False,
+        average_cost_native=Decimal("100"),
+        market_value_native=value,
+        priced=priced,
+        price_date=date(2026, 1, 6) if priced else None,
+        market_value_eur=value,
+        unrealized_return_eur=None if value is None else value - Decimal("1000"),
+        unrealized_return_pct=None,
+        dividends_received_eur=Decimal("0") if priced else None,
+        total_return_eur=None if value is None else value - Decimal("1000"),
+        total_return_pct=None,
+        accounts=(),
+    )
+
+
+def test_build_portfolio_holdings_weights_each_row_by_market_value():
+    a, b = _holding("A.AS", "3000"), _holding("B.AS", "1000")
+
+    rows = build_portfolio_holdings([a, b])
+
+    assert rows == [
+        PortfolioHoldingRow(holding=a, weight=Decimal("0.75")),
+        PortfolioHoldingRow(holding=b, weight=Decimal("0.25")),
+    ]
+
+
+def test_build_portfolio_holdings_weighs_priced_rows_only():
+    """An unpriced holding has no weight and isn't counted as worth zero in anyone else's."""
+    rows = build_portfolio_holdings([_holding("A.AS", "1000"), _holding("NEW.DE", None)])
+
+    assert [r.weight for r in rows] == [Decimal("1"), None]
+
+
+def test_build_portfolio_holdings_weights_are_none_when_priced_rows_sum_to_zero():
+    rows = build_portfolio_holdings([_holding("A.AS", "0"), _holding("B.AS", "0")])
+
+    assert [r.weight for r in rows] == [None, None]
+
+
+def test_build_portfolio_holdings_keeps_portfolios_order():
+    rows = build_portfolio_holdings([_holding("B.AS", "1"), _holding("A.AS", "1")])
+
+    assert [r.holding.canonical_ticker for r in rows] == ["B.AS", "A.AS"]
+
+
+def test_build_portfolio_holdings_of_nothing_is_empty():
+    assert build_portfolio_holdings([]) == []
+
+
+# --- unmapped_across_brokers (PF-4) ------------------------------------------------
+
+
+def test_unmapped_across_brokers_sorts_and_names_each_instrument_once():
+    unmapped = [
+        UnmappedInstrument("SYMBOL", "SXR8", "globex"),
+        UnmappedInstrument("ISIN", "IE00B4L5Y983", None),
+        UnmappedInstrument("SYMBOL", "SXR8", "acme"),
+    ]
+
+    assert [(u.kind, u.identifier) for u in unmapped_across_brokers(unmapped)] == [
+        ("ISIN", "IE00B4L5Y983"),
+        ("SYMBOL", "SXR8"),
+    ]
+
+
+def test_unmapped_across_brokers_of_nothing_is_empty():
+    assert unmapped_across_brokers([]) == []

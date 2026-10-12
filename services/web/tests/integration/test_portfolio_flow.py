@@ -14,6 +14,7 @@ task 15), so only the reliably-reproducible BrokerParserNotFound path is exercis
 """
 
 import os
+from decimal import Decimal
 from pathlib import Path
 
 import httpx
@@ -26,8 +27,13 @@ from portfolio.api.app import create_app as create_portfolio_app
 from portfolio.datastore_client.base import TickerInfo
 from portfolio.settings import Settings as PortfolioSettings
 from web.api.app import create_app as create_web_app
-from web.api.deps import get_portfolio_client, optional_user, require_user
-from web.auth_client.base import AuthUser
+from web.api.deps import (
+    get_auth_client,
+    get_portfolio_client,
+    optional_user,
+    require_user,
+)
+from web.auth_client.base import AuthResult, AuthUser
 from web.portfolio_client.http_client import HttpPortfolioClient
 from web.settings import Settings as WebSettings
 
@@ -377,3 +383,65 @@ async def test_an_admin_maps_an_imported_isin_and_the_users_position_appears(adm
     with _connect() as conn, conn.cursor() as cur:
         cur.execute("SELECT canonical_ticker FROM position_snapshots")
         assert [row[0] for row in cur.fetchall()] == ["IWDA.AS"]
+
+
+# --- the combined page: GET /portfolio (PF-4) ---------------------------------------------------
+
+
+class _LoggedInAuthClient:
+    """/portfolio resolves its user inside the handler, so the redirect for ?account= never asks
+    auth, which means overriding require_user doesn't reach it. Answering for auth does."""
+
+    async def validate_session(self, *, cookie_header):
+        return AuthResult(user=_USER, set_cookie="stakehold_session=tok; Path=/")
+
+
+def _log_in_to_portfolio_page(client):
+    client.app.dependency_overrides[get_auth_client] = _LoggedInAuthClient
+    client.cookies.set("stakehold_session", "tok")
+
+
+async def test_portfolio_page_with_no_accounts_shows_the_first_run_card(web_client):
+    _log_in_to_portfolio_page(web_client)
+
+    response = web_client.get("/portfolio")
+
+    assert response.status_code == 200
+    assert "No accounts yet" in response.text
+
+
+async def test_portfolio_page_sums_a_ticker_held_in_two_accounts(web_client_with_data_store):
+    """PF-3's client against portfolio's real GET /holdings: the same ticker bought in two
+    accounts is one row, its units summed, with both accounts in its breakdown. No prices exist
+    in this suite, so the row waits for them rather than showing a partial value."""
+    web_client = web_client_with_data_store
+    for label, ref, quantity in (("main", "buy-1", "10"), ("isa", "buy-2", "5")):
+        _create_account(web_client, label=label)
+        token = _csrf_token(web_client, "/transactions/new", account=label)
+        buy = web_client.post(
+            "/transactions/new",
+            data=_transaction_form(
+                token,
+                account_label=label,
+                broker_transaction_ref=ref,
+                transaction_type="BUY",
+                instrument_identifier="IWDA.AS",
+                quantity=quantity,
+                price="95.00",
+                native_amount=f"-{Decimal(quantity) * 95}",
+            ),
+            follow_redirects=False,
+        )
+        assert buy.status_code == 303
+    _log_in_to_portfolio_page(web_client)
+
+    response = web_client.get("/portfolio")
+
+    assert response.status_code == 200
+    assert response.text.count('<tr role="row" class="holding-row">') == 1
+    row = response.text.split('class="holding-row">', 1)[1].split("</tr>", 1)[0]
+    assert "IWDA.AS" in row and ">15<" in row
+    assert "Waiting for prices" in row
+    assert "<summary>In 2 accounts</summary>" in response.text
+    assert 'href="/accounts/holdings?account=isa"' in response.text
+    assert 'href="/accounts/holdings?account=main"' in response.text

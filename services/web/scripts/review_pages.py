@@ -51,6 +51,9 @@ PAGES = [
     Page("login", "/login", "anon"),
     Page("signup", "/signup", "anon"),
     Page("overview", "/", "admin"),
+    Page("portfolio", "/portfolio", "admin"),
+    # The first holding's per-account breakdown, opened.
+    Page("portfolio-breakdown", "/portfolio", "admin", click="details summary"),
     Page("accounts", "/accounts", "admin"),
     Page("accounts-delete-dialog", "/accounts", "admin", click="a[data-confirm]"),
     Page("accounts-delete", "/accounts/delete?account=main", "admin"),
@@ -193,6 +196,10 @@ def _fakes():
         Account,
         Broker,
         GrowthPoint,
+        Holding,
+        HoldingAccount,
+        Holdings,
+        HoldingsTotals,
         Position,
         Return,
         TickerLookup,
@@ -384,6 +391,87 @@ def _fakes():
                 ),
                 txn("dep-0901", "DEPOSIT", 1, "10000.00"),
             ]
+
+        async def list_holdings(self, *, user_id):
+            """The review holdings summed across accounts: VWCE.DE held in both accounts, AAPL
+            in two currencies (so its native cells read "Mixed currencies"), and NEWCO.DE still
+            waiting for prices."""
+
+            def part(label, ticker, qty, cost, currency, value):
+                cost_eur = Decimal(qty) * Decimal(cost)
+                value_eur = None if value is None else Decimal(value)
+                return HoldingAccount(
+                    label,
+                    Decimal(qty),
+                    currency,
+                    Decimal(cost),
+                    cost_eur,
+                    value_eur,
+                    value_eur,
+                    None if value_eur is None else value_eur - cost_eur,
+                )
+
+            def holding(ticker, parts, currency, dividends="0"):
+                priced = all(p.market_value_eur is not None for p in parts)
+                quantity = sum((p.quantity for p in parts), Decimal("0"))
+                cost = sum((p.cost_basis_eur for p in parts), Decimal("0"))
+                value = sum((p.market_value_eur or 0 for p in parts), Decimal("0"))
+                unrealized = value - cost
+                total = unrealized + Decimal(dividends)
+                return Holding(
+                    canonical_ticker=ticker,
+                    quantity=quantity,
+                    average_cost_eur=cost / quantity,
+                    cost_basis_eur=cost,
+                    native_currency=currency,
+                    mixed_currency=currency is None,
+                    average_cost_native=None if currency is None else cost / quantity,
+                    market_value_native=None if currency is None or not priced else value,
+                    priced=priced,
+                    price_date=today if priced else None,
+                    market_value_eur=value if priced else None,
+                    unrealized_return_eur=unrealized if priced else None,
+                    unrealized_return_pct=unrealized / cost if priced else None,
+                    dividends_received_eur=Decimal(dividends) if priced else None,
+                    total_return_eur=total if priced else None,
+                    total_return_pct=total / cost if priced else None,
+                    accounts=tuple(parts),
+                )
+
+            rows = (
+                holding(
+                    "AAPL",
+                    [
+                        part("main", "AAPL", "12.5", "182.10", "USD", "1978.40"),
+                        part("pension", "AAPL", "4", "150.00", "GBP", "633.10"),
+                    ],
+                    None,
+                ),
+                holding("NEWCO.DE", [part("main", "NEWCO.DE", "3", "20.00", "EUR", None)], "EUR"),
+                holding(
+                    "VWCE.DE",
+                    [
+                        part("main", "VWCE.DE", "42", "98.40", "EUR", "5124.84"),
+                        part("pension", "VWCE.DE", "10", "120.00", "EUR", "1220.20"),
+                    ],
+                    "EUR",
+                    dividends="31.20",
+                ),
+            )
+            priced = [r for r in rows if r.priced]
+            cost = sum((r.cost_basis_eur for r in priced), Decimal("0"))
+            total = sum((r.total_return_eur for r in priced), Decimal("0"))
+            return Holdings(
+                holdings=rows,
+                totals=HoldingsTotals(
+                    price_date=today,
+                    market_value_eur=sum((r.market_value_eur for r in priced), Decimal("0")),
+                    cost_basis_eur=cost,
+                    dividends_received_eur=Decimal("31.20"),
+                    total_return_eur=total,
+                    total_return_pct=total / cost,
+                ),
+            )
 
         async def list_unmapped_instruments(self, *, user_id):
             return [UnmappedInstrument("ISIN", "IE00B4L5Y983", None)]

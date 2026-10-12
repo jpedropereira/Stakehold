@@ -238,8 +238,8 @@ this file for size. It counts as part of this document under `.claude/rules/arch
   (return over current cost basis); the two answer different questions and both are shown.
 - **`GET /accounts/holdings` is per-account, read-only, and never triggers a rebuild.** It reads
   `portfolio`'s `account_label`-scoped positions/returns endpoints, so the view is one page per
-  account (linked from `accounts.html` and the home overview). The whole-portfolio page across
-  accounts is PF-4's, at `/portfolio`. The route only displays whatever `position_snapshots`/
+  account (linked from `accounts.html` and the home overview). The page across accounts is
+  `/portfolio` (PF-4, below). The route only displays whatever `position_snapshots`/
   `return_snapshots` rows already exist. `web` never calls a rebuild itself: `portfolio` rebuilds
   an account's positions and returns on every transaction write (see `portfolio/docs/flows.md`,
   "Positions and returns follow every transaction write"), and refreshes returns on a schedule
@@ -253,19 +253,29 @@ this file for size. It counts as part of this document under `.claude/rules/arch
   positions and/or no return history yet renders as an ordinary empty state, not an error. Since
   UI-7 the page also says why figures are missing (see the next-but-one entry).
 - **The old `/portfolio?account=X` URL answers a 308 to `/accounts/holdings?account=X` (PF-2).**
-  The per-account page moved so `/portfolio` can be the combined page across accounts (PF-4);
-  bookmarks and links saved outside the app still carry the old URL, so it redirects rather
-  than 404s. Permanent, because PF-4 keeps answering `/portfolio?account=X` the same way, so a
-  browser caching it (per URL, query included) never caches the wrong page; 308 rather than 301
-  because it is the code the agreed requirement names and it keeps the method. It asks nobody
-  who is logged in: the redirect reveals nothing and the target requires login, so it costs no
-  `auth` call. The query string goes on verbatim, so an encoded label stays encoded, and the
-  path is fixed, so it can't be turned into an open redirect. It lives in `api/portfolio.py`,
-  not next to the page, because PF-4's one `/portfolio` handler branches on `account` and will
-  extend that file rather than move the route. Templates link to `/accounts/holdings` directly
-  (a unit test checks no template links to `/portfolio`), so the redirect is only for links
-  from outside the app. Without an `account`, `/portfolio` is still the 422 it always was until
-  PF-4 gives it a page.
+  The per-account page moved so `/portfolio` could be the combined page across accounts;
+  bookmarks still carry the old URL, so it redirects rather than 404s. Permanent, because a
+  browser caches it per URL, query included, so the bare `/portfolio` is never mistaken for it;
+  308 because it is the code the agreed requirement names and it keeps the method. The query
+  string goes on verbatim, so an encoded label stays encoded, and the path is fixed, so it can't
+  be turned into an open redirect. Templates link to `/accounts/holdings` directly (a unit test
+  checks no template contains `/portfolio?`).
+- **`GET /portfolio` is the combined page, and the redirect still asks nobody who is logged in
+  (PF-4).** One handler in `api/portfolio.py` branches on `account`. The redirect reveals nothing
+  and its target requires login, so it costs no `auth` call; a `Depends(require_user)` would run
+  before the handler could branch, so the handler calls `require_user` itself after the redirect
+  check. **Sharp edge:** overriding `require_user` in `dependency_overrides` doesn't reach this
+  page; tests override `get_auth_client` instead (`test_portfolio_flow.py`).
+  The page sums nothing itself. portfolio's `GET /holdings` (PF-1) does, so it is one call
+  however many accounts there are, against the overview's one per account. It also calls
+  `GET /accounts` and `GET /instruments/unmapped`, concurrently, each degrading on its own: the
+  account list only tells "no accounts" (the first-run card) from "accounts holding nothing"
+  (`/holdings` answers both with an empty list), and a failed list is never read as "no
+  accounts". A failed `/holdings` shows a notice in place of the table and no tiles, never an
+  empty table. The tiles come from `/holdings`' `totals`, not from the rows: totals count closed
+  positions' dividends, the home page's rule, so the two pages agree. A holding is unpriced
+  unless every account holding it has a return row (portfolio's rule, so no partial sum is
+  shown); unpriced holdings ask `ticker_status.load_statuses` where their prices stand.
 - **The overview's totals (UI-11) sum each account's own summary.** `GET /` fetches the
   account list, then one `GET /returns/latest` per account, concurrently. Each account is reduced
   with `summarize_latest_returns`, and `portfolio_view.summarize_accounts` adds those summaries
@@ -375,7 +385,7 @@ this file for size. It counts as part of this document under `.claude/rules/arch
 | `GET /transactions/delete` | `require_user`; required `account` and `ref` query params (`ref` is the row's `broker_transaction_ref`, which with the account is what identifies a transaction to `portfolio`). The no-JS confirmation page each Delete link on the log points to (`api/deletion.py`): the transaction's date, type, instrument, amount and reference, a "can't be undone" warning, and a form posting to `POST /transactions/delete`. `portfolio` has no single-transaction read, so the account's log is fetched (with `GET /accounts` for the header, concurrently) and searched. An unknown account is a 404 like the log's; a row that's gone redirects to the log with `deleted=0`; a failed fetch shows a notice and no form, since the visitor would be confirming a delete they can't see. With JS, `confirm_dialog.js` opens the same confirmation as a dialog on the log instead (see [`ui-architecture.md`](ui-architecture.md)) |
 | `POST /transactions/delete` | `require_user`, CSRF-checked; posted by both the dialog and the page. Calls `portfolio`'s `DELETE /transactions` with the visitor's own `user_id`, then redirects to `/transactions?account=<label>&deleted=1&positions=<status>&returns=<status>`. POST rather than DELETE because a plain HTML form can't send DELETE. A 404 (the account or the row is gone; `TransactionNotFound`) redirects with `deleted=0` rather than showing an error: the visitor wanted the row gone. Any other failure, a CSRF mismatch included, re-renders the confirmation page with the error, so a delete started from the dialog can be retried from there |
 | `GET /accounts/holdings` | `require_user`; required `account` query param; fetches `portfolio`'s `GET /positions`, `GET /returns`, `GET /returns/latest`, `GET /returns/growth` and `GET /instruments/unmapped` concurrently. Renders a "Prices as of" line and summary tiles (market value, cost basis, total return € and %, growth since inception, dividends; `portfolio_view.summarize_latest_returns`, and the last growth point), a holdings table of open positions joined to their latest return row (quantity, average cost, market value, weight, unrealized return; `portfolio_view.build_holdings`), and a Chart.js chart of the per-ticker series aggregated into one portfolio-level series (`portfolio_view.aggregate_portfolio_returns`), with growth joined on by date (`portfolio_view.build_chart_payload`), a total return / market value / growth % toggle and date ranges. A failed growth call shows the tile as "—" and drops the Growth % button, not the chart. `GET /accounts` is fetched concurrently for the account header. `AccountNotFound` on any call, or a label missing from a successfully loaded account list, renders `account_not_found.html` with a 404; any other failure degrades only the part that call feeds, mirroring `GET /accounts`'s own pattern. Pending states: "Waiting for prices" on a holding with no return row, and a notice listing the instruments waiting for a ticker mapping at this account's broker (UI-7). No writes, no rebuild trigger. |
-| `GET /portfolio` | No auth (PF-2, `api/portfolio.py`). Required `account` query param; answers a 308 to `/accounts/holdings` with the query string passed on unchanged. Without `account`, the branded 422 page. PF-4 makes the bare `/portfolio` the combined page across accounts. |
+| `GET /portfolio` | `api/portfolio.py`. With `account`: no auth, a 308 to `/accounts/holdings` with the query string passed on unchanged (PF-2); an empty `account` is the branded 422. Without it: the login check, then the nav's "Portfolio" (PF-4), every holding summed across accounts from `portfolio`'s `GET /holdings`, with tiles from its totals, a per-account breakdown per row, and the user's unmapped instruments (see "Key decisions") |
 
 Every POST error (wrong credentials, a duplicate email, a tripped throttle, `auth`/`portfolio`
 being unreachable, a CSRF mismatch, or a `portfolio` validation failure) re-renders the form with
@@ -442,7 +452,8 @@ branded page with its own status, and an unhandled exception a branded 500 (UI-1
   `GET /accounts/holdings`: `filter_open_positions`, `aggregate_portfolio_returns`, and (UI-6)
   `summarize_latest_returns` and `build_holdings` with its `HoldingRow`, and (UI-7)
   `unmapped_for_broker` (see "Key decisions"), and (UI-11) `summarize_accounts` with its
-  `AccountOverview`, for `GET /`. No FastAPI/httpx dependency, tested in isolation, mirroring how `portfolio`'s own
+  `AccountOverview`, for `GET /`, and (PF-4) `build_portfolio_holdings` (weight over priced
+  rows only) and `unmapped_across_brokers` for `GET /portfolio`. No FastAPI/httpx dependency, tested in isolation, mirroring how `portfolio`'s own
   `returns/calculator.py` is a pure function.
 - `formatting.py` (UI-5) — pure display formatters (`money`, `signed_money`, `qty`, `pct`,
   `date`, UI-6's `share` and `delta_class`, and UI-8's `native_money`) plus the `FILTERS` mapping `app.py` registers as Jinja filters; see [`ui-architecture.md`](ui-architecture.md).
@@ -454,8 +465,8 @@ branded page with its own status, and an unhandled exception a branded 500 (UI-1
   view was added (as `api/portfolio_page.py`, serving `/portfolio`; PF-2 renamed both); it still
   renders through `routes._render` and shares `routes.py`'s account-page header helpers with the
   transactions and import pages.
-- `api/portfolio.py` (PF-2) — `GET /portfolio`. For now only the 308 from the old per-account
-  URL; PF-4 adds the combined page to the same handler (see "Key decisions").
+- `api/portfolio.py` — `GET /portfolio`: the combined page across accounts (PF-4) and the 308
+  from the old per-account URL (PF-2), in one handler (see "Key decisions").
 - `api/tickers.py` (TK-8) — the Tickers pages, on their own router for the same file-size
   reason, rendering through `routes.py`'s helpers so CSRF and cookie handling stay identical.
 - `ticker_status.py` (TK-8/TK-9) — how a tracked ticker's status reads (labels, a holding's
@@ -555,9 +566,6 @@ to browser JS.
   `X-Forwarded-For` unconditionally, which would let any external caller spoof it.
 - Whether a future view will need data `portfolio` doesn't already expose, at which point `web`
   would need its own `data-store` client — not needed by task 12 (see "Talks to" above).
-- **Cross-account portfolio rollup**: `portfolio` now serves it (`GET /holdings`, PF-1); the
-  `web` page that shows it, at `/portfolio`, is PF-4. Until then `/accounts/holdings` is per
-  account only.
 - **Service-to-service trust**: resolved for now via network isolation plus a shared internal
   secret — see [`auth`'s architecture doc](../../auth/docs/architecture.md#key-decisions). The
   stronger fix (signed identity assertions from `auth`) is deliberately deferred; see that doc's
