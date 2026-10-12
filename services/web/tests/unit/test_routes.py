@@ -22,6 +22,7 @@ from web.portfolio_client.base import (
     Account,
     AccountWriteResult,
     Broker,
+    PortfolioReturns,
     TickerMapping,
     TickerMappingWriteResult,
     TransactionWriteResult,
@@ -211,6 +212,10 @@ class FakePortfolioClient:
     async def list_latest_returns(self, *, user_id, account_label):
         self.calls.append(("list_latest_returns", user_id, account_label))
         return []
+
+    # Overview's returns chart (LY-6): no history, so it shows its empty state.
+    async def list_portfolio_returns(self, *, user_id):
+        return PortfolioReturns(series=(), by_ticker=())
 
     async def list_growth(self, *, user_id, account_label):
         return []

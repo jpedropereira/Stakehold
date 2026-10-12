@@ -74,8 +74,8 @@ The previous chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archi
 | LY-3 | [Chart sized by its container](#ly-3-chart-sized-by-its-container) | LY-1 | done |
 | LY-4 | [`/portfolio`: table and chart side by side](#ly-4-portfolio-table-and-chart-side-by-side) | LY-2, LY-3 | done |
 | LY-5 | [Account holdings: table and chart side by side](#ly-5-account-holdings-table-and-chart-side-by-side) | LY-4 | done |
-| LY-6 | [Overview: two-column layout](#ly-6-overview-two-column-layout) | LY-4 | ready |
-| LY-7 | [Retire the 880px column](#ly-7-retire-the-880px-column) | LY-5, LY-6 | blocked |
+| LY-6 | [Overview: two-column layout](#ly-6-overview-two-column-layout) | LY-4 | done |
+| LY-7 | [Retire the 880px column](#ly-7-retire-the-880px-column) | LY-5, LY-6 | ready |
 
 ## Tasks
 
@@ -275,7 +275,7 @@ Done as:
 
 ### LY-6. Overview: two-column layout
 
-**Status:** ready
+**Status:** done
 
 Today Overview shows four tiles and a two-line accounts list, and nothing else.
 
@@ -294,9 +294,23 @@ leaves the other section rendered. The first run shows the welcome card only.
 Files: `api/overview.py`, `templates/home.html`, `static/web.css`, `docs/ui-architecture.md`,
 `screenshots/`.
 
+Done as:
+- The chart's buttons, frame, island and scripts were copied in `/portfolio` and
+  `/accounts/holdings`, so they became one macro, `partials/_returns_chart.html`, before
+  Overview used it (its own commit, no visible change).
+- Columns agreed as 2:3, the chart wider, through a `.split-overview` modifier. `.split`'s
+  values stay `/portfolio`'s. The accounts column's minimum is 450px, the longest account row on
+  one line plus padding (measured); with the chart's 420px, two columns from a 980px window (a
+  new "overview-split" breakpoint, with room for a classic 15px scrollbar as in LY-5), so
+  desktop, laptop and wide are two columns. No sticky chart: the list is shorter than it.
+- Four tiles, as before. The growth tile was considered and left out.
+- An account-list failure is now a banner inside the Accounts card with the chart still drawn,
+  rather than a banner alone on the page.
+- `review_pages.py` gains Overview's market-value and growth views: 280 of 280, from 260.
+
 ### LY-7. Retire the 880px column
 
-**Status:** blocked (LY-6)
+**Status:** ready
 
 Once every data page uses a width tier, remove what is left of the old column: the 880px
 default of `--page-wide` (full becomes the default, so the `page_width` block may go too) and
