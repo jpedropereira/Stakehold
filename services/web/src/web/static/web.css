@@ -254,24 +254,12 @@ img.logo-on-dark {
 /* A column, not a row: several cards on one page stack instead of squeezing side by side (and a
    centered row that overflows clips its first card off the left edge, unscrollable). */
 .page {
-  /* The width the account header, as-of line, tiles and wide cards take (LY-2). 880px, the old
-     single column, which pages without a full-width layout still have; LY-7 makes the full
-     width the default and removes it. */
-  --page-wide: 880px;
-
   display: flex;
   flex-direction: column;
   align-items: center;
   width: min(100% - 2 * var(--gutter), var(--content-max));
   margin-inline: auto;
   padding-block: var(--space-8);
-}
-
-/* A page that uses the room: Transactions, Tickers, the admin mappings, both holdings pages
-   and Overview. Set for the whole page (base.html's page_width block), not per block, so the
-   blocks can't drift apart. Form and narrow cards keep their own width on it. */
-.page-full {
-  --page-wide: none;
 }
 
 /* A holdings table beside its returns chart (LY-4; .split-account and .split-overview below).
@@ -379,17 +367,23 @@ img.logo-on-dark {
 
 /* ---- account header ---- */
 
-/* Above an account's cards, the same width as the widest of them: the page's (LY-2). */
+/* Above an account's cards, the page's full width, so its sub-nav sits in the same place on
+   every account page (LY-7). */
 .account-header {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
   gap: var(--space-3) var(--space-5);
   width: 100%;
-  max-width: var(--page-wide);
   margin-bottom: var(--space-5);
   padding-bottom: var(--space-3);
   border-bottom: 1px solid var(--border);
+}
+
+/* A form card under it (Add, Import, the delete confirmations) starts at its left edge, not in
+   the middle of the page (LY-7). Full-width cards are unaffected. */
+.account-header ~ .card {
+  align-self: flex-start;
 }
 
 .account-heading {
@@ -447,8 +441,9 @@ img.logo-on-dark {
   max-width: 380px;
 }
 
+/* The full tier: the page's width, lifting .card's 560px (LY-7). */
 .card-wide {
-  max-width: var(--page-wide);
+  max-width: none;
 }
 
 /* Login and signup: the mark heads the card, and the header shows none (UI-12). */
@@ -967,8 +962,8 @@ img.logo-on-dark {
 
 
 /* The chart's height comes from here, not from the canvas (portfolio_chart.js turns Chart.js's
-   own aspect ratio off). 2:1 of the card's width keeps today's height on an 880px card, and the
-   bounds stop it going squat on a phone or taller than the screen at full width. Width-relative
+   own aspect ratio off). 2:1 of the card's width, and the bounds stop it going squat on a
+   phone or taller than the screen at full width. Width-relative
    rather than a viewport clamp(): a chart in a column (.split) isn't as wide as the window. Chart.js
    sizes the canvas from its parent, so the frame is positioned and holds only the canvas. A
    layout that wants another height overrides aspect-ratio and the bounds here. The explicit
@@ -1005,7 +1000,6 @@ img.logo-on-dark {
 
 .as-of {
   width: 100%;
-  max-width: var(--page-wide);
   margin: 0 0 var(--space-3);
   font: var(--text-caption);
   color: var(--text-muted);
@@ -1021,7 +1015,6 @@ img.logo-on-dark {
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: var(--space-4);
   width: 100%;
-  max-width: var(--page-wide);
   margin-bottom: var(--space-5);
 }
 
@@ -1068,7 +1061,7 @@ img.logo-on-dark {
 
 /* ---- the combined portfolio (PF-4) ---- */
 
-/* /portfolio is a page-full page: its table's ten columns (PF-6) need about 875px inside the
+/* On /portfolio the table's ten columns (PF-6) need about 875px inside the
    card. Stacked, the card runs the content width, so the table fits from a window of about
    1000px and scrolls in its .table-scroll box between that and the stack breakpoint. In two
    columns (.split) its column never goes below the table's width, so the box doesn't scroll. */

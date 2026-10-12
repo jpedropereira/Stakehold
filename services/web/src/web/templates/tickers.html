@@ -1,7 +1,6 @@
 {% extends "base.html" %}
 {% from "partials/_banner.html" import banner %}
 {% block title %}Tickers — Stakehold{% endblock %}
-{% block page_width %} page-full{% endblock %}
 {% block content %}
 <section class="card card-wide">
   <h1>{% if user.is_admin %}Tickers{% else %}Your tickers{% endif %}</h1>

@@ -467,8 +467,8 @@ def _main_classes(page_html):
     ],
 )
 def test_wide_table_pages_take_the_full_content_width(client, path, is_admin):
-    """LY-2: the page, not each block, sets the width, so the account header, as-of line, tiles
-    and wide cards can't drift apart."""
+    """LY-2: full-width tables sit in a .card-wide card, which lifts .card's 560px. Since LY-7
+    full width is every page's default, so the page itself needs no class for it."""
     test_client, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth, is_admin=is_admin)
     fake_portfolio.transactions = [_buy()]
@@ -478,7 +478,7 @@ def test_wide_table_pages_take_the_full_content_width(client, path, is_admin):
 
     page_html = test_client.get(path).text
 
-    assert _main_classes(page_html) == ["page", "page-full"]
+    assert _main_classes(page_html) == ["page"]
     tables = re.findall(r'<section class="card card-wide"[^>]*>.*?</section>', page_html, re.S)
     assert any("<table" in section for section in tables)
 
@@ -486,40 +486,62 @@ def test_wide_table_pages_take_the_full_content_width(client, path, is_admin):
 @pytest.mark.parametrize(
     "path",
     [
+        "/",
+        "/portfolio",
         "/accounts",
+        "/accounts/holdings?account=main",
+        "/transactions?account=main",
         "/transactions/new?account=main",
         "/transactions/import?account=main",
+        "/tickers",
     ],
 )
-def test_other_pages_keep_the_default_width(client, path):
-    """Forms keep their own cards. Account holdings (LY-5, test_account_holdings_page.py) and
-    Overview (LY-6) went full width."""
-    test_client, fake_auth, fake_portfolio = client
+def test_no_page_sets_a_width_of_its_own(client, path):
+    """LY-7: one width for every page. The per-page switch (page-full) went with the 880px
+    default it switched off."""
+    test_client, fake_auth, _ = client
     _logged_in(test_client, fake_auth)
 
     page_html = test_client.get(path).text
 
     assert _main_classes(page_html) == ["page"]
+    assert "page-full" not in page_html
 
 
-def test_overview_takes_the_full_content_width(client):
-    """LY-6: the tiles span the content width, and the accounts list and chart share it below."""
-    test_client, fake_auth, _ = client
-    _logged_in(test_client, fake_auth)
-
-    page_html = test_client.get("/").text
-
-    assert _main_classes(page_html) == ["page", "page-full"]
-
-
-def test_wide_blocks_take_their_width_from_the_page():
-    """No block repeats a pixel width of its own: the page variable sets all four."""
+def test_the_880px_column_is_gone():
+    """LY-7: no block has a column width of its own; .card-wide only lifts .card's 560px."""
     css = _css()
-    assert "max-width: 880px" not in css
+    assert "880px" not in css
+    assert "--page-wide" not in css
+    assert ".page-full" not in css
     assert ".content-wide" not in css
-    for selector in (".account-header", ".card-wide", ".as-of", ".summary-tiles"):
-        rule = re.search(rf"\{selector} \{{([^}}]*)\}}", css)
-        assert rule and "max-width: var(--page-wide)" in rule.group(1), selector
+    rule = re.search(r"\.card-wide \{([^}]*)\}", css)
+    assert rule and "max-width: none" in rule.group(1)
+
+
+def test_a_card_under_the_account_header_lines_up_with_its_left_edge():
+    """LY-7: the account header spans the page, so a form card under it starts at its left
+    edge rather than floating in the middle of the page."""
+    rule = re.search(r"\.account-header ~ \.card \{([^}]*)\}", _css())
+    assert rule and "align-self: flex-start" in rule.group(1)
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        "transactions_new.html",
+        "transactions_import.html",
+        "account_delete.html",
+        "transaction_delete.html",
+    ],
+)
+def test_account_form_cards_are_siblings_of_the_account_header(template):
+    """The left-alignment rule is a sibling selector, so it only reaches these cards while
+    nothing wraps them."""
+    source = (_WEB_DIR / "src" / "web" / "templates" / template).read_text()
+    after_header = source.split('{% include "partials/_account_header.html" %}', 1)[1]
+    before_card = after_header.split('<section class="card">', 1)[0]
+    assert "<div" not in before_card and "<section" not in before_card
 
 
 def test_admin_tables_scroll_in_a_keyboard_reachable_region(client):

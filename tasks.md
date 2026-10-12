@@ -75,7 +75,7 @@ The previous chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archi
 | LY-4 | [`/portfolio`: table and chart side by side](#ly-4-portfolio-table-and-chart-side-by-side) | LY-2, LY-3 | done |
 | LY-5 | [Account holdings: table and chart side by side](#ly-5-account-holdings-table-and-chart-side-by-side) | LY-4 | done |
 | LY-6 | [Overview: two-column layout](#ly-6-overview-two-column-layout) | LY-4 | done |
-| LY-7 | [Retire the 880px column](#ly-7-retire-the-880px-column) | LY-5, LY-6 | ready |
+| LY-7 | [Retire the 880px column](#ly-7-retire-the-880px-column) | LY-5, LY-6 | done |
 
 ## Tasks
 
@@ -310,7 +310,7 @@ Done as:
 
 ### LY-7. Retire the 880px column
 
-**Status:** ready
+**Status:** done
 
 Once every data page uses a width tier, remove what is left of the old column: the 880px
 default of `--page-wide` (full becomes the default, so the `page_width` block may go too) and
@@ -320,6 +320,17 @@ every width, and check that `ui-architecture.md` no longer describes the 880px l
 
 Files: `static/web.css`, any template still using the old classes, `docs/ui-architecture.md`,
 `screenshots/`.
+
+Done as:
+- `--page-wide`, `.page-full` and `base.html`'s `page_width` block are gone, and so is every
+  `page-full` in the six templates that set it. The account header, as-of line and tiles are
+  the content width on every page.
+- `.card-wide` stays as the full tier (`max-width: none`): it is what lifts `.card`'s 560px.
+- The last 880px block was the account header on Add, Import and the two delete confirmations.
+  It now spans the page as on Holdings and Transactions, so the sub-nav no longer moves between
+  tabs. Agreed: the form card under it starts at its left edge (`.account-header ~ .card`), not
+  centred under a 1600px header. Other form and narrow pages stay centred.
+- `review_pages.py` needed no change: 280 of 280.
 
 ## Deferred
 

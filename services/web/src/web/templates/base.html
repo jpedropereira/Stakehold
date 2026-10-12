@@ -55,9 +55,7 @@
       {% endif %}
     </div>
   </header>
-  {# A page whose tables need the room sets page_width to " page-full" (LY-2); the account
-     header, as-of line, tiles and wide cards follow it, and form cards keep their own width. #}
-  <main id="main" class="page{% block page_width %}{% endblock %}" tabindex="-1">
+  <main id="main" class="page" tabindex="-1">
     {% block content %}{% endblock %}
   </main>
   {# Shown in a form's #form-errors by htmx-error-swap.js when an htmx request fails in a way

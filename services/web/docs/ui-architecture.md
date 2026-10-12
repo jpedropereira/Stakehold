@@ -68,7 +68,7 @@ described here updates this file in the same change.
       Comparing canvas to frame is the only check on the chart script and the CSS together,
       since there's no JS test runner. Without `maintainAspectRatio: false` the canvas falls back
       to 2:1 of its width, which at phone width is 144px inside a 280px frame. Where 2:1 of the
-      width already lands inside the bounds, as on an 880px card, the two agree and the check
+      width already lands inside the bounds (a frame about 560–960px wide), the two agree and the check
       can't tell;
     - every summary tile's figure on one line, inside its tile's content box. At a 160px tile
       minimum, `+€1,450.78` broke after its sign at phone and tablet, and unsigned six-digit
@@ -215,8 +215,8 @@ described here updates this file in the same change.
   Chart.js's default 2:1 aspect ratio ties height to width: about 150px at phone width, and about
   775px once a chart runs the full content width. `portfolio_chart.js` turns that off
   (`maintainAspectRatio: false`) and the frame sets the height: `aspect-ratio: 2 / 1` of the
-  frame's own width, held between 280px and 480px. On an 880px card that is the height the chart
-  always had (408px). The roadmap first asked for a `clamp()` on the viewport width; the frame's
+  frame's own width, held between 280px and 480px. On the 880px card of the time that was the
+  height the chart always had (408px). The roadmap first asked for a `clamp()` on the viewport width; the frame's
   width was chosen instead, because from LY-4 a chart in a column is much narrower than the window,
   and a viewport-based height would put a 420px-wide chart at the 480px cap. Chart.js sizes the
   canvas from its parent, so the frame is `position: relative` and holds only the canvas. **Sharp
@@ -268,7 +268,7 @@ described here updates this file in the same change.
     the POST's own URL, so the no-JS toggle redirects to that route's GET. For
     `/transactions/new` and `/transactions/import`, the account is lost from the query and the
     GET answers 422. The htmx path doesn't navigate, so it's unaffected.
-- **Page width: one content width, three tiers, set per page (LY-2).**
+- **Page width: one content width, three tiers, set per card (LY-2, LY-7).**
   - *Content width*: `--content-max` is the content's own width, 1600px, with the side gutter
     outside it. Up to 1600px the content grows with the window; beyond it, it centres (about
     160px each side on a 1920px screen). It used to be 1120px *including* the page's padding,
@@ -281,17 +281,27 @@ described here updates this file in the same change.
     That's a custom property on those two elements, not a second `:root`, because
     `test_templates.py` holds `:root` to one declaration block for the theme aliases.
   - *Tiers*: narrow (`.card-narrow`, 380px: auth, errors, the first-run card), form (`.card`,
-    560px) and full. Full is set for the whole page, not per element: `base.html`'s
-    `page_width` block adds `page-full` to `<main>`, which sets `--page-wide: none`. The account
-    header, as-of line, tiles and `.card-wide` cards all take `max-width: var(--page-wide)`, so
-    they can't drift apart, and the account header lines up with the cards under it without the
-    partial needing a parameter. A class per element was the alternative; it would repeat the
-    tier on every block of every page. Form and narrow cards keep their own width on a full
-    page (the admin mappings form). Full pages: Transactions, Tickers, admin mappings,
-    `/portfolio`, account Holdings (LY-5) and Overview (LY-6). **Interim:** `--page-wide`
-    defaults to 880px, the old single column, which the account form pages keep. Stretched to
-    full width first, the holdings pages and Overview would have been long stacked pages with a
-    1600px chart. LY-7 makes full the default.
+    560px) and full (`.card-wide`, `max-width: none`, the content width). The account header,
+    as-of line and tiles are always the content width. Full is the page's default, and a card
+    opts into it: a full-width table sits in a `.card-wide` card, and form and narrow cards keep
+    their own width on the same page (the admin mappings form).
+  - *No per-page switch (LY-7)*: from LY-2 to LY-6 a page opted into full width through
+    `base.html`'s `page_width` block, which added `page-full` to `<main>` and lifted a
+    `--page-wide` variable from its 880px default, the old single column. That kept the holdings
+    pages and Overview on 880px until their two-column layouts landed, rather than turning them
+    into long stacked pages with a 1600px chart. Once every data page had opted in, the switch
+    had nothing left to switch, and the one thing still on 880px was the account header on the
+    form pages (Add, Import, the two delete confirmations), whose sub-nav moved when the visitor
+    went between those tabs and Holdings or Transactions. The variable, the class and the block
+    went, and the header is the content width on every account page.
+  - *Form cards under the account header start at its left edge*: `.page` is a centred flex
+    column, so a 560px card under a 1600px header would float in the middle of the page, under
+    nothing. `.account-header ~ .card` aligns it to the start instead. It's a sibling selector,
+    so it reaches only cards placed directly after the header; `test_responsive_a11y.py` checks
+    the four form templates still do. Full-width cards fill the row, so the rule changes nothing
+    on Holdings or Transactions, and pages without an account header (Accounts, auth, errors,
+    Tickers' add form) stay centred. *Rejected:* the card centred under the full-width header,
+    and a narrower header tier for the form pages, which would have kept 880px alive.
   - *Breakpoints* are listed once, by name, in a comment by `--content-max`, because a custom
     property can't be used in `@media`; each media query's comment cites the name.
   - *Transactions* gets the spare width in its text columns: above the stack breakpoint the
@@ -346,8 +356,7 @@ described here updates this file in the same change.
     breakpoint is 1240px: the extra slack covers a classic 15px scrollbar, which `vw` gutters
     count but the content box doesn't (headless Chromium has none, so the review can't see it).
     A 1280px laptop gets two columns, about 708px and 472px; 1920px gets the same 3:2 as
-    `/portfolio`. The page is a `page-full` page, so the account header, as-of line and tiles
-    span both columns. The table needs no `.table-scroll` box: stacked, a full-width card fits
+    `/portfolio`. The account header, as-of line and tiles span both columns. The table needs no `.table-scroll` box: stacked, a full-width card fits
     it from well before the stack breakpoint.
     *A modifier, not new values on `.split`*: the container is `split split-account`, and the
     modifier's rules come after `.split`'s, so from 1480px, where both apply, its 704px minimum
@@ -405,8 +414,8 @@ described here updates this file in the same change.
   page's rule: a holding waiting for prices isn't counted as worth zero. With PF-6's Growth %
   the table has ten columns, about 875px wide even with the transactions table's tighter cells
   and 13px figures, more than the 880px card holds inside its padding. So `/portfolio` takes the
-  full content width (a `page-full` page since LY-2; before it, `.content-wide` on its as-of
-  line, tiles and cards), and the table sits in a focusable `.table-scroll` region. Stacked,
+  full content width (since LY-2; before it, `.content-wide` on its as-of line, tiles and
+  cards), and the table sits in a focusable `.table-scroll` region. Stacked,
   between about 600px, where it stacks, and about 1000px, where it fits a full-width card, it
   scrolls in its box. In two columns (LY-4, from 1480px) its column never goes below the
   table's width, so the box is only a scroller below 1000px. Before that box, PF-4's nine columns already made the whole page
