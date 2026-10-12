@@ -39,6 +39,7 @@ from portfolio.api.models import (
     AccountWriteResponse,
     BrokerResponse,
     GrowthResponse,
+    HoldingsResponse,
     PositionResponse,
     RebuildPositionsResponse,
     RebuildRequest,
@@ -442,6 +443,17 @@ def rebuild_positions(
     )
     response.status_code = _write_status_code(result)
     return result
+
+
+# --- holdings ---
+
+
+@router.get("/holdings", response_model=HoldingsResponse)
+def list_holdings(
+    user_id: UUID = Query(...),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    return jobs.get_holdings(user_id=user_id, settings=settings)
 
 
 # --- returns ---

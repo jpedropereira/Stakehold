@@ -66,6 +66,7 @@ flowchart TD
     subgraph orch["Orchestration"]
         JOBS["jobs.py<br/><i>runnable units: config + connection + one flow</i>"]
         PIPE["pipeline.py<br/><i>the flows; broker-parser/cashflow-parser (entry-point discovered)<br/>and datastore-client registries</i>"]
+        HFLOW["holdings/flows.py<br/><i>reads that span a user's accounts (PF-1)</i>"]
     end
 
     subgraph domain["Domain modules"]
@@ -75,6 +76,7 @@ flowchart TD
         TXN["transactions/<br/>base · repository"]
         POS["positions/<br/>calculator · repository"]
         RET["returns/<br/>calculator · performance · repository"]
+        HOLD["holdings/<br/>aggregator"]
     end
 
     subgraph found["Foundation"]
@@ -91,6 +93,11 @@ flowchart TD
     CLI --> JOBS
     API --> JOBS
     JOBS --> PIPE
+    JOBS --> HFLOW
+    HFLOW --> ACC
+    HFLOW --> POS
+    HFLOW --> RET
+    HFLOW --> HOLD
     JOBS --> SET
     JOBS --> DB
     JOBS --> ERR
@@ -139,6 +146,13 @@ The rule that keeps this honest, same as data-store's: **`pipeline.py` never tou
 directly, and the domain modules never decide *what* to import or rebuild.** Orchestration knows
 which account, which file, which date range; domain modules know how to parse one broker's file or
 read/write one table.
+
+**Cross-account reads live in `holdings/flows.py`, not `pipeline.py` (PF-1).** It is the same
+layer as `pipeline.py`, orchestration over domain modules, and follows the same rule: no SQL of
+its own. It sits beside it rather than in it because `pipeline.py` is near the 64 KB file limit,
+and every flow there is per account while these span all of a user's accounts. PF-5's
+cross-account return series goes here too. `jobs.get_holdings` calls it the way the other `get_*`
+jobs call `pipeline.py`.
 
 **Built as of task 5** — `add_account`, `list_accounts`, `add_manual_transaction`. `pipeline.py`
 (not a per-flow `service.py`) is where the `with transaction(conn):` boundary lives, the role
@@ -256,6 +270,7 @@ the ticker may still be fully computable from its `BUY`/`SELL` rows regardless.
 | `transactions/` | `base.py` (the `CanonicalTransaction` record shape) + `repository.py` | `base.py` here holds a **data shape**, not a `Protocol` — the contract is "what a normalized transaction looks like," which multiple producers (`broker_import` parsers, manual CLI entry) must fill in, not a swappable behavior one class implements. |
 | `positions/` | `calculator.py` (pure) + `repository.py` | **Built at task 7.** Same shape as data-store's `returns/`: no `base.py`, no `*_source.py` — the input is this service's own `transactions` and `ticker_mapping` tables, not an external provider. One deliberate deviation from "repositories never commit": `positions/repository.py` still never commits, but `pipeline.rebuild_positions` opens the `with transaction(conn):` boundary once *per `(account, canonical_ticker)` pair* rather than once per flow, because `schema.md`'s delete-then-insert contract requires each pair's replacement to be atomic on its own, not the whole rebuild run. |
 | `returns/` | `calculator.py` (pure) + `performance.py` (pure) + `repository.py` | **Built at task 8.** Same shape again, plus one more thing to disclose: it also needs prices and FX rates from `datastore_client`. Those are fetched by `pipeline.py` and handed into `calculator.py` as plain data — the calculator itself stays pure and knows nothing about HTTP, keeping it as unit-testable as data-store's `returns/calculator.py`. A second thing to disclose, surfaced only once `return_snapshots`' original mark-to-market-only design turned out not to account for dividend income: `calculator.py` also takes a `DividendEvent` sequence per pair, needing no `datastore_client` call at all (`transactions.eur_amount` is already frozen in EUR) — but resolving which `DIVIDEND` transactions belong to which ticker is `pipeline.rebuild_returns`'s job, via the same `mappings.resolve` `rebuild_positions` already uses for `BUY`/`SELL`. `returns/` is therefore not quite as decoupled from `ticker_mapping/` as `position_snapshots` being pre-resolved might suggest. **`performance.py` added with the growth-since-inception view**: a second pure function, over an account's stored `return_snapshots` rows and its `BUY`/`SELL` money flows (already resolved to tickers by `pipeline.py`), returning time-weighted growth per priced day. It writes nothing; see "Growth since inception is computed on read" below. |
+| `holdings/` | `aggregator.py` (pure) + `flows.py` (orchestration) | **Built at PF-1.** No `repository.py` and no table of its own: it reads `positions/` and `returns/` latest rows through their repositories and sums them per ticker across a user's accounts, on read. `aggregator.py` is pure, like the calculators. `flows.py` is the orchestration around it, kept out of `pipeline.py` (see Layering). Rows stay keyed on (account, ticker) until the final merge, so the same ticker in two accounts can't collapse into one account's row, the bug UI-11 documented in web's `aggregate_portfolio_returns`. See "Holdings across accounts are summed here, on read" below. |
 | `datastore_client/` | `base.py` (a `DataStoreClient` Protocol) + `http_client.py` | This is the `*_source.py` role, but the "provider" is another in-house service's read API rather than a third party. **`get_fx_rate` built at task 14**, pulled forward from its original task 8 slot because a cash-ledger import needed it. **`get_price_series`, `get_fx_rate_series`, and `get_ticker_info` built at task 8** — see [`flows.md`](flows.md)'s "Cross-service prerequisite". `get_fx_rate_series` is a range-returning sibling of `get_fx_rate`, not a replacement: `returns/calculator.py` needs a whole date range's rates per `(account, ticker)` pair, and repeating a single-date `get_fx_rate` call per priced day would cost one HTTP round trip per day instead of one per pair; `get_fx_rate` itself is untouched and still serves `import_cashflow`'s single-date lookup. **`lookup_ticker` and `add_`/`list_`/`update_tracked_ticker` built at TK-7** (ticker onboarding): pure pass-throughs that share one `_tracked_request`, mapping `data-store`'s meaningful refusals to `TickerRequestRefused` and anything else to `DataStoreApiError`. |
 
 **`errors.py` is not a domain module** — it's a single Foundation-layer file (`PortfolioError` plus
@@ -545,6 +560,33 @@ computing it in `web` from `/returns` and `/transactions`* — turning a transac
 SYMBOL into a ticker is `mappings.resolve`, which lives here; web would need a copy of it. *Known
 cost:* the read grows with an account's history, like `GET /returns` does. If it gets slow, the
 fix is a `growth_snapshots` table written by `rebuild-returns`, after the user signs off its schema.
+
+**Holdings across accounts are summed here, on read (PF-1).** `GET /holdings` sums each user's
+latest position and return rows per ticker. Nothing is stored: it reads the same latest rows
+`GET /positions` and `GET /returns/latest` serve, one pair of queries per account, so there is no
+history to replay. *Rejected: summing in `web`* — web would make two calls per account, and
+PF-5's cross-account return series needs a server-side path anyway, since fetching every
+account's full history into web is what UI-11 avoided as too expensive. The rules:
+
+- **A row is a ticker with an open position (`quantity != 0`) in at least one account.** Only
+  those positions feed it. A negative quantity is kept, as web's `filter_open_positions` keeps
+  it: it is a replay anomaly to show, not hide.
+- **Units and cost come from positions, values from return rows**, as web's per-account page
+  joins them. Percentages are recomputed from summed euros, never averaged.
+- **No partial sums.** If any contributing account has no return row for the ticker yet, the
+  row's value figures are null and it reads `priced = false`; the per-account breakdown still
+  shows what is priced.
+- **Native figures only when the currencies agree.** Otherwise they are null and the row reads
+  `mixed_currency = true`. EUR figures are always summed.
+- **The totals follow the home page's rule**, not the rows'. web's `summarize_accounts` sums every
+  latest return row, closed tickers included, because a closed position's dividends are still
+  part of the return. Totals built from the open rows would leave them out and disagree with the
+  home page, so the response carries a separate `totals` object worked out that way.
+
+*Known limits:* holdings merge only when they resolve to the same `canonical_ticker`, so two
+listings of one fund (`IWDA.AS`, `SWDA.L`) stay separate rows. The read is 2N queries for N
+accounts; a single query joining through `accounts` is the fix if that ever matters, as long as
+it still starts from `accounts.user_id`.
 
 **CLI first; orchestration is plain callables so the HTTP API added a caller, not a rewrite.**
 Mirrors data-store's `jobs.py` seam — `cli.py`/`api/routes.py` are both argument parsing plus one
