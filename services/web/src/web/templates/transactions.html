@@ -3,6 +3,7 @@
 {% from "partials/_delete_dialog.html" import delete_dialog %}
 {% from "partials/_transaction_summary.html" import transaction_summary %}
 {% block title %}Transactions — {{ account_label }} — Stakehold{% endblock %}
+{% block page_width %} page-full{% endblock %}
 {% block content %}
 {% include "partials/_account_header.html" %}
 {% if error %}
@@ -18,6 +19,8 @@
   <h1>Transactions</h1>
   {% if transactions %}
   {# Stacks at phone width like the holdings table (account_holdings.html says why the roles). #}
+  {# Focusable, so a keyboard can scroll it where nine columns don't fit and it doesn't stack yet. #}
+  <div class="table-scroll" tabindex="0" role="region" aria-label="Transactions">
   <table class="positions-table transactions-table stack-table" role="table">
     <thead role="rowgroup">
       <tr role="row">
@@ -47,7 +50,7 @@
         <td class="num" role="cell" data-label="Amount"><span class="mono">{{ txn.native_amount | native_money(currency) }}</span>{% if currency != "EUR" %}
           <span class="mono eur-amount">{{ txn.eur_amount | money }}</span>{% endif %}</td>
         <td class="num" role="cell" data-label="Fees"><span class="mono">{{ txn.fees_native | native_money(currency) }}</span></td>
-        {# Shortened by CSS; the full value stays selectable and is in the tooltip. #}
+        {# Whole above phone width; shortened by CSS when stacked, with the full value in the tooltip. #}
         <td role="cell" data-label="Reference"><span class="mono reference" title="{{ txn.broker_transaction_ref }}">{{ txn.broker_transaction_ref }}</span></td>
         {# A link to the confirmation page, which is the whole flow without JS; with it,
            confirm_dialog.js opens the dialog below instead. #}
@@ -56,6 +59,7 @@
       {% endfor %}
     </tbody>
   </table>
+  </div>
   {% call delete_dialog("delete-transaction-dialog", "/transactions/delete", "Delete this transaction?", csrf_token, ["account", "ref"]) %}<strong>This can't be undone.</strong> Your holdings and returns for this account will be recalculated without it.{% endcall %}
   <script src="/static/confirm_dialog.js" defer></script>
   {% elif transactions is not none %}

@@ -2,6 +2,7 @@
 {% from "partials/_banner.html" import banner %}
 {% from "partials/_delta.html" import delta %}
 {% block title %}Portfolio — Stakehold{% endblock %}
+{% block page_width %} page-full{% endblock %}
 {% set freshness = "Prices update daily; returns are recalculated a few times a day." %}
 {# A holding's figure in its own currency, on a muted line under the EUR one: only off EUR,
    where it would repeat the EUR figure, and "Mixed currencies" when accounts recorded the
@@ -27,8 +28,8 @@
 {# From portfolio's totals, not the rows: they also count closed positions' dividends, the
    home page's rule, so the two pages agree. #}
 {% if totals %}
-<p class="as-of content-wide">Prices as of <span class="mono">{{ totals.price_date | date }}</span>. {{ freshness }}</p>
-<section class="summary-tiles content-wide" aria-label="All accounts">
+<p class="as-of">Prices as of <span class="mono">{{ totals.price_date | date }}</span>. {{ freshness }}</p>
+<section class="summary-tiles" aria-label="All accounts">
   <div class="tile">
     <p class="tile-label">Market value</p>
     <p class="tile-value"><span class="mono">{{ totals.market_value_eur | money }}</span></p>
@@ -53,7 +54,7 @@
 </section>
 {% endif %}
 
-<section class="card card-wide content-wide">
+<section class="card card-wide">
   <h1>Holdings</h1>
   {% include "partials/_unmapped_notice.html" %}
   {% if holdings_error %}
@@ -137,7 +138,7 @@
   {% endif %}
 </section>
 
-<section class="card card-wide content-wide">
+<section class="card card-wide">
   <h1>Returns over time</h1>
   {% if returns_error %}
   {% call banner("error") %}<strong>Couldn't load your returns.</strong> {{ returns_error }}{% endcall %}

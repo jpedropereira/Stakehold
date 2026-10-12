@@ -89,7 +89,8 @@ described here updates this file in the same change.
     sits left of the cards.
     At 768px the account-holdings page's five tiles wrap four and one. LY-2 to LY-7 are
     compared against this. After LY-3 added the two market-value pages: 196 of 208, the same 12
-    failures.
+    failures. After LY-2: 208 of 208. Transactions fits its full-width card from about 1150px
+    and scrolls in its box below that; the logo lines up with the content edge.
 - **Feedback and error states (UI-12).**
   - *Banners*: every message is one macro, `partials/_banner.html`, in the charter's ink rule
     (chapter II): an icon and a bold lead word carry the meaning, never color, so errors use
@@ -238,6 +239,41 @@ described here updates this file in the same change.
     the POST's own URL, so the no-JS toggle redirects to that route's GET. For
     `/transactions/new` and `/transactions/import`, the account is lost from the query and the
     GET answers 422. The htmx path doesn't navigate, so it's unaffected.
+- **Page width: one content width, three tiers, set per page (LY-2).**
+  - *Content width*: `--content-max` is the content's own width, 1600px, with the side gutter
+    outside it. Up to 1600px the content grows with the window; beyond it, it centres (about
+    160px each side on a 1920px screen). It used to be 1120px *including* the page's padding,
+    and the header padded 32px against the page's 24px, each in its own 1120px box, so on a wide
+    screen the logo sat about 110px left of the cards. Now `.site-header-inner` and `.page` both
+    take `width: min(100% - 2 * var(--gutter), var(--content-max))`, and the logo is on the
+    content edge at every width.
+  - *Gutter*: `--gutter: clamp(24px, 3vw, 48px)`, so a laptop gets more than 24px but the table
+    doesn't lose much width to it. At phone width both the header and the page set it to 12px.
+    That's a custom property on those two elements, not a second `:root`, because
+    `test_templates.py` holds `:root` to one declaration block for the theme aliases.
+  - *Tiers*: narrow (`.card-narrow`, 380px: auth, errors, the first-run card), form (`.card`,
+    560px) and full. Full is set for the whole page, not per element: `base.html`'s
+    `page_width` block adds `page-full` to `<main>`, which sets `--page-wide: none`. The account
+    header, as-of line, tiles and `.card-wide` cards all take `max-width: var(--page-wide)`, so
+    they can't drift apart, and the account header lines up with the cards under it without the
+    partial needing a parameter. A class per element was the alternative; it would repeat the
+    tier on every block of every page. Form and narrow cards keep their own width on a full
+    page (the admin mappings form). Full pages: Transactions, Tickers, admin mappings and
+    `/portfolio`. **Interim:** `--page-wide` defaults to 880px, the old single column, which
+    Holdings, Overview and the account form pages keep until LY-4 to LY-6 lay them out. Stretched
+    to full width first, they would have been long stacked pages with a 1600px chart. LY-7 makes
+    full the default.
+  - *Breakpoints* are listed once, by name, in a comment by `--content-max`, because a custom
+    property can't be used in `@media`; each media query's comment cites the name.
+  - *Transactions* gets the spare width in its text columns: above the stack breakpoint the
+    figures, date and Delete cells ask for `width: 1%`, which in an auto-layout table means "only
+    your content's width". The broker reference now shows whole; only a stacked row still cuts it at 24ch.
+    With a 36-character UUID the table is about 1020px, so it fits its card from a window of
+    about 1150px. Between the stack breakpoint and that, the nine columns don't fit, so the table scrolls in a focusable
+    `.table-scroll` region, as `/portfolio`'s does. **Sharp edge, fixed here:** `.table-scroll`
+    is `position: relative`. Without it, the visually-hidden "Actions" header, which is
+    absolutely positioned, took the page as its containing block, escaped the box's clipping,
+    and still scrolled the page sideways at 768px.
 - **App shell (UI-4): the current page is marked on the server, and the account pages share one
   header.** Each route passes `nav_active` (`overview` / `portfolio` / `accounts` / `tickers` / `admin`) and, on the four
   account-scoped pages, `account_nav_active` (`holdings` / `transactions` / `add` / `import`). The templates turn these into `aria-current="page"`, and `web.css` styles
@@ -266,8 +302,9 @@ described here updates this file in the same change.
   page's rule: a holding waiting for prices isn't counted as worth zero. With PF-6's Growth %
   the table has ten columns, about 875px wide even with the transactions table's tighter cells
   and 13px figures, more than the 880px card holds inside its padding. So `/portfolio` takes the
-  full content width (`.content-wide` on its as-of line, tiles and cards), and the table sits in
-  a focusable `.table-scroll` region: between about 600px, where it stacks, and 990px, where it
+  full content width (a `page-full` page since LY-2; before it, `.content-wide` on its as-of
+  line, tiles and cards), and the table sits in
+  a focusable `.table-scroll` region: between about 600px, where it stacks, and about 1000px, where it
   fits, it scrolls in its box. Before that box, PF-4's nine columns already made the whole page
   scroll sideways at tablet widths, which `review_pages.py`, checking sideways scroll at phone width only at the time, didn't see
   (it checks every width since LY-1). Adding Portfolio made five nav links for an admin, so the phone nav's gap tightened
