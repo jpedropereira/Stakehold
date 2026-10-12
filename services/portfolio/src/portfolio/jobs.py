@@ -21,6 +21,7 @@ from uuid import UUID
 from portfolio import pipeline
 from portfolio.accounts.repository import Account
 from portfolio.datastore_client.http_client import HttpDataStoreClient
+from portfolio.holdings import flows as holdings_flows
 from portfolio.run_result import build_run_result
 from portfolio.settings import Settings, SettingsError, load_settings
 from portfolio.ticker_mapping.repository import TickerMappingRow
@@ -1274,3 +1275,27 @@ def get_growth(
     else:
         logger.info("get-growth: done, no return rows yet, so no growth to report.")
     return [asdict(point) for point in points]
+
+
+def get_holdings(*, user_id: UUID, settings: Settings | None = None) -> dict:
+    """Everything this user holds, summed per ticker across all their accounts, plus the
+    portfolio totals (see holdings/flows.list_holdings). Read-only: never triggers a rebuild."""
+    configure_logging()
+    settings = settings or load_settings()
+    conn = get_connection(settings.database_url)
+    try:
+        logger.info("get-holdings: listing holdings across accounts for user %s.", user_id)
+        result = holdings_flows.list_holdings(conn, user_id=user_id)
+    finally:
+        conn.close()
+
+    if result.holdings:
+        accounts = {entry.account_label for h in result.holdings for entry in h.accounts}
+        logger.info(
+            "get-holdings: done, %d holding(s) across %d account(s).",
+            len(result.holdings),
+            len(accounts),
+        )
+    else:
+        logger.info("get-holdings: done, no open holdings in any account.")
+    return asdict(result)

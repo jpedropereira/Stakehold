@@ -32,6 +32,7 @@ this file; references to sections that stayed in `architecture.md` name it.
 | Returns refresh, every user | `rebuild-returns --all` | — | every `PORTFOLIO_RETURNS_REFRESH_SECONDS` (default 6h), by the `returns-refresh` container (see "Returns follow new prices") | as for one user, for each user with an account | `return_snapshots` |
 | Returns refresh, newly ready tickers | `refresh-ready-tickers --window-minutes N` | — | every 5 minutes with a 10-minute window, by the `returns-refresh-ready` container | `data-store`'s `GET /tracked-tickers?status=ready` (`ready_at` inside the window), then `position_snapshots` joined to `accounts` for the accounts holding them | `return_snapshots`, for those accounts only |
 | Return listing | — (CLI has none) | `GET /returns`, `GET /returns/latest` | on demand | `return_snapshots`, optionally filtered by ticker/date range | — (read-only report) |
+| Holdings across accounts | — (CLI has none) | `GET /holdings?user_id=` | on demand (web's `/portfolio` page, PF-4) | `accounts` by `user_id`, then each account's latest `position_snapshots` and `return_snapshots` rows | — (computed on read, see "Holdings across accounts") |
 | Growth since inception | — (CLI has none) | `GET /returns/growth?user_id=&account_label=` (404 if the label didn't resolve) | on demand | `return_snapshots` and the account's `BUY`/`SELL` `transactions`, scoped through the resolved account; `ticker_mappings` | — (computed on read, see "Growth since inception") |
 
 **No separate `brokers` table** ever materialized — `schema.md` settled on `broker` as a plain
@@ -407,6 +408,22 @@ which is what this view exists to remove, and gives one rate per period rather t
 - **Two separate reads.** The rows and the transactions are two queries, so a write landing
   between them can skew one response the same way; the next read is right.
 
+### Holdings across accounts
+
+Everything a user holds, summed per `canonical_ticker` across all of their accounts: 120 IWDA in
+one account and 20 in another is one row of 140, with a per-account breakdown.
+`holdings/flows.list_holdings` lists the user's accounts through `accounts/repository`, reads
+each one's latest position and return rows by its own id, and hands them to
+`holdings/aggregator.aggregate_holdings`. The response is
+
+    {"holdings": [Holding, ...], "totals": Totals | null}
+
+`holdings` is sorted by ticker, each row with its `accounts` in label order. `totals` sums every
+latest return row, closed tickers included, so it matches web's home page; it is null when no
+account has a return row yet. A user with no accounts gets `{"holdings": [], "totals": null}`,
+not a 404. The rules, and why the summing happens here, are in `architecture.md`'s "Holdings
+across accounts are summed here, on read".
+
 ## HTTP API
 
 **Built at task 9.** `src/portfolio/api/{app,routes,security,models}.py` — FastAPI routes that
@@ -486,6 +503,9 @@ account-level series, `[{price_date, growth_pct}]`, where a ticker with no row o
 last value (the forward-fill web's chart already used). It combines tickers here rather than in
 web because its money flows need `mappings.resolve`; see "Growth since inception" above.
 `growth_pct` is a fraction (`0.1234` is +12.34%), like `total_return_pct`.
+
+`GET /holdings` sums across accounts rather than across dates: one row per ticker from each
+account's latest rows, so no calendar question arises. See "Holdings across accounts" above.
 
 **Known limitations, same category as `data-store`'s own read API:**
 

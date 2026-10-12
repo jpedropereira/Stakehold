@@ -71,11 +71,11 @@ The previous chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archi
 | ID | Task | Depends on | Status |
 |----|------|-------------|--------|
 | PF-0 | [Roadmap housekeeping](#pf-0-roadmap-housekeeping) | — | done |
-| PF-1 | [portfolio: `GET /holdings` across accounts](#pf-1-portfolio-get-holdings-across-accounts) | — | ready |
+| PF-1 | [portfolio: `GET /holdings` across accounts](#pf-1-portfolio-get-holdings-across-accounts) | — | done |
 | PF-2 | [web: move per-account holdings to `/accounts/holdings`](#pf-2-web-move-per-account-holdings-to-accountsholdings) | — | ready |
-| PF-3 | [web: portfolio client for `/holdings`](#pf-3-web-portfolio-client-for-holdings) | PF-1 | blocked |
+| PF-3 | [web: portfolio client for `/holdings`](#pf-3-web-portfolio-client-for-holdings) | PF-1 | ready |
 | PF-4 | [web: `/portfolio` combined page](#pf-4-web-portfolio-combined-page) | PF-2, PF-3 | blocked |
-| PF-5 | [portfolio: cross-account return series](#pf-5-portfolio-cross-account-return-series) | PF-1 | blocked |
+| PF-5 | [portfolio: cross-account return series](#pf-5-portfolio-cross-account-return-series) | PF-1 | ready |
 | PF-6 | [web: returns chart on `/portfolio`](#pf-6-web-returns-chart-on-portfolio) | PF-4, PF-5 | blocked |
 
 ## Tasks
@@ -91,54 +91,48 @@ which PF-5 and PF-6 now cover.
 
 ### PF-1. portfolio: `GET /holdings` across accounts
 
-**Status:** ready
+**Status:** done
 
-A new pure module, `holdings/aggregator.py`, provides
-`aggregate_holdings(per_account) -> list[Holding]`. Its inputs are each account's latest position
-and latest return rows, read through the existing
-`positions/repository.list_latest_snapshots` and `returns/repository.list_latest_snapshots`.
+`GET /holdings?user_id` returns `{"holdings": [...], "totals": {...} | null}`, computed on read.
+`holdings/aggregator.py` is the pure `aggregate_holdings(per_account) -> HoldingsResult`, and
+`holdings/flows.py`'s `list_holdings` is the orchestration around it: it lists the user's
+accounts through `accounts/repository` and reads each one's latest position and return rows
+through the existing `list_latest_snapshots`. `jobs.get_holdings` and the route call it.
+`list_holdings` went into `holdings/flows.py` rather than `pipeline.py` (50.9 KB), where PF-5's
+orchestration is planned too.
 
-Aggregation rules:
-- **Rows.** Only open positions, `quantity > 0`, the same filter as web's
-  `filter_open_positions`.
-- **Summed per ticker:** `quantity`, `cost_basis_eur`, `market_value_eur`,
+Aggregation rules, as built:
+- **Rows.** A ticker gets a row if any account has an open position in it, `quantity != 0`. That
+  is web's `filter_open_positions` rule: it keeps a negative quantity (a replay anomaly) visible.
+  The task first said `> 0`, which isn't what web does. Only open positions feed the row.
+- **Joined on (account, ticker).** Units and cost come from each account's position, values from
+  that account's own latest return row, as web's `build_holdings` joins them.
+- **Summed per ticker:** `quantity`, `cost_basis_eur`, and, when priced, `market_value_eur`,
   `unrealized_return_eur`, `dividends_received_eur` and `total_return_eur`.
-- **Average cost** is `sum(cost_basis_eur) / sum(quantity)`.
-- **Percentages** are `sum(return) / sum(cost)`, and null when the cost is 0, matching
-  `returns/calculator.py`.
+- **Average cost** is `sum(cost_basis_eur) / sum(quantity)`, null when the units net to 0.
+- **Percentages** are `sum(return) / sum(cost)`, null when the cost is 0.
 - **Native figures.** If every account agrees on `native_currency`, `average_cost_native` is
   weighted by quantity and `market_value_native` is summed. Otherwise both are null and the row
   reads `mixed_currency = true`.
-- **Unpriced holdings.** A holding with no return row in some account (prices loading or failed)
-  still counts its units and cost. Its value fields are null and the row reads `priced = false`.
-  A partial sum is never shown as if it were a total.
-- **Price date.** `price_date` is the newest latest-return date among the accounts' rows.
-- **Breakdown.** Each row lists every account holding it: `account_label`, `quantity`,
-  `native_currency`, `average_cost_native`, `cost_basis_eur`, `market_value_eur` and
-  `unrealized_return_eur`.
-- **Matching the home page.** First check whether closed positions' dividends count in the
-  per-account and home totals today. Use the same rule here, so the totals match the home
-  page's, and record it. #65's `docs/flows.md` notes a related gap: growth misses a dividend
-  paid after a position fully closed.
+- **Unpriced holdings.** If any contributing account has no return row yet, the row still counts
+  its units and cost, its value fields are null and it reads `priced = false`.
+- **Price date** is the newest return date among the row's accounts.
+- **Breakdown.** `accounts` lists every account holding it, in label order: `account_label`,
+  `quantity`, `native_currency`, `average_cost_native`, `cost_basis_eur`, `market_value_native`,
+  `market_value_eur` and `unrealized_return_eur`. `market_value_native` was added so the
+  breakdown can show each account's own native figures, as the mixed-currencies requirement says.
+- **Matching the home page.** Closed positions' dividends do count today: web's
+  `summarize_latest_returns` sums every latest return row, closed tickers included, and the home
+  page sums those per account. Totals built from the open rows would leave them out, so the
+  response carries a separate `totals` (market value, cost basis, dividends, total return € and
+  %, price date) on the home page's rule. It is null when no account has a return row.
 
-Then:
-- **Pipeline.** `pipeline.list_holdings(conn, *, user_id)` resolves the user's accounts through
-  `accounts/repository`. `pipeline.py` is 49 KB, so if the function grows it goes in
-  `holdings/flows.py` instead.
-- **Jobs.** `jobs.get_holdings(user_id)`.
-- **API.** Route `GET /holdings`, read-only (it never triggers a rebuild), with
-  `HoldingResponse` and `HoldingAccountResponse` models.
+Tests: `tests/unit/holdings/test_{aggregator,flows}.py`, `tests/unit/test_jobs_holdings.py`,
+`tests/unit/api/test_routes_holdings.py`, and `tests/integration/test_holdings.py` (two accounts
+summed, another user's account never included, no accounts gives an empty result).
 
-Unit tests cover:
-- two accounts holding the same ticker (120 + 20 = 140),
-- mixed currencies, partly priced, unpriced, a closed position, zero cost, and an empty
-  portfolio.
-
-An integration test uses two accounts with real snapshots, plus another user's account that must
-not leak into the result.
-
-Files: new `holdings/{__init__,aggregator}.py`, `pipeline.py`, `jobs.py`,
-`api/{routes,models}.py`; `docs/architecture.md`, `README.md` if it lists the routes.
+Files: new `holdings/{__init__,aggregator,flows}.py`, `jobs.py`, `api/{routes,models}.py`;
+`docs/architecture.md`, `docs/flows.md`. portfolio has no `README.md`.
 
 ### PF-2. web: move per-account holdings to `/accounts/holdings`
 
@@ -159,10 +153,11 @@ Files: `api/{portfolio_page→holdings,routes,app}.py`, `templates/{account_hold
 
 ### PF-3. web: portfolio client for `/holdings`
 
-**Status:** blocked (PF-1)
+**Status:** ready
 
-`list_holdings(user_id)` on the `PortfolioClient` protocol and its HTTP implementation, plus the
-`Holding` and `HoldingAccount` models. The fake client used in tests gets the same method.
+`list_holdings(user_id)` on the `PortfolioClient` protocol and its HTTP implementation, returning
+PF-1's `{holdings, totals}` shape: the `Holding`, `HoldingAccount` and `HoldingsTotals` models
+(nullable fields as PF-1 serves them; Decimals arrive as strings). The fake client used in tests gets the same method.
 
 Files: `portfolio_client/{base,http_client}.py`; `docs/architecture.md` (endpoint table).
 
@@ -173,7 +168,8 @@ Files: `portfolio_client/{base,http_client}.py`; `docs/architecture.md` (endpoin
 - A new router, `api/portfolio.py`, and a "Portfolio" nav link (`nav_active="portfolio"`) placed
   between Overview and Accounts.
 - **The page shows:**
-  - the "Prices as of" line and the summary tiles computed from the holdings: market value,
+  - the "Prices as of" line and the summary tiles from PF-1's `totals`, not computed from the
+    rows, so they match the home page (closed positions' dividends count): market value,
     cost basis, total return € and % (over cost basis), and dividends. The growth tile comes
     with PF-6, since it needs PF-5's series,
   - the unmapped-instruments warning, covering the user's whole list rather than one broker's,
@@ -197,7 +193,7 @@ Files: new `api/portfolio.py`, `api/app.py`, `portfolio_view.py`, new `templates
 
 ### PF-5. portfolio: cross-account return series
 
-**Status:** blocked (PF-1)
+**Status:** ready
 
 `GET /returns/portfolio?user_id[&start&end]` returns an object with two parts:
 - **`series`**, one point per date:

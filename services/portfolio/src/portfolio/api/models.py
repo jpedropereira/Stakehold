@@ -115,6 +115,62 @@ class GrowthResponse(BaseModel):
     growth_pct: Decimal
 
 
+class HoldingAccountResponse(BaseModel):
+    """One account's share of a holding. The value fields are null while that account has no
+    return row for the ticker yet."""
+
+    account_label: str
+    quantity: Decimal
+    native_currency: str
+    average_cost_native: Decimal
+    cost_basis_eur: Decimal
+    market_value_native: Decimal | None
+    market_value_eur: Decimal | None
+    unrealized_return_eur: Decimal | None
+
+
+class HoldingResponse(BaseModel):
+    """One ticker summed across every account with an open position in it. The value fields are
+    null unless `priced` (every account has a return row); the native ones are null when
+    `mixed_currency`. The pcts are fractions, as in ReturnResponse."""
+
+    canonical_ticker: str
+    quantity: Decimal
+    average_cost_eur: Decimal | None
+    cost_basis_eur: Decimal
+    native_currency: str | None
+    mixed_currency: bool
+    average_cost_native: Decimal | None
+    market_value_native: Decimal | None
+    priced: bool
+    price_date: date | None
+    market_value_eur: Decimal | None
+    unrealized_return_eur: Decimal | None
+    unrealized_return_pct: Decimal | None
+    dividends_received_eur: Decimal | None
+    total_return_eur: Decimal | None
+    total_return_pct: Decimal | None
+    accounts: list[HoldingAccountResponse]
+
+
+class HoldingsTotalsResponse(BaseModel):
+    """Every account's latest return rows summed, closed tickers included -- the home page's
+    rule, so the two pages' totals agree."""
+
+    price_date: date
+    market_value_eur: Decimal
+    cost_basis_eur: Decimal
+    dividends_received_eur: Decimal
+    total_return_eur: Decimal
+    total_return_pct: Decimal | None
+
+
+class HoldingsResponse(BaseModel):
+    holdings: list[HoldingResponse]
+    # Null when no account has a return row yet.
+    totals: HoldingsTotalsResponse | None
+
+
 class BrokerResponse(BaseModel):
     broker: str
     # Which import routes this broker has a parser for: "transactions" (POST
