@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% from "partials/_banner.html" import banner %}
 {% block title %}Portfolio — {{ account_label }} — Stakehold{% endblock %}
+{% block page_width %} page-full{% endblock %}
 {% from "partials/_delta.html" import delta %}
 {% set freshness = "Prices update daily; returns are recalculated a few times a day." %}
 {% block content %}
@@ -36,6 +37,11 @@
 </section>
 {% endif %}
 
+{# Two columns on a wide screen, the table wider, and stacked below the split-account
+   breakpoint (web.css, .split-account). The markup keeps reading order, holdings then
+   chart; CSS grid places the columns. The chart card stays in view beside a long table
+   (.split-aside). #}
+<div class="split split-account">
 <section class="card card-wide">
   <h1>Holdings</h1>
   {% include "partials/_unmapped_notice.html" %}
@@ -77,7 +83,7 @@
   {% endif %}
 </section>
 
-<section class="card card-wide">
+<section class="card card-wide split-aside">
   <h1>Returns over time</h1>
   {% if return_points %}
   <div class="chart-controls" hidden>
@@ -104,4 +110,5 @@
   <p class="entry-empty">No return history yet — returns appear once Stakehold has prices for your holdings' dates. {{ freshness }}</p>
   {% endif %}
 </section>
+</div>
 {% endblock %}
