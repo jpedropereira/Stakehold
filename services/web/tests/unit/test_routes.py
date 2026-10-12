@@ -222,7 +222,7 @@ class FakePortfolioClient:
         return self.list_ticker_mappings_result
 
     async def list_unmapped_instruments(self, *, user_id):
-        return []  # /portfolio's own tests (test_portfolio_page.py) cover this call
+        return []  # /accounts/holdings' own tests (test_account_holdings_page.py) cover this call
 
     async def list_all_unmapped_instruments(self):
         self.calls.append(("list_all_unmapped_instruments",))
@@ -1812,7 +1812,7 @@ def test_nav_links_to_overview_and_accounts(client):
     [
         ("/", {}, "/"),
         ("/accounts", {}, "/accounts"),
-        ("/portfolio", {"account": "main"}, "/accounts"),
+        ("/accounts/holdings", {"account": "main"}, "/accounts"),
         ("/transactions/new", {"account": "main"}, "/accounts"),
         ("/transactions/import", {"account": "main"}, "/accounts"),
     ],
@@ -1861,7 +1861,7 @@ def test_every_page_has_a_skip_link_to_main(client, path):
 
 
 _ACCOUNT_PAGES = [
-    ("/portfolio", "/portfolio"),
+    ("/accounts/holdings", "/accounts/holdings"),
     ("/transactions/new", "/transactions/new"),
     ("/transactions/import", "/transactions/import"),
 ]
@@ -1880,7 +1880,12 @@ def test_account_pages_share_an_account_header(client, path, current):
     assert "my isa" in response.text
     assert "globex" in response.text
     subnav = _ACCOUNT_NAV.search(response.text).group(1)
-    for target in ("/portfolio", "/transactions", "/transactions/new", "/transactions/import"):
+    for target in (
+        "/accounts/holdings",
+        "/transactions",
+        "/transactions/new",
+        "/transactions/import",
+    ):
         assert f'href="{target}?account=my%20isa"' in subnav
     assert _current_links(_ACCOUNT_NAV, response.text) == [f"{current}?account=my%20isa"]
 

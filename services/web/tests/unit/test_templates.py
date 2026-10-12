@@ -56,7 +56,8 @@ def test_templates_have_no_inline_executable_script():
     """web's CSP (api/security_headers.py) is script-src 'self' with no 'unsafe-inline' and no
     nonce -- an inline <script> with real JS logic would be silently blocked by the browser, not
     just a style violation. A <script type="application/json"> data island is fine: the browser
-    never executes it, only same-origin JS reads it (see portfolio.html/portfolio_chart.js)."""
+    never executes it, only same-origin JS reads it (see account_holdings.html and
+    portfolio_chart.js)."""
     offenders = {}
     for path in sorted(_TEMPLATES_DIR.rglob("*.html")):
         text = path.read_text()

@@ -237,7 +237,7 @@ def test_holdings_table_can_stack_at_phone_width(client):
     fake_portfolio.positions = [_position("AAPL"), _position("MSFT")]
     fake_portfolio.latest_returns = [_latest("AAPL"), _latest("MSFT")]
 
-    page_html = test_client.get("/portfolio?account=main").text
+    page_html = test_client.get("/accounts/holdings?account=main").text
 
     _assert_stackable(_table(page_html, "holdings-table"), _HOLDINGS_LABELS)
 
@@ -248,7 +248,7 @@ def test_holdings_waiting_for_prices_cell_is_labelled(client):
     fake_portfolio.positions = [_position("AAPL"), _position("MSFT")]
     fake_portfolio.latest_returns = [_latest("AAPL")]
 
-    table = _table(test_client.get("/portfolio?account=main").text, "holdings-table")
+    table = _table(test_client.get("/accounts/holdings?account=main").text, "holdings-table")
 
     waiting = next(row for row in _body_rows(table) if "MSFT" in row)
     labels = [_attr(c, "data-label") for c in re.findall(r"<td\b[^>]*>", waiting)]
@@ -278,7 +278,7 @@ def test_stacked_tables_no_longer_scroll_sideways(client):
     fake_portfolio.latest_returns = [_latest("AAPL")]
     fake_portfolio.transactions = [_buy()]
 
-    for path in ("/portfolio?account=main", "/transactions?account=main"):
+    for path in ("/accounts/holdings?account=main", "/transactions?account=main"):
         assert "table-scroll" not in test_client.get(path).text, path
 
 

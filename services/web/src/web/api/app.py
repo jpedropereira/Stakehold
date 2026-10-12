@@ -11,9 +11,10 @@ from shared.logging_config import configure_logging
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from web.api.deletion import router as deletion_router
 from web.api.deps import AdminRequired, AuthRequired
+from web.api.holdings import router as holdings_router
 from web.api.htmx import htmx_or_redirect
 from web.api.overview import router as overview_router
-from web.api.portfolio_page import router as portfolio_page_router
+from web.api.portfolio import router as portfolio_router
 from web.api.routes import health_router, router
 from web.api.security_headers import SecurityHeadersMiddleware, apply_security_headers
 from web.api.theme import router as theme_router
@@ -96,7 +97,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(health_router)
     app.include_router(overview_router)
-    app.include_router(portfolio_page_router)
+    app.include_router(holdings_router)
+    app.include_router(portfolio_router)
     app.include_router(router)
     app.include_router(deletion_router)
     app.include_router(theme_router)

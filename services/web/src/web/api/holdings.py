@@ -1,4 +1,7 @@
-"""GET /portfolio: one account's holdings, summary tiles and returns chart.
+"""GET /accounts/holdings: one account's holdings, summary tiles and returns chart.
+
+It was served at /portfolio?account=X until PF-2, which freed /portfolio for the combined page
+across accounts; api/portfolio.py redirects the old URL here.
 
 On its own router, like overview.py, because routes.py is close to the repo's 64KB file limit.
 It renders through routes.py's _render, so a cookie set earlier in the request (the CSRF cookie, a
@@ -50,7 +53,7 @@ _PORTFOLIO_VIEW_ERROR = (
 
 
 @dataclass(frozen=True)
-class _PortfolioViewData:
+class _HoldingsViewData:
     positions: list[Position]
     returns: list[Return]
     latest_returns: list[Return]
@@ -61,9 +64,9 @@ class _PortfolioViewData:
     error: str | None
 
 
-async def _load_portfolio_view(
+async def _load_holdings_view(
     portfolio_client: PortfolioClient, user_id: str, account_label: str
-) -> _PortfolioViewData:
+) -> _HoldingsViewData:
     """Fetches this account's positions, return history, latest returns and growth since
     inception, plus the user's unmapped instruments (UI-7), concurrently, tolerating any of them
     failing independently -- except AccountNotFound, which is re-raised rather than degraded: a
@@ -93,7 +96,7 @@ async def _load_portfolio_view(
             failed.add(name)
         elif isinstance(result, BaseException):
             raise result
-    return _PortfolioViewData(
+    return _HoldingsViewData(
         positions=results["positions"],
         returns=results["returns"],
         latest_returns=results["latest returns"],
@@ -104,8 +107,8 @@ async def _load_portfolio_view(
     )
 
 
-@router.get("/portfolio")
-async def portfolio_page(
+@router.get("/accounts/holdings")
+async def account_holdings_page(
     request: Request,
     response: Response,
     account: str = Query(..., min_length=1),
@@ -117,7 +120,7 @@ async def portfolio_page(
     csrf_token = ensure_csrf_cookie(request, response, cookie_secure=settings.cookie_secure)
     header, view = await asyncio.gather(
         _account_header_context(portfolio_client, user.user_id, account),
-        _load_portfolio_view(portfolio_client, user.user_id, account),
+        _load_holdings_view(portfolio_client, user.user_id, account),
         return_exceptions=True,
     )
     if isinstance(header, BaseException):
@@ -140,7 +143,7 @@ async def portfolio_page(
         request,
         response,
         templates,
-        "portfolio.html",
+        "account_holdings.html",
         {
             "user": user,
             "csrf_token": csrf_token,

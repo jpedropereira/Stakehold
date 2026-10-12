@@ -1,8 +1,8 @@
 """Pure, web-side display logic over portfolio's raw /positions and /returns responses.
 
 Nothing here changes portfolio's own data -- it only reshapes what the routes already fetched for
-the /portfolio view: filtering closed positions out of a "current holdings" listing, combining N
-per-ticker daily return series into one portfolio-level series for the chart
+the /accounts/holdings view: filtering closed positions out of a "current holdings" listing,
+combining N per-ticker daily return series into one portfolio-level series for the chart
 (portfolio/docs/architecture.md's "Returns are served per ticker" note explicitly leaves this to
 task 12), (UI-6) the summary tiles and the holdings table built from /returns/latest, and
 (UI-11) the home overview's per-account rows and cross-account totals, and the chart's data

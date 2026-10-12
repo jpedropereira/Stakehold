@@ -117,7 +117,7 @@ def test_account_label_opens_its_holdings(client):
 
     html = test_client.get("/accounts").text
 
-    assert '<a class="account-label" href="/portfolio?account=main">main' in html
+    assert '<a class="account-label" href="/accounts/holdings?account=main">main' in html
 
 
 def test_account_row_has_secondary_links_to_its_other_pages(client):
@@ -141,7 +141,7 @@ def test_account_links_encode_the_label(client):
 
     html = test_client.get("/accounts").text
 
-    assert 'href="/portfolio?account=joint%20%26%20co"' in html
+    assert 'href="/accounts/holdings?account=joint%20%26%20co"' in html
     assert 'href="/transactions/import?account=joint%20%26%20co"' in html
 
 
@@ -248,7 +248,7 @@ def test_an_error_rerender_still_lists_the_accounts(client):
 
     response = _post_account(test_client)
 
-    assert '<a class="account-label" href="/portfolio?account=main">' in response.text
+    assert '<a class="account-label" href="/accounts/holdings?account=main">' in response.text
 
 
 # --- import: the upload form -------------------------------------------------------------
@@ -318,7 +318,7 @@ def test_import_summary_links_to_the_next_steps(client):
 
     summary = _summary(_import_page(test_client, imported="12").text)
 
-    assert '<a href="/portfolio?account=main">View holdings</a>' in summary
+    assert '<a href="/accounts/holdings?account=main">View holdings</a>' in summary
     assert '<a href="/transactions?account=main">View transactions</a>' in summary
 
 

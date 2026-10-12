@@ -125,7 +125,7 @@ described here updates this file in the same change.
   `<script>` block with real logic — this codebase has never had one, and adding the first here
   would either be silently blocked by the browser or force a CSP weakening this task's own
   no-CDN framing argues against. The chart's numeric data is embedded via a non-executable
-  `<script type="application/json">` data island in `portfolio.html` (inspected as data, not run
+  `<script type="application/json">` data island in `account_holdings.html` (inspected as data, not run
   as script — needs no `script-src` permission to be read); the logic (`getComputedStyle(...)
   .getPropertyValue('--gain')` etc., and the `Chart` instantiation) lives in a same-origin
   `static/portfolio_chart.js`, loaded exactly like vendored htmx. `test_templates.py`'s new
@@ -204,7 +204,7 @@ described here updates this file in the same change.
   `routes._account_header_context`, one `list_accounts` call. The same call answers "is this the
   visitor's account?": `/transactions/new` and `/transactions/import` used to render a form for
   any `?account=` label and leave `portfolio` to reject the write. They now 404 up front
-  (`account_not_found.html`, shared with `/portfolio`). The 404 happens only when the list loaded
+  (`account_not_found.html`, shared with `/accounts/holdings`). The 404 happens only when the list loaded
   and the label isn't in it. If `portfolio` can't be reached, the page renders with a label-only
   header and no switcher, because an outage must not tell the visitor a real account doesn't
   exist. POST routes load the header lazily (`extra_context_loader`), so only a full-page error
@@ -213,7 +213,7 @@ described here updates this file in the same change.
   `?account=` back to the current path, so switching keeps the visitor on Holdings,
   Transactions, Add or Import. An htmx `hx-get` swapping the response into `<body>` was planned and rejected. htmx
   1.9 does take a full document's `<body>` and update the title, but page scripts that start on
-  `DOMContentLoaded` (`portfolio_chart.js`) never run after a swap, so `/portfolio` would lose its
+  `DOMContentLoaded` (`portfolio_chart.js`) never run after a swap, so `/accounts/holdings` would lose its
   chart. A full navigation is also what an account switch is: every figure on the page changes.
   The cost is a visible "Switch" button, since the form can't submit on `change` without a script.
   The Transactions sub-nav link shipped ahead of its page (UI-4) and 404ed until UI-8 built

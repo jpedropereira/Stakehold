@@ -190,7 +190,7 @@ def test_overview_row_shows_the_accounts_figures_and_links_to_its_holdings(clien
     html = test_client.get("/").text
 
     isa = _account_row(html, "my isa")
-    assert 'href="/portfolio?account=my%20isa"' in isa
+    assert 'href="/accounts/holdings?account=my%20isa"' in isa
     assert "acme" in isa
     assert "€2,000.00" in isa
     assert "+€520.00" in isa and "+34.67%" in isa

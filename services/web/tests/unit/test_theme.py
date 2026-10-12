@@ -172,9 +172,9 @@ def test_post_theme_only_redirects_within_the_site(client, next_url):
 
 
 def test_post_theme_keeps_the_query_string_of_next(client):
-    response = _post_theme(client, "dark", next_url="/portfolio?account=Main")
+    response = _post_theme(client, "dark", next_url="/accounts/holdings?account=Main")
 
-    assert response.headers["location"] == "/portfolio?account=Main"
+    assert response.headers["location"] == "/accounts/holdings?account=Main"
 
 
 # --- rendering --------------------------------------------------------------

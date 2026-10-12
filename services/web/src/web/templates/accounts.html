@@ -19,7 +19,7 @@
     {% for account in accounts %}
     {% set account_query = "?account=" ~ (account.account_label | urlencode) %}
     <li class="account-row">
-      <a class="account-label" href="/portfolio{{ account_query }}">{{ account.account_label }}<span class="visually-hidden"> holdings</span></a>
+      <a class="account-label" href="/accounts/holdings{{ account_query }}">{{ account.account_label }}<span class="visually-hidden"> holdings</span></a>
       <span class="account-broker">{{ account.broker }}</span>
       <span class="account-actions">
         <a class="btn btn-secondary" href="/transactions{{ account_query }}">Transactions</a>

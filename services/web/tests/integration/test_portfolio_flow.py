@@ -270,13 +270,13 @@ async def test_import_with_no_registered_parser_surfaces_broker_parser_not_found
     assert message in response.text.lower()
 
 
-# --- portfolio view: GET /portfolio -------------------------------------------
+# --- holdings view: GET /accounts/holdings -----------------------------------
 
 
-async def test_portfolio_page_shows_empty_state_before_any_rebuild(web_client):
+async def test_holdings_page_shows_empty_state_before_any_rebuild(web_client):
     _create_account(web_client)
 
-    response = web_client.get("/portfolio", params={"account": "main"})
+    response = web_client.get("/accounts/holdings", params={"account": "main"})
 
     assert response.status_code == 200
     assert "No positions yet" in response.text
@@ -284,8 +284,8 @@ async def test_portfolio_page_shows_empty_state_before_any_rebuild(web_client):
     assert "Can&#39;t reach the portfolio service" not in response.text
 
 
-async def test_portfolio_page_for_unknown_account_is_404(web_client):
-    response = web_client.get("/portfolio", params={"account": "ghost"})
+async def test_holdings_page_for_unknown_account_is_404(web_client):
+    response = web_client.get("/accounts/holdings", params={"account": "ghost"})
 
     assert response.status_code == 404
     assert "doesn't exist" in response.text
@@ -315,7 +315,7 @@ async def test_a_ticker_picked_in_the_form_shows_up_as_a_position(web_client_wit
         ),
         follow_redirects=False,
     )
-    response = web_client.get("/portfolio", params={"account": "main"})
+    response = web_client.get("/accounts/holdings", params={"account": "main"})
 
     assert '<option value="IWDA.AS">' in form.text
     assert buy_response.status_code == 303
