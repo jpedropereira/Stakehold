@@ -47,8 +47,10 @@ described here updates this file in the same change.
     Tab stop of its own. While that button has focus, the input matches `:focus-within` but not
     `:focus-visible`, so the field gets the ring for `:focus-within` too.
   - *Review script*: `scripts/review_pages.py` serves `create_app()` against in-process fake
-    clients, then screenshots every page in both themes at four widths: phone 360px, tablet
-    768px, desktop 1280px and wide 1920px (LY-1). A page entry can name an element to click
+    clients, then screenshots every page in both themes at five widths: phone 360px, tablet
+    768px, desktop 1280px, laptop 1440px and wide 1920px (LY-1). Laptop came with LY-4: it sits
+    just under the split breakpoint (1480px), so the stacked side of it is reviewed as well as
+    the two-column side. A page entry can name an element to click
     once loaded, for a state only a click reaches, such as the transaction log's open delete
     dialog, or each chart view (total return, the default, plus market value and growth, on both
     chart pages). `--only` and `--width` narrow a run to some pages or widths. For each variant it
@@ -58,7 +60,11 @@ described here updates this file in the same change.
     - no table reaching past its card's content edge, unless it sits in a `.table-scroll` box,
       which is meant to scroll. A table that spills over its card doesn't always scroll the
       page (Transactions at 1280px didn't), so the first check alone misses it;
-    - every chart canvas filling its `.chart-frame` (within 1px), 280 to 480px tall (LY-3).
+    - no `.table-scroll` box that scrolls while its `.split` shows two columns (LY-4). The
+      breakpoint is chosen so the table column fits its table, and the check above skips
+      anything in a `.table-scroll` box, so a breakpoint set too low would otherwise go unseen;
+    - every chart canvas filling its `.chart-frame` (within 1px), 280 to 560px tall: 280 to
+      480px stacked (LY-3), 320 to 560px in a `.split` column (LY-4).
       Comparing canvas to frame is the only check on the chart script and the CSS together,
       since there's no JS test runner. Without `maintainAspectRatio: false` the canvas falls back
       to 2:1 of its width, which at phone width is 144px inside a 280px frame. Where 2:1 of the
@@ -90,7 +96,9 @@ described here updates this file in the same change.
     At 768px the account-holdings page's five tiles wrap four and one. LY-2 to LY-7 are
     compared against this. After LY-3 added the two market-value pages: 196 of 208, the same 12
     failures. After LY-2: 208 of 208. Transactions fits its full-width card from about 1150px
-    and scrolls in its box below that; the logo lines up with the content edge.
+    and scrolls in its box below that; the logo lines up with the content edge. After LY-4,
+    which added the laptop width: 260 of 260. `/portfolio` is two columns at 1920px and
+    stacked at 1440px and below.
 - **Feedback and error states (UI-12).**
   - *Banners*: every message is one macro, `partials/_banner.html`, in the charter's ink rule
     (chapter II): an icon and a bold lead word carry the meaning, never color, so errors use
@@ -194,9 +202,9 @@ described here updates this file in the same change.
   edge:** the frame needs its explicit `width: 100%`. Left `auto`, `aspect-ratio` carries the
   bounds across to the width: `min-height: 280px` became a 560px minimum width and every phone
   page with a chart scrolled sideways, and `max-height` capped `/portfolio`'s chart at 960px wide
-  inside a 1008px card. A layout that wants another height (LY-4 stretches the chart to its row)
-  overrides `aspect-ratio` and the bounds on the frame, and moves `review_pages.py`'s
-  `CHART_HEIGHT` with them. At about 420px wide (LY-4's column) and at phone width, the x-axis
+  inside a 1008px card. A layout that wants another height overrides `aspect-ratio` and the
+  bounds on the frame, and moves `review_pages.py`'s `CHART_HEIGHT` with them; `.split` does
+  (LY-4, below). At about 420px wide (a `.split` column's minimum) and at phone width, the x-axis
   ticks thin out on their own (`autoSkipPadding`) and the view and range buttons wrap, so neither
   needed changing.
 - **Theme (UI-3): a cookie, applied on the server.** The choice (`light` / `dark` / `system`,
@@ -274,6 +282,40 @@ described here updates this file in the same change.
     is `position: relative`. Without it, the visually-hidden "Actions" header, which is
     absolutely positioned, took the page as its containing block, escaped the box's clipping,
     and still scrolled the page sideways at 768px.
+- **A holdings table and its chart share a row on a wide screen: `.split` (LY-4).** On
+  `/portfolio` the as-of line and tiles span the page, and below them a `.split` grid holds the
+  Holdings card and the Returns card. LY-5 (account holdings) and LY-6 (Overview) reuse it.
+  - *Grid, not markup order*: the cards are in the markup in reading order, tiles then table
+    then chart, and the grid places the columns. A screen reader or keyboard meets the page in
+    the same order at every width, which moving the chart's markup to put it first would
+    break.
+  - *Breakpoint, measured*: the ten-column table is 875px at its natural width, plus 64px of
+    card padding, so the table column's minimum is 940px. The chart's is 420px. With the 24px
+    gap that's 1384px of content, a window of about 1473px once the 3vw gutters are taken off;
+    the split breakpoint is 1480px, a few pixels of slack. Wider, the spare width splits 3:2:
+    at 1920px the columns are about 946px and 630px. Below 1480px the cards stack at full
+    width, as before, so a 1280–1440px laptop gets a 1200–1350px table card rather than the old
+    880px one. All ten columns stay (agreed requirement). The table's width depends on the data
+    (longer figures, a longer ticker); if real data outgrows the 940px minimum, the table
+    scrolls in its `.table-scroll` box rather than the page, and `review_pages.py` flags it
+    for the fake data.
+  - *Stacked column is explicit (sharp edge, fixed here)*: `.split` sets
+    `grid-template-columns: minmax(0, 1fr)` even when stacked. Left `auto`, the implicit
+    column grew to the card's min-content width, which counts the 875px table inside its
+    `.table-scroll` box, and every phone and tablet `/portfolio` page scrolled sideways. As a
+    flex item with `width: 100%`, which is what the cards were before, that didn't happen.
+  - *Top-aligned, the chart sticky*: opening a holding's breakdown makes the table much taller
+    than the chart. Stretching the Returns card to the row would leave a tall empty card, or a
+    very tall chart, so both cards align to the top and the Returns card (`.split-aside`) is
+    `position: sticky`, staying in view while the table scrolls past. Only in a window at least
+    640px tall (the "tall" breakpoint): the card is about 580px at most, and in a shorter window
+    a pinned card would hide its own bottom until the table ran out. The site header isn't
+    sticky, so the card needs no offset for it.
+  - *Chart 4:3 in the column*: the roadmap first said the chart would "stretch to its row",
+    which contradicts top alignment. In a 420–630px column, LY-3's 2:1 would make it 210–315px
+    tall, so inside `.split` the frame is `aspect-ratio: 4 / 3`, held between 320px and 560px:
+    about 470px at 1920px. Still from its own width, as LY-3 chose, never from the viewport or
+    the table. `review_pages.py`'s `CHART_HEIGHT` moved to 280–560px to cover both layouts.
 - **App shell (UI-4): the current page is marked on the server, and the account pages share one
   header.** Each route passes `nav_active` (`overview` / `portfolio` / `accounts` / `tickers` / `admin`) and, on the four
   account-scoped pages, `account_nav_active` (`holdings` / `transactions` / `add` / `import`). The templates turn these into `aria-current="page"`, and `web.css` styles
@@ -303,9 +345,10 @@ described here updates this file in the same change.
   the table has ten columns, about 875px wide even with the transactions table's tighter cells
   and 13px figures, more than the 880px card holds inside its padding. So `/portfolio` takes the
   full content width (a `page-full` page since LY-2; before it, `.content-wide` on its as-of
-  line, tiles and cards), and the table sits in
-  a focusable `.table-scroll` region: between about 600px, where it stacks, and about 1000px, where it
-  fits, it scrolls in its box. Before that box, PF-4's nine columns already made the whole page
+  line, tiles and cards), and the table sits in a focusable `.table-scroll` region. Stacked,
+  between about 600px, where it stacks, and about 1000px, where it fits a full-width card, it
+  scrolls in its box. In two columns (LY-4, from 1480px) its column never goes below the
+  table's width, so the box is only a scroller below 1000px. Before that box, PF-4's nine columns already made the whole page
   scroll sideways at tablet widths, which `review_pages.py`, checking sideways scroll at phone width only at the time, didn't see
   (it checks every width since LY-1). Adding Portfolio made five nav links for an admin, so the phone nav's gap tightened
   and it wraps rather than scrolls on anything narrower than 360px.

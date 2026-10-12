@@ -43,6 +43,8 @@
 
   /* Breakpoints. A custom property can't be used in @media, so each is named here and every
      media query cites its name:
+     - split (1480px): a holdings table and its chart share a row (.split);
+     - tall (640px of height): the chart card in a .split row stays in view (.split-aside);
      - stack (600px): tables stack into labelled rows (.stack-table);
      - phone (480px): the header and page give the content the width rather than the padding. */
 }
@@ -268,6 +270,55 @@ img.logo-on-dark {
    drift apart. Form and narrow cards keep their own width on it. */
 .page-full {
   --page-wide: none;
+}
+
+/* A holdings table beside its returns chart (LY-4; LY-5 and LY-6 reuse it). One column, the
+   cards stacked in reading order, until the split breakpoint; then two, placed by the grid, not
+   by reordering the markup, so a screen reader or keyboard meets the table first at every width.
+   The gap is the only space between the cards, stacked or not. The stacked column is explicit:
+   left auto, it grows to the card's min-content width, which counts the table inside its
+   .table-scroll box, and the page scrolls sideways at tablet and phone width. */
+.split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-5);
+  width: 100%;
+  margin-bottom: var(--space-5);
+}
+
+.split > .card {
+  margin-bottom: 0;
+}
+
+/* The table column's minimum is /portfolio's ten-column table in its card (875px plus 64px of
+   padding), the chart's is 420px. With the gap that is 1384px of content, a window of about
+   1473px once the 3vw gutters are taken off; the breakpoint leaves a few pixels of slack.
+   Wider than that, the spare width splits 3:2. Both cards align to the top: the chart card
+   doesn't stretch to the table's height, which an opened breakdown makes much taller, and stays
+   in view while the table scrolls past (.split-aside, below). Breakpoint: split. */
+@media (min-width: 1480px) {
+  .split {
+    grid-template-columns: minmax(940px, 3fr) minmax(420px, 2fr);
+    align-items: start;
+  }
+
+  /* A column is narrower than a stacked card, so 2:1 would make the chart squat (about 315px
+     at 1920px); 4:3 gives it about 470px there, still from its own width, not the table's. */
+  .split .chart-frame {
+    aspect-ratio: 4 / 3;
+    min-height: 320px;
+    max-height: 560px;
+  }
+}
+
+/* The chart card is about 580px tall at most (its frame stops growing with the content), so a
+   window this tall shows all of it while it's pinned. In a shorter one a pinned card would hide
+   its own bottom until the table ran out, so it scrolls with the page. Breakpoints: split, tall. */
+@media (min-width: 1480px) and (min-height: 640px) {
+  .split-aside {
+    position: sticky;
+    top: var(--space-5);
+  }
 }
 
 /* ---- account header ---- */
@@ -862,7 +913,7 @@ img.logo-on-dark {
 /* The chart's height comes from here, not from the canvas (portfolio_chart.js turns Chart.js's
    own aspect ratio off). 2:1 of the card's width keeps today's height on an 880px card, and the
    bounds stop it going squat on a phone or taller than the screen at full width. Width-relative
-   rather than a viewport clamp(): a chart in a column (LY-4) isn't as wide as the window. Chart.js
+   rather than a viewport clamp(): a chart in a column (.split) isn't as wide as the window. Chart.js
    sizes the canvas from its parent, so the frame is positioned and holds only the canvas. A
    layout that wants another height overrides aspect-ratio and the bounds here. The explicit
    width matters: left auto, aspect-ratio turns min-height into a 560px minimum width, and a
@@ -954,7 +1005,9 @@ img.logo-on-dark {
 /* ---- the combined portfolio (PF-4) ---- */
 
 /* /portfolio is a page-full page: its table's ten columns (PF-6) need about 875px inside the
-   card. Below that (between phone and desktop width) the table scrolls in its .table-scroll box. */
+   card. Stacked, the card runs the content width, so the table fits from a window of about
+   1000px and scrolls in its .table-scroll box between that and the stack breakpoint. In two
+   columns (.split) its column never goes below the table's width, so the box doesn't scroll. */
 
 /* Ten columns: the transactions table's tighter cells and smaller figures. */
 .portfolio-table th,

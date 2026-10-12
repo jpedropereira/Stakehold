@@ -54,6 +54,10 @@
 </section>
 {% endif %}
 
+{# Two columns on a wide screen, the table wider, and stacked below the split breakpoint
+   (web.css, .split). The markup keeps reading order, holdings then chart; CSS grid places
+   the columns. The chart card stays in view beside a long table (.split-aside). #}
+<div class="split">
 <section class="card card-wide">
   <h1>Holdings</h1>
   {% include "partials/_unmapped_notice.html" %}
@@ -63,8 +67,9 @@
   {# Stacks at phone width like the per-account table (web.css, .stack-table), with the same
      explicit roles and data-labels. Each holding is followed by a breakdown row: one cell
      spanning the table, holding a <details> with the accounts, so it opens without JS. Between
-     phone and desktop width its ten columns don't fit, so it scrolls in its own box (focusable,
-     so a keyboard can scroll it) rather than moving the page. #}
+     phone width and about 1000px its ten columns don't fit, so it scrolls in its own box
+     (focusable, so a keyboard can scroll it) rather than moving the page. In two columns its
+     column is sized to fit it, so the box never scrolls there. #}
   <div class="table-scroll" tabindex="0" role="region" aria-label="Holdings">
   <table class="positions-table holdings-table portfolio-table stack-table" role="table">
     <thead role="rowgroup">
@@ -138,7 +143,7 @@
   {% endif %}
 </section>
 
-<section class="card card-wide">
+<section class="card card-wide split-aside">
   <h1>Returns over time</h1>
   {% if returns_error %}
   {% call banner("error") %}<strong>Couldn't load your returns.</strong> {{ returns_error }}{% endcall %}
@@ -167,5 +172,6 @@
   <p class="entry-empty">No return history yet — returns appear once Stakehold has prices for your holdings' dates. {{ freshness }}</p>
   {% endif %}
 </section>
+</div>
 {% endif %}
 {% endblock %}

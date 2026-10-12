@@ -1,15 +1,18 @@
-"""Screenshot every web page in both themes at every width, and check each one (UI-13, LY-1, LY-3).
+"""Screenshot every web page in both themes at every width, and check each one (UI-13, LY-1, LY-3,
+LY-4).
 
     uv run python services/web/scripts/review_pages.py [--out DIR] [--only NAME ...]
         [--width NAME ...]
 
-The widths are phone (360px), tablet (768px), desktop (1280px) and wide (1920px).
+The widths are phone (360px), tablet (768px), desktop (1280px), laptop (1440px, just under the
+split breakpoint) and wide (1920px).
 
 For a person to review, not a pixel-diff gate: the screenshots land in services/web/screenshots/
 (gitignored). Alongside them, every page and variant gets the checks a screenshot can't show:
 
 - no sideways scroll;
 - no table wider than the card that holds it, unless it sits in a .table-scroll box;
+- no .table-scroll box that scrolls while its .split shows two columns;
 - every chart filling its .chart-frame, at a height within CHART_HEIGHT;
 - WCAG AA contrast for every piece of visible text against what's actually behind it;
 - a visible focus indicator on everything Tab reaches, and Tab never getting stuck;
@@ -39,7 +42,7 @@ _WEB_DIR = Path(__file__).resolve().parents[1]
 _DEFAULT_OUT = _WEB_DIR / "screenshots"
 
 THEMES = ("light", "dark")
-WIDTHS = {"phone": 360, "tablet": 768, "desktop": 1280, "wide": 1920}
+WIDTHS = {"phone": 360, "tablet": 768, "desktop": 1280, "laptop": 1440, "wide": 1920}
 
 
 @dataclass(frozen=True)
@@ -219,8 +222,26 @@ _TABLE_OVERFLOW_JS = """
 }
 """
 
-# The chart's agreed height bounds (LY-3). A layout that stretches the chart (LY-4) moves these.
-CHART_HEIGHT = (280, 480)
+# Run in the page. Every .table-scroll box that scrolls while its .split is in two columns: the
+# split breakpoint is chosen so the table column fits its table, and the overflow check above
+# skips anything in a .table-scroll box, so a breakpoint set too low would otherwise go unseen.
+_SPLIT_SCROLL_JS = """
+() => {
+  const failures = [];
+  for (const box of document.querySelectorAll(".split .table-scroll")) {
+    const split = box.closest(".split");
+    const columns = getComputedStyle(split).gridTemplateColumns.trim().split(/\\s+/).length;
+    if (columns > 1 && box.scrollWidth > box.clientWidth + 1) {
+      const label = box.getAttribute("aria-label") || "table";
+      failures.push(`${label}: ${box.scrollWidth}px in a ${box.clientWidth}px box`);
+    }
+  }
+  return failures;
+}
+"""
+
+# The chart's agreed height bounds: 280-480px stacked (LY-3), 320-560px in a .split column (LY-4).
+CHART_HEIGHT = (280, 560)
 
 # Run in the page. Every chart canvas that doesn't fill its .chart-frame, which means Chart.js is
 # sizing it from its own width rather than from the frame, or whose height is outside the bounds.
@@ -699,6 +720,7 @@ def _review(browser, base_url, page_spec, theme, width_name, out) -> list[str]:
     if not page.evaluate("document.documentElement.scrollWidth <= window.innerWidth"):
         problems.append("scrolls sideways")
     problems += [f"table overflows its card: {f}" for f in page.evaluate(_TABLE_OVERFLOW_JS)]
+    problems += [f"table scrolls in two columns: {f}" for f in page.evaluate(_SPLIT_SCROLL_JS)]
     problems += [f"chart: {f}" for f in page.evaluate(_CHART_SIZE_JS, list(CHART_HEIGHT))]
     problems += [f"contrast: {f}" for f in page.evaluate(_CONTRAST_JS)]
     problems += [f"focus: {p}" for p in _focus_problems(page)]
