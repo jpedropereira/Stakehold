@@ -47,10 +47,16 @@ described here updates this file in the same change.
     Tab stop of its own. While that button has focus, the input matches `:focus-within` but not
     `:focus-visible`, so the field gets the ring for `:focus-within` too.
   - *Review script*: `scripts/review_pages.py` serves `create_app()` against in-process fake
-    clients, then screenshots every page in both themes at 1280px and 360px. A page entry can
-    name an element to click once loaded, for a state only a click reaches, such as the
-    transaction log's open delete dialog. For each of those variants it also checks:
-    - no sideways scroll at phone width;
+    clients, then screenshots every page in both themes at four widths: phone 360px, tablet
+    768px, desktop 1280px and wide 1920px (LY-1). A page entry can name an element to click
+    once loaded, for a state only a click reaches, such as the transaction log's open delete
+    dialog. `--only` and `--width` narrow a run to some pages or widths. For each variant it
+    also checks:
+    - no sideways scroll, at every width: PF-4's table scrolled the page at tablet width for a
+      whole task because the check only ran at phone width;
+    - no table reaching past its card's content edge, unless it sits in a `.table-scroll` box,
+      which is meant to scroll. A table that spills over its card doesn't always scroll the
+      page (Transactions at 1280px didn't), so the first check alone misses it;
     - WCAG AA contrast of every visible text element against the background actually behind
       it;
     - a visible focus indicator at every Tab stop, a date input's inner stops included;
@@ -65,6 +71,17 @@ described here updates this file in the same change.
     test checks that its page list includes every `GET` page route, so a new page can't skip
     review. **Known limitation:** text drawn on the chart's canvas isn't measured. It's
     colored from the same aliases, which `test_brand_contrast.py` covers.
+
+    *Baseline before the screen-layout chunk* (LY-1, 2026-10-12): 180 of 192 variants pass.
+    The 12 failures are Transactions and its open delete dialog, both themes:
+    - tablet: the 844px table runs past its 656px card, and the page scrolls sideways;
+    - desktop and wide: the same table runs past its 816px card. It stays inside the page.
+
+    The screenshots show the rest. At 1920px every data page is an 880px column with about 520px
+    empty on each side (`/portfolio`, about 1070px wide, leaves about 425px), and the logo
+    sits left of the cards.
+    At 768px the account-holdings page's five tiles wrap four and one. LY-2 to LY-7 are
+    compared against this.
 - **Feedback and error states (UI-12).**
   - *Banners*: every message is one macro, `partials/_banner.html`, in the charter's ink rule
     (chapter II): an icon and a bold lead word carry the meaning, never color, so errors use
@@ -227,7 +244,8 @@ described here updates this file in the same change.
   full content width (`.content-wide` on its as-of line, tiles and cards), and the table sits in
   a focusable `.table-scroll` region: between about 600px, where it stacks, and 990px, where it
   fits, it scrolls in its box. Before that box, PF-4's nine columns already made the whole page
-  scroll sideways at tablet widths, which `review_pages.py` (desktop and phone only) can't see. Adding Portfolio made five nav links for an admin, so the phone nav's gap tightened
+  scroll sideways at tablet widths, which `review_pages.py`, checking sideways scroll at phone width only at the time, didn't see
+  (it checks every width since LY-1). Adding Portfolio made five nav links for an admin, so the phone nav's gap tightened
   and it wraps rather than scrolls on anything narrower than 360px.
 - **The account switcher is a plain GET form, with no htmx enhancement.** The form submits
   `?account=` back to the current path, so switching keeps the visitor on Holdings,

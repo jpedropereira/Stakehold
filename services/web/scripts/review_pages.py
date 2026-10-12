@@ -1,11 +1,15 @@
-"""Screenshot every web page in both themes at desktop and phone width, and check each one (UI-13).
+"""Screenshot every web page in both themes at every width, and check each one (UI-13, LY-1).
 
     uv run python services/web/scripts/review_pages.py [--out DIR] [--only NAME ...]
+        [--width NAME ...]
+
+The widths are phone (360px), tablet (768px), desktop (1280px) and wide (1920px).
 
 For a person to review, not a pixel-diff gate: the screenshots land in services/web/screenshots/
 (gitignored). Alongside them, every page and variant gets the checks a screenshot can't show:
 
-- no sideways scroll at phone width;
+- no sideways scroll;
+- no table wider than the card that holds it, unless it sits in a .table-scroll box;
 - WCAG AA contrast for every piece of visible text against what's actually behind it;
 - a visible focus indicator on everything Tab reaches, and Tab never getting stuck;
 - no console errors, CSP violations included.
@@ -34,7 +38,7 @@ _WEB_DIR = Path(__file__).resolve().parents[1]
 _DEFAULT_OUT = _WEB_DIR / "screenshots"
 
 THEMES = ("light", "dark")
-WIDTHS = {"desktop": 1280, "phone": 360}
+WIDTHS = {"phone": 360, "tablet": 768, "desktop": 1280, "wide": 1920}
 
 
 @dataclass(frozen=True)
@@ -176,6 +180,32 @@ _FOCUS_JS = """
       || style.boxShadow !== "none",
     visible: rect.width > 0 && rect.height > 0 && style.visibility === "visible",
   };
+}
+"""
+
+# Run in the page. Every rendered table that reaches past its card's content edge (inside the
+# padding), unless it sits in a .table-scroll box, which is meant to scroll. 1px of slack absorbs
+# subpixel rounding. Returns one entry per failure.
+_TABLE_OVERFLOW_JS = """
+() => {
+  const failures = [];
+  for (const table of document.querySelectorAll("table")) {
+    if (table.closest(".table-scroll")) continue;
+    const card = table.closest(".card");
+    const rect = table.getBoundingClientRect();
+    if (!card || rect.width === 0 || rect.height === 0) continue;
+    const box = card.getBoundingClientRect();
+    const style = getComputedStyle(card);
+    const left = box.left + parseFloat(style.borderLeftWidth) + parseFloat(style.paddingLeft);
+    const right = box.right - parseFloat(style.borderRightWidth) - parseFloat(style.paddingRight);
+    if (rect.left < left - 1 || rect.right > right + 1) {
+      const names = table.className.trim();
+      const cls = names ? "." + names.split(/\\s+/).join(".") : "";
+      failures.push(
+        `table${cls} ${Math.round(rect.width)}px in a ${Math.round(right - left)}px card`);
+    }
+  }
+  return failures;
 }
 """
 
@@ -627,10 +657,9 @@ def _review(browser, base_url, page_spec, theme, width_name, out) -> list[str]:
     # Before the checks: the focus walk scrolls whatever it tabs into.
     page.screenshot(path=out / f"{page_spec.name}-{theme}-{width_name}.png", full_page=True)
     problems = []
-    if width_name == "phone" and not page.evaluate(
-        "document.documentElement.scrollWidth <= window.innerWidth"
-    ):
+    if not page.evaluate("document.documentElement.scrollWidth <= window.innerWidth"):
         problems.append("scrolls sideways")
+    problems += [f"table overflows its card: {f}" for f in page.evaluate(_TABLE_OVERFLOW_JS)]
     problems += [f"contrast: {f}" for f in page.evaluate(_CONTRAST_JS)]
     problems += [f"focus: {p}" for p in _focus_problems(page)]
     problems += [f"console: {line}" for line in console]
@@ -642,6 +671,9 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--out", type=Path, default=_DEFAULT_OUT, help="screenshot folder")
     parser.add_argument("--only", nargs="+", metavar="NAME", help="review just these pages")
+    parser.add_argument(
+        "--width", nargs="+", choices=WIDTHS, metavar="NAME", help="review at just these widths"
+    )
     args = parser.parse_args(argv)
 
     from playwright.sync_api import sync_playwright
@@ -650,9 +682,13 @@ def main(argv=None) -> int:
     unknown = set(args.only or ()) - {p.name for p in PAGES}
     if unknown:
         parser.error(f"no such page: {', '.join(sorted(unknown))}")
+    widths = [w for w in WIDTHS if not args.width or w in args.width]
     args.out.mkdir(parents=True, exist_ok=True)
-    variants = len(THEMES) * len(WIDTHS)
-    print(f"Reviewing {len(pages)} page(s) x {variants} variants; screenshots to {args.out}")
+    variants = len(THEMES) * len(widths)
+    print(
+        f"Reviewing {len(pages)} page(s) x {variants} variants ({', '.join(widths)});"
+        f" screenshots to {args.out}"
+    )
 
     base_url = _serve()
     failed = 0
@@ -660,7 +696,7 @@ def main(argv=None) -> int:
         browser = playwright.chromium.launch()
         for page_spec in pages:
             for theme in THEMES:
-                for width_name in WIDTHS:
+                for width_name in widths:
                     problems = _review(browser, base_url, page_spec, theme, width_name, args.out)
                     label = f"{page_spec.name} ({theme}, {width_name})"
                     print(f"{'FAIL' if problems else 'ok  '} {label}")

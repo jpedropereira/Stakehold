@@ -490,3 +490,18 @@ def test_review_script_covers_every_page():
     reviewed = {page.path.split("?", 1)[0] for page in _review_script().PAGES}
 
     assert page_routes <= reviewed, f"not reviewed: {sorted(page_routes - reviewed)}"
+
+
+def test_review_script_covers_phone_tablet_desktop_and_wide():
+    """LY-1: the empty sides only show at 1920px, and tables overflowed between 600px and about
+    990px unseen, so the review covers each class of screen."""
+    assert _review_script().WIDTHS == {"phone": 360, "tablet": 768, "desktop": 1280, "wide": 1920}
+
+
+def test_review_script_rejects_an_unknown_width(capsys):
+    """--width narrows a run to some widths; a typo stops the run instead of reviewing nothing."""
+    with pytest.raises(SystemExit) as stopped:
+        _review_script().main(["--width", "nope"])
+
+    assert stopped.value.code == 2
+    assert "invalid choice: 'nope'" in capsys.readouterr().err
