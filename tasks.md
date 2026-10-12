@@ -58,8 +58,8 @@ The previous chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archi
 - **Tests first**, per `.claude/rules/testing.md`. CSS layout can't be asserted in a unit test,
   so tests cover what is in the markup: which cards a page renders, in what order, inside which
   layout container, and error isolation for anything a page newly loads. Each task is verified
-  visually with `review_pages.py` at every width in LY-1's set. Its screenshots are refreshed in
-  the same change.
+  visually with `review_pages.py` at every width in LY-1's set, and its screenshots are
+  regenerated and looked at in the same change. They stay local (gitignored), not committed.
 - **Docs in the same change.** `services/web/docs/ui-architecture.md` holds the layout reasoning.
   Statements that become false are rewritten, including the PF-4/PF-6 note on `/portfolio`'s
   `.content-wide` and `.table-scroll`. `web.css` (27 KB) stays under 64 KB.
@@ -69,9 +69,9 @@ The previous chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archi
 | ID | Task | Depends on | Status |
 |----|------|-------------|--------|
 | LY-0 | [Roadmap housekeeping](#ly-0-roadmap-housekeeping) | — | done |
-| LY-1 | [Review at tablet and wide widths](#ly-1-review-at-tablet-and-wide-widths) | — | ready |
-| LY-2 | [Wider content and wide tables](#ly-2-wider-content-and-wide-tables) | LY-1 | blocked |
-| LY-3 | [Chart sized by its container](#ly-3-chart-sized-by-its-container) | LY-1 | blocked |
+| LY-1 | [Review at tablet and wide widths](#ly-1-review-at-tablet-and-wide-widths) | — | done |
+| LY-2 | [Wider content and wide tables](#ly-2-wider-content-and-wide-tables) | LY-1 | ready |
+| LY-3 | [Chart sized by its container](#ly-3-chart-sized-by-its-container) | LY-1 | ready |
 | LY-4 | [`/portfolio`: table and chart side by side](#ly-4-portfolio-table-and-chart-side-by-side) | LY-2, LY-3 | blocked |
 | LY-5 | [Account holdings: table and chart side by side](#ly-5-account-holdings-table-and-chart-side-by-side) | LY-4 | blocked |
 | LY-6 | [Overview: two-column layout](#ly-6-overview-two-column-layout) | LY-4 | blocked |
@@ -90,7 +90,7 @@ over whole, and its Known limitations stay with that chunk, since they describe 
 
 ### LY-1. Review at tablet and wide widths
 
-**Status:** ready
+**Status:** done
 
 `scripts/review_pages.py` screenshots at 1280px and 360px only, so it can't see the problem
 this chunk fixes or the regressions it could cause. The empty sides only show at 1920px.
@@ -102,16 +102,23 @@ script missed it (ui-architecture.md, PF-4 note).
 - The no-sideways-scroll check runs at every width, not just phone.
 - New check: no table is wider than the card that holds it, unless it sits in a `.table-scroll`
   region. That catches the Transactions table, which overflows its card at 1280px today.
-- Refresh the committed screenshots. Several are stale; `portfolio-*-desktop.png` predates
-  PF-6's chart.
+- Regenerate the screenshots. They're gitignored and stay local; committing about 190 PNGs on
+  every refresh was rejected.
+- `--width` narrows a run to some widths, like `--only` does for pages, for faster loops in
+  LY-2 to LY-7.
 
 This task changes no page. Its output is the baseline that later tasks are compared against.
+The baseline is recorded in `docs/ui-architecture.md` (review section): 180 of 192 variants
+pass, and the 12 failures are the Transactions table (with and without its delete dialog)
+overflowing its card at tablet, desktop and wide, and scrolling the page at tablet. Known
+failures stay failures rather than going on an allowlist, so the script exits non-zero until
+LY-2 fixes them.
 
 Files: `scripts/review_pages.py`, `screenshots/`, `docs/ui-architecture.md` (the review section).
 
 ### LY-2. Wider content and wide tables
 
-**Status:** blocked (LY-1)
+**Status:** ready
 
 The layout foundation, applied first to the pages that are just one wide table.
 
@@ -139,7 +146,7 @@ Files: `static/web.css`, `templates/{transactions,tickers,admin_mappings,base}.h
 
 ### LY-3. Chart sized by its container
 
-**Status:** blocked (LY-1)
+**Status:** ready
 
 `portfolio_chart.js` uses Chart.js's default 2:1 aspect ratio, so its height is decided by its
 width. The chart is 880px wide today, so about 440px tall. That breaks either way once layouts
