@@ -3,6 +3,7 @@
 {% block title %}Portfolio — {{ account_label }} — Stakehold{% endblock %}
 {% block page_width %} page-full{% endblock %}
 {% from "partials/_delta.html" import delta %}
+{% from "partials/_term.html" import term %}
 {% set freshness = "Prices update daily; returns are recalculated a few times a day." %}
 {% block content %}
 {% include "partials/_account_header.html" %}
@@ -14,24 +15,24 @@
 <p class="as-of">Prices as of <span class="mono">{{ summary.price_date | date }}</span>. {{ freshness }}</p>
 <section class="summary-tiles" aria-label="Account summary">
   <div class="tile">
-    <p class="tile-label">Market value</p>
+    <p class="tile-label">{{ term("Market value", "market-value") }}</p>
     <p class="tile-value"><span class="mono">{{ summary.market_value_eur | money }}</span></p>
   </div>
   <div class="tile">
-    <p class="tile-label">Cost basis</p>
+    <p class="tile-label">{{ term("Cost basis", "cost-basis") }}</p>
     <p class="tile-value"><span class="mono">{{ summary.cost_basis_eur | money }}</span></p>
   </div>
   <div class="tile">
-    <p class="tile-label">Total return</p>
+    <p class="tile-label">{{ term("Total return", "total-return") }}</p>
     <p class="tile-value">{{ delta(summary.total_return_eur) }} {{ delta(summary.total_return_pct, "pct") }}</p>
   </div>
   <div class="tile">
     {# Time-weighted: money added or taken out doesn't move it, unlike the total return's %. #}
-    <p class="tile-label">Growth since inception</p>
+    <p class="tile-label">{{ term("Growth since inception", "growth") }}</p>
     <p class="tile-value">{{ delta(growth_pct, "pct") }}</p>
   </div>
   <div class="tile">
-    <p class="tile-label">Dividends received</p>
+    <p class="tile-label">{{ term("Dividends received", "dividends") }}</p>
     <p class="tile-value"><span class="mono">{{ summary.dividends_received_eur | money }}</span></p>
   </div>
 </section>
@@ -44,6 +45,7 @@
 <div class="split split-account">
 <section class="card card-wide">
   <h1>Holdings</h1>
+  <p class="glossary-link"><a href="/glossary">What these figures mean</a></p>
   {% include "partials/_unmapped_notice.html" %}
   {% if holdings %}
   {# Stacks into one labelled block per holding at phone width (web.css, .stack-table). The
@@ -53,11 +55,11 @@
     <thead role="rowgroup">
       <tr role="row">
         <th role="columnheader">Ticker</th>
-        <th class="num" role="columnheader">Quantity</th>
-        <th class="num" role="columnheader">Avg cost</th>
-        <th class="num" role="columnheader">Market value</th>
-        <th class="num" role="columnheader">Weight</th>
-        <th class="num" role="columnheader" colspan="2">Unrealized return</th>
+        <th class="num" role="columnheader">{{ term("Quantity", "units") }}</th>
+        <th class="num" role="columnheader">{{ term("Avg cost", "avg-cost") }}</th>
+        <th class="num" role="columnheader">{{ term("Market value", "market-value") }}</th>
+        <th class="num" role="columnheader">{{ term("Weight", "weight") }}</th>
+        <th class="num" role="columnheader" colspan="2">{{ term("Unrealized return", "unrealized-return") }}</th>
       </tr>
     </thead>
     <tbody role="rowgroup">

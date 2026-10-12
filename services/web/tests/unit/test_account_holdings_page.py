@@ -207,7 +207,10 @@ def _return_row(
 def _tile(html, label):
     """The value markup of the summary tile labelled `label`, or None if there's no such tile."""
     match = re.search(
-        rf'<p class="tile-label">{label}</p>\s*<p class="tile-value">(.*?)</p>', html, re.DOTALL
+        rf'<p class="tile-label">(?:<a [^>]*>)?{label}(?:</a>)?</p>'
+        r'\s*<p class="tile-value">(.*?)</p>',
+        html,
+        re.DOTALL,
     )
     return None if match is None else match.group(1).strip()
 
@@ -1071,3 +1074,55 @@ def test_an_unknown_account_has_no_split(client):
 
     assert "doesn't exist" in html
     assert 'class="split' not in html
+
+
+def _glossary_links(html):
+    """(anchor, label) for every figure label that links to its glossary entry."""
+    return set(re.findall(r'<a class="term-link" href="/glossary#([\w-]+)">(.*?)</a>', html))
+
+
+def _a_priced_account(fake_portfolio):
+    fake_portfolio.list_positions_result = [_position()]
+    fake_portfolio.list_latest_returns_result = [_return_row()]
+
+
+def test_each_figure_header_and_tile_links_to_its_glossary_entry(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _a_priced_account(fake_portfolio)
+
+    links = _glossary_links(_page(test_client))
+
+    assert {
+        ("units", "Quantity"),
+        ("avg-cost", "Avg cost"),
+        ("market-value", "Market value"),
+        ("weight", "Weight"),
+        ("unrealized-return", "Unrealized return"),
+        ("cost-basis", "Cost basis"),
+        ("total-return", "Total return"),
+        ("growth", "Growth since inception"),
+        ("dividends", "Dividends received"),
+    } <= links
+
+
+def test_every_glossary_link_lands_on_an_entry(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _a_priced_account(fake_portfolio)
+
+    anchors = {anchor for anchor, _ in _glossary_links(_page(test_client))}
+    glossary = test_client.get("/glossary").text
+
+    assert anchors
+    assert {a for a in anchors if f'<dt id="{a}"' not in glossary} == set()
+
+
+def test_holdings_card_links_to_the_glossary_for_phone_widths(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _a_priced_account(fake_portfolio)
+
+    holdings, _ = _split(_page(test_client))
+
+    assert '<a href="/glossary">What these figures mean</a>' in holdings

@@ -116,7 +116,10 @@ def _latest(*, ticker="AAPL", market_value, cost_basis, dividends="0", price_dat
 def _tile(html, label):
     """The value markup of the summary tile labelled `label`, or None if there's no such tile."""
     match = re.search(
-        rf'<p class="tile-label">{label}</p>\s*<p class="tile-value">(.*?)</p>', html, re.DOTALL
+        rf'<p class="tile-label">(?:<a [^>]*>)?{label}(?:</a>)?</p>'
+        r'\s*<p class="tile-value">(.*?)</p>',
+        html,
+        re.DOTALL,
     )
     return None if match is None else match.group(1).strip()
 
@@ -287,3 +290,37 @@ def test_overview_is_the_current_nav_entry(client):
     html = test_client.get("/").text
 
     assert '<a href="/" aria-current="page"' in html
+
+
+def _glossary_links(html):
+    """(anchor, label) for every figure label that links to its glossary entry."""
+    return set(re.findall(r'<a class="term-link" href="/glossary#([\w-]+)">(.*?)</a>', html))
+
+
+def test_overview_tiles_link_to_their_glossary_entries(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _two_accounts(fake_portfolio)
+
+    html = test_client.get("/").text
+    links = _glossary_links(html)
+    glossary = test_client.get("/glossary").text
+
+    assert links == {
+        ("market-value", "Market value"),
+        ("cost-basis", "Cost basis"),
+        ("total-return", "Total return"),
+        ("dividends", "Dividends received"),
+    }
+    assert all(f'<dt id="{anchor}"' in glossary for anchor, _ in links)
+
+
+def test_overview_accounts_card_links_to_the_glossary(client):
+    """Its rows show figures with no headers to link from."""
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _two_accounts(fake_portfolio)
+
+    html = test_client.get("/").text
+
+    assert '<a href="/glossary">What these figures mean</a>' in html
