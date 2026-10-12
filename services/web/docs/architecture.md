@@ -358,8 +358,10 @@ this file for size. It counts as part of this document under `.claude/rules/arch
   charter's ink tag), never gain/loss colored, because a SELL or a WITHDRAWAL isn't a loss.
   Native figures (price, amount, fees) go through `native_money`. The frozen `eur_amount` is a
   muted second line under a non-EUR amount, rather than its own column: with a ninth column the
-  table overflowed the 880px card at desktop width. A long reference is cut off with an ellipsis
-  by CSS, its full value still in the page and in a `title` tooltip.
+  table overflowed the 880px card at desktop width. Since LY-2 the page takes the full content
+  width and the reference shows whole; between phone and about 1150px the table scrolls in its
+  own box (`ui-architecture.md`, "Page width"). A stacked row still cuts a long reference off
+  with an ellipsis, its full value in a `title` tooltip.
 
 ## Endpoint surface
 

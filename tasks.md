@@ -70,9 +70,9 @@ The previous chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archi
 |----|------|-------------|--------|
 | LY-0 | [Roadmap housekeeping](#ly-0-roadmap-housekeeping) | — | done |
 | LY-1 | [Review at tablet and wide widths](#ly-1-review-at-tablet-and-wide-widths) | — | done |
-| LY-2 | [Wider content and wide tables](#ly-2-wider-content-and-wide-tables) | LY-1 | ready |
+| LY-2 | [Wider content and wide tables](#ly-2-wider-content-and-wide-tables) | LY-1 | done |
 | LY-3 | [Chart sized by its container](#ly-3-chart-sized-by-its-container) | LY-1 | done |
-| LY-4 | [`/portfolio`: table and chart side by side](#ly-4-portfolio-table-and-chart-side-by-side) | LY-2, LY-3 | blocked |
+| LY-4 | [`/portfolio`: table and chart side by side](#ly-4-portfolio-table-and-chart-side-by-side) | LY-2, LY-3 | ready |
 | LY-5 | [Account holdings: table and chart side by side](#ly-5-account-holdings-table-and-chart-side-by-side) | LY-4 | blocked |
 | LY-6 | [Overview: two-column layout](#ly-6-overview-two-column-layout) | LY-4 | blocked |
 | LY-7 | [Retire the 880px column](#ly-7-retire-the-880px-column) | LY-5, LY-6 | blocked |
@@ -118,7 +118,7 @@ Files: `scripts/review_pages.py`, `screenshots/`, `docs/ui-architecture.md` (the
 
 ### LY-2. Wider content and wide tables
 
-**Status:** ready
+**Status:** done
 
 The layout foundation, applied first to the pages that are just one wide table.
 
@@ -143,6 +143,23 @@ overflow at any width, phone stacking unchanged.
 
 Files: `static/web.css`, `templates/{transactions,tickers,admin_mappings,base}.html`,
 `partials/_account_header.html`, `docs/ui-architecture.md`, `screenshots/`.
+
+Done as:
+- `--content-max` is now the content's own width (1600px), gutters outside it. The header and
+  the page share one width rule and one gutter (`--gutter: clamp(24px, 3vw, 48px)`, 12px at
+  phone width), so the logo sits on the content edge at every width.
+- Full width is set per page, not per element: `base.html`'s `page_width` block adds
+  `page-full` to `<main>`. The account header, as-of line, tiles and `.card-wide` take
+  `max-width: var(--page-wide)`, 880px by default and `none` on a full page, so the account
+  header needs no parameter. The narrow and form tiers stay `.card-narrow` and `.card`.
+- `/portfolio` became a full page, so `.content-wide` is gone already.
+- Transactions: text columns take the spare width, and the reference shows whole above the
+  stack breakpoint. With a 36-character UUID the table needs about 1150px of window; between
+  600px and that it scrolls in a focusable `.table-scroll` region, as `/portfolio` does.
+  `.table-scroll` became `position: relative`: the visually-hidden "Actions" header escaped
+  the box and still scrolled the page at 768px.
+- The two breakpoints (stack 600px, phone 480px) are named in a comment by `--content-max`.
+- `review_pages.py`: 208 of 208, from 196.
 
 ### LY-3. Chart sized by its container
 
@@ -180,7 +197,7 @@ Files: `static/portfolio_chart.js`, `static/web.css`,
 
 ### LY-4. `/portfolio`: table and chart side by side
 
-**Status:** blocked (LY-2)
+**Status:** ready
 
 - **Layout.** The as-of line and the five tiles span the full width, so all five tiles fit on
   one row at 1280px and up. Below them is a two-column grid (`.split`, reused by LY-5 and LY-6).
@@ -199,8 +216,8 @@ Files: `static/portfolio_chart.js`, `static/web.css`,
   error with holdings, first run). The first-run welcome card stays narrow and alone.
 - **Chart height.** To stretch the chart to its row, override `.chart-frame`'s `aspect-ratio`
   and height bounds for this layout, and move `review_pages.py`'s `CHART_HEIGHT` to match.
-- `.content-wide` and the `.table-scroll` wrapper are reviewed. The scroll box stays only for
-  widths where the table still can't fit.
+- The `.table-scroll` wrapper is reviewed. The scroll box stays only for widths where the table
+  still can't fit. (`.content-wide` went in LY-2, when `/portfolio` became a `page-full` page.)
 
 Tests: both cards render inside the split container, holdings first. Each error state still
 renders the other card. First run renders neither.
@@ -246,8 +263,10 @@ Files: `api/overview.py`, `templates/home.html`, `static/web.css`, `docs/ui-arch
 
 **Status:** blocked (LY-5, LY-6)
 
-Once every data page uses a width tier, remove what is left of the old column: `.card-wide`,
-`.content-wide`, and any remaining `max-width: 880px`. Run a final `review_pages.py` sweep at
+Once every data page uses a width tier, remove what is left of the old column: the 880px
+default of `--page-wide` (full becomes the default, so the `page_width` block may go too) and
+`.card-wide` if nothing still needs it. `.content-wide` and the per-block `max-width: 880px`
+rules already went in LY-2. Run a final `review_pages.py` sweep at
 every width, and check that `ui-architecture.md` no longer describes the 880px layout anywhere.
 
 Files: `static/web.css`, any template still using the old classes, `docs/ui-architecture.md`,

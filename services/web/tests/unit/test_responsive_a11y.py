@@ -37,6 +37,7 @@ from web.portfolio_client.base import (
     Position,
     Return,
     TickerMapping,
+    TrackedTicker,
     Transaction,
     UnmappedInstrument,
 )
@@ -70,6 +71,7 @@ class FakePortfolioClient:
         self.transactions: list[Transaction] = []
         self.mappings: list[TickerMapping] = []
         self.unmapped: list[UnmappedInstrument] = []
+        self.tracked: list[TrackedTicker] = []
         self.holdings = Holdings(holdings=(), totals=None)
 
     async def list_accounts(self, *, user_id):
@@ -94,7 +96,7 @@ class FakePortfolioClient:
         return []
 
     async def list_tracked_tickers(self, *, requested_by=None, statuses=None, tickers=None):
-        return []
+        return self.tracked
 
     async def list_latest_returns(self, *, user_id, account_label):
         return self.latest_returns
@@ -110,6 +112,9 @@ class FakePortfolioClient:
 
     async def list_tickers(self):
         return ["VWCE.DE"]
+
+    async def list_brokers(self):
+        return []
 
 
 def _settings() -> Settings:
@@ -392,16 +397,121 @@ def test_transactions_table_can_stack_at_phone_width(client):
     )
 
 
-def test_stacked_tables_no_longer_scroll_sideways(client):
-    """A stacked table fits the width, so it needs no scroll box around it."""
+def test_stacked_holdings_table_needs_no_scroll_box(client):
+    """A stacked table fits the width, and the holdings table fits its card above it."""
     test_client, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)
     fake_portfolio.positions = [_position("AAPL")]
     fake_portfolio.latest_returns = [_latest("AAPL")]
+
+    assert "table-scroll" not in test_client.get("/accounts/holdings?account=main").text
+
+
+def test_transactions_table_scrolls_in_its_own_named_region(client):
+    """LY-2: at full width the reference shows whole, and between phone and desktop width, where
+    the table doesn't stack yet, its nine columns scroll in their box rather than the page."""
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
     fake_portfolio.transactions = [_buy()]
 
-    for path in ("/accounts/holdings?account=main", "/transactions?account=main"):
-        assert "table-scroll" not in test_client.get(path).text, path
+    page_html = test_client.get("/transactions?account=main").text
+
+    region = re.search(r'(<div class="table-scroll"[^>]*>)\s*<table class="([^"]*)"', page_html)
+    assert region and "transactions-table" in region.group(2)
+    assert _attr(region.group(1), "tabindex") == "0"
+    assert _attr(region.group(1), "role") == "region"
+    assert _attr(region.group(1), "aria-label") == "Transactions"
+
+
+def _tracked(ticker) -> TrackedTicker:
+    return TrackedTicker(
+        ticker=ticker,
+        display_name="Vanguard FTSE All-World",
+        asset_type="etf",
+        currency="EUR",
+        exchange="XETRA",
+        origin="request",
+        status="ready",
+        enabled=True,
+        attempts=0,
+        last_error=None,
+        requested_by="u1",
+        requested_at=datetime(2026, 1, 5, tzinfo=timezone.utc),
+        ready_at=datetime(2026, 1, 5, tzinfo=timezone.utc),
+    )
+
+
+def _mapping() -> TickerMapping:
+    return TickerMapping(
+        id=1,
+        identifier_kind="ISIN",
+        identifier="IE00BK5BQT80",
+        broker=None,
+        canonical_ticker="VWCE.DE",
+        updated_at=datetime(2026, 1, 5, tzinfo=timezone.utc),
+    )
+
+
+def _main_classes(page_html):
+    return _attr(re.search(r'<main id="main"[^>]*>', page_html).group(0), "class").split()
+
+
+@pytest.mark.parametrize(
+    "path, is_admin",
+    [
+        ("/transactions?account=main", False),
+        ("/tickers", False),
+        ("/tickers", True),
+        ("/admin/mappings", True),
+        ("/portfolio", False),
+    ],
+)
+def test_wide_table_pages_take_the_full_content_width(client, path, is_admin):
+    """LY-2: the page, not each block, sets the width, so the account header, as-of line, tiles
+    and wide cards can't drift apart."""
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth, is_admin=is_admin)
+    fake_portfolio.transactions = [_buy()]
+    fake_portfolio.holdings = Holdings(holdings=(_combined_holding("AAPL"),), totals=None)
+    fake_portfolio.tracked = [_tracked("VWCE.DE")]
+    fake_portfolio.mappings = [_mapping()]
+
+    page_html = test_client.get(path).text
+
+    assert _main_classes(page_html) == ["page", "page-full"]
+    tables = re.findall(r'<section class="card card-wide"[^>]*>.*?</section>', page_html, re.S)
+    assert any("<table" in section for section in tables)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/",
+        "/accounts",
+        "/accounts/holdings?account=main",
+        "/transactions/new?account=main",
+        "/transactions/import?account=main",
+    ],
+)
+def test_other_pages_keep_the_default_width(client, path):
+    """Holdings and Overview keep the 880px column until LY-5 and LY-6 lay them out; forms keep
+    their own cards."""
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+
+    page_html = test_client.get(path).text
+
+    assert _main_classes(page_html) == ["page"]
+
+
+def test_wide_blocks_take_their_width_from_the_page():
+    """No block repeats a pixel width of its own: the page variable sets all four."""
+    css = _css()
+    assert "max-width: 880px" not in css
+    assert ".content-wide" not in css
+    for selector in (".account-header", ".card-wide", ".as-of", ".summary-tiles"):
+        rule = re.search(rf"\{selector} \{{([^}}]*)\}}", css)
+        assert rule and "max-width: var(--page-wide)" in rule.group(1), selector
 
 
 def test_admin_tables_scroll_in_a_keyboard_reachable_region(client):
@@ -448,6 +558,14 @@ def test_stacked_table_labels_are_hidden_from_screen_readers():
     """The column header already names each cell for a screen reader; the drawn label carries
     empty alt text so it isn't read a second time."""
     assert re.search(r'content:\s*attr\(data-label\)\s*/\s*""', _css())
+
+
+def test_table_scroll_contains_what_is_positioned_inside_it():
+    """LY-2: the transactions table's visually-hidden Actions header is absolutely positioned. With
+    no positioned ancestor inside the scroll box, it escaped the box's clipping and the page
+    scrolled sideways at tablet width."""
+    rule = re.search(r"\.table-scroll \{([^}]*)\}", _css())
+    assert rule and "position: relative" in rule.group(1)
 
 
 def test_table_scroll_regions_show_a_focus_ring():
