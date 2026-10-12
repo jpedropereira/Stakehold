@@ -355,7 +355,7 @@ def test_as_of_line_tiles_and_warning_span_the_page_above_the_split(client):
 
     html = test_client.get("/").text
 
-    assert 'class="page page-full"' in html
+    assert '<main id="main" class="page"' in html
     split_at = html.index('<div class="split')
     assert html.index('class="as-of"') < split_at
     assert html.index('class="summary-tiles"') < split_at

@@ -3,7 +3,6 @@
 {% from "partials/_banner.html" import banner %}
 {% from "partials/_returns_chart.html" import returns_chart %}
 {% block title %}Overview — Stakehold{% endblock %}
-{% block page_width %} page-full{% endblock %}
 {% set freshness = "Prices update daily; returns are recalculated a few times a day." %}
 {% block content %}
 {# First run only when the list actually loaded: an outage must never read as "no accounts". #}

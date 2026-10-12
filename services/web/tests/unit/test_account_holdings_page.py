@@ -996,7 +996,8 @@ def test_holdings_page_is_a_full_width_page(client):
     _logged_in(test_client, fake_auth)
     _with_a_priced_holding(fake_portfolio)
 
-    assert re.search(r'<main id="main" class="page page-full"', _page(test_client))
+    assert re.search(r'<main id="main" class="page"', _page(test_client))
+    assert re.search(r'<section class="card card-wide"', _page(test_client))
 
 
 def test_account_header_as_of_line_and_tiles_span_the_page_above_the_split(client):
