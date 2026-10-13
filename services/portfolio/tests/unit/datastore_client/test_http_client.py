@@ -164,8 +164,16 @@ def test_get_price_series_returns_every_point(client, monkeypatch):
                 "ticker": "IWDA.AS",
                 "source": "yfinance",
                 "points": [
-                    {"date": "2026-01-08", "split_adjusted_close": "95.5000"},
-                    {"date": "2026-01-09", "split_adjusted_close": "96.2500"},
+                    {
+                        "date": "2026-01-08",
+                        "split_adjusted_close": "95.5000",
+                        "simple_return": None,
+                    },
+                    {
+                        "date": "2026-01-09",
+                        "split_adjusted_close": "96.2500",
+                        "simple_return": "0.007853",
+                    },
                 ],
             },
         )
@@ -175,8 +183,14 @@ def test_get_price_series_returns_every_point(client, monkeypatch):
     points = client.get_price_series("IWDA.AS", date(2026, 1, 8), date(2026, 1, 9))
 
     assert points == [
-        PricePoint(date=date(2026, 1, 8), split_adjusted_close=Decimal("95.5000")),
-        PricePoint(date=date(2026, 1, 9), split_adjusted_close=Decimal("96.2500")),
+        PricePoint(
+            date=date(2026, 1, 8), split_adjusted_close=Decimal("95.5000"), simple_return=None
+        ),
+        PricePoint(
+            date=date(2026, 1, 9),
+            split_adjusted_close=Decimal("96.2500"),
+            simple_return=Decimal("0.007853"),
+        ),
     ]
     assert captured["url"] == "http://datastore:8000/prices/IWDA.AS"
     assert captured["params"] == {"start": "2026-01-08", "end": "2026-01-09"}
@@ -219,6 +233,41 @@ def test_get_price_series_raises_on_a_point_missing_split_adjusted_close(client,
 
     with pytest.raises(DataStoreApiError):
         client.get_price_series("IWDA.AS", date(2026, 1, 8), date(2026, 1, 9))
+
+
+def test_get_price_series_keeps_a_null_return_as_none_not_zero(client, monkeypatch):
+    point = {"date": "2026-01-08", "split_adjusted_close": "95.5000", "simple_return": None}
+    monkeypatch.setattr(requests, "get", lambda *a, **kw: FakeResponse(200, {"points": [point]}))
+
+    [parsed] = client.get_price_series("IWDA.AS", date(2026, 1, 8), date(2026, 1, 8))
+
+    assert parsed.simple_return is None
+
+
+def test_get_price_series_keeps_a_flat_day_as_zero(client, monkeypatch):
+    point = {"date": "2026-01-08", "split_adjusted_close": "95.5000", "simple_return": "0"}
+    monkeypatch.setattr(requests, "get", lambda *a, **kw: FakeResponse(200, {"points": [point]}))
+
+    [parsed] = client.get_price_series("IWDA.AS", date(2026, 1, 8), date(2026, 1, 8))
+
+    assert parsed.simple_return == Decimal("0")
+
+
+def test_get_price_series_raises_on_a_point_missing_simple_return(client, monkeypatch):
+    # A missing key must not read as a gap: that would hide a contract break behind wrong returns.
+    point = {"date": "2026-01-08", "split_adjusted_close": "95.5000"}
+    monkeypatch.setattr(requests, "get", lambda *a, **kw: FakeResponse(200, {"points": [point]}))
+
+    with pytest.raises(DataStoreApiError):
+        client.get_price_series("IWDA.AS", date(2026, 1, 8), date(2026, 1, 8))
+
+
+def test_get_price_series_raises_on_an_unparseable_simple_return(client, monkeypatch):
+    point = {"date": "2026-01-08", "split_adjusted_close": "95.5000", "simple_return": "n/a"}
+    monkeypatch.setattr(requests, "get", lambda *a, **kw: FakeResponse(200, {"points": [point]}))
+
+    with pytest.raises(DataStoreApiError):
+        client.get_price_series("IWDA.AS", date(2026, 1, 8), date(2026, 1, 8))
 
 
 def test_get_price_series_raises_when_the_request_itself_fails(client, monkeypatch):
@@ -317,6 +366,8 @@ def test_get_ticker_info_returns_exists_and_has_returns(client, monkeypatch):
                 "has_returns": True,
                 "first_date": "2020-01-01",
                 "last_date": "2026-01-09",
+                "currency": "GBp",
+                "fx_currency": "GBP",
             },
         )
 
@@ -324,7 +375,7 @@ def test_get_ticker_info_returns_exists_and_has_returns(client, monkeypatch):
 
     info = client.get_ticker_info("IWDA.AS")
 
-    assert info == TickerInfo(exists=True, has_returns=True)
+    assert info == TickerInfo(exists=True, has_returns=True, currency="GBp", fx_currency="GBP")
     assert captured["url"] == "http://datastore:8000/tickers/IWDA.AS"
     assert captured["headers"]["Authorization"] == "Bearer secret"
 
@@ -341,6 +392,21 @@ def test_get_ticker_info_never_404s_exists_false_is_a_normal_200(client, monkeyp
     info = client.get_ticker_info("NOPE")
 
     assert info == TickerInfo(exists=False, has_returns=False)
+
+
+@pytest.mark.parametrize(
+    "currency_fields",
+    [{"currency": None, "fx_currency": None}, {}],
+    ids=["null", "absent"],
+)
+def test_get_ticker_info_missing_currency_is_none(client, monkeypatch, currency_fields):
+    body = {"exists": True, "has_returns": True, **currency_fields}
+    monkeypatch.setattr(requests, "get", lambda *a, **kw: FakeResponse(200, body))
+
+    info = client.get_ticker_info("ODD.L")
+
+    assert info.currency is None
+    assert info.fx_currency is None
 
 
 def test_get_ticker_info_raises_on_a_server_error(client, monkeypatch):
