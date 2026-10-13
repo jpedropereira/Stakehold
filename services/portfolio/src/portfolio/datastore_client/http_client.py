@@ -79,7 +79,7 @@ class HttpDataStoreClient:
     def get_price_series(self, ticker: str, start: date, end: date) -> list[PricePoint]:
         try:
             response = requests.get(
-                f"{self._base_url}/prices/{ticker}",
+                f"{self._base_url}/prices/{_path(ticker)}",
                 params={"start": start.isoformat(), "end": end.isoformat()},
                 headers=self._headers,
                 timeout=_REQUEST_TIMEOUT,
@@ -188,7 +188,7 @@ class HttpDataStoreClient:
     def get_ticker_info(self, ticker: str) -> TickerInfo:
         try:
             response = requests.get(
-                f"{self._base_url}/tickers/{ticker}",
+                f"{self._base_url}/tickers/{_path(ticker)}",
                 headers=self._headers,
                 timeout=_REQUEST_TIMEOUT,
             )

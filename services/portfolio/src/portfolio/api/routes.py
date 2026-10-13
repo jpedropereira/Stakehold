@@ -37,6 +37,8 @@ from portfolio.api.models import (
     AccountDeleteResponse,
     AccountResponse,
     AccountWriteResponse,
+    BacktestRequest,
+    BacktestResponse,
     BrokerResponse,
     HoldingsResponse,
     PortfolioReturnsResponse,
@@ -506,3 +508,19 @@ def rebuild_returns(
     )
     response.status_code = _write_status_code(result)
     return result
+
+
+# --- labs ---
+
+
+@router.post("/labs/backtest", response_model=BacktestResponse)
+def backtest(body: BacktestRequest, settings: Settings = Depends(get_settings)) -> dict:
+    """A POST because the mix is a structured body, not because anything changes: nothing is
+    stored, so it answers 200, never _write_status_code's 201. The mix holds no user data, so
+    there is no user_id; the internal secret is checked like every other route here. An asset
+    data-store can't serve is reported in `statuses`, not as an error status."""
+    return jobs.get_backtest(
+        assets=[(asset.ticker, asset.weight) for asset in body.assets],
+        period=body.period,
+        settings=settings,
+    )
