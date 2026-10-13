@@ -63,7 +63,7 @@ PAGES = [
     Page("overview-market-value", "/", "admin", click="[data-chart-view=market_value_eur]"),
     Page("portfolio", "/portfolio", "admin"),
     # The first holding's per-account breakdown, opened.
-    Page("portfolio-breakdown", "/portfolio", "admin", click="details summary"),
+    Page("portfolio-breakdown", "/portfolio", "admin", click=".ticker-toggle"),
     Page(
         "portfolio-market-value", "/portfolio", "admin", click="[data-chart-view=market_value_eur]"
     ),

@@ -63,10 +63,13 @@
   {% elif rows %}
   {# Stacks at phone width like the per-account table (web.css, .stack-table), with the same
      explicit roles and data-labels. Each holding is followed by a breakdown row: one cell
-     spanning the table, holding a <details> with the accounts, so it opens without JS. Between
-     phone width and about 1000px its ten columns don't fit, so it scrolls in its own box
-     (focusable, so a keyboard can scroll it) rather than moving the page. In two columns its
-     column is sized to fit it, so the box never scrolls there. #}
+     spanning the table, holding a table of the accounts. The ticker is the button that shows
+     and hides it (static/holdings_breakdown.js). It ships disabled and the row open, so without
+     the script every breakdown is shown and no button does nothing; the id comes from the loop,
+     so a ticker never lands in an attribute. Between phone width and about 1000px its ten
+     columns don't fit, so it scrolls in its own box (focusable, so a keyboard can scroll it)
+     rather than moving the page. In two columns its column is sized to fit it, so the box
+     never scrolls there. #}
   <div class="table-scroll" tabindex="0" role="region" aria-label="Holdings">
   <table class="positions-table holdings-table portfolio-table stack-table" role="table">
     <thead role="rowgroup">
@@ -84,7 +87,7 @@
       {% for row in rows %}
       {% set holding = row.holding %}
       <tr role="row" class="holding-row">
-        <td role="cell"><span class="mono">{{ holding.canonical_ticker }}</span></td>
+        <td role="cell"><button type="button" class="ticker-toggle mono" aria-controls="breakdown-{{ loop.index }}" aria-expanded="true" disabled>{{ holding.canonical_ticker }}</button></td>
         <td class="num" role="cell" data-label="Units"><span class="mono">{{ holding.quantity | qty }}</span></td>
         <td class="num" role="cell" data-label="Avg cost"><span class="mono">{{ holding.average_cost_eur | money }}</span>{{ native_line(holding, holding.average_cost_native) }}</td>
         {% if not holding.priced %}
@@ -98,41 +101,39 @@
         <td class="num" role="cell" data-label="Total return (%)">{{ delta(holding.total_return_pct, "pct") }}</td>
         {% endif %}
       </tr>
-      <tr role="row" class="breakdown-row">
+      <tr role="row" class="breakdown-row" id="breakdown-{{ loop.index }}">
         <td role="cell" colspan="9">
-          <details>
-            <summary>In {{ holding.accounts | length }} account{{ "s" if holding.accounts | length != 1 }}</summary>
-            <table class="positions-table breakdown-table stack-table" role="table">
-              <thead role="rowgroup">
-                <tr role="row">
-                  <th role="columnheader">Account</th>
-                  <th class="num" role="columnheader">Units</th>
-                  <th class="num" role="columnheader">Avg cost</th>
-                  <th class="num" role="columnheader">Cost basis</th>
-                  <th class="num" role="columnheader">Market value</th>
-                  <th class="num" role="columnheader">Unrealized return</th>
-                </tr>
-              </thead>
-              <tbody role="rowgroup">
-                {% for part in holding.accounts %}
-                <tr role="row">
-                  <td role="cell"><a href="/accounts/holdings?account={{ part.account_label | urlencode }}">{{ part.account_label }}</a></td>
-                  <td class="num" role="cell" data-label="Units"><span class="mono">{{ part.quantity | qty }}</span></td>
-                  <td class="num" role="cell" data-label="Avg cost"><span class="mono">{{ part.average_cost_native | native_money(part.native_currency) }}</span></td>
-                  <td class="num" role="cell" data-label="Cost basis"><span class="mono">{{ part.cost_basis_eur | money }}</span></td>
-                  <td class="num" role="cell" data-label="Market value"><span class="mono">{{ part.market_value_eur | money }}</span></td>
-                  <td class="num" role="cell" data-label="Unrealized return">{{ delta(part.unrealized_return_eur) }}</td>
-                </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-          </details>
+          <table class="positions-table breakdown-table stack-table" role="table">
+            <thead role="rowgroup">
+              <tr role="row">
+                <th role="columnheader">Account</th>
+                <th class="num" role="columnheader">Units</th>
+                <th class="num" role="columnheader">Avg cost</th>
+                <th class="num" role="columnheader">Cost basis</th>
+                <th class="num" role="columnheader">Market value</th>
+                <th class="num" role="columnheader">Unrealized return</th>
+              </tr>
+            </thead>
+            <tbody role="rowgroup">
+              {% for part in holding.accounts %}
+              <tr role="row">
+                <td role="cell"><a href="/accounts/holdings?account={{ part.account_label | urlencode }}">{{ part.account_label }}</a></td>
+                <td class="num" role="cell" data-label="Units"><span class="mono">{{ part.quantity | qty }}</span></td>
+                <td class="num" role="cell" data-label="Avg cost"><span class="mono">{{ part.average_cost_native | native_money(part.native_currency) }}</span></td>
+                <td class="num" role="cell" data-label="Cost basis"><span class="mono">{{ part.cost_basis_eur | money }}</span></td>
+                <td class="num" role="cell" data-label="Market value"><span class="mono">{{ part.market_value_eur | money }}</span></td>
+                <td class="num" role="cell" data-label="Unrealized return">{{ delta(part.unrealized_return_eur) }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
         </td>
       </tr>
       {% endfor %}
     </tbody>
   </table>
   </div>
+  <script src="/static/holdings_breakdown.js" defer></script>
   {% else %}
   <p class="entry-empty">No holdings yet — they appear here as soon as one of your accounts records a buy.</p>
   {% endif %}
