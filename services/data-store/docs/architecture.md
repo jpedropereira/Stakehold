@@ -49,7 +49,7 @@ flowchart TD
 
     subgraph orch["Orchestration"]
         JOBS["jobs.py<br/><i>runnable units: config + connection + one flow</i>"]
-        PIPE["pipeline.py<br/><i>the run-level write flows; ticker/currency resolution</i>"]
+        PIPE["pipeline.py<br/><i>the run-level write flows; currency resolution</i>"]
         READ["read_flows.py<br/><i>read-side composition: FX derivation, existence checks</i>"]
         ONB["ticker_onboarding.py<br/><i>tracked_tickers: YAML sync, onboarding</i>"]
     end
@@ -70,6 +70,7 @@ flowchart TD
         SCHEMA["db/schema.sql"]
         RESULT["run_result.py"]
         RETRY["yfinance_retry.py<br/><i>shared transient-error classifier</i>"]
+        RESOLVE["ticker_resolution.py<br/><i>holding → provider ticker</i>"]
     end
 
     subgraph ext_pkg["services/shared (workspace package)"]
@@ -96,6 +97,7 @@ flowchart TD
     PIPE --> RET
     PIPE --> REG
     PIPE --> MACRO
+    PIPE --> RESOLVE
     READ --> FX
     READ --> RET
     ONB --> TRK
@@ -464,7 +466,12 @@ flows read it differently, on purpose:
 A consequence: a ticker added to the YAML is not priced daily until onboarding (TK-5) has
 backfilled it and marked it `ready`.
 
-The per-exchange normalizers (`_TICKER_NORMALIZERS`) encode verified quirks — Hong Kong codes need
+The rules live in `ticker_resolution.py`, not `pipeline.py`, because the read API needs the
+same answer (which holding a priced ticker came from, for its currency). They return `None` for
+an unmapped exchange without logging; ingest warns at its own call site. The read API resolves
+every holding on each call, so a warning there would only be noise.
+
+The per-exchange normalizers (`TICKER_NORMALIZERS`) encode verified quirks — Hong Kong codes need
 zero-padding, London tickers ending in `.` must not double it, Nordic and Toronto share classes use
 a hyphen. These were confirmed against real provider responses, not inferred. Treat them as
 findings, not guesses, and verify before adding more.
