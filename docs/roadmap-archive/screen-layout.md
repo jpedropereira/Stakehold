@@ -1,14 +1,23 @@
+# Screen-layout roadmap (archived)
+
+Completed 2026-10, tasks LY-0 to LY-7. This is the screen-layout chunk's `tasks.md`, moved here
+when the next roadmap chunk (labs) started in
+[`tasks-labs-thread.md`](../../tasks-labs-thread.md). The content is verbatim except for relative
+links, adjusted for the new location. Its Deferred list is carried forward into that file.
+
+---
+
 # Tasks
 
 Roadmap for the screen-layout chunk: making the web UI use a desktop screen instead of stacking
 every page into one narrow centred column. Today every data page is capped at 880px inside a
 1120px page box. A 1280px screen leaves about 400px empty, a 1920px one more than 1000px, and the
 holdings pages put the table above the chart, so seeing both means scrolling past one.
-The previous chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archive/):
-[walking skeleton](docs/roadmap-archive/walking-skeleton.md),
-[UI/UX](docs/roadmap-archive/ui-ux.md),
-[ticker onboarding](docs/roadmap-archive/ticker-onboarding.md) and
-[portfolio view](docs/roadmap-archive/portfolio-view.md).
+The previous chunks are archived in [`docs/roadmap-archive/`](./):
+[walking skeleton](walking-skeleton.md),
+[UI/UX](ui-ux.md),
+[ticker onboarding](ticker-onboarding.md) and
+[portfolio view](portfolio-view.md).
 
 **Task IDs are prefixed `LY-`** so they can't be confused with the walking-skeleton's bare
 "task N" references or the earlier chunks' `UI-N`, `TK-N` and `PF-N`.
@@ -84,7 +93,7 @@ The previous chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archi
 **Status:** done
 
 The portfolio-view chunk moved to
-[`docs/roadmap-archive/portfolio-view.md`](docs/roadmap-archive/portfolio-view.md). Its content is
+[`docs/roadmap-archive/portfolio-view.md`](portfolio-view.md). Its content is
 verbatim apart from relative links. This file was then started. The Deferred list is carried
 over whole, and its Known limitations stay with that chunk, since they describe its features.
 
