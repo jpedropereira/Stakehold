@@ -5,7 +5,11 @@ from pathlib import Path
 import pandas as pd
 import psycopg
 import pytest
-from data_store.market_data.repository import get_earliest_dates, save_raw_market_data
+from data_store.market_data.repository import (
+    get_earliest_dates,
+    get_latest_close_dates,
+    save_raw_market_data,
+)
 from shared.db.connection import apply_schema
 
 pytestmark = pytest.mark.integration
@@ -222,4 +226,34 @@ def test_get_earliest_dates_returns_min_date_per_ticker_and_source():
     assert yfinance_result == {"TEST": date(2020, 1, 1)}
     assert "NEVER_INSERTED" not in yfinance_result
     assert other_result == {"TEST": date(2015, 1, 1)}
+    conn.close()
+
+
+def test_get_latest_close_dates_skips_rows_without_a_close():
+    # The 2026-09-03 rows stored with no close must not count as fetched, or the daily ingest's
+    # catch-up would start after them and never repair them.
+    conn = _connect()
+    save_raw_market_data(
+        conn,
+        "yfinance",
+        "equity",
+        make_df(
+            [
+                ["TEST", date(2026, 9, 2), 10.0, 11.0, 9.0, 10.5, 10.5, 1000, 0.0, 0.0],
+                ["TEST", date(2026, 9, 3), 10.0, 11.0, 9.0, None, None, 400, 0.0, 0.0],
+            ]
+        ),
+    )
+    save_raw_market_data(
+        conn,
+        "other_source",
+        "equity",
+        make_df([["TEST", date(2026, 9, 10), 10.0, 11.0, 9.0, 10.5, 10.5, 1000, 0.0, 0.0]]),
+    )
+
+    yfinance_result = get_latest_close_dates(conn, "yfinance", ["TEST", "NEVER_INSERTED"])
+    other_result = get_latest_close_dates(conn, "other_source", ["TEST"])
+
+    assert yfinance_result == {"TEST": date(2026, 9, 2)}
+    assert other_result == {"TEST": date(2026, 9, 10)}
     conn.close()

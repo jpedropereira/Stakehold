@@ -113,6 +113,26 @@ def _first_out_of_range(columns: list[str], values: list) -> tuple[str, object] 
     return None
 
 
+def get_latest_close_dates(conn, source: str, tickers: list[str]) -> dict[str, date]:
+    """{ticker: latest stored price_date that has a close} for tickers with at least one such
+    row for this source -- where the daily ingest's catch-up starts from. A row without a close
+    doesn't count: it was never a finished observation, and counting it would put the catch-up
+    past it, so it would never be fetched again."""
+    if not tickers:
+        return {}
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT ticker, MAX(price_date)
+            FROM raw_market_data
+            WHERE source = %s AND ticker = ANY(%s) AND close IS NOT NULL
+            GROUP BY ticker
+            """,
+            (source, tickers),
+        )
+        return {row[0]: row[1] for row in cur.fetchall()}
+
+
 def get_earliest_dates(conn, source: str, tickers: list[str]) -> dict[str, date]:
     """{ticker: earliest stored price_date} for tickers with at least one row for this
     source. A ticker with no rows at all is absent from the result — callers distinguish

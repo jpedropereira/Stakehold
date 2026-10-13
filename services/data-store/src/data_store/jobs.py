@@ -57,6 +57,12 @@ logger = logging.getLogger(__name__)
 
 SCHEMA_PATH = Path(__file__).parent / "db" / "schema.sql"
 
+# How far back the daily ingests reach for a ticker or currency pair that fell behind their
+# rolling window, e.g. after the DAG didn't run for a while (see pipeline._fetch_windows). A
+# year covers any outage worth recovering from without a backfill, and bounds what a delisted
+# ticker, which never catches up, costs every run.
+CATCH_UP_DAYS = 366
+
 
 def run_db_init() -> dict[str, int | str]:
     """Apply the schema. Idempotent -- see docs/schema.md on why every statement is guarded."""
@@ -165,7 +171,8 @@ def run_ingest_market_data(
     *, fund: str | None = None, days: int = 7, tickers: list[str] | None = None
 ) -> dict[str, int | str]:
     """Prices, dividends and stock splits for the selected funds' holdings plus every tracked
-    ticker, over a rolling window."""
+    ticker, over a rolling window -- reaching further back, up to CATCH_UP_DAYS, for a ticker
+    that fell behind it."""
     configure_logging()
     end_date = date.today()
     return _run_priced_flow(
@@ -174,6 +181,7 @@ def run_ingest_market_data(
         tickers=tickers,
         ready_only=True,
         positional=(end_date - timedelta(days=days), end_date),
+        extra_kwargs={"catch_up_limit": end_date - timedelta(days=CATCH_UP_DAYS)},
     )
 
 
@@ -219,7 +227,8 @@ def run_ingest_fx_rates(
     *, days: int = 7, currencies: list[str] | None = None
 ) -> dict[str, int | str]:
     """Currency-conversion rates for every enabled currency in config/currencies.yaml, plus every
-    enabled tracked ticker's currency, against base_currency, over a rolling window."""
+    enabled tracked ticker's currency, against base_currency, over a rolling window --
+    reaching further back, up to CATCH_UP_DAYS, for a pair that fell behind it."""
     configure_logging()
     settings = load_settings()
     currencies_config = load_currencies(settings.currencies_path)
@@ -232,6 +241,7 @@ def run_ingest_fx_rates(
             end_date - timedelta(days=days),
             end_date,
             only_currencies=set(currencies) if currencies else None,
+            catch_up_limit=end_date - timedelta(days=CATCH_UP_DAYS),
         )
     finally:
         conn.close()

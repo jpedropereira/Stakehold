@@ -117,8 +117,22 @@ rerun is the normal case. `source` is part of the primary key so a second market
 coexist for the same ticker/date without collision — the schema-level hook for adding sources
 beyond yfinance later.
 
-**Backfill loading pattern**: the daily `ingest-market-data` flow keeps a rolling recent window
-filled. Deep history is filled separately by `backfill-market-data`
+**Daily catch-up after an outage**: the daily `ingest-market-data` flow keeps a rolling recent
+window filled (`--days`, default 7). A ticker whose latest stored row *with a close* is older than
+that window is fetched from that row instead, up to a year back (`jobs.CATCH_UP_DAYS`,
+`pipeline._fetch_windows`), so a run after the DAG was down fills the gap instead of starting a
+new hole. A row without a close doesn't count as stored for this: the yfinance source no longer
+keeps one at all (a bar Yahoo serves before the day's close is final), and rows stored before that
+change get re-fetched over. Both rules came from 2026-09: the DAG didn't run from 09-04 to 09-22,
+the 09-04 run had stored 09-03 bars without a close for 918 tickers, and the next run's 7-day
+window left 09-03..09-14 unrepaired. `market_returns` then read NULL on 09-15 for 921 tickers,
+since `compute_returns` can't anchor a return to a missing close.
+
+*Known limit:* the catch-up starts from a ticker's *latest* close, so it never looks for a hole
+behind it. A gap left before this rule existed, or one older than the year limit, needs a one-off
+`ingest-market-data --days N` reaching back over it, or a backfill with `--force-refresh`.
+
+**Backfill loading pattern**: deep history is filled separately by `backfill-market-data`
 (`pipeline.backfill_market_data`). No schema change and no separate checkpoint table —
 `raw_market_data` itself is the checkpoint, via `get_earliest_dates` — but note the table records
 *how far back rows exist*, not *how far back we have looked*, so what counts as "already done"
@@ -350,6 +364,11 @@ avoids the sparser data some exotic direct crosses have on yfinance.
 **Loading strategy: true upsert** (`INSERT ... ON CONFLICT (base_currency, quote_currency,
 rate_date, source) DO UPDATE`), same rationale as `raw_market_data`: successive ingestion runs
 fetch overlapping date windows, and a provider may restate a recent rate.
+
+**Daily catch-up after an outage**: same rule as `raw_market_data`'s. A pair whose latest stored
+`rate_date` is older than `ingest-fx-rates`' window is fetched from that date, up to a year back
+(`get_latest_fx_dates`). The 2026-09 outage left every pair without rates for 09-04..09-14, the
+same hole, with the same known limit.
 
 **Backfill loading pattern**: identical in shape to `raw_market_data`'s — `data-store
 backfill-fx-rates` fills the stretch of history each pair is still missing, using `fx_rates`

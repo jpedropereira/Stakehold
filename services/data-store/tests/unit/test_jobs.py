@@ -243,6 +243,7 @@ def test_ingest_market_data_runs_for_all_enabled_funds_with_default_lookback(
         end_date,
         only_tickers=None,
         ticker_overrides=None,
+        catch_up_limit=None,
     ):
         calls.append(
             (passed_funds, tracked_tickers, exchange_suffixes, start_date, end_date, only_tickers)
@@ -274,16 +275,32 @@ def test_ingest_market_data_respects_days_flag(monkeypatch, fake_settings):
     monkeypatch.setattr(
         jobs,
         "ingest_market_data",
-        lambda conn, funds, tt, ex, s, e, only_tickers=None, ticker_overrides=None: calls.append(
-            (s, e)
-        )
-        or flow_result(1),
+        lambda conn, funds, tt, ex, s, e, **kw: calls.append((s, e)) or flow_result(1),
     )
 
     jobs.run_ingest_market_data(days=30)
 
     start_date, end_date = calls[0]
     assert (end_date - start_date).days == 30
+
+
+def test_ingest_market_data_catches_up_for_up_to_a_year(monkeypatch, fake_settings):
+    calls = []
+
+    monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(jobs, "load_funds", lambda path: [make_fund("a")])
+    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(
+        jobs,
+        "ingest_market_data",
+        lambda conn, funds, tt, ex, s, e, **kw: calls.append((e, kw["catch_up_limit"]))
+        or flow_result(1),
+    )
+
+    jobs.run_ingest_market_data()
+
+    end_date, catch_up_limit = calls[0]
+    assert (end_date - catch_up_limit).days == 366
 
 
 def test_ingest_market_data_ticker_flag_passes_only_tickers_filter(monkeypatch, fake_settings):
@@ -296,9 +313,7 @@ def test_ingest_market_data_ticker_flag_passes_only_tickers_filter(monkeypatch, 
     monkeypatch.setattr(
         jobs,
         "ingest_market_data",
-        lambda conn, funds, tt, ex, s, e, only_tickers=None, ticker_overrides=None: calls.append(
-            (funds, only_tickers)
-        )
+        lambda conn, funds, tt, ex, s, e, **kw: calls.append((funds, kw.get("only_tickers")))
         or flow_result(),
     )
 
@@ -318,9 +333,7 @@ def test_ingest_market_data_without_ticker_flag_passes_none(monkeypatch, fake_se
     monkeypatch.setattr(
         jobs,
         "ingest_market_data",
-        lambda conn, funds, tt, ex, s, e, only_tickers=None, ticker_overrides=None: calls.append(
-            only_tickers
-        )
+        lambda conn, funds, tt, ex, s, e, **kw: calls.append(kw.get("only_tickers"))
         or flow_result(),
     )
 
@@ -344,8 +357,7 @@ def test_ingest_market_data_syncs_the_yaml_then_prices_ready_tracked_tickers(
     monkeypatch.setattr(
         jobs,
         "ingest_market_data",
-        lambda conn, funds, tt, ex, s, e, only_tickers=None, ticker_overrides=None: calls.append(tt)
-        or flow_result(1),
+        lambda conn, funds, tt, ex, s, e, **kw: calls.append(tt) or flow_result(1),
     )
 
     jobs.run_ingest_market_data()
@@ -388,8 +400,7 @@ def test_ingest_market_data_treats_missing_tracked_tickers_file_as_empty(
     monkeypatch.setattr(
         jobs,
         "ingest_market_data",
-        lambda conn, funds, tt, ex, s, e, only_tickers=None, ticker_overrides=None: calls.append(tt)
-        or flow_result(),
+        lambda conn, funds, tt, ex, s, e, **kw: calls.append(tt) or flow_result(),
     )
 
     jobs.run_ingest_market_data()
@@ -408,8 +419,7 @@ def test_ingest_market_data_loads_and_passes_exchange_suffixes(monkeypatch, fake
     monkeypatch.setattr(
         jobs,
         "ingest_market_data",
-        lambda conn, funds, tt, ex, s, e, only_tickers=None, ticker_overrides=None: calls.append(ex)
-        or flow_result(),
+        lambda conn, funds, tt, ex, s, e, **kw: calls.append(ex) or flow_result(),
     )
 
     jobs.run_ingest_market_data()
@@ -427,9 +437,7 @@ def test_ingest_market_data_loads_and_passes_ticker_overrides(monkeypatch, fake_
     monkeypatch.setattr(
         jobs,
         "ingest_market_data",
-        lambda conn, funds, tt, ex, s, e, only_tickers=None, ticker_overrides=None: calls.append(
-            ticker_overrides
-        )
+        lambda conn, funds, tt, ex, s, e, **kw: calls.append(kw.get("ticker_overrides"))
         or flow_result(),
     )
 
@@ -836,7 +844,9 @@ def test_ingest_fx_rates_loads_currencies_and_uses_default_seven_day_window(
     monkeypatch.setattr(
         jobs,
         "ingest_fx_rates",
-        lambda conn, c, s, e, only_currencies=None: calls.append((c, s, e, only_currencies))
+        lambda conn, c, s, e, only_currencies=None, catch_up_limit=None: calls.append(
+            (c, s, e, only_currencies)
+        )
         or flow_result(3),
     )
 
@@ -860,13 +870,32 @@ def test_ingest_fx_rates_respects_days_flag(monkeypatch, fake_settings):
     monkeypatch.setattr(
         jobs,
         "ingest_fx_rates",
-        lambda conn, c, s, e, only_currencies=None: calls.append((s, e)) or flow_result(1),
+        lambda conn, c, s, e, only_currencies=None, catch_up_limit=None: calls.append((s, e))
+        or flow_result(1),
     )
 
     jobs.run_ingest_fx_rates(days=30)
 
     start_date, end_date = calls[0]
     assert (end_date - start_date).days == 30
+
+
+def test_ingest_fx_rates_catches_up_for_up_to_a_year(monkeypatch, fake_settings):
+    calls = []
+
+    monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(jobs, "load_currencies", lambda path: make_currencies())
+    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(
+        jobs,
+        "ingest_fx_rates",
+        lambda conn, c, s, e, **kw: calls.append((e, kw["catch_up_limit"])) or flow_result(1),
+    )
+
+    jobs.run_ingest_fx_rates()
+
+    end_date, catch_up_limit = calls[0]
+    assert (end_date - catch_up_limit).days == 366
 
 
 def test_ingest_fx_rates_currency_flag_passes_only_currencies_filter(monkeypatch, fake_settings):
@@ -878,7 +907,10 @@ def test_ingest_fx_rates_currency_flag_passes_only_currencies_filter(monkeypatch
     monkeypatch.setattr(
         jobs,
         "ingest_fx_rates",
-        lambda conn, c, s, e, only_currencies=None: calls.append(only_currencies) or flow_result(),
+        lambda conn, c, s, e, only_currencies=None, catch_up_limit=None: calls.append(
+            only_currencies
+        )
+        or flow_result(),
     )
 
     jobs.run_ingest_fx_rates(currencies=["USD", "GBP"])
@@ -895,7 +927,10 @@ def test_ingest_fx_rates_without_currency_flag_passes_none(monkeypatch, fake_set
     monkeypatch.setattr(
         jobs,
         "ingest_fx_rates",
-        lambda conn, c, s, e, only_currencies=None: calls.append(only_currencies) or flow_result(),
+        lambda conn, c, s, e, only_currencies=None, catch_up_limit=None: calls.append(
+            only_currencies
+        )
+        or flow_result(),
     )
 
     jobs.run_ingest_fx_rates()
@@ -910,7 +945,9 @@ def test_ingest_fx_rates_closes_the_connection(monkeypatch, fake_settings):
     monkeypatch.setattr(jobs, "load_currencies", lambda path: make_currencies())
     monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn(closed))
     monkeypatch.setattr(
-        jobs, "ingest_fx_rates", lambda conn, c, s, e, only_currencies=None: flow_result(1)
+        jobs,
+        "ingest_fx_rates",
+        lambda conn, c, s, e, only_currencies=None, catch_up_limit=None: flow_result(1),
     )
 
     jobs.run_ingest_fx_rates()
@@ -1335,7 +1372,8 @@ def test_ingest_fx_rates_uses_the_widened_currencies(monkeypatch, fake_settings,
     monkeypatch.setattr(
         jobs,
         "ingest_fx_rates",
-        lambda conn, c, s, e, only_currencies=None: calls.append(c) or flow_result(),
+        lambda conn, c, s, e, only_currencies=None, catch_up_limit=None: calls.append(c)
+        or flow_result(),
     )
 
     jobs.run_ingest_fx_rates()
