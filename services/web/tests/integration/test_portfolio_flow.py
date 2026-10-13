@@ -444,8 +444,8 @@ async def test_portfolio_page_sums_a_ticker_held_in_two_accounts(web_client_with
     row = response.text.split('class="holding-row">', 1)[1].split("</tr>", 1)[0]
     assert "IWDA.AS" in row and ">15<" in row
     assert "Waiting for prices" in row
-    assert "<summary>In 2 accounts</summary>" in response.text
-    assert 'href="/accounts/holdings?account=isa"' in response.text
-    assert 'href="/accounts/holdings?account=main"' in response.text
+    breakdown = response.text.split('class="breakdown-row"', 1)[1].split("</table>", 1)[0]
+    assert 'href="/accounts/holdings?account=isa"' in breakdown
+    assert 'href="/accounts/holdings?account=main"' in breakdown
     assert "No return history yet" in response.text
     assert "Couldn't load your returns" not in response.text

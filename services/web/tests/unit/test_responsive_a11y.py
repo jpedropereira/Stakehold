@@ -338,7 +338,7 @@ def test_portfolio_table_can_stack_at_phone_width(client):
         assert _attr(cells[0], "data-label") is None
         assert [_attr(c, "data-label") for c in cells[1:]] == _PORTFOLIO_LABELS
     breakdown_cells = re.findall(
-        r'<tr role="row" class="breakdown-row">\s*(<td\b[^>]*>)', page_html
+        r'<tr role="row" class="breakdown-row"[^>]*>\s*(<td\b[^>]*>)', page_html
     )
     assert [_attr(c, "colspan") for c in breakdown_cells] == ["9", "9"]
     assert all(_attr(c, "role") == "cell" for c in breakdown_cells)

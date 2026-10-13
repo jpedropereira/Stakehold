@@ -210,8 +210,8 @@ def _tile(html, label):
 def _holding_row(html, ticker):
     """The holdings table's main row for `ticker` (not its breakdown row)."""
     match = re.search(
-        rf'<tr role="row" class="holding-row">\s*<td[^>]*><span class="mono">'
-        rf"{re.escape(ticker)}</span></td>.*?</tr>",
+        rf'<tr role="row" class="holding-row">\s*<td[^>]*><button [^>]*>'
+        rf"{re.escape(ticker)}</button></td>.*?</tr>",
         html,
         re.S,
     )
@@ -219,11 +219,25 @@ def _holding_row(html, ticker):
     return match.group(0)
 
 
+def _toggle_of(html, ticker):
+    """The opening tag of the button in `ticker`'s main row that shows its breakdown."""
+    match = re.search(r"<button [^>]*>", _holding_row(html, ticker))
+    assert match, f"no toggle for {ticker}"
+    return match.group(0)
+
+
+def _attr(tag, name):
+    match = re.search(rf'\s{name}(?:="([^"]*)")?', tag)
+    return None if match is None else (match.group(1) or "")
+
+
 def _breakdown_of(html, ticker):
-    """The <details> breakdown that follows `ticker`'s main row."""
-    row = _holding_row(html, ticker)
-    after = html[html.index(row) + len(row) :]
-    match = re.search(r"<details\b.*?</details>", after, re.S)
+    """The breakdown row that `ticker`'s toggle controls."""
+    row_id = _attr(_toggle_of(html, ticker), "aria-controls")
+    assert row_id, f"{ticker}'s toggle controls nothing"
+    match = re.search(
+        rf'<tr [^>]*id="{re.escape(row_id)}"[^>]*>.*?</table>\s*</td>\s*</tr>', html, re.S
+    )
     assert match, f"no breakdown for {ticker}"
     return match.group(0)
 
@@ -504,7 +518,6 @@ def test_each_holding_has_a_breakdown_of_its_accounts(client):
 
     details = _breakdown_of(_page(test_client), "IWDA.AS")
 
-    assert "<summary>In 2 accounts</summary>" in details
     assert 'href="/accounts/holdings?account=A"' in details
     assert 'href="/accounts/holdings?account=my%20isa%20%26%20co"' in details
     assert "80.00 EUR" in details  # account A's own average cost
@@ -516,10 +529,54 @@ def test_a_single_account_holding_still_says_which_account(client):
     _logged_in(test_client, fake_auth)
     fake_portfolio.holdings = Holdings(holdings=(_holding(),), totals=_totals())
 
-    details = _breakdown_of(_page(test_client), "IWDA.AS")
+    html = _page(test_client)
 
-    assert "<summary>In 1 account</summary>" in details
-    assert 'href="/accounts/holdings?account=A"' in details
+    assert _toggle_of(html, "IWDA.AS")
+    assert 'href="/accounts/holdings?account=A"' in _breakdown_of(html, "IWDA.AS")
+
+
+def test_the_ticker_is_the_toggle_for_its_breakdown(client):
+    """No "In N accounts" line under each holding: the ticker shows and hides its accounts. It
+    ships disabled with the breakdown open, so without static/holdings_breakdown.js every
+    breakdown reads as it is and there's no button that does nothing; the script closes them
+    and enables the buttons."""
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    accounts = (_breakdown("A"), _breakdown("B"))
+    fake_portfolio.holdings = Holdings(holdings=(_holding(accounts=accounts),), totals=_totals())
+
+    html = _page(test_client)
+    toggle = _toggle_of(html, "IWDA.AS")
+
+    assert _attr(toggle, "type") == "button"
+    assert "ticker-toggle" in _attr(toggle, "class")
+    assert _attr(toggle, "aria-expanded") == "true"
+    assert _attr(toggle, "disabled") is not None
+    row_tag = re.search(r"<tr [^>]*>", _breakdown_of(html, "IWDA.AS")).group(0)
+    assert "breakdown-row" in _attr(row_tag, "class")
+    assert _attr(row_tag, "hidden") is None
+    assert "<details" not in html and not re.search(r"In \d+ accounts?\b", html)
+    assert '<script src="/static/holdings_breakdown.js" defer></script>' in html
+
+
+def test_each_toggle_controls_its_own_breakdown(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.holdings = Holdings(
+        holdings=(
+            _holding("IWDA.AS", accounts=(_breakdown("A"),)),
+            _holding("VUSA.AS", accounts=(_breakdown("B"),)),
+        ),
+        totals=_totals(),
+    )
+
+    html = _page(test_client)
+
+    ids = [_attr(_toggle_of(html, t), "aria-controls") for t in ("IWDA.AS", "VUSA.AS")]
+    assert len(set(ids)) == 2
+    assert "account=A" in _breakdown_of(html, "IWDA.AS")
+    assert "account=B" not in _breakdown_of(html, "IWDA.AS")
+    assert "account=B" in _breakdown_of(html, "VUSA.AS")
 
 
 def test_breakdown_shows_each_accounts_own_currency(client):

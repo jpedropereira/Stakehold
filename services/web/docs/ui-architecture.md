@@ -398,14 +398,21 @@ described here updates this file in the same change.
   header and no switcher, because an outage must not tell the visitor a real account doesn't
   exist. POST routes load the header lazily (`extra_context_loader`), so only a full-page error
   re-render pays for that call, never a successful write.
-- **`/portfolio`'s per-account breakdown is a `<details>` in a row of its own under each
-  holding (PF-4).** One cell spans the table and holds a small table of the accounts, so the
-  breakdown opens with no script (nothing to add under the strict CSP) and stays keyboard and
-  screen-reader native. A row of its own, rather than a `<details>` in the ticker cell, gives the
-  accounts the table's full width on desktop; at phone width the main row stacks as the
-  per-account table does, the breakdown cell drops the stacked "label  figure" layout, and its
-  inner table stacks too, one block per account. Every holding has one, single-account ones
-  included, since it says which account holds it and links to that account's holdings. Native
+- **`/portfolio`'s per-account breakdown is a row of its own under each holding, opened from
+  the ticker (PF-4).** One cell spans the table and holds a small table of the accounts. A row of
+  its own, rather than a `<details>` in the ticker cell, gives the accounts the table's full
+  width on desktop; at phone width the main row stacks as the per-account table does, the
+  breakdown cell drops the stacked "label  figure" layout, and its inner table stacks too, one
+  block per account. Every holding has one, single-account ones included, since it says which
+  account holds it and links to that account's holdings. It used to be a `<details>` in that row,
+  opened with no script, but its "In N accounts" summary repeated under every holding and cost a
+  line each. The ticker is now a button (`aria-expanded`, `aria-controls` naming the row) and
+  `holdings_breakdown.js` toggles the row's `hidden`: a control in one row can't open a
+  `<details>` in another without script. The button ships `disabled` and every row open, so
+  without JS each breakdown is shown and no button does nothing, the password toggle's
+  convention. A CSS `:target` link was rejected: one open at a time, no way to close it, a scroll
+  jump and no expanded state. The holding and breakdown drop the rule between them only while
+  the breakdown is open (`:has()`), so a closed one leaves each holding its own rule. Native
   figures sit on a muted line under the EUR ones and only off EUR, where they'd repeat the EUR
   figure; a ticker recorded in different currencies reads "Mixed currencies" there, and the
   breakdown shows each account's own. Weight is over priced holdings only, the per-account

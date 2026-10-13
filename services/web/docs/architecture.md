@@ -509,8 +509,9 @@ branded page with its own status, and an unhandled exception a branded 500 (UI-1
   `web.css` plus vendored `htmx.min.js`. Same-origin scripts: `htmx-error-swap.js` (also the
   generic failure banner, UI-12), `portfolio_chart.js`, `theme.js` (UI-3, applies a theme
   switch in place), `transaction_form.js` (UI-9, shows the manual-entry fields the chosen type
-  and currency need), `password_toggle.js` (UI-12), and `confirm_dialog.js` (opens a delete's
-  confirmation as a dialog in place of its page).
+  and currency need), `password_toggle.js` (UI-12), `confirm_dialog.js` (opens a delete's
+  confirmation as a dialog in place of its page), and `holdings_breakdown.js` (shows and hides a
+  `/portfolio` holding's per-account breakdown from its ticker).
 - `cli.py` — `web serve` only, mirroring `auth serve`'s lazy-import-uvicorn shape.
 - `scripts/review_pages.py` (UI-13) — a developer tool, not part of the package and not an
   entry point of the service. It screenshots every page against fake clients and checks

@@ -285,7 +285,7 @@ img.logo-on-dark {
    padding), the chart's is 420px. With the gap that is 1384px of content, a window of about
    1473px once the 3vw gutters are taken off; the breakpoint leaves a few pixels of slack.
    Wider than that, the spare width splits 3:2. Both cards align to the top: the chart card
-   doesn't stretch to the table's height, which an opened breakdown makes much taller, and stays
+   doesn't stretch to the table's height, which an open breakdown makes much taller, and stays
    in view while the table scrolls past (.split-aside, below). Breakpoint: split. */
 @media (min-width: 1480px) {
   .split {
@@ -1087,20 +1087,58 @@ img.logo-on-dark {
   font-family: var(--font-mono);
 }
 
-/* A holding and its breakdown read as one: no rule between them, and the breakdown sits close
-   under the figures. */
-.portfolio-table .holding-row td {
+/* The ticker is the button that shows and hides its breakdown (static/holdings_breakdown.js):
+   it reads as the ticker, with a chevron for its state. Disabled, which it ships as until the
+   script runs, it is plain text with no chevron, and every breakdown is open. */
+.ticker-toggle {
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-family: var(--font-mono);
+  text-align: left;
+  cursor: pointer;
+}
+
+.ticker-toggle::after {
+  content: "\25B8" / "";
+  display: inline-block;
+  margin-left: var(--space-1);
+  color: var(--text-muted);
+  transition: transform 0.15s ease;
+}
+
+.ticker-toggle[aria-expanded="true"]::after {
+  transform: rotate(90deg);
+}
+
+.ticker-toggle:is(:hover, :focus-visible)::after {
+  color: var(--accent);
+}
+
+.ticker-toggle:disabled {
+  cursor: auto;
+}
+
+.ticker-toggle:disabled::after {
+  content: none;
+}
+
+/* An explicit rule, because the stacked layout's display: block would otherwise override
+   [hidden]. */
+.portfolio-table .breakdown-row[hidden] {
+  display: none;
+}
+
+/* A holding and its open breakdown read as one: no rule between them, and the breakdown sits
+   close under the figures. A closed one leaves the holding its own rule. */
+.portfolio-table .holding-row:has(+ .breakdown-row:not([hidden])) td {
   border-bottom: none;
 }
 
 .portfolio-table .breakdown-row > td {
   padding-top: 0;
-}
-
-.breakdown-row summary {
-  font: var(--text-caption);
-  color: var(--text-muted);
-  cursor: pointer;
 }
 
 .breakdown-table {
@@ -1176,13 +1214,13 @@ img.logo-on-dark {
     flex-basis: 100%;
   }
 
-  /* The holding and its breakdown stay one block, with one rule after the pair. */
-  .portfolio-table .holding-row {
+  /* The holding and its open breakdown stay one block, with one rule after the pair. */
+  .portfolio-table .holding-row:has(+ .breakdown-row:not([hidden])) {
     padding-bottom: 0;
     border-bottom: none;
   }
 
-  /* The breakdown's cell holds the <details>, not a "label  figure" line: no flex, no
+  /* The breakdown's cell holds the accounts' table, not a "label  figure" line: no flex, no
      heading weight, and its accounts stack as rows of their own. */
   .portfolio-table .breakdown-row > td {
     display: block;
