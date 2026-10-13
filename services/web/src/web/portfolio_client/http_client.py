@@ -4,9 +4,15 @@ from urllib.parse import quote
 
 import httpx
 from web.portfolio_client.base import (
+    BACKTEST_PERIODS,
     Account,
     AccountDeleteResult,
     AccountWriteResult,
+    Backtest,
+    BacktestAssetStatus,
+    BacktestGrowth,
+    BacktestPeriodReturn,
+    BacktestRow,
     Broker,
     Holding,
     HoldingAccount,
@@ -326,6 +332,75 @@ def _portfolio_returns(body: dict) -> PortfolioReturns:
         raise PortfolioUnavailable(f"malformed portfolio response: {exc}") from exc
 
 
+def _int(item: dict, key: str) -> int:
+    value = item[key]
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{key} is not an integer")
+    return value
+
+
+def _backtest_period(item: dict) -> BacktestPeriodReturn:
+    return BacktestPeriodReturn(
+        start=date.fromisoformat(item["start"]),
+        end=date.fromisoformat(item["end"]),
+        covered=_bool(item, "covered"),
+        return_pct=_opt_decimal(item["return_pct"]),
+        gaps=_int(item, "gaps"),
+    )
+
+
+def _backtest_row(item: dict) -> BacktestRow:
+    periods = item["periods"]
+    missing = [p for p in BACKTEST_PERIODS if p not in periods]
+    if missing:
+        # The table has a column per period, so a row without one can't be shown truthfully.
+        raise ValueError(f"backtest row missing period(s) {', '.join(missing)}")
+    return BacktestRow(
+        ticker=item["ticker"],
+        weight=Decimal(item["weight"]),
+        periods={p: _backtest_period(periods[p]) for p in BACKTEST_PERIODS},
+    )
+
+
+def _growth_line(values, length: int) -> tuple[Decimal, ...] | None:
+    if values is None:
+        return None
+    line = tuple(Decimal(v) for v in values)
+    if len(line) != length:
+        # One value per date, or the chart would draw each point against the wrong day.
+        raise ValueError(f"growth line has {len(line)} values for {length} dates")
+    return line
+
+
+def _backtest_growth(item: dict) -> BacktestGrowth:
+    dates = tuple(date.fromisoformat(d) for d in item["dates"])
+    return BacktestGrowth(
+        period=item["period"],
+        dates=dates,
+        mix=_growth_line(item["mix"], len(dates)),
+        assets={t: _growth_line(v, len(dates)) for t, v in item["assets"].items()},
+    )
+
+
+def _backtest(body: dict) -> Backtest:
+    try:
+        mix, growth = body["mix"], body["growth"]
+        return Backtest(
+            end_date=_opt_date(body["end_date"]),
+            mix=None if mix is None else _backtest_row(mix),
+            assets=tuple(_backtest_row(item) for item in body["assets"]),
+            growth=None if growth is None else _backtest_growth(growth),
+            statuses=tuple(
+                BacktestAssetStatus(
+                    ticker=item["ticker"], status=item["status"], reason=item["reason"]
+                )
+                for item in body["statuses"]
+            ),
+        )
+    except (KeyError, TypeError, ValueError, InvalidOperation) as exc:
+        raise PortfolioUnavailable(f"malformed portfolio response: {exc}") from exc
+
+
 def _transaction(item: dict) -> Transaction:
     try:
         return Transaction(
@@ -572,6 +647,26 @@ class HttpPortfolioClient:
         if response.status_code != 200:
             _raise_for_status(response)
         return _portfolio_returns(_json_body(response))
+
+    async def backtest(self, *, assets: list[tuple[str, Decimal]], period: str) -> Backtest:
+        response = await self._request(
+            "POST",
+            "/labs/backtest",
+            json={
+                "assets": [
+                    {"ticker": ticker, "weight": _decimal_str(weight)} for ticker, weight in assets
+                ],
+                "period": period,
+            },
+        )
+        if response.status_code == 422:
+            raise InvalidPortfolioRequest(_error_detail(response))
+        if response.status_code != 200:
+            # Not _raise_for_status: its 404 means AccountNotFound, and this route has no account.
+            raise PortfolioUnavailable(
+                f"unexpected portfolio response {response.status_code}: {_error_detail(response)}"
+            )
+        return _backtest(_json_body(response))
 
     async def list_ticker_mappings(self) -> list[TickerMapping]:
         response = await self._request("GET", "/ticker-mappings")

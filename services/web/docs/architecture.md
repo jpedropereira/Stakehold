@@ -450,7 +450,15 @@ branded page with its own status, and an unhandled exception a branded 500 (UI-1
   `/holdings` has no 404 (a user with no accounts gets an empty result). PF-6 added
   `list_portfolio_returns` (`GET /returns/portfolio`, the full series: the chart's ranges crop
   on the client) and its `PortfolioReturns`/`PortfolioSeriesPoint`; no 404
-  either.
+  either. LB-5 added `backtest` (`POST /labs/backtest`, read-only despite the POST) and its
+  `Backtest`/`BacktestRow`/`BacktestPeriodReturn`/`BacktestGrowth`/`BacktestAssetStatus`, plus
+  `BACKTEST_PERIODS` for the column order, since web can't import portfolio's `Period`. A 422 is
+  `InvalidPortfolioRequest`. Every other status, a 404 included, is `PortfolioUnavailable`: the
+  route has no account, so `_raise_for_status`'s 404-means-`AccountNotFound` would mislead. An
+  asset portfolio can't backtest is a status in the result, never an error. Two checks go beyond
+  typing, so that a broken contract can't render as wrong figures: every row must have all seven
+  periods, and every growth line one value per date. The shared 10 s timeout fits: the flow took
+  about 2.2 s for 50 assets over Max against the dev data.
 - `rebuild_outcome.py` (UI-7) — pure. Turns the two rebuild statuses into the confirmation
   banner's one sentence; see "Key decisions".
 - `portfolio_view.py` (task 12) — pure, I/O-free reshaping of what `routes.py` fetches for
@@ -553,7 +561,9 @@ one-time network creation. See `docs/smoke-test.md` for the full bring-up sequen
   `web`: `portfolio` rebuilds positions and returns itself on each transaction write, and
   refreshes returns on a schedule. `web` only reports the write's rebuild statuses (UI-7).
   Ticker onboarding (TK-8) goes through `portfolio` too: its `/instruments/tickers/{t}/lookup`
-  and `/instruments/tracked-tickers` routes pass straight through to `data-store`.
+  and `/instruments/tracked-tickers` routes pass straight through to `data-store`. So do Labs
+  backtests (LB-5): `POST /labs/backtest` reads price and FX history from `data-store` on
+  `portfolio`'s side, so `web` still never calls `data-store`.
 - **`data-store`** — turns out not to be needed directly. This line previously anticipated task 12
   calling `data-store` for market-data reads; in practice `portfolio`'s own `/positions`/`/returns`
   already return EUR-converted figures (computed against `data-store` on `portfolio`'s side, at

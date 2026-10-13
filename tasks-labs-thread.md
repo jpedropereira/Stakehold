@@ -97,8 +97,8 @@ The previous chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archi
 | LB-2 | [portfolio: client reads returns and currency](#lb-2-portfolio-client-reads-returns-and-currency) | LB-1 | done |
 | LB-3 | [portfolio: backtest calculator](#lb-3-portfolio-backtest-calculator) | — | done |
 | LB-4 | [portfolio: backtest endpoint](#lb-4-portfolio-backtest-endpoint) | LB-2, LB-3 | done |
-| LB-5 | [web: client for the backtest](#lb-5-web-client-for-the-backtest) | LB-4 | ready |
-| LB-6 | [web: `/labs` page with the period table](#lb-6-web-labs-page-with-the-period-table) | LB-5 | blocked |
+| LB-5 | [web: client for the backtest](#lb-5-web-client-for-the-backtest) | LB-4 | done |
+| LB-6 | [web: `/labs` page with the period table](#lb-6-web-labs-page-with-the-period-table) | LB-5 | ready |
 | LB-7 | [web: edit the mix](#lb-7-web-edit-the-mix) | LB-6 | blocked |
 | LB-8 | [web: growth chart](#lb-8-web-growth-chart) | LB-6 | blocked |
 
@@ -285,7 +285,7 @@ surface), `services/portfolio/docs/flows.md` (the new flow).
 
 ### LB-5. web: client for the backtest
 
-**Status:** ready
+**Status:** done
 
 - Add `backtest()` to the `PortfolioClient` Protocol and to `HttpPortfolioClient`, with frozen
   result dataclasses.
@@ -295,6 +295,24 @@ Tests: parsing a full response, an asset that isn't included, and an error respo
 
 Files: `web/portfolio_client/{base,http_client}.py`, their tests,
 `services/web/docs/architecture.md` (the endpoints web calls).
+
+**As built:**
+- **No fake yet.** web's fake clients are partial copies, one per test file plus
+  `review_pages.py`'s, and each has only the methods its routes call. No route calls `backtest()`
+  until LB-6, so LB-6's new test file and `review_pages.py` add the fake with the `/labs` route.
+- **A 404 is `PortfolioUnavailable`, not `AccountNotFound`.** The route has no account. A 422 is
+  `InvalidPortfolioRequest`, with portfolio's message.
+- **Periods are strings, with `BACKTEST_PERIODS` for the column order.** web can't import
+  portfolio's `Period`. A row missing a period, or a growth line whose length differs from
+  `dates`, is a malformed response, not a partial one.
+- **The shared 10 s timeout fits.** LB-4's route wasn't deployed on the dev stack yet, so the
+  flow was timed from the repo's code against the dev data-store. A 50-asset mix over Max took
+  about 2.2 s, and its response was about 460 KB, mostly the growth series. LB-8 should weigh
+  that size before putting the series in the page.
+- In the dev data, `fx_rates` has no HKD, JPY, CAD, DKK, AUD or SEK series. Tickers in those
+  currencies come back `no_fx_rate`, which is 15 of the 50 sampled.
+- `services/web/docs/architecture.md` is now about 63.6 KB. LB-6 has to move a section out
+  before adding to it.
 
 ### LB-6. web: `/labs` page with the period table
 
