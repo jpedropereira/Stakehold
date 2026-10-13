@@ -122,8 +122,9 @@ window filled (`--days`, default 7). A ticker whose latest stored row *with a cl
 that window is fetched from that row instead, up to a year back (`jobs.CATCH_UP_DAYS`,
 `pipeline._fetch_windows`), so a run after the DAG was down fills the gap instead of starting a
 new hole. A row without a close doesn't count as stored for this: the yfinance source no longer
-keeps one at all (a bar Yahoo serves before the day's close is final), and rows stored before that
-change get re-fetched over. Both rules came from 2026-09: the DAG didn't run from 09-04 to 09-22,
+keeps one at all, and rows stored before that change get re-fetched over. Such a bar is the
+in-progress session, which Yahoo appends to a request ending before it, stamped with the last
+day requested: on 2026-10-13, 447 rows dated 10-12 held partial 10-13 data. Both rules came from 2026-09: the DAG didn't run from 09-04 to 09-22,
 the 09-04 run had stored 09-03 bars without a close for 918 tickers, and the next run's 7-day
 window left 09-03..09-14 unrepaired. `market_returns` then read NULL on 09-15 for 921 tickers,
 since `compute_returns` can't anchor a return to a missing close.
