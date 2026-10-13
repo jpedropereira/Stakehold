@@ -105,11 +105,14 @@ class HttpDataStoreClient:
                 f"data-store returned a malformed response for prices/{ticker}: {exc}"
             ) from exc
 
+        # simple_return is required even though it's nullable: data-store always sends the key,
+        # and defaulting a missing one to None would turn a contract break into silent gaps.
         try:
             return [
                 PricePoint(
                     date=date.fromisoformat(point["date"]),
                     split_adjusted_close=Decimal(point["split_adjusted_close"]),
+                    simple_return=_optional_decimal(point["simple_return"]),
                 )
                 for point in points
             ]
@@ -203,8 +206,14 @@ class HttpDataStoreClient:
 
         try:
             body = response.json()
+            # A missing currency only leaves an asset without an FX pair, which a caller reports;
+            # it can't produce a wrong figure, so absent reads as unknown rather than malformed.
             return TickerInfo(
-                exists=body["exists"], has_returns=body["has_returns"], status=body.get("status")
+                exists=body["exists"],
+                has_returns=body["has_returns"],
+                status=body.get("status"),
+                currency=body.get("currency"),
+                fx_currency=body.get("fx_currency"),
             )
         except (ValueError, KeyError, TypeError) as exc:
             raise DataStoreApiError(
@@ -293,6 +302,11 @@ class HttpDataStoreClient:
         if not isinstance(body, dict):
             raise DataStoreApiError(f"data-store returned a malformed response for {path}")
         return body
+
+
+def _optional_decimal(value) -> Decimal | None:
+    """A nullable numeric field: None stays None (a gap), anything else must parse."""
+    return None if value is None else Decimal(value)
 
 
 def _path(segment: str) -> str:

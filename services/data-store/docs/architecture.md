@@ -49,8 +49,8 @@ flowchart TD
 
     subgraph orch["Orchestration"]
         JOBS["jobs.py<br/><i>runnable units: config + connection + one flow</i>"]
-        PIPE["pipeline.py<br/><i>the run-level write flows; ticker/currency resolution</i>"]
-        READ["read_flows.py<br/><i>read-side composition: FX derivation, existence checks</i>"]
+        PIPE["pipeline.py<br/><i>the run-level write flows; currency resolution</i>"]
+        READ["read_flows.py<br/><i>read-side composition: FX derivation, ticker info</i>"]
         ONB["ticker_onboarding.py<br/><i>tracked_tickers: YAML sync, onboarding</i>"]
     end
 
@@ -70,6 +70,7 @@ flowchart TD
         SCHEMA["db/schema.sql"]
         RESULT["run_result.py"]
         RETRY["yfinance_retry.py<br/><i>shared transient-error classifier</i>"]
+        RESOLVE["ticker_resolution.py<br/><i>holding → provider ticker</i>"]
     end
 
     subgraph ext_pkg["services/shared (workspace package)"]
@@ -96,8 +97,13 @@ flowchart TD
     PIPE --> RET
     PIPE --> REG
     PIPE --> MACRO
+    PIPE --> RESOLVE
     READ --> FX
     READ --> RET
+    READ --> HOLD
+    READ --> TRK
+    READ --> RESOLVE
+    READ --> ONB
     ONB --> TRK
     HOLD --> EXT
     MKT --> EXT
@@ -487,7 +493,12 @@ flows read it differently, on purpose:
 A consequence: a ticker added to the YAML is not priced daily until onboarding (TK-5) has
 backfilled it and marked it `ready`.
 
-The per-exchange normalizers (`_TICKER_NORMALIZERS`) encode verified quirks — Hong Kong codes need
+The rules live in `ticker_resolution.py`, not `pipeline.py`, because the read API needs the
+same answer (which holding a priced ticker came from, for its currency). They return `None` for
+an unmapped exchange without logging; ingest warns at its own call site. The read API resolves
+every holding on each call, so a warning there would only be noise.
+
+The per-exchange normalizers (`TICKER_NORMALIZERS`) encode verified quirks — Hong Kong codes need
 zero-padding, London tickers ending in `.` must not double it, Nordic and Toronto share classes use
 a hyphen. These were confirmed against real provider responses, not inferred. Treat them as
 findings, not guesses, and verify before adding more.
@@ -544,11 +555,29 @@ call beyond one quick lookup.
 | `GET /prices/{ticker}` | `market_returns` | Not `raw_market_data` — schema.md calls `market_returns` "the table a portfolio or chart should read"; serving raw OHLCV would push return computation onto every consumer. |
 | `GET /fx/{base}/{quote}` | `fx_rates` | See below — the endpoint derives pairs `fx_rates` never stores directly. |
 | `GET /tickers` | `raw_market_data` | Every ingested ticker for `source`, sorted and unpaginated (~1.3k tickers, ~10 KB). Built for `portfolio`'s manual-entry picker, which needs the whole set at once. Uses the same "ingested universe" definition as `GET /tickers/{ticker}`'s `exists` (`returns/repository.py`'s `list_tickers` sits next to `ticker_exists`), so a ticker in the list always reports `exists: true`. The query is a recursive-CTE loose index scan over the primary key: Postgres 17 has no skip scan, and a plain `SELECT DISTINCT` would read all ~9M rows to find the ~1.3k tickers. Measured at ~25 ms on the dev database. |
-| `GET /tickers/{ticker}` | `raw_market_data` + `market_returns` + `tracked_tickers` | Existence and whether returns have been computed are reported separately — a ticker can be ingested before `calculate-returns` has run for it. `status` is the ticker's onboarding status when it's tracked, else `null`. |
+| `GET /tickers/{ticker}` | `raw_market_data` + `market_returns` + `tracked_tickers` + `etf_holdings` | Existence and whether returns have been computed are reported separately — a ticker can be ingested before `calculate-returns` has run for it. `status` is the ticker's onboarding status when it's tracked, else `null`. `currency` and `fx_currency`: see below. |
 | `GET /tickers/{ticker}/lookup` | `tracked_tickers`, then the provider | What adding a ticker would do. `outcome` is one of: `tracked` (with its `status`), `available`, `unsupported` (an index or a currency pair), `not_found`, or `unavailable` (the provider didn't answer). Always 200, except 422 for a symbol that can't be one. |
 | `POST /tracked-tickers` | `tracked_tickers` | Adds a user's ticker as `pending`. 201 when added, 200 when already tracked (free, and not counted). Errors: 404 not on the provider, 422 invalid or can't be held, 429 over the requester's daily limit, 503 provider unavailable. |
 | `GET /tracked-tickers` | `tracked_tickers` | Filterable by `requested_by`, repeated `status`, repeated `ticker`. |
 | `PATCH /tracked-tickers/{ticker}` | `tracked_tickers` | Admin changes: `enabled`, or `retry` a `failed` ticker. 409 for enabling or disabling a config row (the next YAML sync would undo it) or retrying one that isn't `failed`. |
+
+**A ticker's currency** comes from `tracked_tickers.currency` when that is set. Otherwise it comes
+from the newest `etf_holdings` row that resolves to the ticker, else `null`. It is the
+provider's spelling verbatim (`GBp` stays `GBp`). `fx_currency` is
+`ticker_onboarding.major_currency(currency)`, the code `fx_rates` is keyed by. That function is
+the one minor→major map; a consumer picks its FX pair from `fx_currency` instead of keeping a
+copy (portfolio's Labs backtest does this).
+
+- **Holdings are matched by resolving forward**, with ingest's own rules (`ticker_resolution.py`),
+  not by stripping the suffix. iShares reuses a raw symbol across exchanges (`DG` is Vinci in
+  Paris and Dollar General in New York), and overrides and normalizers can't be reversed. All
+  ~1.3k listings are resolved on each call, which is cheap.
+- **Every snapshot counts, not just the latest**, so a holding that left the index keeps a
+  currency for its stored history.
+- **iShares writes `GBP` where yfinance writes `GBp`** (`AZN`, `SHEL` on the LSE), so a
+  holdings-only London ticker reports `GBP`. This does no harm: a percentage return doesn't
+  depend on the unit, and `fx_currency` is `GBP` either way. A price in that currency is still
+  in pence.
 
 **`source` is an explicit, defaulted query parameter, not hardcoded.** `source` is part of the
 primary key on all three tables — the schema's own hook for a second provider to coexist with

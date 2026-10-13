@@ -48,7 +48,14 @@ jobs:
           path: ~/.cache/pre-commit
           key: pre-commit-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml', 'uv.lock') }}
 
+      # pytest-fast is skipped here because CI has no .testmondata (it's gitignored and not
+      # cached), so testmon ran the entire unit suite -- a duplicate of the step below that
+      # added ~50s and, being `-x`, stopped at the first failure. The plain run below covers
+      # a superset of what pytest-fast would, so no test goes unchecked. If that step is ever
+      # removed or the hook is renamed, revisit this.
       - name: Run pre-commit hooks
+        env:
+          SKIP: pytest-fast
         run: uv run pre-commit run --all-files --show-diff-on-failure --color=always
 
       # Two steps, not one, because the root pyproject deselects `integration` by default

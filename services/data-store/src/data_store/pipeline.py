@@ -43,6 +43,7 @@ from data_store.returns.repository import (
     save_market_returns,
 )
 from data_store.run_result import build_run_result
+from data_store.ticker_resolution import holding_symbol, resolve_yfinance_ticker
 
 logger = logging.getLogger(__name__)
 
@@ -78,43 +79,6 @@ FX_RATE_SOURCES = {
 MACRO_INDICATOR_SOURCES = {
     "fred": FredMacroIndicatorSource,
     "eurostat": EurostatMacroIndicatorSource,
-}
-
-
-# Per-exchange raw-ticker normalization applied before appending the exchange suffix.
-# yfinance's ticker syntax for a market doesn't always match the raw symbol iShares scrapes --
-# these are the specific, verified-against-real-yfinance mismatches found so far. Scoped by
-# exact exchange name (not applied globally) so an exchange with no known quirk is never
-# touched.
-def _zero_pad_hk(raw_ticker: str) -> str:
-    return raw_ticker.zfill(4)
-
-
-def _normalize_london(raw_ticker: str) -> str:
-    # London raw tickers use "." two ways: a trailing full-stop with no meaning of its own
-    # (e.g. "BP.", "NG.") -- stripped, or it doubles the "." already in the ".L" suffix -- and
-    # a mid-string class-share separator (e.g. "BT.A") -- which yfinance expects as "-", same
-    # as the Nordic/Toronto class-share convention. Stripping the trailing dot first means any
-    # dot left over is necessarily the class-share kind.
-    return raw_ticker.rstrip(".").replace(".", "-")
-
-
-def _space_to_hyphen(raw_ticker: str) -> str:
-    return raw_ticker.replace(" ", "-")
-
-
-def _dot_to_hyphen(raw_ticker: str) -> str:
-    return raw_ticker.replace(".", "-")
-
-
-_TICKER_NORMALIZERS = {
-    "Hong Kong Exchanges And Clearing Ltd": _zero_pad_hk,
-    "London Stock Exchange": _normalize_london,
-    "Nasdaq Omx Nordic": _space_to_hyphen,
-    "Nasdaq Omx Helsinki Ltd.": _space_to_hyphen,
-    "Omx Nordic Exchange Copenhagen A/S": _space_to_hyphen,
-    "Oslo Bors Asa": _space_to_hyphen,
-    "Toronto Stock Exchange": _dot_to_hyphen,
 }
 
 
@@ -170,9 +134,9 @@ def ingest_market_data(
     `only_tickers`, when given, restricts the run to exactly those final (post-suffix-resolution)
     tickers -- e.g. "0700.HK", not the raw "0700" -- so it can target holdings-derived tickers
     too, not just tracked_tickers entries. `ticker_overrides` is forwarded to ticker resolution
-    -- see _resolve_yfinance_ticker. `catch_up_limit` lets a ticker that fell behind
-    `start_date` catch up from its last stored close -- see _fetch_windows. Logs per-group
-    progress and a final summary; logging_config decides where that output lands."""
+    -- see ticker_resolution.py. `catch_up_limit` lets a ticker that fell behind `start_date`
+    catch up from its last stored close -- see _fetch_windows. Logs per-group progress and a
+    final summary; logging_config decides where that output lands."""
     resolved = _resolve_priceable_tickers(
         conn, funds, tracked_tickers, exchange_suffixes, ticker_overrides
     )
@@ -762,7 +726,7 @@ def backfill_market_data(
     `only_tickers`, when given, restricts the run to exactly those final (post-suffix-resolution)
     tickers -- e.g. "0700.HK", not the raw "0700" -- so it can target holdings-derived tickers
     too, not just tracked_tickers entries.
-    `ticker_overrides` is forwarded to ticker resolution -- see _resolve_yfinance_ticker.
+    `ticker_overrides` is forwarded to ticker resolution -- see ticker_resolution.py.
 
     Decorated rather than the daily flow because an empty result means something different
     here: during a backfill it's the expected end state for every ticker, whereas for
@@ -969,62 +933,30 @@ def _resolve_priceable_tickers(
     yfinance-ready suffixed form (e.g. "0700" on "Hong Kong Exchanges And Clearing Ltd" ->
     "0700.HK") via exchange_suffixes and default to ("equity", fund.price_source); a raw
     ticker whose exchange has no mapping entry (and no ticker_overrides entry) is dropped
-    (logged, not fetched -- see _resolve_yfinance_ticker). Explicit tracked_tickers entries --
-    already fully yfinance-ready -- are never resolved or overridden, and win for tickers that
-    appear in both."""
+    (warned about here, not fetched -- see ticker_resolution.py). Explicit tracked_tickers
+    entries -- already fully yfinance-ready -- are never resolved or overridden, and win for
+    tickers that appear in both."""
     resolved: dict[str, tuple[str, str]] = {}
     for fund in funds:
         for raw_ticker, exchange in get_latest_tickers(conn, fund.key):
-            ticker = (raw_ticker or "").strip()
-            # "-" is how the source spells "this line has no symbol" (cash, some derivative
-            # legs). It survives the emptiness check, and on a mapped exchange it would be
-            # sent as a real request like "-.L".
-            if not ticker or ticker == "-":
+            ticker = holding_symbol(raw_ticker)
+            if ticker is None:
                 continue
-            yf_ticker = _resolve_yfinance_ticker(
+            yf_ticker = resolve_yfinance_ticker(
                 ticker, exchange, exchange_suffixes, ticker_overrides
             )
             if yf_ticker is None:
+                logger.warning(
+                    "No yfinance suffix mapped for exchange %r (ticker %r); skipping from this "
+                    "run.",
+                    (exchange or "").strip(),
+                    ticker,
+                )
                 continue
             resolved.setdefault(yf_ticker, ("equity", fund.price_source))
     for tt in tracked_tickers:
         resolved[tt.ticker] = (tt.asset_type, tt.price_source)
     return resolved
-
-
-def _resolve_yfinance_ticker(
-    ticker: str,
-    exchange: str | None,
-    exchange_suffixes: dict[str, str | None],
-    ticker_overrides: dict[str, str] | None = None,
-) -> str | None:
-    """`ticker` + the yfinance suffix mapped for `exchange`, with any exchange-specific
-    normalization applied first (e.g. zero-padding Hong Kong codes, hyphenating Nordic
-    share-class tickers -- see _TICKER_NORMALIZERS). `ticker_overrides`, when it has an entry
-    for `ticker`, wins outright and skips exchange resolution entirely -- for one-off cases a
-    general rule can't cover: a raw ticker needing a full rewrite, or one whose source exchange
-    tagging is simply wrong. Returns None (after logging a warning naming both) when `exchange`
-    has no entry in exchange_suffixes and no override applies -- an unresolvable ticker must
-    never be sent to yfinance bare, since yfinance won't error on a wrong/bare ticker, it just
-    silently returns no data."""
-    if ticker_overrides and ticker in ticker_overrides:
-        return ticker_overrides[ticker]
-
-    exchange_key = (exchange or "").strip()
-    if exchange_key not in exchange_suffixes:
-        logger.warning(
-            "No yfinance suffix mapped for exchange %r (ticker %r); skipping from this run.",
-            exchange_key,
-            ticker,
-        )
-        return None
-
-    normalizer = _TICKER_NORMALIZERS.get(exchange_key)
-    if normalizer:
-        ticker = normalizer(ticker)
-
-    suffix = exchange_suffixes[exchange_key] or ""
-    return f"{ticker}{suffix}"
 
 
 def _group_by_source_and_type(

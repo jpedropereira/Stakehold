@@ -65,3 +65,29 @@ def get_latest_tickers(conn, fund_key: str) -> list[tuple[str, str | None]]:
             (fund_key, fund_key),
         )
         return [(row[0], row[1]) for row in cur.fetchall()]
+
+
+def get_listing_currencies(conn) -> list[tuple[str, str | None, str]]:
+    """(holding_ticker, exchange, currency) for every equity listing any snapshot of any fund
+    has held, each from the newest snapshot that lists it, newest first.
+
+    Keyed by (ticker, exchange), not ticker: iShares reuses one raw symbol on different
+    exchanges ("DG" is both Vinci in Paris and Dollar General in New York). Every snapshot, not
+    each fund's latest, so a holding that has left the index still has a currency for the
+    history already stored. Same row filter as get_latest_tickers, so only a listing that could
+    have been priced is offered. Matching a listing to a priced ticker needs ticker resolution,
+    which is the caller's job, as it is for get_latest_tickers."""
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT holding_ticker, exchange, currency FROM (
+                SELECT DISTINCT ON (holding_ticker, exchange)
+                    holding_ticker, exchange, currency, as_of_date, fund_key
+                FROM etf_holdings
+                WHERE holding_ticker IS NOT NULL
+                  AND asset_class ILIKE 'equity'
+                  AND currency IS NOT NULL
+                ORDER BY holding_ticker, exchange, as_of_date DESC, fund_key
+            ) AS listing
+            ORDER BY as_of_date DESC, fund_key, holding_ticker, exchange
+            """)
+        return [(row[0], row[1], row[2]) for row in cur.fetchall()]

@@ -65,6 +65,12 @@ class TickerInfo(BaseModel):
     # The ticker's onboarding status ("pending", "backfilling", "ready", "failed") when it is in
     # tracked_tickers; None when it's priced only through a fund's holdings, or not at all.
     status: str | None = None
+    # The provider's spelling, verbatim (`GBp` stays `GBp`): from tracked_tickers, else the
+    # newest fund holding that resolves to this ticker, else None.
+    currency: str | None = None
+    # The ISO code fx_rates is keyed by (`GBp` -> `GBP`). Pick an FX pair from this, not from
+    # `currency`. None when there's no currency, or it isn't one fx_rates could hold.
+    fx_currency: str | None = None
 
 
 class TickerLookup(BaseModel):

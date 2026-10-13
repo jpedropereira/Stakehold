@@ -3,18 +3,22 @@
 A sibling of `pipeline.py`, not an addition to it: `pipeline.py` is already close to the
 context-management file-size guidance and is entirely about write flows, while FX cross-rate
 derivation is a read-side decision with no write-flow analogue. Like `pipeline.py`, this module
-never touches SQL directly -- reads go through `returns/repository.py` and `fx/repository.py`,
-imported as modules (not `from ... import fn`) so a test can monkeypatch the whole repository
-namespace the way `jobs.py`'s tests already do for `pipeline` functions.
+never touches SQL directly -- reads go through the domain repositories (`returns`, `fx`,
+`holdings`, `tracked_tickers`), imported as modules (not `from ... import fn`) so a test can
+monkeypatch the whole repository namespace the way `jobs.py`'s tests already do for `pipeline`
+functions.
 """
 
 import logging
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 
-from data_store.config_loader import CurrenciesConfig
+from data_store.config_loader import CurrenciesConfig, TickerResolution
 from data_store.fx import repository as fx_repository
+from data_store.holdings import repository as holdings_repository
 from data_store.returns import repository as returns_repository
+from data_store.ticker_onboarding import major_currency
+from data_store.ticker_resolution import holding_symbol, resolve_yfinance_ticker
 from data_store.tracked_tickers import repository as tracked_tickers_repository
 
 logger = logging.getLogger(__name__)
@@ -57,13 +61,25 @@ def price_series(conn, ticker: str, source: str, start: date, end: date) -> dict
     }
 
 
-def ticker_info(conn, ticker: str, source: str) -> dict:
+def ticker_info(conn, ticker: str, source: str, resolution: TickerResolution) -> dict:
     """`status` is the ticker's onboarding status when it's in tracked_tickers, else None (a
     ticker priced only through a fund's holdings, or not at all). It is reported alongside
-    `exists`, not folded into it: a `pending` ticker is tracked but has no stored rows yet."""
+    `exists`, not folded into it: a `pending` ticker is tracked but has no stored rows yet.
+
+    `currency` is the provider's spelling, verbatim (`GBp` stays `GBp`): tracked_tickers' when
+    it has one, else the newest fund holding that resolves to this ticker, else None.
+    `fx_currency` is the code fx_rates is keyed by (`major_currency`), so a caller picks its FX
+    pair from it rather than keeping its own copy of the minor-unit map."""
     exists = returns_repository.ticker_exists(conn, ticker, source)
     first_date, last_date = returns_repository.get_returns_date_range(conn, ticker, source)
     tracked = tracked_tickers_repository.get_tracked_ticker(conn, ticker, source)
+
+    currency, currency_from = (tracked.currency, "tracked_tickers") if tracked else (None, None)
+    if currency is None:
+        currency = _holdings_currency(conn, ticker, resolution)
+        currency_from = "etf_holdings" if currency is not None else "nowhere"
+    logger.info("ticker info: %s currency=%s from %s", ticker, currency, currency_from)
+
     return {
         "ticker": ticker,
         "exists": exists,
@@ -71,7 +87,27 @@ def ticker_info(conn, ticker: str, source: str) -> dict:
         "first_date": first_date,
         "last_date": last_date,
         "status": tracked.status if tracked else None,
+        "currency": currency,
+        "fx_currency": major_currency(currency),
     }
+
+
+def _holdings_currency(conn, ticker: str, resolution: TickerResolution) -> str | None:
+    """The currency of the newest holding that ingest would price as `ticker`.
+
+    Resolved forward, with ingest's own rules, rather than by stripping the suffix off
+    `ticker`: overrides and per-exchange normalizers aren't reversible, and the same raw symbol
+    on two exchanges is two companies. ~1.3k listings, so resolving them all is cheap."""
+    for raw_ticker, exchange, currency in holdings_repository.get_listing_currencies(conn):
+        symbol = holding_symbol(raw_ticker)
+        if symbol is None:
+            continue
+        resolved = resolve_yfinance_ticker(
+            symbol, exchange, resolution.exchange_suffixes, resolution.ticker_overrides
+        )
+        if resolved == ticker:
+            return currency
+    return None
 
 
 def ticker_list(conn, source: str) -> dict:
