@@ -267,6 +267,64 @@ class TrackedTickerAddResult:
     created: bool
 
 
+# portfolio's labs Period values, in the table's column order. web can't import portfolio's enum.
+BACKTEST_PERIODS = ("1M", "3M", "6M", "1Y", "2Y", "5Y", "Max")
+
+
+@dataclass(frozen=True)
+class BacktestPeriodReturn:
+    """One period's figure, mirroring portfolio's PeriodReturnResponse. return_pct is a fraction,
+    and None exactly when not `covered` ("Not enough history"), never 0."""
+
+    start: date
+    end: date
+    covered: bool
+    return_pct: Decimal | None
+    gaps: int  # NULL returns bridged as flat days inside (start, end]
+
+
+@dataclass(frozen=True)
+class BacktestRow:
+    """The mix (ticker None, weight 1) or one included asset, with the weight actually used
+    after normalizing. `periods` has every key in BACKTEST_PERIODS, in that order."""
+
+    ticker: str | None
+    weight: Decimal
+    periods: dict[str, BacktestPeriodReturn]
+
+
+@dataclass(frozen=True)
+class BacktestGrowth:
+    """Cumulative growth over `period`, as fractions: 0 on its first date. Every line has one
+    value per date. A line is None when its asset (or, for the mix, any asset) doesn't cover the
+    period."""
+
+    period: str
+    dates: tuple[date, ...]
+    mix: tuple[Decimal, ...] | None
+    assets: dict[str, tuple[Decimal, ...] | None]
+
+
+@dataclass(frozen=True)
+class BacktestAssetStatus:
+    ticker: str
+    # "included", "not_tracked", "no_history", "no_fx_rate" or "failed".
+    status: str
+    reason: str | None  # None when included
+
+
+@dataclass(frozen=True)
+class Backtest:
+    """portfolio's BacktestResponse (LB-4). With no asset included, end_date, mix and growth
+    are None and assets is empty; statuses still lists every requested asset, in order."""
+
+    end_date: date | None
+    mix: BacktestRow | None
+    assets: tuple[BacktestRow, ...]
+    growth: BacktestGrowth | None
+    statuses: tuple[BacktestAssetStatus, ...]
+
+
 class PortfolioClient(Protocol):
     async def list_accounts(self, *, user_id: str) -> list[Account]: ...
 
@@ -342,6 +400,11 @@ class PortfolioClient(Protocol):
     # The whole portfolio's daily series, across every account. The full history: the chart's
     # ranges crop it on the client. Empty for a user with no accounts.
     async def list_portfolio_returns(self, *, user_id: str) -> PortfolioReturns: ...
+
+    # A Labs backtest of (ticker, weight) pairs; weights are normalized by portfolio. Read-only
+    # despite the POST. An asset portfolio can't backtest is a status in the result, not an
+    # error; InvalidPortfolioRequest means the mix itself was rejected.
+    async def backtest(self, *, assets: list[tuple[str, Decimal]], period: str) -> Backtest: ...
 
     async def list_ticker_mappings(self) -> list[TickerMapping]: ...
 
