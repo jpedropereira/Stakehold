@@ -472,3 +472,35 @@ def test_list_tickers_raises_when_the_request_itself_fails(client, monkeypatch):
 
     with pytest.raises(DataStoreApiError):
         client.list_tickers()
+
+
+# Labs (LB-4) hands these two methods tickers a user typed, not ones read from stored positions,
+# so a "/" must stay inside one path segment rather than reach another data-store route.
+
+
+def test_get_ticker_info_quotes_the_ticker_as_one_path_segment(client, monkeypatch):
+    captured = {}
+
+    def fake_get(url, **kwargs):
+        captured["url"] = url
+        return FakeResponse(200, {"exists": False, "has_returns": False})
+
+    monkeypatch.setattr(requests, "get", fake_get)
+
+    client.get_ticker_info("A/../B")
+
+    assert captured["url"] == "http://datastore:8000/tickers/A%2F..%2FB"
+
+
+def test_get_price_series_quotes_the_ticker_as_one_path_segment(client, monkeypatch):
+    captured = {}
+
+    def fake_get(url, **kwargs):
+        captured["url"] = url
+        return FakeResponse(200, {"points": []})
+
+    monkeypatch.setattr(requests, "get", fake_get)
+
+    client.get_price_series("A/../B", date(2026, 1, 1), date(2026, 1, 9))
+
+    assert captured["url"] == "http://datastore:8000/prices/A%2F..%2FB"

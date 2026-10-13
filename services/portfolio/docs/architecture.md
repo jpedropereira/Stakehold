@@ -7,10 +7,11 @@ below is still described conceptually rather than as DDL. This document covers t
 boundaries between modules, and the decisions that would otherwise look arbitrary — mirroring the
 shape of [`data-store`'s own architecture doc](../../data-store/docs/architecture.md).
 
-Two companions hold the rest, split out to keep each file under the repo's 64KB limit:
+Three companions hold the rest, split out to keep each file under the repo's 64KB limit:
 [`flows.md`](flows.md) (every flow and its entry points, the HTTP API, and what portfolio reads
-from data-store) and [`broker-import.md`](broker-import.md) (the broker-parser plugin surfaces).
-A structural change may need any of the three updated.
+from data-store), [`broker-import.md`](broker-import.md) (the broker-parser plugin surfaces) and
+[`deployment.md`](deployment.md) (containers and databases).
+A structural change may need any of the four updated.
 
 ## What the service is responsible for
 
@@ -67,6 +68,7 @@ flowchart TD
         JOBS["jobs.py<br/><i>runnable units: config + connection + one flow</i>"]
         PIPE["pipeline.py<br/><i>the flows; broker-parser/cashflow-parser (entry-point discovered)<br/>and datastore-client registries</i>"]
         HFLOW["holdings/flows.py<br/><i>reads that span a user's accounts (PF-1, PF-5)</i>"]
+        LFLOW["labs/flows.py<br/><i>backtest fetches, concurrent (LB-4)</i>"]
     end
 
     subgraph domain["Domain modules"]
@@ -95,6 +97,9 @@ flowchart TD
     API --> JOBS
     JOBS --> PIPE
     JOBS --> HFLOW
+    JOBS --> LFLOW
+    LFLOW --> LABS
+    LFLOW --> DSC
     HFLOW --> ACC
     HFLOW --> POS
     HFLOW --> RET
@@ -157,6 +162,21 @@ and every flow there is per account while these span all of a user's accounts. I
 `list_holdings` and PF-5's `list_portfolio_returns`. `jobs.get_holdings` and
 `jobs.get_portfolio_returns` call it the way the other `get_*` jobs call `pipeline.py`. It
 doesn't call into `pipeline.py` at all, and nothing in `pipeline.py` imports `holdings/`.
+
+**Labs orchestration lives in `labs/flows.py` (LB-4)**, beside `labs/calculator.py`, for the
+same file-size reason as `holdings/flows.py`, and because a backtest opens no database
+connection at all: nothing is stored, and every input is data-store's. `jobs.get_backtest`
+builds the data-store client and calls it, with no connection to open or close.
+- **It is the service's first concurrent fan-out.** A mix of up to 50 assets needs two or three
+  data-store calls each, so sequential calls would put several seconds between the user and the
+  page. The client is synchronous (`requests`), so the fan-out is a `ThreadPoolExecutor` of 8
+  rather than an async client. An async client would mean a second implementation of
+  `DataStoreClient` for one caller. 8 in flight is a modest load on data-store, which serves
+  sync routes from its own thread pool with one connection per request.
+- **The failure-isolation unit is one asset.** That is the same reasoning as the rebuilds'
+  per-pair catch, applied to a read. A failed call is a `failed` status in the response, not a
+  502, so one bad ticker can't blank a whole lab. A failed FX fetch fails every asset in that
+  currency.
 
 **Built as of task 5** — `add_account`, `list_accounts`, `add_manual_transaction`. `pipeline.py`
 (not a per-flow `service.py`) is where the `with transaction(conn):` boundary lives, the role
@@ -275,8 +295,8 @@ the ticker may still be fully computable from its `BUY`/`SELL` rows regardless.
 | `positions/` | `calculator.py` (pure) + `repository.py` | **Built at task 7.** Same shape as data-store's `returns/`: no `base.py`, no `*_source.py` — the input is this service's own `transactions` and `ticker_mapping` tables, not an external provider. One deliberate deviation from "repositories never commit": `positions/repository.py` still never commits, but `pipeline.rebuild_positions` opens the `with transaction(conn):` boundary once *per `(account, canonical_ticker)` pair* rather than once per flow, because `schema.md`'s delete-then-insert contract requires each pair's replacement to be atomic on its own, not the whole rebuild run. |
 | `returns/` | `calculator.py` (pure) + `performance.py` (pure) + `repository.py` | **Built at task 8.** Same shape again, plus one more thing to disclose: it also needs prices and FX rates from `datastore_client`. Those are fetched by `pipeline.py` and handed into `calculator.py` as plain data — the calculator itself stays pure and knows nothing about HTTP, keeping it as unit-testable as data-store's `returns/calculator.py`. A second thing to disclose, surfaced only once `return_snapshots`' original mark-to-market-only design turned out not to account for dividend income: `calculator.py` also takes a `DividendEvent` sequence per pair, needing no `datastore_client` call at all (`transactions.eur_amount` is already frozen in EUR) — but resolving which `DIVIDEND` transactions belong to which ticker is `pipeline.rebuild_returns`'s job, via the same `mappings.resolve` `rebuild_positions` already uses for `BUY`/`SELL`. `returns/` is therefore not quite as decoupled from `ticker_mapping/` as `position_snapshots` being pre-resolved might suggest. **`performance.py`**: one pure function, `compute_series`, that sums stored `return_snapshots` rows from every account a user holds into one series per priced day, keyed on (account, ticker) and forward-filled per pair. It writes nothing; see "The portfolio series is summed here, on read" below. It once also computed time-weighted growth since inception (`GET /returns/growth`, plus `growth_pct`/`by_ticker` on `GET /returns/portfolio`); that was removed, see "Growth since inception was removed" below. |
 | `holdings/` | `aggregator.py` (pure) + `flows.py` (orchestration) | **Built at PF-1, extended at PF-5.** No `repository.py` and no table of its own: it reads `positions/` and `returns/` latest rows through their repositories and sums them per ticker across a user's accounts, on read. PF-5's cross-account return series is orchestrated here too, with `returns/performance.py` as its pure part. `aggregator.py` is pure, like the calculators. `flows.py` is the orchestration around it, kept out of `pipeline.py` (see Layering). Rows stay keyed on (account, ticker) until the final merge, so the same ticker in two accounts can't collapse into one account's row, the bug UI-11 documented in web's `aggregate_portfolio_returns`. See "Holdings across accounts are summed here, on read" below. |
-| `labs/` | `calculator.py` (pure) | **Built at LB-3.** Backtests a mix of assets for Labs: each asset's and the buy-and-hold mix's % return in EUR over 1M to 5Y and Max, plus the daily growth series for one period. No `repository.py`: nothing is stored (saving labs is deferred), and the inputs are data-store's, not this service's tables. No `base.py`: the input is `datastore_client`'s own `PricePoint`/`FxPoint`, so the calculator imports those shapes from `datastore_client/base.py` (the same one-way dependency `returns/calculator.py` has) rather than defining look-alikes the endpoint would have to copy into. The caller picks each asset's FX series, so this module never maps a currency code (`TickerInfo.fx_currency` already did). The rules, including how a NULL return is bridged and why, are in the module docstring. LB-4 adds the endpoint and its orchestration beside it. |
-| `datastore_client/` | `base.py` (a `DataStoreClient` Protocol) + `http_client.py` | This is the `*_source.py` role, but the "provider" is another in-house service's read API rather than a third party. **`get_fx_rate` built at task 14**, pulled forward from its original task 8 slot because a cash-ledger import needed it. **`get_price_series`, `get_fx_rate_series`, and `get_ticker_info` built at task 8** — see [`flows.md`](flows.md)'s "Cross-service prerequisite". `get_fx_rate_series` is a range-returning sibling of `get_fx_rate`, not a replacement: `returns/calculator.py` needs a whole date range's rates per `(account, ticker)` pair, and repeating a single-date `get_fx_rate` call per priced day would cost one HTTP round trip per day instead of one per pair; `get_fx_rate` itself is untouched and still serves `import_cashflow`'s single-date lookup. **`lookup_ticker` and `add_`/`list_`/`update_tracked_ticker` built at TK-7** (ticker onboarding): pure pass-throughs that share one `_tracked_request`, mapping `data-store`'s meaningful refusals to `TickerRequestRefused` and anything else to `DataStoreApiError`. **LB-2** (labs): `PricePoint` also carries `simple_return` and `TickerInfo` carries `currency`/`fx_currency`, so a backtest can chain data-store's total returns and pick each asset's FX pair; no new method. `simple_return` keeps NULL as `None` (a gap, never 0), and a missing key is a `DataStoreApiError` rather than a silent gap; a missing currency is `None`, since it can only leave an asset without an FX pair, never yield a wrong figure. |
+| `labs/` | `calculator.py` (pure) + `flows.py` (orchestration) | **Built at LB-3, extended at LB-4.** Backtests a mix of assets for Labs: each asset's and the buy-and-hold mix's % return in EUR over 1M to 5Y and Max, plus the daily growth series for one period. No `repository.py`: nothing is stored (saving labs is deferred), and the inputs are data-store's, not this service's tables. No `base.py`: the input is `datastore_client`'s own `PricePoint`/`FxPoint`, so the calculator imports those shapes from `datastore_client/base.py` (the same one-way dependency `returns/calculator.py` has) rather than defining look-alikes the endpoint would have to copy into. The caller picks each asset's FX series, so this module never maps a currency code (`TickerInfo.fx_currency` already did). The rules, including how a NULL return is bridged and why, are in the module docstring. `flows.py` (LB-4) fetches the inputs and gives every requested asset a status: included, not tracked, no history yet, no FX rate, or failed (see Layering's "Labs orchestration"). `Period` is a `StrEnum`, so the API parses and writes `"1M"` to `"Max"` without a mapping of its own. |
+| `datastore_client/` | `base.py` (a `DataStoreClient` Protocol) + `http_client.py` | This is the `*_source.py` role, but the "provider" is another in-house service's read API rather than a third party. **`get_fx_rate` built at task 14**, pulled forward from its original task 8 slot because a cash-ledger import needed it. **`get_price_series`, `get_fx_rate_series`, and `get_ticker_info` built at task 8** — see [`flows.md`](flows.md)'s "Cross-service prerequisite". `get_fx_rate_series` is a range-returning sibling of `get_fx_rate`, not a replacement: `returns/calculator.py` needs a whole date range's rates per `(account, ticker)` pair, and repeating a single-date `get_fx_rate` call per priced day would cost one HTTP round trip per day instead of one per pair; `get_fx_rate` itself is untouched and still serves `import_cashflow`'s single-date lookup. **`lookup_ticker` and `add_`/`list_`/`update_tracked_ticker` built at TK-7** (ticker onboarding): pure pass-throughs that share one `_tracked_request`, mapping `data-store`'s meaningful refusals to `TickerRequestRefused` and anything else to `DataStoreApiError`. **LB-2** (labs): `PricePoint` also carries `simple_return` and `TickerInfo` carries `currency`/`fx_currency`, so a backtest can chain data-store's total returns and pick each asset's FX pair; no new method. `simple_return` keeps NULL as `None` (a gap, never 0), and a missing key is a `DataStoreApiError` rather than a silent gap; a missing currency is `None`, since it can only leave an asset without an FX pair, never yield a wrong figure. **LB-4**: `get_ticker_info` and `get_price_series` quote the ticker as one path segment, as the tracked-ticker methods already did, because Labs passes them tickers a user typed rather than ones read from stored positions. |
 
 **`errors.py` is not a domain module** — it's a single Foundation-layer file (`PortfolioError` plus
 `InvalidBroker`, `AccountNotFound`, `AccountLabelConflict`, `InvalidTransaction`, and, as of task 6,
@@ -410,109 +430,8 @@ retired along with that setting — see the cross-cutting decision below. The fi
 
 ## Deployment
 
-```mermaid
-flowchart TB
-    subgraph pf["portfolio"]
-        PCLI["portfolio CLI"]
-        PAPI["portfolio HTTP API<br/><i>built (task 9)</i>"]
-        PREF["returns-refresh-all<br/><i>loop: rebuild-returns --all</i>"]
-        PJOBS["jobs.py"]
-    end
-
-    APPDB[("app-postgres<br/><i>the shared application database for non-data-store,<br/>non-credential services -- accounts, transactions,<br/>position_snapshots, return_snapshots, and any future<br/>such service's tables</i>")]
-
-    subgraph ds["data-store"]
-        DSAPI["data-store read API<br/><i>built (task 3)</i>"]
-        DSDB[("data-store-postgres<br/><i>raw_market_data, market_returns</i>")]
-    end
-
-    subgraph au["auth"]
-        AUAPI["auth HTTP API<br/><i>built (task 2)</i>"]
-    end
-
-    AUDB[("auth-postgres<br/><i>dedicated instance -- users, sessions.<br/>Isolated deliberately: credential data,<br/>kept out of app-postgres's blast radius</i>")]
-
-    PCLI --> PJOBS
-    PAPI --> PJOBS
-    PREF --> PJOBS
-    PJOBS --> APPDB
-    PJOBS -->|"datastore_client<br/>(HTTP -- FX, prices, ticker info; task 14 + task 8)"| DSAPI
-    DSAPI --> DSDB
-    AUAPI --> AUDB
-```
-
-**Three separate Postgres instances, not two.** Portfolio never opens a connection to
-`data-store`'s or `auth`'s database, and neither of those opens one to portfolio's — the boundary
-between services is always an API, full stop. `data-store` has its own, dedicated database because
-its ingestion machinery and schema evolve independently. **`auth` also gets its own, dedicated
-database — a deliberate exception, not an oversight**: credentials and session tokens are the most
-sensitive data in the system, and isolating them at the database level keeps a bug or injection in
-portfolio's code path from ever reaching auth's tables, consistent with this repo's
-[`security.md`](../../../.claude/rules/security.md) rule to give credential-handling code extra
-scrutiny. **`app-postgres` remains the shared database for every other future non-data-store
-service** — the one such a service uses instead of standing up a fourth instance — but that sharing
-principle stops at the credential boundary; `auth` is the one deliberate carve-out from it.
-
-**`app-postgres` runs with `log_statement=mod`** (`docker-compose.yml`'s `command:`), logging
-every `INSERT`/`UPDATE`/`DELETE`/`TRUNCATE` — including a direct `psql` connection bypassing
-`portfolio`'s own code — to the container's own log. See `auth/docs/architecture.md`'s
-"Deployment" section for the incident that prompted this across all three instances.
-
-**`app-postgres`'s compose file lives at `services/portfolio/docker-compose.yml`**, even though the
-instance is meant to be shared, because portfolio is its only tenant today and every other service
-here keeps its own containers next to its own code. Naming it `app-postgres` rather than
-`portfolio-postgres` is the part that matters: the container is not portfolio's to own, only
-portfolio's to start.
-
-**Considered and left as-is at task 13 (end-to-end integration)**: that task put every service's
-*API* on one shared network (`stakehold-net`) but added no second database tenant — nothing beyond
-`portfolio` opens a connection to `app-postgres`, so the trigger for moving this container's
-ownership out of `services/portfolio/` still hasn't arrived. Revisit only if a second service ever
-needs a direct `app-postgres` connection, not merely another service that talks to `portfolio` over
-HTTP.
-
-Inside that one instance the **database is named for the instance (`app`) and the role for the
-service (`portfolio`)**. A second service on `app-postgres` gets its own role in the same database
-rather than its own database, so the shared-application-database claim above stays true in the
-schema and not just in the container name.
-
-**That role is a real, enforced boundary, not an aspiration.** The official postgres image always
-grants superuser to whatever role it bootstraps via `POSTGRES_USER` — there is no env-var way
-around that — so `docker-compose.yml` and `ci.yml` bootstrap a separate admin role
-(`APP_POSTGRES_ADMIN_USER`) that the running app never connects as. `portfolio db init`
-(`jobs.py`'s `_ensure_role_and_schema`) uses that admin role exactly once, to create the
-non-superuser `portfolio` role and a like-named schema it owns (`CREATE SCHEMA portfolio
-AUTHORIZATION portfolio`) — Postgres denies cross-schema access by default, so owning the schema
-is the entire isolation mechanism, no further `GRANT`s needed. A role's default `search_path`
-resolves `"$user"` to the schema matching its own name first, which is why `schema.sql`'s table
-names stay unqualified. A second tenant follows the same recipe: its own `<service>_DATABASE_URL`
-with its own role name, and `db init` creates its role/schema the same way — never reusing
-`portfolio`'s. The one thing this doesn't solve is the admin role itself, which remains a
-superuser for as long as the stock postgres image bootstraps it that way; the guarantee is that
-nothing beyond one `db init` bootstrap step ever holds that privilege, not that no superuser
-exists on the instance.
-
-**Broker-parser plugins get into the image as wheels dropped into `services/portfolio/plugins/`.**
-The Dockerfile's `uv sync --frozen` installs only the workspace, so a plugin installed into the
-host `.venv` (`uv pip install -e`) never reached the container. The API then reported "no parser
-registered … Currently registered: (none)" even though the same import worked from the host CLI.
-A follow-up `RUN` step installs every `*.whl` in that directory on top of the locked environment,
-and installs nothing when the directory holds only its README. The directory is gitignored apart
-from that README, so the repo still never names a plugin (see "Extension points"). Alternatives
-rejected:
-- An extra Compose build context pointing at the plugin's source checkout. Every
-  `docker-compose*.yml` that builds this image tag (`api`, `db-init`, and the `stakehold-net`
-  overlay's `returns-refresh-all`) would have to repeat it, and a build that missed it would
-  silently overwrite the shared tag with a plugin-less image.
-- An auto-loaded `docker-compose.override.yml`. The stack is started with explicit `-f` flags,
-  which skip auto-loading.
-
-Known sharp edges:
-- The wheel's own dependencies, unlike the workspace's, aren't pinned by `uv.lock`.
-- The wheel is a build-time snapshot, like the image's code. A plugin change needs `uv build`
-  then `docker compose build`.
-- Two versions of one plugin's wheel left side by side both install, so discovery fails on the
-  duplicate entry-point name (`BrokerPluginError`). That is loud, not silent.
+Moved to [`deployment.md`](deployment.md): the containers, the three Postgres instances and why,
+the `portfolio` role's isolation on `app-postgres`, and how broker-parser plugins get into the image.
 
 ## Cross-cutting decisions
 

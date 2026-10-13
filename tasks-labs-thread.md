@@ -96,8 +96,8 @@ The previous chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archi
 | LB-1 | [data-store: a ticker's currency](#lb-1-data-store-a-tickers-currency) | — | done |
 | LB-2 | [portfolio: client reads returns and currency](#lb-2-portfolio-client-reads-returns-and-currency) | LB-1 | done |
 | LB-3 | [portfolio: backtest calculator](#lb-3-portfolio-backtest-calculator) | — | done |
-| LB-4 | [portfolio: backtest endpoint](#lb-4-portfolio-backtest-endpoint) | LB-2, LB-3 | ready |
-| LB-5 | [web: client for the backtest](#lb-5-web-client-for-the-backtest) | LB-4 | blocked |
+| LB-4 | [portfolio: backtest endpoint](#lb-4-portfolio-backtest-endpoint) | LB-2, LB-3 | done |
+| LB-5 | [web: client for the backtest](#lb-5-web-client-for-the-backtest) | LB-4 | ready |
 | LB-6 | [web: `/labs` page with the period table](#lb-6-web-labs-page-with-the-period-table) | LB-5 | blocked |
 | LB-7 | [web: edit the mix](#lb-7-web-edit-the-mix) | LB-6 | blocked |
 | LB-8 | [web: growth chart](#lb-8-web-growth-chart) | LB-6 | blocked |
@@ -233,7 +233,7 @@ module).
 
 ### LB-4. portfolio: backtest endpoint
 
-**Status:** ready
+**Status:** done
 
 - **Route.** `POST /labs/backtest` with body `{assets: [{ticker, weight}], period}`. It returns:
   - the period table, with each asset and the mix in each of the seven periods,
@@ -259,9 +259,33 @@ rest intact.
 Files: `portfolio/labs/`, `portfolio/api/`, `services/portfolio/docs/architecture.md` (endpoint
 surface), `services/portfolio/docs/flows.md` (the new flow).
 
+**As built:**
+- **Two fetch phases, not one.** The FX pair comes from the ticker info's `fx_currency`, so
+  `labs/flows.py` fetches every ticker info concurrently first. It then fetches prices, plus one
+  FX series per distinct currency, concurrently too. Both phases use a pool of 8 threads,
+  because the client is synchronous. Both series run from 1970-01-01, since Max needs the whole
+  history.
+- **A fifth status, `failed`** ("couldn't reach data-store"), for an asset whose call raised. The
+  exception is logged, not returned. An outage must not look like missing data. A failed FX fetch
+  fails every asset in that currency and no other.
+- **`statuses` replaces the calculator's `unavailable`** in the response. It lists every
+  requested asset, in order, with a code (`included`, `not_tracked`, `no_history`, `no_fx_rate`,
+  `failed`) and a reason. `no_history` also covers an empty price series, and `no_fx_rate` an
+  empty FX series.
+- **The cap is 50 assets.** Web's default mix is the user's whole holdings, so the cap has to sit
+  above any real portfolio. It still bounds a request to about 105 data-store calls. Tickers are
+  limited to 20 characters, data-store's own path limit. A weight must be a positive, finite
+  number.
+- **`Period` became a `StrEnum`**, so the body's `period` and the response's period keys are
+  `"1M"` to `"Max"` with no mapping. Figures are written in fixed-point, never `"0E-8"`.
+- **Ticker quoting.** `get_ticker_info` and `get_price_series` now quote the ticker as one path
+  segment. Labs is the first caller to pass them a ticker a user typed.
+- portfolio's `architecture.md` was over 62 KB, so its Deployment section moved to
+  `docs/deployment.md` first, in a commit of its own.
+
 ### LB-5. web: client for the backtest
 
-**Status:** blocked
+**Status:** ready
 
 - Add `backtest()` to the `PortfolioClient` Protocol and to `HttpPortfolioClient`, with frozen
   result dataclasses.
@@ -292,6 +316,9 @@ The first visible page. It only reads; editing is LB-7.
   are linked from the labels with the `term` macro.
 - **Review.** Add `review_pages.py` entries with fake data, including an unavailable asset and
   short history. Update `ui-architecture.md`.
+- **More than 50 holdings.** `POST /labs/backtest` returns a 422 for more than 50 assets (LB-4).
+  A portfolio with more priced holdings than that needs the page to cut the default mix to the
+  largest 50 by weight and say so, rather than show an error.
 
 Tests: the page renders the mix row and the asset rows in order. Each failing call leaves the
 other section rendered. An empty portfolio shows the explanation. Every `term` anchor exists in

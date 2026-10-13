@@ -40,7 +40,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
-from enum import Enum
+from enum import StrEnum
 
 from portfolio.datastore_client.base import FxPoint, PricePoint
 
@@ -53,7 +53,7 @@ NO_HISTORY = "no history yet"
 NO_FX_RATE = "no FX rate"
 
 
-class Period(Enum):
+class Period(StrEnum):
     M1 = "1M"
     M3 = "3M"
     M6 = "6M"

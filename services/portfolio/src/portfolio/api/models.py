@@ -10,10 +10,12 @@ tz-aware datetime -- so a malformed request 422s the same way a malformed CLI fl
 
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Annotated
 from uuid import UUID
 
+from portfolio.labs.calculator import Period
 from portfolio.transactions.base import TRANSACTION_TYPES
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, PlainSerializer, field_validator, model_validator
 
 
 class AccountCreateRequest(BaseModel):
@@ -346,3 +348,77 @@ class RebuildReturnsResponse(BaseModel):
     pairs_failed: int
     blocked_tickers: list[BlockedTickerResponse]
     failed_pairs: list[FailedPairResponse]
+
+
+# --- labs (LB-4) ---
+
+# Above any realistic personal portfolio, since web's default mix is the user's whole holdings,
+# while bounding one request's fan-out (about two data-store calls per asset, plus one per
+# currency) and its growth payload (one point per trading day per asset for Max).
+MAX_BACKTEST_ASSETS = 50
+
+# Fixed-point, never scientific notation: a quantized zero is Decimal("0E-8"), and str() would
+# write 0.00000012 as "1.2E-7". Every figure in a backtest is a fraction (0.10 is +10%).
+BacktestDecimal = Annotated[
+    Decimal, PlainSerializer(lambda value: format(value, "f"), return_type=str, when_used="json")
+]
+
+
+class BacktestAssetRequest(BaseModel):
+    # 20 is data-store's own limit on the ticker in /tickers/{ticker} and /prices/{ticker}.
+    ticker: str = Field(min_length=1, max_length=20)
+    # Any positive number: the weights are normalized over the assets that can be backtested.
+    weight: Decimal = Field(gt=0, allow_inf_nan=False)
+
+
+class BacktestRequest(BaseModel):
+    assets: list[BacktestAssetRequest] = Field(min_length=1, max_length=MAX_BACKTEST_ASSETS)
+    # The period the growth series is for; the table always has every period.
+    period: Period
+
+    @model_validator(mode="after")
+    def _no_duplicate_tickers(self):
+        tickers = [asset.ticker for asset in self.assets]
+        duplicates = sorted({t for t in tickers if tickers.count(t) > 1})
+        if duplicates:
+            raise ValueError(f"duplicate tickers in the mix: {', '.join(duplicates)}")
+        return self
+
+
+class PeriodReturnResponse(BaseModel):
+    start: date
+    end: date
+    covered: bool
+    return_pct: BacktestDecimal | None  # null exactly when not covered
+    gaps: int  # NULL returns bridged as flat days inside (start, end]
+
+
+class BacktestRowResponse(BaseModel):
+    ticker: str | None  # null for the mix
+    weight: BacktestDecimal  # the weight actually used, normalized; 1 for the mix
+    periods: dict[Period, PeriodReturnResponse]
+
+
+class GrowthSeriesResponse(BaseModel):
+    """Cumulative growth over `period`: 0 on its start date, then one point per trading day of
+    any asset. A line is null when its asset (or, for the mix, any asset) doesn't cover it."""
+
+    period: Period
+    dates: list[date]
+    mix: list[BacktestDecimal] | None
+    assets: dict[str, list[BacktestDecimal] | None]
+
+
+class AssetStatusResponse(BaseModel):
+    ticker: str
+    # included, not_tracked, no_history, no_fx_rate or failed.
+    status: str
+    reason: str | None  # null when included
+
+
+class BacktestResponse(BaseModel):
+    end_date: date | None  # null when no asset could be included
+    mix: BacktestRowResponse | None
+    assets: list[BacktestRowResponse]  # included assets, in request order
+    growth: GrowthSeriesResponse | None
+    statuses: list[AssetStatusResponse]  # every requested asset, in request order
