@@ -95,8 +95,8 @@ The previous chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archi
 | LB-0 | [Roadmap housekeeping](#lb-0-roadmap-housekeeping) | — | done |
 | LB-1 | [data-store: a ticker's currency](#lb-1-data-store-a-tickers-currency) | — | done |
 | LB-2 | [portfolio: client reads returns and currency](#lb-2-portfolio-client-reads-returns-and-currency) | LB-1 | done |
-| LB-3 | [portfolio: backtest calculator](#lb-3-portfolio-backtest-calculator) | — | ready |
-| LB-4 | [portfolio: backtest endpoint](#lb-4-portfolio-backtest-endpoint) | LB-2, LB-3 | blocked |
+| LB-3 | [portfolio: backtest calculator](#lb-3-portfolio-backtest-calculator) | — | done |
+| LB-4 | [portfolio: backtest endpoint](#lb-4-portfolio-backtest-endpoint) | LB-2, LB-3 | ready |
 | LB-5 | [web: client for the backtest](#lb-5-web-client-for-the-backtest) | LB-4 | blocked |
 | LB-6 | [web: `/labs` page with the period table](#lb-6-web-labs-page-with-the-period-table) | LB-5 | blocked |
 | LB-7 | [web: edit the mix](#lb-7-web-edit-the-mix) | LB-6 | blocked |
@@ -178,7 +178,7 @@ tests.
 
 ### LB-3. portfolio: backtest calculator
 
-**Status:** ready
+**Status:** done
 
 A new domain module, `portfolio/labs/`, following the service's three-file shape
 (`services/portfolio/docs/architecture.md`). Its core is a pure function. It takes each asset's
@@ -208,9 +208,32 @@ common history. Weights that don't sum to 1, which depends on the decision in LB
 Files: `portfolio/labs/` (new), its tests, `services/portfolio/docs/architecture.md` (the new
 module).
 
+**As built:**
+- **Inputs are `PricePoint` and `FxPoint`.** LB-2 had merged by then, so
+  `compute_backtest(assets, growth_period=...)` takes each asset's `PricePoint`s (reading only
+  `simple_return`) and `FxPoint`s, rather than a look-alike type that LB-4 would copy into.
+  `fx=None` means a EUR asset. An empty series, or one that starts after the asset's last
+  price, makes it unavailable with "no FX rate". No prices at all is "no history yet".
+- **A gap is a flat day, counted** in each period's `gaps`. The dev database, after the
+  September 2026 ingest gap was repaired, has 464 NULL returns after a ticker's first day across
+  9.0M rows, 446 of them single days. Blanking a period that contains one was rejected: a single
+  suppressed spike would hide years of figures. The repair itself was a data-store bug fix
+  (#88), not part of this roadmap.
+- **FX applies every day, using the latest rate on or before it, with no age limit.** An asset's
+  EUR value moves with the rate on days it didn't trade. Its usable history starts on its first
+  day with a rate.
+- **A period's base is each asset's value on or before its start.** Every row's Max starts on
+  the latest first day among the assets. If the histories don't overlap at all, no period is
+  covered.
+- **Unavailable assets are left out, and the rest are re-weighted to 100%.** Rows report the
+  weight actually used. Weights are normalized, per the assumption LB-7 still has to confirm.
+- **The growth series** starts on the period's start date at 0, then has a point for each
+  trading day of any asset. An asset that doesn't cover the period has no line, and the mix has
+  none unless every asset does.
+
 ### LB-4. portfolio: backtest endpoint
 
-**Status:** blocked
+**Status:** ready
 
 - **Route.** `POST /labs/backtest` with body `{assets: [{ticker, weight}], period}`. It returns:
   - the period table, with each asset and the mix in each of the seven periods,
