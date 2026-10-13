@@ -57,10 +57,13 @@ def _reshape_one(ticker: str, data: pd.DataFrame) -> pd.DataFrame:
     reshaped = data.reset_index().rename(columns=_COLUMN_RENAMES)
     reshaped["ticker"] = ticker
     reshaped["price_date"] = pd.to_datetime(reshaped["price_date"]).dt.date
-    # A day with no OHLC at all isn't a real observation; a day missing only volume (or with a
-    # zero dividend/split, which yfinance always fills rather than omitting) is still real and
-    # kept -- same filtering rule the old prices/yfinance_source.py used.
-    reshaped = reshaped.dropna(subset=["open", "high", "low", "close"], how="all")
+    # A day with no close isn't a finished observation. Yahoo serves the current day's bar
+    # without one for a while after the close; storing it would leave a row the daily ingest's
+    # catch-up never re-fetches, and returns/calculator.py can't anchor the next day's return to
+    # it. Left out, the date stays missing and the next run fetches it. A day missing only volume
+    # (or with a zero dividend/split, which yfinance always fills rather than omitting) is still
+    # real and kept.
+    reshaped = reshaped.dropna(subset=["close"])
     return reshaped[_OUTPUT_COLUMNS]
 
 
