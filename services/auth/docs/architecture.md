@@ -14,7 +14,7 @@ references a user only by the UUID `auth` issues at signup, as a trusted plain c
 
 - **FastAPI**, with its own dedicated Postgres — deliberately isolated from `app-postgres` given
   the sensitivity of what it stores (password hashes, session tokens). See
-  [`portfolio`'s deployment section](../../portfolio/docs/architecture.md#deployment) for the full
+  [`portfolio`'s deployment section](../../portfolio/docs/deployment.md) for the full
   reasoning and how this reconciles with `app-postgres` being the shared database every other
   future non-data-store service uses instead of standing up its own instance.
 - **Argon2id** via `argon2-cffi` for password hashing, not bcrypt.
@@ -190,7 +190,7 @@ Consequences worth knowing:
 
 `auth-postgres` is a dedicated Postgres 17 container (`services/auth/docker-compose.yml`), separate
 from `data-store-postgres` and `app-postgres` — see
-[`portfolio`'s deployment section](../../portfolio/docs/architecture.md#deployment) for the
+[`portfolio`'s deployment section](../../portfolio/docs/deployment.md) for the
 three-instances-not-two reasoning. `auth-postgres` itself stays reachable only within `auth`'s own
 compose project; only `auth-api` additionally joins the cross-service network (see "Service-to-
 service trust" under "Key decisions" above). Connection config is `AUTH_DATABASE_URL`

@@ -22,6 +22,8 @@ from portfolio import pipeline
 from portfolio.accounts.repository import Account
 from portfolio.datastore_client.http_client import HttpDataStoreClient
 from portfolio.holdings import flows as holdings_flows
+from portfolio.labs import flows as labs_flows
+from portfolio.labs.calculator import Period
 from portfolio.run_result import build_run_result
 from portfolio.settings import Settings, SettingsError, load_settings
 from portfolio.ticker_mapping.repository import TickerMappingRow
@@ -1304,3 +1306,38 @@ def get_portfolio_returns(
             "report."
         )
     return asdict(result)
+
+
+def get_backtest(
+    *,
+    assets: list[tuple[str, Decimal]],
+    period: Period,
+    settings: Settings | None = None,
+) -> dict:
+    """A Labs backtest of `assets` (ticker, weight) pairs: every period's return for the mix and
+    each asset, the growth series for `period`, and a status for every asset (see
+    labs/flows.run_backtest). Read-only and per request: nothing is stored, and no user data is
+    read, so there is no database connection and no user_id."""
+    configure_logging()
+    settings = settings or load_settings()
+    datastore_client = _require_datastore_client(settings, command="a backtest")
+    logger.info("backtest: %d asset(s), growth series for %s.", len(assets), period)
+    outcome = labs_flows.run_backtest(datastore_client, assets, period)
+
+    included = sum(1 for s in outcome.statuses if s.status == labs_flows.INCLUDED)
+    left_out = len(outcome.statuses) - included
+    if included:
+        logger.info(
+            "backtest: done, %d included, %d left out, ending %s.",
+            included,
+            left_out,
+            outcome.result.end_date,
+        )
+    else:
+        logger.warning(
+            "backtest: done, no asset could be included (%d left out), so there are no figures.",
+            left_out,
+        )
+    result = asdict(outcome.result)
+    del result["unavailable"]  # `statuses` covers every asset left out, with its reason
+    return {**result, "statuses": [asdict(s) for s in outcome.statuses]}

@@ -34,6 +34,7 @@ this file; references to sections that stayed in `architecture.md` name it.
 | Return listing | — (CLI has none) | `GET /returns`, `GET /returns/latest` | on demand | `return_snapshots`, optionally filtered by ticker/date range | — (read-only report) |
 | Holdings across accounts | — (CLI has none) | `GET /holdings?user_id=` | on demand (web's `/portfolio` page, PF-4) | `accounts` by `user_id`, then each account's latest `position_snapshots` and `return_snapshots` rows | — (computed on read, see "Holdings across accounts") |
 | Portfolio return series | — (CLI has none) | `GET /returns/portfolio?user_id=[&start=&end=]` | on demand (web's `/portfolio` chart, PF-6) | `accounts` by `user_id`, then each account's full `return_snapshots` history | — (computed on read, see "Portfolio return series") |
+| Labs backtest | — (CLI has none) | `POST /labs/backtest` | on demand (web's `/labs` page, LB-6) | `data-store`'s `GET /tickers/{t}`, `GET /prices/{t}` and `GET /fx/EUR/{c}` per asset; no portfolio table | — (read-only: nothing is stored) |
 
 **No separate `brokers` table** ever materialized — `schema.md` settled on `broker` as a plain
 string on `accounts`, so `account add` writes only to `accounts`, never a second table.
@@ -407,6 +408,57 @@ A user with no accounts, or no rows yet, gets `{"series": []}`, not a 404. Why i
 here, and why the forward-fill is in Python, is in `architecture.md`'s "The portfolio series is
 summed here, on read".
 
+### Labs backtest
+
+How a mix of assets, bought at its weights and held, would have done over 1M, 3M, 6M, 1Y, 2Y,
+5Y and Max, in EUR (LB-4). The request is
+
+    {"assets": [{"ticker", "weight"}, ...], "period": "1M" | ... | "Max"}
+
+and the response is
+
+    {"end_date", "mix": Row | null, "assets": [Row, ...], "growth": Growth | null,
+     "statuses": [{"ticker", "status", "reason"}, ...]}
+
+where a `Row` is `{ticker, weight, periods: {"1M": {start, end, covered, return_pct, gaps},
+..., "Max": ...}}` and `Growth` is `{period, dates, mix, assets: {ticker: [...]}}`. Every figure
+is a fraction (0.10 is +10%), written in fixed-point. The arithmetic and its rules are in
+`labs/calculator.py`'s docstring.
+
+`labs/flows.run_backtest` fetches in two concurrent phases, through a pool of 8 threads:
+
+1. `get_ticker_info` for every asset.
+2. `get_price_series` for every asset that exists and has returns, and `get_fx_rate_series`
+   once per distinct non-EUR `fx_currency`, shared by every asset in that currency.
+
+Both series run from 1970-01-01 to today, since Max needs each asset's whole history. The FX pair
+needs the ticker info first, so the phases can't overlap.
+
+- **`statuses`** has every requested asset, in request order, each with one of:
+  - `included`, with no reason.
+  - `not_tracked` ("not tracked"): data-store has never ingested it.
+  - `no_history` ("no history yet"): it has no returns yet, which means it is still onboarding,
+    or its price series is empty.
+  - `no_fx_rate` ("no FX rate"): it isn't in EUR, and it has no `fx_currency`, or that
+    currency's series is empty or starts after its last price.
+  - `failed` ("couldn't reach data-store"): one of its calls raised. The exception is logged,
+    not returned.
+
+  A left-out asset is dropped from the mix, and the rest are re-weighted to 100%. `assets` lists
+  only the included ones, with the weight actually used. When none is included, `end_date`,
+  `mix` and `growth` are null.
+- **Failures stay with their asset.** Each call is caught on its own. A failed FX fetch fails
+  every asset in that currency and no other.
+- **Validation is the route's.** A 422 is returned for an empty mix, more than 50 assets, a
+  duplicate ticker, a weight that isn't a positive finite number, a ticker that is empty or
+  longer than data-store's 20 characters, or an unknown period.
+- **The cap of 50** sits above any realistic personal portfolio, because web's default mix is the
+  user's whole holdings. It still bounds one request to about 105 data-store calls, and a Max
+  growth series to one point per trading day for each of 50 assets.
+
+It is a POST because the mix is a structured body. It changes nothing, so it answers 200. The
+mix holds no user data, so there is no `user_id`.
+
 ## HTTP API
 
 **Built at task 9.** `src/portfolio/api/{app,routes,security,models}.py` — FastAPI routes that
@@ -488,6 +540,11 @@ until they are summed. It returns the summed EUR figures; see "Portfolio return 
 
 `GET /holdings` sums across accounts rather than across dates: one row per ticker from each
 account's latest rows, so no calendar question arises. See "Holdings across accounts" above.
+
+`POST /labs/backtest` answers the calendar question the way `GET /returns/portfolio` does: each
+asset carries its last value over days it didn't trade. Unlike every other route here, an
+upstream failure doesn't make it a 502. Each asset's data-store calls are isolated, and a failure
+is reported in that asset's `status`. See "Labs backtest" above.
 
 **Known limitations, same category as `data-store`'s own read API:**
 
