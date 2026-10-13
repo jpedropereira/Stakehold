@@ -14,6 +14,11 @@ from uuid import UUID
 class PricePoint:
     date: date
     split_adjusted_close: Decimal
+    # data-store's market_returns.simple_return (price + dividend, split-aware). None is a gap --
+    # the ticker's first stored day, or a day data-store judged implausible -- never 0, which is a
+    # real flat day. HttpDataStoreClient always sets it; the default only spares callers that
+    # don't read it (returns/calculator.py and its fakes).
+    simple_return: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -29,6 +34,11 @@ class TickerInfo:
     # data-store's onboarding status when the ticker is tracked ("pending", "backfilling",
     # "ready", "failed"); None when it's priced only through a fund's holdings, or not at all.
     status: str | None = None
+    # The provider's spelling, verbatim (`GBp` stays `GBp`); None when data-store knows none.
+    currency: str | None = None
+    # The ISO code fx_rates is keyed by (`GBp` -> `GBP`). Pick an FX pair from this, not from
+    # `currency`. None when there's no currency, or it isn't one fx_rates could hold.
+    fx_currency: str | None = None
 
 
 @dataclass(frozen=True)
@@ -78,9 +88,10 @@ class DataStoreClient(Protocol):
         ...
 
     def get_price_series(self, ticker: str, start: date, end: date) -> list[PricePoint]:
-        """split_adjusted_close for every trading day data-store has for ticker in [start, end],
-        ascending by date. An empty list is a legitimate "no data in this range"; the ticker
-        itself is assumed to exist -- callers check that with get_ticker_info first.
+        """split_adjusted_close and simple_return for every trading day data-store has for ticker
+        in [start, end], ascending by date. An empty list is a legitimate "no data in this
+        range"; the ticker itself is assumed to exist -- callers check that with get_ticker_info
+        first.
         """
         ...
 
@@ -126,9 +137,10 @@ class DataStoreClient(Protocol):
         ...
 
     def get_ticker_info(self, ticker: str) -> TickerInfo:
-        """Whether data-store has ever ingested ticker at all, and whether calculate-returns has
-        run for it. Never raises for an unknown ticker -- exists=False is itself the answer, not
-        an error -- so a caller can block its own rebuild for that ticker loudly rather than
-        finding out from a failed price-series call.
+        """Whether data-store has ever ingested ticker at all, whether calculate-returns has run
+        for it, and its currency (verbatim and as the FX code), when data-store knows one. Never
+        raises for an unknown ticker -- exists=False is itself the answer, not an error -- so a
+        caller can block its own rebuild for that ticker loudly rather than finding out from a
+        failed price-series call.
         """
         ...

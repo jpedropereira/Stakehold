@@ -94,7 +94,7 @@ The previous chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archi
 |----|------|-------------|--------|
 | LB-0 | [Roadmap housekeeping](#lb-0-roadmap-housekeeping) | — | done |
 | LB-1 | [data-store: a ticker's currency](#lb-1-data-store-a-tickers-currency) | — | done |
-| LB-2 | [portfolio: client reads returns and currency](#lb-2-portfolio-client-reads-returns-and-currency) | LB-1 | ready |
+| LB-2 | [portfolio: client reads returns and currency](#lb-2-portfolio-client-reads-returns-and-currency) | LB-1 | done |
 | LB-3 | [portfolio: backtest calculator](#lb-3-portfolio-backtest-calculator) | — | ready |
 | LB-4 | [portfolio: backtest endpoint](#lb-4-portfolio-backtest-endpoint) | LB-2, LB-3 | blocked |
 | LB-5 | [web: client for the backtest](#lb-5-web-client-for-the-backtest) | LB-4 | blocked |
@@ -153,7 +153,7 @@ Files: `data_store/api/models.py`, `data_store/api/routes.py`, the read flow beh
 
 ### LB-2. portfolio: client reads returns and currency
 
-**Status:** ready
+**Status:** done
 
 data-store's `GET /prices/{ticker}` already returns `simple_return`.
 `HttpDataStoreClient.get_price_series` drops it: `PricePoint` has only `date` and
@@ -167,6 +167,14 @@ Tests: client parsing, including a NULL return and a missing currency.
 
 Files: `portfolio/datastore_client/base.py`, `portfolio/datastore_client/http_client.py`, their
 tests.
+
+**As built:**
+- **`simple_return`'s key is required, its value nullable.** data-store always sends the key, so
+  a missing one is a `DataStoreApiError`, not a gap: defaulting it to `None` would turn a
+  contract break into wrong returns. The dataclass field still defaults to `None`, so existing
+  constructors (`returns/calculator.py`'s tests and fakes) didn't change.
+- **A missing currency is `None`, not an error.** Absent or null, it can only leave an asset
+  without an FX pair, which LB-4 reports as "no FX rate".
 
 ### LB-3. portfolio: backtest calculator
 

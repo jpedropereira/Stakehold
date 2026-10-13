@@ -520,9 +520,10 @@ portfolio's sides:
    `market_returns`. Returns `split_adjusted_close`, `future_split_factor`, and the four return
    columns (`price_return`, `dividend_return`, `simple_return`, `log_return`), nullable together
    on a ticker's first stored date. **Built at task 8** as `DataStoreClient.get_price_series(
-   ticker, start, end)`; `http_client.py` only carries `split_adjusted_close` through into
-   `PricePoint` — the four return columns aren't needed, since `returns/calculator.py` computes
-   its own `unrealized_return_eur`/`total_return_eur` locally rather than consuming data-store's.
+   ticker, start, end)`; `http_client.py` carries `split_adjusted_close` and, since **LB-2**,
+   `simple_return` into `PricePoint` (NULL stays `None`). `returns/calculator.py` ignores
+   `simple_return` — it computes its own `unrealized_return_eur`/`total_return_eur` locally — and
+   Labs' backtest chains it. The other three return columns aren't carried.
 2. **FX rate series for a currency pair** over a date range, in the *same shape* as a price
    series (a list of `{date, value}` points) — `GET /fx/{base}/{quote}`. **Correction to an
    earlier assumption here**: this is *not* modeled as another yfinance-style ticker (e.g.
@@ -538,7 +539,9 @@ portfolio's sides:
    needing conversion, rather than one per priced day.
 3. **Ticker existence/validity check** — `GET /tickers/{ticker}`, reporting `exists` (ingested at
    all) and `has_returns` (whether `calculate-returns` has run for it) separately, plus the
-   covered date range. **Built at task 8** as `DataStoreClient.get_ticker_info(ticker)`; unlike
+   covered date range, and (since data-store's LB-1) the ticker's `currency` and `fx_currency`,
+   which `TickerInfo` carries since **LB-2** so a backtest can choose each asset's FX pair from
+   `fx_currency`. **Built at task 8** as `DataStoreClient.get_ticker_info(ticker)`; unlike
    the other two, this endpoint never 404s (`exists: false` is itself a normal `200` answer), so
    `http_client.py`'s implementation has no 404 special-case. `rebuild_returns` calls this first,
    per ticker, cached for the whole run: a ticker data-store doesn't track (or hasn't had
