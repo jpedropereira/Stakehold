@@ -62,6 +62,49 @@ def test_fully_tracked_ticker_reports_date_range(monkeypatch, client):
     assert body["last_date"] == "2026-08-29"
 
 
+def test_ticker_info_serializes_currency_and_fx_currency(monkeypatch, client):
+    monkeypatch.setattr(
+        jobs,
+        "get_ticker_info",
+        lambda **kw: {
+            "ticker": "VOD.L",
+            "exists": True,
+            "has_returns": True,
+            "first_date": date(2010, 1, 4),
+            "last_date": date(2026, 8, 29),
+            "status": "ready",
+            "currency": "GBp",
+            "fx_currency": "GBP",
+        },
+    )
+
+    body = client.get("/tickers/VOD.L").json()
+
+    assert (body["currency"], body["fx_currency"]) == ("GBp", "GBP")
+
+
+def test_ticker_info_serializes_an_unknown_currency_as_null(monkeypatch, client):
+    monkeypatch.setattr(
+        jobs,
+        "get_ticker_info",
+        lambda **kw: {
+            "ticker": "NOPE",
+            "exists": False,
+            "has_returns": False,
+            "first_date": None,
+            "last_date": None,
+            "status": None,
+            "currency": None,
+            "fx_currency": None,
+        },
+    )
+
+    body = client.get("/tickers/NOPE").json()
+
+    assert body["currency"] is None
+    assert body["fx_currency"] is None
+
+
 def test_source_query_param_is_forwarded(monkeypatch, client):
     calls = []
     monkeypatch.setattr(

@@ -335,9 +335,10 @@ def get_ticker_info(*, ticker: str, source: str) -> dict:
     ticker -- returning `exists: False` *is* the answer this endpoint exists to give."""
     configure_logging()
     settings = load_settings()
+    resolution = load_ticker_resolution(settings.exchange_suffixes_path)
     conn = get_connection(settings.database_url)
     try:
-        return ticker_info(conn, ticker, source)
+        return ticker_info(conn, ticker, source, resolution)
     finally:
         conn.close()
 

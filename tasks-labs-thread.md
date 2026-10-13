@@ -93,8 +93,8 @@ The previous chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archi
 | ID | Task | Depends on | Status |
 |----|------|-------------|--------|
 | LB-0 | [Roadmap housekeeping](#lb-0-roadmap-housekeeping) | — | done |
-| LB-1 | [data-store: a ticker's currency](#lb-1-data-store-a-tickers-currency) | — | ready |
-| LB-2 | [portfolio: client reads returns and currency](#lb-2-portfolio-client-reads-returns-and-currency) | LB-1 | blocked |
+| LB-1 | [data-store: a ticker's currency](#lb-1-data-store-a-tickers-currency) | — | done |
+| LB-2 | [portfolio: client reads returns and currency](#lb-2-portfolio-client-reads-returns-and-currency) | LB-1 | ready |
 | LB-3 | [portfolio: backtest calculator](#lb-3-portfolio-backtest-calculator) | — | ready |
 | LB-4 | [portfolio: backtest endpoint](#lb-4-portfolio-backtest-endpoint) | LB-2, LB-3 | blocked |
 | LB-5 | [web: client for the backtest](#lb-5-web-client-for-the-backtest) | LB-4 | blocked |
@@ -115,7 +115,7 @@ over whole.
 
 ### LB-1. data-store: a ticker's currency
 
-**Status:** ready
+**Status:** done
 
 Converting to EUR needs each asset's currency. Portfolio knows a currency only from a user's
 transactions (`position.native_currency`), and a lab can include tickers the user has never
@@ -137,16 +137,30 @@ ticker with no currency (integration). The route serializes the field (unit).
 Files: `data_store/api/models.py`, `data_store/api/routes.py`, the read flow behind
 `GET /tickers/{ticker}`, `services/data-store/docs/architecture.md`.
 
+**As built:**
+- **`fx_currency` as well as `currency`.** Portfolio can't import data-store's
+  `ticker_onboarding.major_currency`, so naming the mapping in the docs would still have left
+  LB-3 with a second copy. `TickerInfo` returns both: `currency` verbatim and
+  `fx_currency = major_currency(currency)`. Consumers choose the FX pair from `fx_currency`.
+- **A null tracked currency falls back to holdings.** A config row has no currency until
+  onboarding fills it in.
+- **Holdings are matched by resolving forward**, with ingest's rules, not by the raw symbol.
+  The dev database showed iShares reusing a raw symbol across exchanges (`DG` is Vinci in Paris
+  and Dollar General in New York). To share those rules, the resolution moved out of
+  `pipeline.py` into `ticker_resolution.py`.
+- iShares writes `GBP` where yfinance writes `GBp` for LSE stocks, so a holdings-only London
+  ticker reports `GBP`. A percentage return and the FX pair are the same either way.
+
 ### LB-2. portfolio: client reads returns and currency
 
-**Status:** blocked
+**Status:** ready
 
 data-store's `GET /prices/{ticker}` already returns `simple_return`.
 `HttpDataStoreClient.get_price_series` drops it: `PricePoint` has only `date` and
 `split_adjusted_close`.
 
 - Add `simple_return: Decimal | None` to `PricePoint` and parse it. Keep NULL as `None`, not 0.
-- Add `currency` to the client's ticker info, from LB-1.
+- Add `currency` and `fx_currency` to the client's ticker info, from LB-1. Both can be null.
 - Existing callers (`returns/calculator.py`) ignore the new fields and don't change.
 
 Tests: client parsing, including a NULL return and a missing currency.
@@ -165,8 +179,9 @@ asset's and the mix's % return for every period, and the daily growth series for
 It does no I/O, so it can be built before LB-2.
 
 - **EUR conversion.** An asset's EUR return on day t is (1 + rₜ) · fxₜ₋₁ / fxₜ − 1, where fx is
-  units of the currency per 1 EUR, as `fx_rates` stores it. An asset with no FX series for its
-  currency is unavailable, with that reason. EUR assets need no FX.
+  units of the currency per 1 EUR, as `fx_rates` stores it. The FX series is chosen by the
+  asset's `fx_currency` from LB-1, with no minor-unit mapping of its own. An asset with no FX
+  series for its currency is unavailable, with that reason. EUR assets need no FX.
 - **Calendars.** Assets trade on different exchanges and holidays. Line their dates up on the
   union of trading days, and carry each asset's growth forward on days it didn't trade.
 - **Gaps.** Count NULL returns inside a period and report them with the result. Before choosing
