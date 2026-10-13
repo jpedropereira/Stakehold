@@ -108,8 +108,10 @@ structural there. What follows is workspace-level only.
   source of truth.
 - **Two-tier test gate**: `pre-commit` stage runs `pytest --testmon -x` (only tests touched by the
   change, so commits stay fast); `pre-push` stage runs the full suite. CI (`.github/workflows/ci.yml`)
-  then runs the exact same `.pre-commit-config.yaml` via `pre-commit/action`, followed by the full
-  suite again — so local hooks and CI can never disagree about what "passing" means.
+  then runs the exact same `.pre-commit-config.yaml` (via the lockfile-pinned `uv run pre-commit`,
+  skipping only `pytest-fast`), followed by the full unit and integration suites — so local hooks
+  and CI can never disagree about what "passing" means. `pytest-fast` is skipped because CI has no
+  testmon data, so it would just rerun the whole unit suite a second time.
 - **detect-secrets runs on every commit**, not just push, against `.secrets.baseline`, which records
   already-audited findings so only genuinely new secrets get flagged.
 
