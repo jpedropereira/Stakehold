@@ -154,7 +154,7 @@ that warning ever proves easy to miss in practice.
 **Exchange-suffix resolution for holdings-derived tickers**: `etf_holdings.holding_ticker` is the
 raw, unsuffixed symbol as scraped (e.g. `"0700"`). Both `ingest-market-data` and
 `backfill-market-data` resolve it into a yfinance-ready ticker via
-`pipeline._resolve_yfinance_ticker`, which looks up `etf_holdings.exchange` in
+`ticker_resolution.resolve_yfinance_ticker`, which looks up `etf_holdings.exchange` in
 `config/yfinance_exchange_suffixes.yaml` (a raw exchange string -> yfinance suffix mapping, e.g.
 `"Hong Kong Exchanges And Clearing Ltd"` -> `.HK`). An exchange with no entry in that mapping is
 not guessed at or sent bare to yfinance (which would silently return zero rows, not an error) —
@@ -163,8 +163,8 @@ the run. This resolution happens at fetch time, not at holdings-scrape time, so
 `etf_holdings.holding_ticker` stays raw/unmodified and a mapping-table fix takes effect on the next
 run with no re-scrape needed.
 
-Before appending the suffix, `_resolve_yfinance_ticker` also applies any exchange-specific raw
-ticker normalization registered in `pipeline._TICKER_NORMALIZERS` — yfinance's per-market ticker
+Before appending the suffix, `resolve_yfinance_ticker` also applies any exchange-specific raw
+ticker normalization registered in `ticker_resolution.TICKER_NORMALIZERS` — yfinance's per-market ticker
 syntax doesn't always match the raw symbol iShares scrapes (verified against real yfinance data,
 not guessed): Hong Kong codes need zero-padding to 4 digits (`"1"` → `"0001.HK"`), London tickers
 that already end in `.` must not double it (`"BP."` → `"BP.L"`, not `"BP..L"`), and Nordic/Canadian

@@ -2,7 +2,7 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
-from data_store.config_loader import CurrenciesConfig, CurrencyConfig
+from data_store.config_loader import CurrenciesConfig, CurrencyConfig, TickerResolution
 from data_store.read_flows import (
     CurrencyNotTracked,
     TickerNotFound,
@@ -95,15 +95,40 @@ def test_price_series_empty_range_returns_empty_points_not_an_error(monkeypatch)
 
 
 class FakeTrackedRepo:
-    def __init__(self, status=None):
+    def __init__(self, status=None, currency=None):
         self.status = status
+        self.currency = currency
 
     def get_tracked_ticker(self, conn, ticker, source):
         if self.status is None:
             return None
         from types import SimpleNamespace
 
-        return SimpleNamespace(status=self.status)
+        return SimpleNamespace(status=self.status, currency=self.currency)
+
+
+class FakeHoldingsRepo:
+    """`listings` is what get_listing_currencies returns: (raw ticker, exchange, currency),
+    newest snapshot first."""
+
+    def __init__(self, listings=()):
+        self.listings = list(listings)
+        self.calls = 0
+
+    def get_listing_currencies(self, conn):
+        self.calls += 1
+        return self.listings
+
+
+RESOLUTION = TickerResolution(
+    exchange_suffixes={
+        "Hong Kong Exchanges And Clearing Ltd": ".HK",
+        "Nyse Euronext - Euronext Paris": ".PA",
+        "New York Stock Exchange Inc.": None,
+        "London Stock Exchange": ".L",
+    },
+    ticker_overrides={"BRKB": "BRK-B"},
+)
 
 
 @pytest.fixture(autouse=True)
@@ -111,6 +136,19 @@ def untracked(monkeypatch):
     import data_store.read_flows as read_flows
 
     monkeypatch.setattr(read_flows, "tracked_tickers_repository", FakeTrackedRepo())
+    monkeypatch.setattr(read_flows, "holdings_repository", FakeHoldingsRepo())
+
+
+@pytest.fixture
+def priced(monkeypatch):
+    """A ticker with stored history, so the currency tests below only vary the currency."""
+    import data_store.read_flows as read_flows
+
+    monkeypatch.setattr(
+        read_flows,
+        "returns_repository",
+        FakeReturnsRepo(exists=True, date_range=(date(2010, 1, 4), date(2026, 8, 29))),
+    )
 
 
 def test_ticker_info_not_tracked(monkeypatch):
@@ -120,7 +158,7 @@ def test_ticker_info_not_tracked(monkeypatch):
         read_flows, "returns_repository", FakeReturnsRepo(exists=False, date_range=(None, None))
     )
 
-    result = ticker_info(None, "NOPE", "yfinance")
+    result = ticker_info(None, "NOPE", "yfinance", RESOLUTION)
 
     assert result == {
         "ticker": "NOPE",
@@ -129,6 +167,8 @@ def test_ticker_info_not_tracked(monkeypatch):
         "first_date": None,
         "last_date": None,
         "status": None,
+        "currency": None,
+        "fx_currency": None,
     }
 
 
@@ -141,7 +181,7 @@ def test_ticker_info_reports_the_onboarding_status_of_a_tracked_ticker(monkeypat
     )
     monkeypatch.setattr(read_flows, "tracked_tickers_repository", FakeTrackedRepo("pending"))
 
-    result = ticker_info(None, "ASML.AS", "yfinance")
+    result = ticker_info(None, "ASML.AS", "yfinance", RESOLUTION)
 
     assert (result["exists"], result["status"]) == (False, "pending")
 
@@ -153,7 +193,7 @@ def test_ticker_info_tracked_without_returns_computed_yet(monkeypatch):
         read_flows, "returns_repository", FakeReturnsRepo(exists=True, date_range=(None, None))
     )
 
-    result = ticker_info(None, "AAPL", "yfinance")
+    result = ticker_info(None, "AAPL", "yfinance", RESOLUTION)
 
     assert result["exists"] is True
     assert result["has_returns"] is False
@@ -168,11 +208,158 @@ def test_ticker_info_tracked_with_returns(monkeypatch):
         FakeReturnsRepo(exists=True, date_range=(date(2010, 1, 4), date(2026, 8, 29))),
     )
 
-    result = ticker_info(None, "AAPL", "yfinance")
+    result = ticker_info(None, "AAPL", "yfinance", RESOLUTION)
 
     assert result["has_returns"] is True
     assert result["first_date"] == date(2010, 1, 4)
     assert result["last_date"] == date(2026, 8, 29)
+
+
+# --- ticker_info: currency -----------------------------------------------------------------
+
+
+def test_ticker_info_takes_a_tracked_tickers_currency_verbatim(monkeypatch, priced):
+    import data_store.read_flows as read_flows
+
+    monkeypatch.setattr(read_flows, "tracked_tickers_repository", FakeTrackedRepo("ready", "GBp"))
+    holdings = FakeHoldingsRepo([("VOD", "London Stock Exchange", "GBP")])
+    monkeypatch.setattr(read_flows, "holdings_repository", holdings)
+
+    result = ticker_info(None, "VOD.L", "yfinance", RESOLUTION)
+
+    # Verbatim: a pence-quoted listing stays GBp. fx_currency is the pair FX rates exist for.
+    assert (result["currency"], result["fx_currency"]) == ("GBp", "GBP")
+    assert holdings.calls == 0
+
+
+def test_ticker_info_falls_back_to_holdings_when_the_tracked_currency_is_null(monkeypatch, priced):
+    # A config row has no currency until onboarding's lookup fills it in.
+    import data_store.read_flows as read_flows
+
+    monkeypatch.setattr(read_flows, "tracked_tickers_repository", FakeTrackedRepo("pending", None))
+    monkeypatch.setattr(
+        read_flows,
+        "holdings_repository",
+        FakeHoldingsRepo([("AAPL", "New York Stock Exchange Inc.", "USD")]),
+    )
+
+    result = ticker_info(None, "AAPL", "yfinance", RESOLUTION)
+
+    assert (result["currency"], result["fx_currency"]) == ("USD", "USD")
+
+
+def test_ticker_info_resolves_a_holdings_only_ticker_through_the_suffix_map(monkeypatch, priced):
+    # Stored raw as "700"; priced as "0700.HK" after Hong Kong's zero-padding.
+    import data_store.read_flows as read_flows
+
+    monkeypatch.setattr(
+        read_flows,
+        "holdings_repository",
+        FakeHoldingsRepo([("700", "Hong Kong Exchanges And Clearing Ltd", "HKD")]),
+    )
+
+    result = ticker_info(None, "0700.HK", "yfinance", RESOLUTION)
+
+    assert (result["currency"], result["fx_currency"]) == ("HKD", "HKD")
+
+
+@pytest.mark.parametrize("ticker,expected", [("DG.PA", "EUR"), ("DG", "USD")])
+def test_ticker_info_tells_apart_one_raw_symbol_on_two_exchanges(
+    monkeypatch, priced, ticker, expected
+):
+    # Real case: iShares lists Vinci (Paris) and Dollar General (NYSE) both as "DG".
+    import data_store.read_flows as read_flows
+
+    monkeypatch.setattr(
+        read_flows,
+        "holdings_repository",
+        FakeHoldingsRepo(
+            [
+                ("DG", "Nyse Euronext - Euronext Paris", "EUR"),
+                ("DG", "New York Stock Exchange Inc.", "USD"),
+            ]
+        ),
+    )
+
+    result = ticker_info(None, ticker, "yfinance", RESOLUTION)
+
+    assert result["currency"] == expected
+
+
+def test_ticker_info_resolves_a_holding_through_a_ticker_override(monkeypatch, priced):
+    import data_store.read_flows as read_flows
+
+    monkeypatch.setattr(
+        read_flows,
+        "holdings_repository",
+        FakeHoldingsRepo([("BRKB", "New York Stock Exchange Inc.", "USD")]),
+    )
+
+    result = ticker_info(None, "BRK-B", "yfinance", RESOLUTION)
+
+    assert result["currency"] == "USD"
+
+
+def test_ticker_info_takes_the_newest_holding_when_two_resolve_to_one_ticker(monkeypatch, priced):
+    import data_store.read_flows as read_flows
+
+    monkeypatch.setattr(
+        read_flows,
+        "holdings_repository",
+        FakeHoldingsRepo(
+            [
+                ("700", "Hong Kong Exchanges And Clearing Ltd", "HKD"),
+                ("0700", "Hong Kong Exchanges And Clearing Ltd", "USD"),
+            ]
+        ),
+    )
+
+    result = ticker_info(None, "0700.HK", "yfinance", RESOLUTION)
+
+    assert result["currency"] == "HKD"
+
+
+def test_ticker_info_ignores_placeholder_and_unmapped_holdings(monkeypatch, priced):
+    import data_store.read_flows as read_flows
+
+    monkeypatch.setattr(
+        read_flows,
+        "holdings_repository",
+        FakeHoldingsRepo(
+            [
+                ("-", "London Stock Exchange", "GBP"),
+                ("ACME", "Some Unmapped Exchange", "JPY"),
+            ]
+        ),
+    )
+
+    assert ticker_info(None, "-.L", "yfinance", RESOLUTION)["currency"] is None
+    assert ticker_info(None, "ACME", "yfinance", RESOLUTION)["currency"] is None
+
+
+def test_ticker_info_currency_is_null_when_no_source_knows_it(monkeypatch, priced):
+    import data_store.read_flows as read_flows
+
+    monkeypatch.setattr(
+        read_flows,
+        "holdings_repository",
+        FakeHoldingsRepo([("MSFT", "New York Stock Exchange Inc.", "USD")]),
+    )
+
+    result = ticker_info(None, "SAP.DE", "yfinance", RESOLUTION)
+
+    assert (result["currency"], result["fx_currency"]) == (None, None)
+
+
+def test_ticker_info_fx_currency_is_null_for_a_currency_with_no_iso_code(monkeypatch, priced):
+    # major_currency's rule: only a 3-letter ISO code can pick an FX pair.
+    import data_store.read_flows as read_flows
+
+    monkeypatch.setattr(read_flows, "tracked_tickers_repository", FakeTrackedRepo("ready", "XX"))
+
+    result = ticker_info(None, "ODD", "yfinance", RESOLUTION)
+
+    assert (result["currency"], result["fx_currency"]) == ("XX", None)
 
 
 # --- fx_rate_series: currency tracking -----------------------------------------------------

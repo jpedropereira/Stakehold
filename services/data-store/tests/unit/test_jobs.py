@@ -1091,17 +1091,27 @@ def test_get_price_series_propagates_ticker_not_found(monkeypatch, fake_settings
 
 def test_get_ticker_info_calls_ticker_info_and_closes_the_connection(monkeypatch, fake_settings):
     closed = []
+    calls = []
 
     monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
     monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn(closed))
+    stub_resolution(monkeypatch, suffixes={"NASDAQ": None}, overrides={"BRKB": "BRK-B"})
     monkeypatch.setattr(
-        jobs, "ticker_info", lambda conn, ticker, source: {"ticker": ticker, "exists": True}
+        jobs,
+        "ticker_info",
+        lambda conn, ticker, source, resolution: calls.append(resolution)
+        or {"ticker": ticker, "exists": True},
     )
 
     result = jobs.get_ticker_info(ticker="AAPL", source="yfinance")
 
     assert result == {"ticker": "AAPL", "exists": True}
     assert closed == [True]
+    # The read API resolves holdings with the same tables ingest uses, or it would match a
+    # priced ticker to the wrong holding.
+    assert calls == [
+        TickerResolution(exchange_suffixes={"NASDAQ": None}, ticker_overrides={"BRKB": "BRK-B"})
+    ]
 
 
 def test_get_ticker_list_calls_ticker_list_and_closes_the_connection(monkeypatch, fake_settings):

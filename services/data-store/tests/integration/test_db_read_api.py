@@ -8,6 +8,7 @@ import pytest
 from data_store.api.app import create_app
 from data_store.config_loader import CurrenciesConfig, CurrencyConfig
 from data_store.fx.repository import get_dates_with_rate, get_rate_series, save_fx_rates
+from data_store.holdings.repository import get_listing_currencies, save_holdings
 from data_store.market_data.repository import save_raw_market_data
 from data_store.read_flows import fx_rate_series
 from data_store.returns.repository import (
@@ -24,6 +25,23 @@ pytestmark = pytest.mark.integration
 
 SCHEMA_PATH = Path(__file__).parents[2] / "src" / "data_store" / "db" / "schema.sql"
 TICKER = "TEST_READAPI"
+FUND = "test_fund_readapi"
+AUTH = {"Authorization": "Bearer integration-test-secret"}
+
+HOLDINGS_COLUMNS = [
+    "holding_ticker",
+    "holding_name",
+    "sector",
+    "asset_class",
+    "market_value",
+    "weight_percent",
+    "notional_value",
+    "shares",
+    "price",
+    "location",
+    "exchange",
+    "currency",
+]
 
 
 def _connect():
@@ -66,6 +84,17 @@ def make_returns_df(rows):
     )
 
 
+def make_holdings_df(rows):
+    """rows: (holding_ticker, asset_class, exchange, currency); the rest is filler."""
+    return pd.DataFrame(
+        [
+            [ticker, "NAME", "Sector", asset_class, 1.0, 1.0, 1.0, 1.0, 1.0, "X", exchange, ccy]
+            for ticker, asset_class, exchange, ccy in rows
+        ],
+        columns=HOLDINGS_COLUMNS,
+    )
+
+
 def make_fx_df(rows):
     return pd.DataFrame(rows, columns=["base_currency", "quote_currency", "rate_date", "rate"])
 
@@ -78,6 +107,8 @@ def clean_tables():
             cur.execute("DELETE FROM market_returns WHERE ticker LIKE 'TEST%%'")
             cur.execute("DELETE FROM raw_market_data WHERE ticker LIKE 'TEST%%'")
             cur.execute("DELETE FROM fx_rates WHERE base_currency = %s", ("TST",))
+            cur.execute("DELETE FROM etf_holdings WHERE fund_key = %s", (FUND,))
+            cur.execute("DELETE FROM tracked_tickers WHERE ticker LIKE 'TEST%%'")
         conn.commit()
         conn.close()
 
@@ -286,3 +317,108 @@ def test_tickers_endpoint_reports_exists_false_for_an_unknown_ticker(api_client)
 
     assert response.status_code == 200
     assert response.json()["exists"] is False
+
+
+# --- a ticker's currency (LB-1) -------------------------------------------------------------
+
+
+def test_get_listing_currencies_takes_each_listings_newest_snapshot_against_a_real_schema():
+    conn = _connect()
+    save_holdings(
+        conn,
+        FUND,
+        date(2026, 1, 1),
+        make_holdings_df(
+            [
+                ("TESTMOVED", "Equity", "NASDAQ", "USD"),
+                ("TESTGONE", "Equity", "NASDAQ", "USD"),
+            ]
+        ),
+    )
+    save_holdings(
+        conn,
+        FUND,
+        date(2026, 2, 1),
+        make_holdings_df(
+            [
+                ("TESTMOVED", "Equity", "NASDAQ", "CAD"),
+                # Same raw symbol, another exchange: a different listing, kept apart.
+                ("TESTMOVED", "Equity", "Xetra", "EUR"),
+                ("TESTFUT", "Futures", "NASDAQ", "USD"),
+                ("TESTNOCCY", "Equity", "NASDAQ", None),
+                (None, "Cash", "-", "USD"),
+            ]
+        ),
+    )
+
+    listings = [row for row in get_listing_currencies(conn) if row[0].startswith("TEST")]
+    conn.close()
+
+    assert sorted(listings) == [
+        # A holding that has left the fund still has a currency, from the last snapshot with it.
+        ("TESTGONE", "NASDAQ", "USD"),
+        ("TESTMOVED", "NASDAQ", "CAD"),
+        ("TESTMOVED", "Xetra", "EUR"),
+    ]
+    # Newest first, so the first match for a priced ticker is the most recent one.
+    assert listings.index(("TESTGONE", "NASDAQ", "USD")) == len(listings) - 1
+
+
+@pytest.fixture
+def currency_api(monkeypatch, tmp_path):
+    suffixes = tmp_path / "suffixes.yaml"
+    suffixes.write_text(
+        "exchanges:\n"
+        '  - exchange: "Nyse Euronext - Euronext Paris"\n'
+        '    suffix: ".PA"\n'
+        '  - exchange: "New York Stock Exchange Inc."\n'
+        "    suffix: null\n"
+    )
+    monkeypatch.setenv("DATA_STORE_EXCHANGE_SUFFIXES_PATH", str(suffixes))
+    monkeypatch.setenv("INTERNAL_API_SECRET", "integration-test-secret")
+    return TestClient(create_app())
+
+
+def test_ticker_endpoint_reports_a_tracked_tickers_currency_end_to_end(currency_api):
+    conn = _connect()
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO tracked_tickers"
+            " (ticker, display_name, asset_type, currency, origin, status)"
+            " VALUES (%s, %s, %s, %s, %s, %s)",
+            ("TESTVOD.L", "Test Vodafone", "equity", "GBp", "user", "ready"),
+        )
+    conn.commit()
+    conn.close()
+
+    body = currency_api.get("/tickers/TESTVOD.L", headers=AUTH).json()
+
+    assert (body["currency"], body["fx_currency"]) == ("GBp", "GBP")
+
+
+def test_ticker_endpoint_reports_a_holdings_only_tickers_currency_end_to_end(currency_api):
+    conn = _connect()
+    save_holdings(
+        conn,
+        FUND,
+        date(2026, 2, 1),
+        make_holdings_df(
+            [
+                ("TESTDG", "Equity", "Nyse Euronext - Euronext Paris", "EUR"),
+                ("TESTDG", "Equity", "New York Stock Exchange Inc.", "USD"),
+            ]
+        ),
+    )
+    conn.close()
+
+    paris = currency_api.get("/tickers/TESTDG.PA", headers=AUTH).json()
+    new_york = currency_api.get("/tickers/TESTDG", headers=AUTH).json()
+
+    assert (paris["currency"], paris["fx_currency"]) == ("EUR", "EUR")
+    assert (new_york["currency"], new_york["fx_currency"]) == ("USD", "USD")
+
+
+def test_ticker_endpoint_reports_no_currency_when_nothing_knows_it(currency_api):
+    body = currency_api.get("/tickers/TEST_TOTALLY_UNKNOWN", headers=AUTH).json()
+
+    assert (body["currency"], body["fx_currency"]) == (None, None)
