@@ -90,6 +90,31 @@ def get_earliest_fx_dates(
         return {(row[0], row[1]): row[2] for row in cur.fetchall()}
 
 
+def get_latest_fx_dates(
+    conn, source: str, pairs: list[tuple[str, str]]
+) -> dict[tuple[str, str], date]:
+    """{(base_currency, quote_currency): latest stored rate_date} for pairs with at least one row
+    for this source -- where the daily ingest's catch-up starts from. rate is NOT NULL, so every
+    row counts."""
+    if not pairs:
+        return {}
+    placeholders = ", ".join(["(%s, %s)"] * len(pairs))
+    params = [source]
+    for base, quote in pairs:
+        params.extend([base, quote])
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT base_currency, quote_currency, MAX(rate_date)
+            FROM fx_rates
+            WHERE source = %s AND (base_currency, quote_currency) IN ({placeholders})
+            GROUP BY base_currency, quote_currency
+            """,
+            params,
+        )
+        return {(row[0], row[1]): row[2] for row in cur.fetchall()}
+
+
 def get_rate_series(
     conn, base: str, quote: str, source: str, start: date, end: date
 ) -> list[tuple]:

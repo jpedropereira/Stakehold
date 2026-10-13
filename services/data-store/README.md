@@ -219,7 +219,9 @@ uv run data-store calculate-returns            # rebuilds market_returns from ra
 stock splits together — one `Ticker.history()` call per ticker returns all three, so there's no
 separate command to run for dividends. They accept `--fund KEY` (only that fund's holdings —
 tracked tickers from `tracked_tickers.yaml` are always included regardless), `--days N` (default
-7, ingest only) for the lookback window, and `--ticker TICKER` (repeatable) to restrict the run to
+7, ingest only) for the lookback window — a ticker whose latest stored close is older than that
+is caught up from it, up to a year back, so a run after an outage fills the gap — and
+`--ticker TICKER` (repeatable) to restrict the run to
 specific final, post-suffix-resolution tickers (e.g. `--ticker AAPL --ticker 0700.HK`) — matches
 any currently followed ticker, fund-holdings-derived or tracked; useful for a small manual run or
 re-attempting specific tickers that previously failed. Omit it to run against everything
@@ -284,7 +286,8 @@ ticker in, say, ZAR needs no YAML edit), against its `base_currency`. A currency
 uv run data-store ingest-fx-rates --days 7   # rolling window, same default as ingest-market-data
 ```
 
-It accepts `--days N` (default 7) and `--currency CODE` (repeatable) to restrict the run to
+It accepts `--days N` (default 7; a pair behind that window catches up the same way as
+`ingest-market-data`'s tickers) and `--currency CODE` (repeatable) to restrict the run to
 specific quote currencies, e.g. `--currency USD --currency GBP`. A `--currency` value matching
 nothing configured is logged as a warning naming it, same convention as `--ticker`.
 

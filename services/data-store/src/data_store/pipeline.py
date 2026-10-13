@@ -1,11 +1,16 @@
 import logging
 import time
+from collections.abc import Callable
 from contextlib import contextmanager
 from datetime import date
 from pathlib import Path
 
 from data_store.config_loader import CurrenciesConfig, FundConfig, TickerConfig
-from data_store.fx.repository import get_earliest_fx_dates, save_fx_rates
+from data_store.fx.repository import (
+    get_earliest_fx_dates,
+    get_latest_fx_dates,
+    save_fx_rates,
+)
 from data_store.fx.yfinance_source import YFinanceFxRateSource
 from data_store.holdings.parser import fetch_holdings_csv
 from data_store.holdings.repository import (
@@ -22,7 +27,11 @@ from data_store.macro.repository import (
     save_macro_indicator_rates,
     save_raw_macro_indicators,
 )
-from data_store.market_data.repository import get_earliest_dates, save_raw_market_data
+from data_store.market_data.repository import (
+    get_earliest_dates,
+    get_latest_close_dates,
+    save_raw_market_data,
+)
 from data_store.market_data.yfinance_source import YFinanceMarketDataSource
 from data_store.regimes.loader import load_regimes
 from data_store.regimes.repository import save_regimes
@@ -115,6 +124,7 @@ def ingest_market_data(
     end_date: date,
     only_tickers: set[str] | None = None,
     ticker_overrides: dict[str, str] | None = None,
+    catch_up_limit: date | None = None,
 ) -> dict[str, int | str]:
     """Prices, dividends and stock splits for every fund's holdings plus every tracked ticker,
     in one pass -- one fetch per ticker per run, since a MarketDataSource returns all three
@@ -124,8 +134,9 @@ def ingest_market_data(
     `only_tickers`, when given, restricts the run to exactly those final (post-suffix-resolution)
     tickers -- e.g. "0700.HK", not the raw "0700" -- so it can target holdings-derived tickers
     too, not just tracked_tickers entries. `ticker_overrides` is forwarded to ticker resolution
-    -- see ticker_resolution.py. Logs per-group progress and a final summary; logging_config
-    decides where that output lands."""
+    -- see ticker_resolution.py. `catch_up_limit` lets a ticker that fell behind `start_date`
+    catch up from its last stored close -- see _fetch_windows. Logs per-group progress and a
+    final summary; logging_config decides where that output lands."""
     resolved = _resolve_priceable_tickers(
         conn, funds, tracked_tickers, exchange_suffixes, ticker_overrides
     )
@@ -171,17 +182,18 @@ def ingest_market_data(
         # run. In practice this now mostly guards save_raw_market_data -- fetch() itself already
         # isolates failures per ticker (see YFinanceMarketDataSource._fetch_one), so a single bad
         # ticker no longer needs this group-level catch to avoid taking the rest of the group
-        # down with it.
+        # down with it. With a catch_up_limit a group can be fetched in several windows, and each
+        # window is isolated the same way: a failed catch-up must not cost today's rows.
         try:
-            data = source.fetch(tickers, start_date, end_date)
-            if data.empty:
-                logger.info(
-                    f"ingest-market-data: no data for this group "
-                    f"(source={source_name}, asset_type={asset_type})."
-                )
-                continue
-
-            saved = save_raw_market_data(conn, source.name, asset_type, data)
+            windows = _fetch_windows(
+                "ingest-market-data",
+                "ticker",
+                tickers,
+                start_date,
+                catch_up_limit,
+                lambda: get_latest_close_dates(conn, source.name, tickers),
+                str,
+            )
         except Exception as e:
             failed += 1
             logger.warning(
@@ -195,22 +207,47 @@ def ingest_market_data(
             )
             continue
 
-        logger.info(
-            f"ingest-market-data: saved {saved} row(s) "
-            f"(source={source_name}, asset_type={asset_type})."
-        )
-        total += saved
+        for window_start, window_tickers in windows:
+            try:
+                data = source.fetch(window_tickers, window_start, end_date)
+                if data.empty:
+                    logger.info(
+                        f"ingest-market-data: no data for this group "
+                        f"(source={source_name}, asset_type={asset_type}, from {window_start})."
+                    )
+                    continue
 
-        # A split in today's data invalidates everything stored outside this window -- see
-        # _refresh_split_histories. Deliberately outside the group try/except above: a repair
-        # failure must not be reported as the group having failed, since the group's own rows
-        # are saved and correct.
-        refresh_rows, refreshed, refresh_failed = _refresh_split_histories(
-            conn, source, asset_type, _tickers_with_splits(data), start_date, end_date
-        )
-        total += refresh_rows
-        splits_refreshed += refreshed
-        splits_refresh_failed += refresh_failed
+                saved = save_raw_market_data(conn, source.name, asset_type, data)
+            except Exception as e:
+                failed += 1
+                logger.warning(
+                    "ingest-market-data: group (source=%s, asset_type=%s, %d ticker(s) from %s) "
+                    "failed, skipping: %s",
+                    source_name,
+                    asset_type,
+                    len(window_tickers),
+                    window_start,
+                    e,
+                    exc_info=True,
+                )
+                continue
+
+            logger.info(
+                f"ingest-market-data: saved {saved} row(s) "
+                f"(source={source_name}, asset_type={asset_type}, from {window_start})."
+            )
+            total += saved
+
+            # A split in today's data invalidates everything stored outside this window -- see
+            # _refresh_split_histories. Deliberately outside the try/except above: a repair
+            # failure must not be reported as the group having failed, since the group's own
+            # rows are saved and correct.
+            refresh_rows, refreshed, refresh_failed = _refresh_split_histories(
+                conn, source, asset_type, _tickers_with_splits(data), window_start, end_date
+            )
+            total += refresh_rows
+            splits_refreshed += refreshed
+            splits_refresh_failed += refresh_failed
 
     logger.info(
         f"ingest-market-data complete: {total} row(s) across {len(resolved)} ticker(s), "
@@ -228,6 +265,74 @@ def ingest_market_data(
         splits_refreshed=splits_refreshed,
         splits_refresh_failed=splits_refresh_failed,
     )
+
+
+def _fetch_windows(
+    flow: str,
+    noun: str,
+    keys: list,
+    start_date: date,
+    catch_up_limit: date | None,
+    latest_dates: Callable[[], dict],
+    describe: Callable[[object], str],
+) -> list[tuple[date, list]]:
+    """[(fetch start, keys fetched from it)], earliest start first: the daily ingests' windows.
+
+    Without a catch_up_limit, every key is fetched from start_date, the fixed rolling window.
+    With one, a key whose latest stored date is before start_date is fetched from that date
+    instead, so a run after an outage longer than the window fills the outage rather than
+    leaving a hole no later run reaches (backfill only fetches below a key's earliest stored
+    date). The stored date itself is fetched again: restating it is harmless, and it keeps the
+    window simple. A key with nothing stored keeps start_date -- its history is backfill's job.
+
+    The catch-up stops at catch_up_limit. A key last stored before it is most likely delisted,
+    and fetching its whole gap daily would cost every run; a real outage that long is warned
+    about, since the part before the limit stays missing until a backfill --force-refresh.
+
+    Keys behind the window to the same date share a window, so an outage that hit everything
+    costs one extra fetch, not one per key. `latest_dates` is called only with a limit, so the
+    fixed-window path never reads the database.
+    """
+    if catch_up_limit is None:
+        return [(start_date, list(keys))]
+
+    latest = latest_dates()
+    starts: dict[date, list] = {}
+    behind = []
+    beyond_limit = []
+    for key in keys:
+        last = latest.get(key)
+        if last is None or last >= start_date:
+            key_start = start_date
+        elif last < catch_up_limit:
+            key_start = catch_up_limit
+            beyond_limit.append((key, last))
+        else:
+            key_start = last
+            behind.append(key)
+        starts.setdefault(key_start, []).append(key)
+
+    if behind:
+        logger.info(
+            "%s: %d %s(s) behind the window starting %s; catching up from as early as %s.",
+            flow,
+            len(behind),
+            noun,
+            start_date,
+            min(latest[key] for key in behind),
+        )
+    if beyond_limit:
+        logger.warning(
+            "%s: %d %s(s) have nothing stored since before the catch-up limit %s, so they are "
+            "fetched from the limit and anything missing before it stays missing (a backfill "
+            "with --force-refresh fills it): %s",
+            flow,
+            len(beyond_limit),
+            noun,
+            catch_up_limit,
+            ", ".join(f"{describe(key)} (last {last})" for key, last in beyond_limit),
+        )
+    return sorted(starts.items())
 
 
 def _tickers_with_splits(data) -> list[str]:
@@ -446,11 +551,14 @@ def ingest_fx_rates(
     start_date: date,
     end_date: date,
     only_currencies: set[str] | None = None,
+    catch_up_limit: date | None = None,
 ) -> dict[str, int | str]:
     """Currency-conversion rates for every enabled currency against `currencies.base_currency`,
-    in one pass -- one fetch, since a single FxRateSource call covers every pair. Simpler than
-    ingest_market_data: one fixed source, no exchange resolution, no fund coupling, no
-    split-restatement pass -- none of those concerns apply to FX rates."""
+    in one pass -- one fetch per window, since a single FxRateSource call covers every pair.
+    Simpler than ingest_market_data: one fixed source, no exchange resolution, no fund
+    coupling, no split-restatement pass -- none of those concerns apply to FX rates.
+    `catch_up_limit` lets a pair that fell behind `start_date` catch up from its last stored
+    rate -- see _fetch_windows."""
     pairs = _resolve_fx_pairs(currencies)
     pairs, unmatched = _apply_only_currencies(pairs, only_currencies, "ingest-fx-rates")
     if not pairs:
@@ -465,12 +573,22 @@ def ingest_fx_rates(
 
     source = FX_RATE_SOURCES["yfinance"]()
     logger.info(f"ingest-fx-rates: fetching {len(pairs)} currency pair(s) (source=yfinance).")
-    data = source.fetch(pairs, start_date, end_date)
-    if data.empty:
-        logger.info("ingest-fx-rates: no data returned.")
-        saved = 0
-    else:
-        saved = save_fx_rates(conn, source.name, data)
+    windows = _fetch_windows(
+        "ingest-fx-rates",
+        "currency pair",
+        pairs,
+        start_date,
+        catch_up_limit,
+        lambda: get_latest_fx_dates(conn, source.name, pairs),
+        lambda pair: f"{pair[0]}/{pair[1]}",
+    )
+    saved = 0
+    for window_start, window_pairs in windows:
+        data = source.fetch(window_pairs, window_start, end_date)
+        if data.empty:
+            logger.info(f"ingest-fx-rates: no data returned from {window_start}.")
+            continue
+        saved += save_fx_rates(conn, source.name, data)
 
     logger.info(f"ingest-fx-rates complete: {saved} row(s) across {len(pairs)} currency pair(s).")
     return build_run_result(

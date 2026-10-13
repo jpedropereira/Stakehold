@@ -305,7 +305,7 @@ because a single `Ticker.history()` call already returns OHLCV, dividends and st
 came back in one.
 
 **Market data ingest has a second, conditional fetch.** Normally it is one fetch per
-(source, asset_type) group. But the provider retroactively rescales a ticker's *entire* price and
+(source, asset_type) group, or a few after an outage (see the catch-up below). But the provider retroactively rescales a ticker's *entire* price and
 dividend history when that ticker splits (see [`schema.md`](schema.md), "What `close` actually
 contains"), while this flow only re-fetches a rolling window — so a split would leave one ticker's
 stored rows on two different scales, a step change indistinguishable from a real
@@ -313,6 +313,29 @@ several-hundred-percent move. When an ingested batch contains a non-zero `stock_
 therefore re-fetches that ticker's full stored range and rewrites it
 (`pipeline._refresh_split_histories`). This is the one place the daily flow issues an unbounded
 historical request rather than a windowed one; splits are rare enough that the cost is negligible.
+
+**The daily ingests catch up after an outage instead of trusting a fixed window.**
+`ingest-market-data` and `ingest-fx-rates` fetch `today − days`, but a ticker or currency pair
+whose latest stored date is older than that is fetched from that date instead, up to
+`jobs.CATCH_UP_DAYS` (a year) back (`pipeline._fetch_windows`). Keys behind to the same date
+share one fetch, so an outage that hit everything costs one extra request per group, not one per
+ticker. Each window is its own failure unit, so a failed catch-up doesn't cost today's rows.
+
+*Why:* the DAG didn't run from 2026-09-04 to 09-22. The next run's 7-day window started at
+09-15, so 09-04..09-14 was never fetched for any ticker or pair. Backfill couldn't repair it
+either, since it only fetches below a ticker's earliest stored date. A gap like that is silent:
+the returns across it read NULL (see `schema.md`'s "Daily catch-up after an outage"), and the
+gap itself shows up nowhere.
+
+*Rejected:* one run-wide start at the oldest key's latest date — a single delisted ticker would
+then drag every ticker's fetch back a year, every run. *Rejected:* Airflow `catchup=True` — the
+jobs take `date.today()`, not the run's logical date, so replaying missed runs would fetch the
+same window again each time; and a run that's down for a day would still depend on the DAG
+history being intact. *Rejected:* no limit — a delisted ticker never catches up, so it would
+re-request its whole gap on every run forever. The limit is warned about by name when hit.
+
+*Known limit:* the catch-up starts from the latest stored date, so a hole *behind* it (one made
+before this rule existed) is not found. Repair is a one-off `--days N` run over it.
 
 **Market data ingest, regimes ingest, FX rates ingest and returns calculation share one DAG,
 `daily_pipeline`.** `ingest-market-data`, `ingest-regimes` and `ingest-fx-rates` start together

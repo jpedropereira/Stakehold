@@ -5,7 +5,11 @@ from pathlib import Path
 import pandas as pd
 import psycopg
 import pytest
-from data_store.fx.repository import get_earliest_fx_dates, save_fx_rates
+from data_store.fx.repository import (
+    get_earliest_fx_dates,
+    get_latest_fx_dates,
+    save_fx_rates,
+)
 from shared.db.connection import apply_schema
 
 pytestmark = pytest.mark.integration
@@ -150,4 +154,26 @@ def test_get_earliest_fx_dates_returns_min_date_per_pair_and_source():
     assert yfinance_result == {("TST", "USD"): date(2020, 1, 1)}
     assert ("TST", "GBP") not in yfinance_result
     assert other_result == {("TST", "USD"): date(2015, 1, 1)}
+    conn.close()
+
+
+def test_get_latest_fx_dates_returns_max_date_per_pair_and_source():
+    conn = _connect()
+    save_fx_rates(
+        conn,
+        "yfinance",
+        make_df(
+            [
+                ["TST", "USD", date(2026, 9, 2), 1.08],
+                ["TST", "USD", date(2026, 9, 3), 1.10],
+            ]
+        ),
+    )
+    save_fx_rates(conn, "other_source", make_df([["TST", "USD", date(2026, 9, 20), 1.05]]))
+
+    yfinance_result = get_latest_fx_dates(conn, "yfinance", [("TST", "USD"), ("TST", "GBP")])
+    other_result = get_latest_fx_dates(conn, "other_source", [("TST", "USD")])
+
+    assert yfinance_result == {("TST", "USD"): date(2026, 9, 3)}
+    assert other_result == {("TST", "USD"): date(2026, 9, 20)}
     conn.close()

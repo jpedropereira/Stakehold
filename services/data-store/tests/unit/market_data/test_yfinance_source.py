@@ -258,6 +258,20 @@ def test_fetch_drops_rows_with_no_ohlc_at_all(monkeypatch):
     assert result.iloc[0]["price_date"] == date(2026, 1, 1)
 
 
+def test_fetch_drops_an_unfinished_bar_with_no_close(monkeypatch):
+    # Seen on 2026-09-03: a run shortly after the US close got open/high/low and a partial
+    # volume but no close for 918 tickers. Stored, the row was never fetched again, and
+    # returns/calculator.py nulled the next day's return for want of a prior close.
+    frame = make_history_frame([date(2026, 1, 1), date(2026, 1, 2)])
+    frame.loc[pd.Timestamp(date(2026, 1, 2)), ["Close", "Adj Close"]] = float("nan")
+    fake = FakeTicker.configured({"AAPL": frame})
+    monkeypatch.setattr("data_store.market_data.yfinance_source.yf.Ticker", fake)
+
+    result = YFinanceMarketDataSource().fetch(["AAPL"], date(2026, 1, 1), date(2026, 1, 3))
+
+    assert result["price_date"].tolist() == [date(2026, 1, 1)]
+
+
 def test_fetch_keeps_rows_missing_only_volume(monkeypatch):
     frame = make_history_frame([date(2026, 1, 1)])
     frame.loc[pd.Timestamp(date(2026, 1, 1)), "Volume"] = float("nan")
