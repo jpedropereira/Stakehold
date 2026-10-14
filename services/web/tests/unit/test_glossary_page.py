@@ -34,7 +34,7 @@ ENTRIES = (
     "prices-as-of",
     "backtest",
     "buy-and-hold",
-    "longest-shared-history",
+    "max-period",
 )
 
 

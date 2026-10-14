@@ -84,7 +84,7 @@
         <th class="num" role="columnheader">Weight</th>
         {% for period in periods %}
         {% if period == "Max" %}
-        <th class="num" role="columnheader">{{ term("Max", "longest-shared-history") }}{% if max_period.covered %}<span class="period-start">from <span class="mono">{{ max_period.start | date }}</span></span>{% endif %}</th>
+        <th class="num" role="columnheader">{{ term("Max", "max-period") }}{% if max_period.covered %}<span class="period-start">from <span class="mono">{{ max_period.start | date }}</span></span>{% endif %}</th>
         {% else %}
         <th class="num" role="columnheader">{{ period }}</th>
         {% endif %}
