@@ -443,9 +443,10 @@ Every route `web` serves, with what it requires and which upstream calls it make
 - `api/portfolio.py` — `GET /portfolio`: the combined page across accounts (PF-4) and the 308
   from the old per-account URL (PF-2), in one handler (see "Key decisions").
 - `api/labs.py` (LB-6) — `GET /labs`, the Labs backtest page, on its own router for the
-  same file-size reason as `api/overview.py`. Fetches holdings, then the backtest, each failing
-  on its own. LB-7 added the edited mix: the ticker list is fetched alongside the holdings, or
-  alone for an edited mix, which needs no holdings.
+  same file-size reason as `api/overview.py`. Fetches holdings, then the backtest for the
+  `?period=` the chart shows (LB-8), each failing on its own. LB-7 added the edited mix: the
+  ticker list is fetched alongside the holdings, or alone for an edited mix, which needs no
+  holdings.
 - `labs_mix.py` (LB-7) — pure: the edited mix's query-string contract (`parse_mix`,
   `canonical_query`) and its checks (`check_mix`). It sits apart from `labs_view.py` because it
   owns a different thing: what the user typed and whether it can be sent, where `labs_view.py`
@@ -455,6 +456,8 @@ Every route `web` serves, with what it requires and which upstream calls it make
   hasn't edited one. Reuses `portfolio_view.build_portfolio_holdings` for the weights, so
   `/labs` and `/portfolio` can't disagree about them, and mirrors `portfolio`'s 50-asset cap
   (`MAX_BACKTEST_ASSETS`) so a large portfolio is cut to its largest holdings, not rejected.
+  LB-8 added `build_growth_payload`, the growth chart's data island, rounded to six
+  significant digits.
 - `api/tickers.py` (TK-8) — the Tickers pages, on their own router for the same file-size
   reason, rendering through `routes.py`'s helpers so CSRF and cookie handling stay identical.
 - `ticker_status.py` (TK-8/TK-9) — how a tracked ticker's status reads (labels, a holding's
@@ -489,7 +492,8 @@ Every route `web` serves, with what it requires and which upstream calls it make
   (`transaction_delete.html`, `account_delete.html`) both show;
   `account_not_found.html`, their shared 404; and `error.html`, every other error page) and
   `web.css` plus vendored `htmx.min.js`. Same-origin scripts: `htmx-error-swap.js` (also the
-  generic failure banner, UI-12), `portfolio_chart.js`, `theme.js` (UI-3, applies a theme
+  generic failure banner, UI-12), `chart_theme.js` (LB-8, the theme colors and redraw both charts share), `portfolio_chart.js`,
+  `labs_chart.js` (LB-8, the Labs growth chart), `theme.js` (UI-3, applies a theme
   switch in place), `transaction_form.js` (UI-9, shows the manual-entry fields the chosen type
   and currency need), `password_toggle.js` (UI-12), `confirm_dialog.js` (opens a delete's
   confirmation as a dialog in place of its page), and `holdings_breakdown.js` (shows and hides a

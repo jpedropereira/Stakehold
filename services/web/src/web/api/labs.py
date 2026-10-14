@@ -10,9 +10,10 @@ the form's suggestions is fetched alongside the holdings, and fails on its own t
 An edited mix needs no holdings. It is checked against the ticker list first. A mix with errors
 isn't sent: the table shows the mix it last showed (the form's last_* fields), if there is one.
 
-The backtest asks for 1Y's growth series, which this page doesn't draw yet: the period only
-picks the series, and 1Y keeps the response well under Max's (about 460 KB for 50 assets,
-LB-5). The growth chart (LB-8) makes it a parameter.
+The backtest returns the growth series for one period, `?period=` (LB-8), which the chart
+draws: buy and hold re-bases each period on its own first day, so a longer series can't be
+sliced client-side. 1Y by default, and in place of anything that isn't a period. The period
+links keep the rest of the query string, so they work with whatever mix it holds.
 
 On its own router, like portfolio.py, because routes.py is close to the repo's 64KB file limit;
 it renders through routes.py's _render, so a cookie set earlier in the request still reaches
@@ -22,6 +23,7 @@ the response.
 import asyncio
 import logging
 from decimal import Decimal
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Request, Response
 from web.api.csrf import ensure_csrf_cookie
@@ -36,7 +38,12 @@ from web.labs_mix import (
     default_rows,
     parse_mix,
 )
-from web.labs_view import MAX_BACKTEST_ASSETS, DefaultMix, build_default_mix
+from web.labs_view import (
+    MAX_BACKTEST_ASSETS,
+    DefaultMix,
+    build_default_mix,
+    build_growth_payload,
+)
 from web.portfolio_client.base import BACKTEST_PERIODS, Backtest, PortfolioClient
 from web.portfolio_client.errors import InvalidPortfolioRequest, PortfolioClientError
 from web.settings import Settings
@@ -46,7 +53,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _UNAVAILABLE = "Can't reach the portfolio service right now, so it can't be shown."
-_GROWTH_PERIOD = "1Y"
+_DEFAULT_PERIOD = "1Y"
 
 
 async def _load_mix(portfolio_client: PortfolioClient, user_id: str) -> DefaultMix | None:
@@ -69,12 +76,26 @@ async def _load_mix(portfolio_client: PortfolioClient, user_id: str) -> DefaultM
     return mix
 
 
+def _chosen_period(requested: str | None) -> str:
+    """`requested` if it is a period, exactly as portfolio spells it; otherwise the default."""
+    if requested is None or requested in BACKTEST_PERIODS:
+        return requested or _DEFAULT_PERIOD
+    logger.info("labs: unknown period %r, showing %s.", requested, _DEFAULT_PERIOD)
+    return _DEFAULT_PERIOD
+
+
+def _period_links(request: Request) -> dict[str, str]:
+    """Each period's URL: this page's query string with only `period` changed."""
+    kept = [(k, v) for k, v in request.query_params.multi_items() if k != "period"]
+    return {p: "/labs?" + urlencode(kept + [("period", p)]) for p in BACKTEST_PERIODS}
+
+
 async def _run_backtest(
-    portfolio_client: PortfolioClient, assets: tuple[tuple[str, Decimal], ...]
+    portfolio_client: PortfolioClient, assets: tuple[tuple[str, Decimal], ...], period: str
 ) -> tuple[Backtest | None, str | None]:
     """The backtest and None, or None and the message to show in its place."""
     try:
-        result = await portfolio_client.backtest(assets=list(assets), period=_GROWTH_PERIOD)
+        result = await portfolio_client.backtest(assets=list(assets), period=period)
     except InvalidPortfolioRequest as exc:
         # portfolio rejected the mix; its message is written to be shown.
         logger.warning("labs: portfolio rejected the mix: %s", exc)
@@ -84,8 +105,9 @@ async def _run_backtest(
         return None, _UNAVAILABLE
     included = sum(1 for s in result.statuses if s.status == "included")
     logger.info(
-        "labs: backtest to %s, %d included, %d left out.",
+        "labs: backtest to %s with %s growth, %d included, %d left out.",
         result.end_date,
+        period,
         included,
         len(result.statuses) - included,
     )
@@ -110,17 +132,22 @@ async def labs(
     templates=Depends(get_templates),
     user: AuthUser = Depends(require_user),
     portfolio_client: PortfolioClient = Depends(get_portfolio_client),
+    period: str | None = None,
 ):
     form = parse_mix(request.query_params.multi_items())
     if form is not None and form.remove is not None:
         # A remove button submits the whole form; answer with the mix it leaves, so a reload
         # doesn't remove the next row too.
+        # The chart's period, if one was chosen, stays chosen.
         query = canonical_query(form.without_removed(), form.last)
+        if period is not None:
+            query += "&" + urlencode([("period", period)])
         return _redirect(request, response, f"/labs?{query}")
 
     # The header's logout and theme forms need the token, as on every other page.
     csrf_token = ensure_csrf_cookie(request, response, cookie_secure=settings.cookie_secure)
 
+    period = _chosen_period(period)
     mix: DefaultMix | None = None
     holdings_error = None
     checked: CheckedMix | None = None
@@ -166,7 +193,7 @@ async def labs(
 
     backtest, backtest_error = None, None
     if to_send:
-        backtest, backtest_error = await _run_backtest(portfolio_client, to_send)
+        backtest, backtest_error = await _run_backtest(portfolio_client, to_send, period)
     return _render(
         request,
         response,
@@ -190,6 +217,13 @@ async def labs(
             "backtest": backtest,
             "backtest_error": backtest_error,
             "periods": BACKTEST_PERIODS,
+            "period": period,
+            "period_links": _period_links(request),
+            "growth": (
+                None
+                if backtest is None or backtest.growth is None
+                else build_growth_payload(backtest.growth)
+            ),
             "unavailable": (
                 [] if backtest is None else [s for s in backtest.statuses if s.status != "included"]
             ),

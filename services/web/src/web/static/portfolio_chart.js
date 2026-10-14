@@ -35,20 +35,9 @@ document.addEventListener("DOMContentLoaded", () => {
   };
   const state = { view: "total_return_eur", months: 0 };
 
-  // Semantic tokens, not brand tokens, so the chart follows the theme like the rest of the
-  // page. Custom properties resolve their var() references, so these are real colors.
-  const readColors = () => {
-    const style = getComputedStyle(document.documentElement);
-    const read = (name) => style.getPropertyValue(name).trim();
-    return {
-      gain: read("--gain"),
-      loss: read("--loss"),
-      line: read("--text"),
-      grid: read("--border"),
-      ticks: read("--text-muted"),
-    };
-  };
-  let colors = readColors();
+  // Theme colors and the redraw on a theme change: static/chart_theme.js.
+  const theme = window.StakeholdChartTheme;
+  let colors = theme.readColors();
 
   // Undefined falls back to the dataset's own (neutral) borderColor.
   const segmentColor = (ctx) => {
@@ -111,14 +100,14 @@ document.addEventListener("DOMContentLoaded", () => {
     const dataset = chart.data.datasets[0];
     chart.data.labels = shown.map((p) => p.date);
     dataset.data = shown.map((p) => p[state.view]);
-    dataset.borderColor = colors.line;
+    dataset.borderColor = colors.text;
     dataset.segment = { borderColor: segmentColor };
     // A lone point has no line to draw, so show it as a dot instead.
     dataset.pointRadius = shown.length === 1 ? 3 : 0;
-    dataset.pointBackgroundColor = colors.line;
+    dataset.pointBackgroundColor = colors.text;
     for (const axis of [chart.options.scales.x, chart.options.scales.y]) {
       axis.grid.color = colors.grid;
-      axis.ticks.color = colors.ticks;
+      axis.ticks.color = colors.muted;
     }
     canvas.setAttribute("aria-label", VIEWS[state.view].label);
     // update("none") doesn't cancel the first draw's animation if it is still running, and that
@@ -148,12 +137,8 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  // The OS switching scheme (only visible with no manual choice, but harmless otherwise) or the
-  // header toggle (static/theme.js).
-  const redraw = () => {
-    colors = readColors();
+  theme.onThemeChange(() => {
+    colors = theme.readColors();
     render();
-  };
-  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", redraw);
-  document.addEventListener("stakehold:themechange", redraw);
+  });
 });

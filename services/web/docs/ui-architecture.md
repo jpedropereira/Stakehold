@@ -188,6 +188,8 @@ described here updates this file in the same change.
   `--border`, `--text-muted`), not brand tokens, so it follows the theme. A canvas doesn't
   restyle itself, so it re-reads them and redraws on `stakehold:themechange` (the header toggle)
   and on a `prefers-color-scheme` change.
+  Since LB-8 the color reading and that redraw live in `static/chart_theme.js`, loaded before
+  each chart script, so `/labs`' chart shares them with this one rather than copying them.
 - **The chart's view toggle and date ranges (UI-6) work client-side over the one data island.**
   The island carries `market_value_eur` and `total_return_eur` per day, so switching between
   "Total return" and "Market value", or between 1M / 6M / 1Y / All, never makes a request. A
@@ -518,12 +520,12 @@ described here updates this file in the same change.
   value reads "Nothing to backtest yet" and links to Accounts, where transactions are added.
   The terms backtest, buy and hold, and Max link to new glossary entries. Gains and losses use
   `delta`, so forest and oxblood appear only on figures. *Rejected: periods as rows and assets
-  as columns*, which reads better for two assets but not for fifty. *Known cost:* the page
-  requests 1Y's growth series and throws it away until the chart (LB-8) draws it.
-- **Labs mix form (LB-7): a GET form, so the mix is the URL.** Under the table, "Edit the mix"
-  has one row per asset (ticker and weight %), then an empty row that adds one. Nothing is
+  as columns*, which reads better for two assets but not for fifty.
+- **Labs mix form (LB-7): a GET form, so the mix is the URL.** Under the table and the chart,
+  "Edit the mix" has one row per asset (ticker and weight %), then an empty row that adds one. Nothing is
   stored, so a lab can be bookmarked or reloaded, and "Reset to my portfolio" is plain `/labs`.
-  It works without JS: submitting reloads the page with the new query string. Each row's Remove
+  It works without JS: submitting reloads the page with the new query string, and a hidden
+  `period` field keeps the chart's period (LB-8). Each row's Remove
   is a submit button whose value is the row's place, and the route answers it with a 303 to
   the mix that's left (`labs_mix.canonical_query`). Otherwise a reload would remove the next
   row as well. A visually hidden Update button comes first in the form, because Enter submits
@@ -564,6 +566,45 @@ described here updates this file in the same change.
 
   *Known cost:* the URL carries the mix twice once it has been edited. Even at 50 assets, that
   is a few KB, well within what browsers and servers accept.
+- **The Labs growth chart (LB-8): one period at a time, chosen on the server.** Under the
+  table, `static/labs_chart.js` draws the cumulative % growth of the mix and its assets over
+  one period, from a `#labs-chart-data` island (`labs_view.build_growth_payload`).
+  - *Periods are links, not client-side buttons*: buy and hold re-bases each period on its own
+    first day, so one long series can't be sliced like `/portfolio`'s ranges. `?period=` picks
+    the series portfolio computes; 1Y is the default and stands in for anything that isn't a
+    period. Each link is the current query string with only `period` changed, so it carries
+    whatever mix the query string holds (LB-7). The current one is `aria-current="true"`,
+    styled like the pressed chart buttons.
+  - *Styling, agreed against chapter II*: the mix is the heavier line (2.5px), gain/loss
+    colored by segment like `/portfolio`'s total return, since a growth is a gain or a loss.
+    Assets are thin (1.25px) `--text-muted` lines; hovering or focusing an asset's box raises
+    its line to `--text`, above the other assets and below the mix. The 0% gridline is drawn in
+    `--text-muted`, stronger than the grid, since every line starts there. *Rejected: the mix in
+    gold.* Gold is the one accent, and as a line on parchment it is 2.2:1, under WCAG 1.4.11's
+    3:1 for a chart's marks (5.5:1 on dark). The checkboxes are tinted `--text` for the same
+    reason: they are the app's first, and the browser's blue isn't in the palette.
+  - *Asset lines start hidden*: a mix can have 50 assets, and 50 lines would bury the mix. Each
+    asset has a checkbox under the chart (rendered `hidden`, since it does nothing without the
+    script); one with no line for the period is disabled and says "Not enough history". When
+    the mix itself has no line (not every asset covers the period), the covered assets start
+    shown, or the chart would open empty, and a note says why the mix is missing. No line at
+    all reads "No asset's history covers …" and draws no chart, keeping the period links.
+  - *Shared, not copied*: the theme colors and the redraw on `stakehold:themechange` and on a
+    `prefers-color-scheme` change moved out of `portfolio_chart.js` into
+    `static/chart_theme.js` (`window.StakeholdChartTheme`), loaded before each chart script;
+    the frame is the same `.chart-frame`, so `review_pages.py`'s chart-size check covers it.
+    The review adds `/labs?period=Max`, `/labs?period=5Y` (no mix line) and `/labs` with an
+    asset's line turned on.
+  - *Payload size*: the island's figures are floats to six significant digits, the fewest
+    that keep the tooltip's hundredths of a percent exact (up to 10,000%). That is only about
+    30% shorter than `portfolio`'s eight-place strings: a synthetic 50-asset, five-year Max
+    island came to about 645 KB, against 937 KB. **Known cost:** a large mix over a long
+    period puts several hundred KB of JSON in the page. Only that period is sent, and 1Y, the
+    default, is about a fifth of it. If it matters, thinning long periods to weekly points is
+    the next step.
+  - **Known sharp edge:** `labs_chart.js`'s `formatPct` mirrors `formatting.pct`, a third copy
+    of the display convention beside `portfolio_chart.js`'s `formatEur`, with no test tying
+    them together.
 - **Display formatting (UI-5) is one fixed convention, applied by Jinja filters from a pure
   module.** `formatting.py` defines `money`, `signed_money`, `qty`, `pct` and `date` (plus UI-6's
   `share`, an unsigned percentage for weights, and `delta_class`), registered on

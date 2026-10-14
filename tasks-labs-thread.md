@@ -100,7 +100,7 @@ The previous chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archi
 | LB-5 | [web: client for the backtest](#lb-5-web-client-for-the-backtest) | LB-4 | done |
 | LB-6 | [web: `/labs` page with the period table](#lb-6-web-labs-page-with-the-period-table) | LB-5 | done |
 | LB-7 | [web: edit the mix](#lb-7-web-edit-the-mix) | LB-6 | done |
-| LB-8 | [web: growth chart](#lb-8-web-growth-chart) | LB-6 | ready |
+| LB-8 | [web: growth chart](#lb-8-web-growth-chart) | LB-6 | done |
 
 ## Tasks
 
@@ -416,10 +416,12 @@ Files: `web/api/labs.py`, `templates/labs.html`, `static/web.css`, maybe a `stat
 - **`labs_form.js` was built.** It adds rows from a `<template>` in place.
 - **The ticker list is fetched alongside the holdings** for the default mix, and alone for an
   edited one, which needs no holdings.
+- **With LB-8's chart.** LB-8 merged first. The form carries the chart's `period` as a hidden
+  field, and a Remove's redirect keeps it, so editing the mix doesn't reset the chart.
 
 ### LB-8. web: growth chart
 
-**Status:** ready
+**Status:** done
 
 `portfolio_chart.js` draws one € line, with fixed element ids and no legend. Labs needs several
 % lines.
@@ -441,6 +443,24 @@ chart's frame. An unknown period falls back to the default.
 
 Files: `static/labs_chart.js`, `templates/labs.html`, `static/web.css`, `scripts/review_pages.py`,
 `services/web/docs/ui-architecture.md`.
+
+**As built:**
+- **Styling, agreed before building.** The mix is the heavier line, colored gain/loss by segment
+  like `/portfolio`'s total return. Assets are thin `--text-muted` lines, raised to `--text` while
+  their box is hovered or focused. *The mix in gold was rejected:* gold on parchment is 2.2:1,
+  under the 3:1 a chart's marks need. Gold stays on controls.
+- **Asset lines start hidden**, so 50 lines can't bury the mix. When the mix has no line for the
+  period, the covered assets start shown and a note says why. No line at all draws no chart and
+  keeps the period links.
+- **Period links keep the rest of the query string**, so LB-7's mix parameters will survive a
+  change of period without LB-7 touching them. An unknown period falls back to 1Y and is logged.
+- **`static/chart_theme.js`** now holds the theme colors and the redraw, for both charts. It went
+  in first, in a commit of its own.
+- **Payload.** The island's figures are floats to six significant digits, the fewest that keep
+  the tooltip's hundredths of a percent exact. That is only about 30% shorter than portfolio's
+  strings: a synthetic 50-asset, five-year Max island was about 645 KB. Thinning long periods to
+  weekly points would be the next step if it matters.
+- The gap count is still not shown.
 
 ## Deferred
 

@@ -1,10 +1,12 @@
 """GET /labs (LB-6): the user's current holdings backtested over 1M to Max -- the period table,
 the assets portfolio couldn't backtest, the holdings left out of the mix, and the empty and
-error states. And (LB-7) the form that edits the mix, held in the query string.
+error states. LB-7: the form that edits the mix, held in the query string. LB-8: the growth
+chart for one period, chosen in the query string.
 
 Like test_portfolio_page.py, it carries its own minimal fakes: only the calls this one page makes.
 """
 
+import json
 import logging
 import re
 from datetime import date
@@ -21,6 +23,7 @@ from web.portfolio_client.base import (
     BACKTEST_PERIODS,
     Backtest,
     BacktestAssetStatus,
+    BacktestGrowth,
     BacktestPeriodReturn,
     BacktestRow,
     Holding,
@@ -169,13 +172,27 @@ def _with_a_backtest(fake_portfolio):
             _row("IWDA.AS", "0.75", **{"1M": "0.02"}),
             _row("VWRL.AS", "0.25", **{"1M": "-0.01"}),
         ),
-        growth=None,
+        growth=_growth(
+            mix=("0", "0.0123456789", "-0.05"),
+            assets={"IWDA.AS": ("0", "0.02", "-0.04"), "VWRL.AS": ("0", "-0.01", "-0.08")},
+        ),
         statuses=(_status("IWDA.AS"), _status("VWRL.AS")),
     )
 
 
-def _page(test_client):
-    response = test_client.get("/labs")
+def _growth(mix, assets, period="1Y"):
+    """A growth series over three days; a line given as None doesn't cover the period."""
+    line = lambda values: None if values is None else tuple(Decimal(v) for v in values)  # noqa
+    return BacktestGrowth(
+        period=period,
+        dates=(date(2025, 10, 9), date(2025, 10, 10), date(2025, 10, 13)),
+        mix=line(mix),
+        assets={ticker: line(values) for ticker, values in assets.items()},
+    )
+
+
+def _page(test_client, query=""):
+    response = test_client.get("/labs" + query)
     assert response.status_code == 200
     return response.text
 
@@ -545,6 +562,288 @@ def test_every_glossary_link_lands_on_an_entry(client):
     assert {a for a in anchors if f'<dt id="{a}"' not in glossary} == set()
 
 
+# --- the growth chart (LB-8) ------------------------------------------------------------------
+
+
+def _growth_section(html):
+    match = re.search(r'<section class="labs-growth".*?</section>', html, re.S)
+    assert match, "no growth section"
+    return match.group(0)
+
+
+def _period_links(html):
+    """(period, href, current) for each period link, in order."""
+    nav = re.search(r'<nav class="chart-toggle labs-periods".*?</nav>', html, re.S).group(0)
+    return [
+        (label, href.replace("&amp;", "&"), bool(current))
+        for href, current, label in re.findall(
+            r'<a [^>]*href="([^"]*)"( aria-current="true")?[^>]*>(\w+)</a>', nav
+        )
+    ]
+
+
+def _island(html):
+    match = re.search(
+        r'<script id="labs-chart-data" type="application/json">(.*?)</script>', html, re.S
+    )
+    assert match, "no data island"
+    return json.loads(match.group(1))
+
+
+def test_the_backtest_asks_for_1y_growth_by_default(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_backtest(fake_portfolio)
+
+    _page(test_client)
+
+    assert fake_portfolio.calls[-1][2] == "1Y"
+
+
+@pytest.mark.parametrize("period", BACKTEST_PERIODS)
+def test_the_backtest_asks_for_the_period_in_the_query_string(client, period):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_backtest(fake_portfolio)
+
+    _page(test_client, f"?period={period}")
+
+    assert fake_portfolio.calls[-1][2] == period
+
+
+@pytest.mark.parametrize("period", ["bogus", "max", "1y", "", "12M"])
+def test_an_unknown_period_falls_back_to_1y(client, period):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_backtest(fake_portfolio)
+
+    html = _page(test_client, f"?period={period}")
+
+    assert fake_portfolio.calls[-1][2] == "1Y"
+    assert [label for label, _, current in _period_links(html) if current] == ["1Y"]
+
+
+def test_period_links_run_1m_to_max_and_mark_the_current_one(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_backtest(fake_portfolio)
+
+    links = _period_links(_page(test_client, "?period=5Y"))
+
+    assert [label for label, _, _ in links] == list(BACKTEST_PERIODS)
+    assert [href for _, href, _ in links] == [f"/labs?period={p}" for p in BACKTEST_PERIODS]
+    assert [label for label, _, current in links if current] == ["5Y"]
+
+
+def test_period_links_keep_the_rest_of_the_query_string(client):
+    """The mix LB-7 puts in the query string survives a change of period."""
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_backtest(fake_portfolio)
+
+    links = _period_links(_page(test_client, "?a=1&period=3M&b=x+y&a=2"))
+
+    assert links[0][1] == "/labs?a=1&b=x+y&a=2&period=1M"
+
+
+def test_the_growth_section_follows_the_table(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_backtest(fake_portfolio)
+
+    html = _page(test_client)
+
+    assert html.index('<section class="labs-growth"') > html.index("</table>")
+    assert "Growth" in re.search(r"<h2[^>]*>(.*?)</h2>", _growth_section(html), re.S).group(1)
+
+
+def test_the_data_island_carries_every_series_for_the_period(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_backtest(fake_portfolio)
+    fake_portfolio.backtest_result = Backtest(
+        end_date=END,
+        mix=fake_portfolio.backtest_result.mix,
+        assets=fake_portfolio.backtest_result.assets,
+        growth=_growth(
+            mix=None, assets={"IWDA.AS": ("0", "0.02", "-0.04"), "VWRL.AS": None}, period="5Y"
+        ),
+        statuses=fake_portfolio.backtest_result.statuses,
+    )
+
+    island = _island(_page(test_client, "?period=5Y"))
+
+    assert island == {
+        "period": "5Y",
+        "dates": ["2025-10-09", "2025-10-10", "2025-10-13"],
+        "mix": None,
+        "assets": [
+            {"ticker": "IWDA.AS", "values": [0.0, 0.02, -0.04]},
+            {"ticker": "VWRL.AS", "values": None},
+        ],
+    }
+
+
+def test_the_canvas_sits_alone_in_its_sizing_frame_and_the_scripts_load_in_order(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_backtest(fake_portfolio)
+
+    section = _growth_section(_page(test_client))
+
+    assert re.search(
+        r'<div class="chart-frame">\s*<canvas id="labs-chart"[^>]*></canvas>\s*</div>', section
+    )
+    scripts = re.findall(r'<script src="([^"]+)" defer></script>', section)
+    assert scripts == [
+        "/static/vendor/chart.min.js",
+        "/static/chart_theme.js",
+        "/static/labs_chart.js",
+    ]
+
+
+def test_asset_lines_start_hidden_beside_the_mixs(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_backtest(fake_portfolio)
+
+    section = _growth_section(_page(test_client))
+
+    boxes = re.findall(r"<input [^>]*>", section)
+    assert len(boxes) == 2
+    assert not [box for box in boxes if "checked" in box]
+
+
+def test_asset_toggles_ship_hidden_one_per_asset_in_table_order(client):
+    """Without the script they'd do nothing, so it reveals them. An asset with no line for the
+    period can't be shown, and says why. With no mix line, the assets' lines start shown, or
+    the chart would start empty."""
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_backtest(fake_portfolio)
+    result = fake_portfolio.backtest_result
+    fake_portfolio.backtest_result = Backtest(
+        end_date=END,
+        mix=result.mix,
+        assets=result.assets,
+        growth=_growth(mix=None, assets={"IWDA.AS": ("0", "0.1", "0.2"), "VWRL.AS": None}),
+        statuses=result.statuses,
+    )
+
+    section = _growth_section(_page(test_client))
+
+    toggles = re.search(r'<fieldset class="labs-series" hidden>.*?</fieldset>', section, re.S)
+    assert toggles, "no hidden toggles"
+    boxes = re.findall(r"<input [^>]*>", toggles.group(0))
+    assert len(boxes) == 2
+    assert 'data-series="IWDA.AS"' in boxes[0] and "disabled" not in boxes[0]
+    assert "checked" in boxes[0]
+    assert 'data-series="VWRL.AS"' in boxes[1] and "disabled" in boxes[1]
+    assert "checked" not in boxes[1]
+    labels = re.findall(r"<label[^>]*>(.*?)</label>", toggles.group(0), re.S)
+    assert "Not enough history" in labels[1] and "Not enough history" not in labels[0]
+
+
+def test_a_mix_without_a_line_for_the_period_says_why(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_backtest(fake_portfolio)
+    result = fake_portfolio.backtest_result
+    fake_portfolio.backtest_result = Backtest(
+        end_date=END,
+        mix=result.mix,
+        assets=result.assets,
+        growth=_growth(mix=None, assets={"IWDA.AS": ("0", "0.1", "0.2"), "VWRL.AS": None}),
+        statuses=result.statuses,
+    )
+
+    section = _growth_section(_page(test_client))
+
+    assert "The mix has no line for 1Y" in section
+    assert '<canvas id="labs-chart"' in section
+
+
+def test_a_full_mix_has_no_coverage_note(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_backtest(fake_portfolio)
+
+    assert "has no line" not in _growth_section(_page(test_client))
+
+
+def test_no_line_at_all_draws_no_chart_but_keeps_the_period_links(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_backtest(fake_portfolio)
+    result = fake_portfolio.backtest_result
+    fake_portfolio.backtest_result = Backtest(
+        end_date=END,
+        mix=result.mix,
+        assets=result.assets,
+        growth=_growth(mix=None, assets={"IWDA.AS": None, "VWRL.AS": None}, period="Max"),
+        statuses=result.statuses,
+    )
+
+    html = _page(test_client, "?period=Max")
+
+    section = _growth_section(html)
+    assert "No asset's history covers Max" in section
+    assert "<canvas" not in section and "labs-chart-data" not in section
+    assert len(_period_links(html)) == len(BACKTEST_PERIODS)
+
+
+@pytest.mark.parametrize(
+    "setup",
+    [
+        lambda fp: setattr(fp, "backtest_error", PortfolioUnavailable("down")),
+        lambda fp: setattr(
+            fp,
+            "backtest_result",
+            Backtest(
+                end_date=None,
+                mix=None,
+                assets=(),
+                growth=None,
+                statuses=(_status("7203.T", "no_fx_rate", "no JPY exchange rate"),),
+            ),
+        ),
+    ],
+    ids=["backtest failed", "nothing included"],
+)
+def test_no_growth_section_without_a_backtested_mix(client, setup):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_holdings(fake_portfolio, _holding("IWDA.AS", "100"))
+    setup(fake_portfolio)
+
+    html = _page(test_client)
+
+    assert "labs-growth" not in html and "<canvas" not in html
+    assert "labs_chart.js" not in html
+
+
+def test_no_growth_section_without_holdings(client):
+    test_client, fake_auth, _ = client
+    _logged_in(test_client, fake_auth)
+
+    html = _page(test_client)
+
+    assert "labs-growth" not in html and "<canvas" not in html
+
+
+def test_logs_the_period_and_a_fallback(client, caplog):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_backtest(fake_portfolio)
+
+    with caplog.at_level(logging.INFO, logger="web.api.labs"):
+        _page(test_client, "?period=nope")
+
+    messages = [r.getMessage() for r in caplog.records if r.name == "web.api.labs"]
+    assert any("'nope'" in m and "1Y" in m for m in messages), messages
+    assert any("2 included" in m and "1Y" in m for m in messages), messages
+
+
 # --- editing the mix (LB-7) -------------------------------------------------------------------
 
 
@@ -815,3 +1114,26 @@ def test_logs_an_edited_mix_and_its_errors(client, caplog):
     assert any(
         "backtesting the last valid mix" in m and "1 assets" in m for m in messages
     ), messages
+
+
+def test_an_edited_mix_is_backtested_for_the_chosen_period_and_the_form_keeps_it(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_backtest(fake_portfolio)
+
+    html = _get(test_client, "ticker=AAPL&weight=100&period=Max")
+
+    assert fake_portfolio.calls == [("backtest", (("AAPL", Decimal("1")),), "Max")]
+    assert '<input type="hidden" name="period" value="Max">' in _form(html)
+
+
+def test_remove_keeps_the_chosen_period(client):
+    test_client, fake_auth, _ = client
+    _logged_in(test_client, fake_auth)
+
+    response = test_client.get(
+        "/labs?ticker=AAPL&weight=60&ticker=IWDA.AS&weight=40&period=5Y&remove=1",
+        follow_redirects=False,
+    )
+
+    assert response.headers["location"] == "/labs?ticker=AAPL&weight=60&period=5Y"
