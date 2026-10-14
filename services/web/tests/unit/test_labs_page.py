@@ -547,7 +547,7 @@ def test_the_page_links_its_terms_to_the_glossary(client):
 
     anchors = {anchor for anchor, _ in _glossary_links(_page(test_client))}
 
-    assert {"backtest", "buy-and-hold", "longest-shared-history"} <= anchors
+    assert {"backtest", "buy-and-hold", "max-period"} <= anchors
 
 
 def test_every_glossary_link_lands_on_an_entry(client):
