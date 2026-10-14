@@ -188,6 +188,8 @@ described here updates this file in the same change.
   `--border`, `--text-muted`), not brand tokens, so it follows the theme. A canvas doesn't
   restyle itself, so it re-reads them and redraws on `stakehold:themechange` (the header toggle)
   and on a `prefers-color-scheme` change.
+  Since LB-8 the color reading and that redraw live in `static/chart_theme.js`, loaded before
+  each chart script, so `/labs`' chart shares them with this one rather than copying them.
 - **The chart's view toggle and date ranges (UI-6) work client-side over the one data island.**
   The island carries `market_value_eur` and `total_return_eur` per day, so switching between
   "Total return" and "Market value", or between 1M / 6M / 1Y / All, never makes a request. A
