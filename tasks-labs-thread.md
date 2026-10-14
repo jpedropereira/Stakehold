@@ -35,7 +35,16 @@ The previous chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archi
   - **Max** starts at the latest first date among the mix's assets, which is the longest history
     they all share.
   - **Short history.** A period longer than an asset's history shows "Not enough history" for
-    that asset. The mix's figure for that period is shown only when every asset covers it.
+    that asset. The mix's figure and growth line for that period use only the assets that
+    cover it, re-weighted to 100%, and the page names the assets left out. The mix has no
+    figure only when no asset covers the period. *Changed in LB-9:* the rule was that the mix
+    had a figure only when every asset covered the period. One ticker onboarded a month
+    earlier then emptied the mix's line and figures for 3M to 5Y, and the chart showed only
+    asset lines.
+  - **Max stays the longest history all the assets share**, so a recently onboarded ticker
+    still shortens it. *Assumption, to confirm in LB-9.* The alternative is to start Max at the
+    earliest asset and add each asset as its history begins. That changes the mix part-way
+    through, which isn't buy and hold.
 - **Buy and hold.** The mix is bought at its weights on the period's first day. Weights then
   drift with prices, with no rebalancing. Each period starts again from the target weights on its
   own first day. With Gᵢ(t) as asset i's growth since the start date s, the mix grows as
@@ -56,7 +65,8 @@ The previous chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archi
 - **Outputs.** There are two:
   - A table: a row for the mix and a row for each asset, with the seven periods as columns.
   - A growth chart: the mix's cumulative % growth over a chosen period, with each asset's growth
-    available as a line.
+    available as a line. The mix's line is always the main one. Asset lines are off until the
+    user picks them (LB-10).
 
   Annualized returns and a side-by-side comparison with the unedited portfolio were considered
   and deferred.
@@ -101,6 +111,8 @@ The previous chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archi
 | LB-6 | [web: `/labs` page with the period table](#lb-6-web-labs-page-with-the-period-table) | LB-5 | done |
 | LB-7 | [web: edit the mix](#lb-7-web-edit-the-mix) | LB-6 | done |
 | LB-8 | [web: growth chart](#lb-8-web-growth-chart) | LB-6 | done |
+| LB-9 | [portfolio: mix over the assets that cover each period](#lb-9-portfolio-mix-over-the-assets-that-cover-each-period) | — | ready |
+| LB-10 | [web: chart shows the mix, assets on demand](#lb-10-web-chart-shows-the-mix-assets-on-demand) | LB-7, LB-9 | blocked |
 
 ## Tasks
 
@@ -461,6 +473,71 @@ Files: `static/labs_chart.js`, `templates/labs.html`, `static/web.css`, `scripts
   strings: a synthetic 50-asset, five-year Max island was about 645 KB. Thinning long periods to
   weekly points would be the next step if it matters.
 - The gap count is still not shown.
+
+### LB-9. portfolio: mix over the assets that cover each period
+
+**Status:** ready
+
+On the dev stack, a portfolio holding BRK-B, which has about a month of history in
+data-store, gets no mix line on the chart and no mix figure from 3M to 5Y.
+`calculator.py`'s `_mix_period` gives the mix a figure only when every asset covers the
+period, and the growth mix is `None` unless `len(covered) == len(series)`. This task applies
+the rewritten **Short history** requirement.
+
+- **The mix over the covered assets.** For each period, the mix uses only the assets that
+  cover it, with their weights normalized to 100%. Buy and hold is unchanged:
+  V(t) = Σ wᵢ′ · Gᵢ(t) / Gᵢ(s) over the covered assets. The same rule applies to the mix's
+  growth series. The mix has no figure and no line only when no asset covers the period.
+- **Name the assets left out.** Each of the mix's `PeriodReturn`s and the `GrowthSeries` carry
+  `left_out`: the tickers left out for not covering that period, in the request's order.
+  Unavailable assets are not in it, because `statuses` already reports them. The endpoint's
+  response gains the field. The change is additive, so web's client keeps working until
+  LB-10 reads the field.
+- **Max** stays the longest history all the assets share. Confirm the assumption in Agreed
+  requirements with the user before building.
+
+Tests: hand-computed fixtures. A short asset left out of 1Y but included in 1M. The weights
+re-normalized over the covered assets. No asset covering a period, which gives no figure.
+LB-3's test for a period longer than one asset's history now expects a mix figure. The route
+serializes `left_out`.
+
+Files: `portfolio/labs/calculator.py`, `portfolio/api/` (the response model), their tests,
+`services/portfolio/docs/architecture.md`, `services/portfolio/docs/flows.md`.
+
+### LB-10. web: chart shows the mix, assets on demand
+
+**Status:** blocked
+
+The user expects the chart to show the portfolio's returns, with assets as lines they choose.
+LB-8 instead turns every covered asset on when the mix has no line (`labs.html`, `checked`
+when `growth.mix is none`). On the dev stack that drew 11 identical muted lines with nothing
+to tell them apart. The tooltip's coloured squares are Chart.js's defaults: they match no
+line and aren't brand colours.
+
+- **The client.** `portfolio_client` parses `left_out` from LB-9 on the mix's period figures
+  and on the growth series. Add it to the fakes in the tests and in `review_pages.py`.
+- **The table.** The mix row's cells now fill. A note under the table names, per period, the
+  assets the mix left out, e.g. "From 3M to 5Y the mix leaves out BRK-B: not enough history."
+- **The mix is always the main line.** Asset boxes always start unchecked, so LB-8's "covered
+  assets start shown" fallback goes. A note under the chart names the assets the mix left out
+  for the period shown. The "no line" note remains only for the case where no asset covers
+  the period.
+- **Tell asset lines apart by name, not colour.** The brand has no spare colours. Each shown
+  asset line keeps its muted colour and has its ticker at its last point, drawn by a small
+  Chart.js plugin inside `labs_chart.js`, with no new vendor file. Labels that would overlap
+  are nudged apart. Hovering a line or its box still raises it.
+- **The tooltip.** No colour squares (`displayColors: false`). The mix comes first, and only
+  the shown lines are listed.
+- **Review.** Add a `review_pages.py` variant with a short-history asset and two assets
+  checked. Regenerate the screenshots at every width, in both themes.
+
+Tests: the client parses `left_out`. The page renders the left-out notes. The boxes start
+unchecked even when an asset doesn't cover the period. The "no line" note appears only when
+no asset covers it.
+
+Files: `web/portfolio_client/{base,http_client}.py`, `web/labs_view.py`, `templates/labs.html`,
+`static/labs_chart.js`, `static/web.css`, `scripts/review_pages.py`, their tests,
+`services/web/docs/ui-architecture.md`.
 
 ## Deferred
 
