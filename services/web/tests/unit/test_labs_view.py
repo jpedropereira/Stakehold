@@ -1,11 +1,12 @@
 """labs_view.build_default_mix (LB-6): the mix /labs backtests when the visitor hasn't edited
-one -- the current holdings, weighted by market value as /portfolio weighs them."""
+one -- the current holdings, weighted by market value as /portfolio weighs them. LB-8:
+build_growth_payload, the growth chart's data island."""
 
 from datetime import date
 from decimal import Decimal
 
-from web.labs_view import MAX_BACKTEST_ASSETS, build_default_mix
-from web.portfolio_client.base import Holding
+from web.labs_view import MAX_BACKTEST_ASSETS, build_default_mix, build_growth_payload
+from web.portfolio_client.base import BacktestGrowth, Holding
 
 
 def _holding(ticker, value):
@@ -86,3 +87,41 @@ def test_more_holdings_than_the_backtest_takes_keeps_the_largest():
     assert mix.dropped == ("T01", "T00")
     # The kept weights are still shares of the whole portfolio; portfolio re-normalizes them.
     assert mix.assets[0] == ("T51", Decimal("151") / sum(Decimal(100 + i) for i in range(52)))
+
+
+def _growth(mix, assets):
+    return BacktestGrowth(
+        period="Max",
+        dates=(date(2021, 3, 15), date(2021, 3, 16)),
+        mix=mix,
+        assets=assets,
+    )
+
+
+def test_growth_payload_keeps_the_assets_order_and_their_missing_lines():
+    growth = _growth(
+        mix=(Decimal("0"), Decimal("0.5")),
+        assets={"B": (Decimal("0"), Decimal("1")), "A": None},
+    )
+
+    assert build_growth_payload(growth) == {
+        "period": "Max",
+        "dates": ["2021-03-15", "2021-03-16"],
+        "mix": [0.0, 0.5],
+        "assets": [{"ticker": "B", "values": [0.0, 1.0]}, {"ticker": "A", "values": None}],
+    }
+
+
+def test_growth_payload_rounds_to_six_significant_digits():
+    """Shorter than portfolio's eight-place strings, and still exact to the hundredth of a
+    percent the tooltip shows."""
+    growth = _growth(
+        mix=(Decimal("0E-8"), Decimal("1.23456789012")),
+        assets={"A": (Decimal("-0.000123456789"), Decimal("12.3456789"))},
+    )
+
+    payload = build_growth_payload(growth)
+
+    assert payload["mix"] == [0.0, 1.23457]
+    assert payload["assets"][0]["values"] == [-0.000123457, 12.3457]
+    assert all(type(v) is float for v in payload["mix"] + payload["assets"][0]["values"])

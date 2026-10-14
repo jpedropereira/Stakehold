@@ -1,4 +1,5 @@
-"""The mix /labs backtests (LB-6): the user's current holdings, weighted by market value.
+"""The mix /labs backtests (LB-6): the user's current holdings, weighted by market value. And
+the growth chart's data island (LB-8).
 
 Pure, like portfolio_view.py: the router fetches, this decides what is sent. Editing the mix
 (LB-7) replaces this default; it doesn't change how a mix is backtested.
@@ -8,7 +9,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 
-from web.portfolio_client.base import Holding
+from web.portfolio_client.base import BacktestGrowth, Holding
 from web.portfolio_view import build_portfolio_holdings
 
 # portfolio's POST /labs/backtest rejects a larger mix with a 422 (LB-4). Mirrored here so a
@@ -56,3 +57,27 @@ def build_default_mix(holdings: Sequence[Holding]) -> DefaultMix:
         unweighted=unweighted,
         dropped=tuple(ticker for ticker, _ in weighted[MAX_BACKTEST_ASSETS:]),
     )
+
+
+def _chart_value(value: Decimal) -> float:
+    """A growth fraction to six significant digits, about 30% shorter in JSON than portfolio's
+    eight-place strings. Not fewer: the tooltip shows hundredths of a percent, which six digits
+    keep exact up to a 10,000% growth."""
+    return float(f"{value:.6g}")
+
+
+def build_growth_payload(growth: BacktestGrowth) -> dict:
+    """The growth chart's data island (static/labs_chart.js). Assets are a list, so they keep
+    the table's order; a line is None when it doesn't cover the period."""
+
+    def line(values):
+        return None if values is None else [_chart_value(v) for v in values]
+
+    return {
+        "period": growth.period,
+        "dates": [d.isoformat() for d in growth.dates],
+        "mix": line(growth.mix),
+        "assets": [
+            {"ticker": ticker, "values": line(values)} for ticker, values in growth.assets.items()
+        ],
+    }

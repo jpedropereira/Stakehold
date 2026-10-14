@@ -91,6 +91,11 @@ PAGES = [
     Page("tickers-user", "/tickers", "user"),
     Page("tickers-new", "/tickers/new?symbol=SXR8.DE", "user"),
     Page("labs", "/labs", "user"),
+    # The longest period, and an asset's line shown beside the mix's (LB-8).
+    Page("labs-max", "/labs?period=Max", "user"),
+    # AAPL doesn't cover 5Y, so the mix has no line and VWCE.DE's starts shown.
+    Page("labs-no-mix-line", "/labs?period=5Y", "user"),
+    Page("labs-asset-line", "/labs", "user", click='.labs-series input[data-series="AAPL"]'),
     Page("glossary", "/glossary", "user"),
     # Followed from a holdings page's "Total return" header: the entry it lands on is marked.
     Page("glossary-total-return", "/glossary#total-return", "user"),
@@ -310,6 +315,7 @@ def _fakes():
         Account,
         Backtest,
         BacktestAssetStatus,
+        BacktestGrowth,
         BacktestPeriodReturn,
         BacktestRow,
         Broker,
@@ -598,8 +604,10 @@ def _fakes():
         async def backtest(self, *, assets, period):
             """The review holdings' mix (VWCE.DE and AAPL; NEWCO.DE has no price, so the page
             leaves it out). AAPL's history is too short for 5Y, so neither it nor the mix has
-            a 5Y figure. 7203.T was never requested: it is there so the review shows the list of
-            assets portfolio couldn't backtest."""
+            a 5Y figure or a 5Y line. 7203.T was never requested: it is there so the review shows
+            the list of assets portfolio couldn't backtest. The growth lines are smooth curves
+            ending at the period's figure, one point per weekday, and the mix is their buy and
+            hold."""
             returns = {
                 None: ("0.0123", "0.0410", "-0.0215", "0.1180", "0.2402", None, "0.3071"),
                 "VWCE.DE": ("0.0141", "0.0388", "-0.0102", "0.1305", "0.2650", "0.6120", "0.3390"),
@@ -631,11 +639,38 @@ def _fakes():
                 return BacktestRow(ticker=ticker, weight=weight, periods=periods)
 
             total = sum((w for _, w in assets), Decimal("0"))
+            column = BACKTEST_PERIODS.index(period)
+            days = [
+                starts[column] + timedelta(days=n)
+                for n in range((today - starts[column]).days + 1)
+                if (starts[column] + timedelta(days=n)).weekday() < 5
+            ]
+
+            def line(ticker, wobble):
+                figure = returns[ticker][column]
+                if figure is None:
+                    return None
+                last = len(days) - 1
+                return tuple(
+                    Decimal(str(round(float(figure) * i / last + wobble * math.sin(i / 9), 6)))
+                    for i in range(len(days))
+                )
+
+            lines = {t: line(t, 0.004 * (k + 1) * (-1) ** k) for k, (t, _) in enumerate(assets)}
+            covered = all(v is not None for v in lines.values())
+            mix_line = (
+                tuple(
+                    sum((w / total * (1 + v[i]) for (t, w), v in zip(assets, lines.values()))) - 1
+                    for i in range(len(days))
+                )
+                if covered
+                else None
+            )
             return Backtest(
                 end_date=today,
                 mix=row(None, Decimal("1")),
                 assets=tuple(row(t, w / total) for t, w in assets),
-                growth=None,
+                growth=BacktestGrowth(period, tuple(days), mix_line, lines),
                 statuses=tuple(BacktestAssetStatus(t, "included", None) for t, _ in assets)
                 + (
                     BacktestAssetStatus(

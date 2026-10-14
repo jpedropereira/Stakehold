@@ -70,6 +70,43 @@
     </tbody>
   </table>
   </div>
+  {# The growth chart (LB-8, static/labs_chart.js) for one period. The periods are links, not
+     client-side buttons: buy and hold re-bases each period, so the server computes each one.
+     The asset toggles ship hidden, since they'd do nothing without the script. #}
+  <section class="labs-growth" aria-labelledby="labs-growth-title">
+    <h2 id="labs-growth-title">Growth</h2>
+    <nav class="chart-toggle labs-periods" aria-label="Growth period">
+      {% for p in periods %}
+      <a class="btn btn-ghost" href="{{ period_links[p] }}"{% if p == period %} aria-current="true"{% endif %}>{{ p }}</a>
+      {% endfor %}
+    </nav>
+    {% set lines = growth.assets | selectattr("values") | list if growth else [] %}
+    {% if growth is none or (growth.mix is none and not lines) %}
+    <p class="entry-empty">No asset's history covers {{ period }}.</p>
+    {% else %}
+    {% if growth.mix is none %}
+    <p class="chart-note">The mix has no line for {{ period }}: not every asset's history covers it.</p>
+    {% endif %}
+    <div class="chart-frame">
+      <canvas id="labs-chart" role="img" aria-label="Cumulative growth over {{ period }}"></canvas>
+    </div>
+    <fieldset class="labs-series" hidden>
+      <legend>Assets on the chart</legend>
+      {% if growth.mix is not none %}<p class="chart-note">The heavier line is the mix.</p>{% endif %}
+      {% for asset in growth.assets %}
+      {% if asset["values"] is none %}
+      <label><input type="checkbox" data-series="{{ asset.ticker }}" disabled> <span class="mono">{{ asset.ticker }}</span> <span class="entry-empty">Not enough history</span></label>
+      {% else %}
+      <label><input type="checkbox" data-series="{{ asset.ticker }}"{% if growth.mix is none %} checked{% endif %}> <span class="mono">{{ asset.ticker }}</span></label>
+      {% endif %}
+      {% endfor %}
+    </fieldset>
+    <script id="labs-chart-data" type="application/json">{{ growth | tojson }}</script>
+    <script src="/static/vendor/chart.min.js" defer></script>
+    <script src="/static/chart_theme.js" defer></script>
+    <script src="/static/labs_chart.js" defer></script>
+    {% endif %}
+  </section>
   {% endif %}
   {% if unavailable %}
   <h2>Not backtested</h2>
