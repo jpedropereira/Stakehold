@@ -520,6 +520,50 @@ described here updates this file in the same change.
   `delta`, so forest and oxblood appear only on figures. *Rejected: periods as rows and assets
   as columns*, which reads better for two assets but not for fifty. *Known cost:* the page
   requests 1Y's growth series and throws it away until the chart (LB-8) draws it.
+- **Labs mix form (LB-7): a GET form, so the mix is the URL.** Under the table, "Edit the mix"
+  has one row per asset (ticker and weight %), then an empty row that adds one. Nothing is
+  stored, so a lab can be bookmarked or reloaded, and "Reset to my portfolio" is plain `/labs`.
+  It works without JS: submitting reloads the page with the new query string. Each row's Remove
+  is a submit button whose value is the row's place, and the route answers it with a 303 to
+  the mix that's left (`labs_mix.canonical_query`). Otherwise a reload would remove the next
+  row as well. A visually hidden Update button comes first in the form, because Enter submits
+  with the first submit button, which would otherwise be the first row's Remove. Removing every
+  row leaves `?ticker=`, an empty edited mix that reads "Add an asset below", not the default.
+  - **Errors sit under their row.** The ink rule's bar and bold lead (the ticker, or
+    "Weight") are used, never oxblood. Each error is tied to its input by `aria-describedby`
+    and marks it `aria-invalid`. The errors are:
+    - an untracked ticker, linking to "Add a ticker" with the symbol filled in,
+    - a repeat of an earlier row,
+    - a missing weight or one that isn't a positive number, with `%` and a decimal comma
+      accepted,
+    - more than 50 rows, for the form as a whole.
+  - **Matching.** Tickers match the tracked list in any case and take its spelling.
+  - **The last valid mix.** A mix with errors isn't sent. The table keeps showing the mix it
+    last showed, which the form carries as hidden `last_ticker`/`last_weight` fields. A
+    warning banner above the table says so and links to the form. A bookmarked URL with
+    errors and no last mix shows only the form.
+  - **Weights.** They are normalized. The form shows their total and, when it isn't 100%,
+    says they're scaled, and the table's Weight column shows what was used. The default mix
+    fills the form with its weights to two places, which can total 99.99%, or less than 100%
+    past the cap.
+  - **Without the ticker list.** If the list fails to load, the form keeps working with a
+    notice and no suggestions, and `portfolio` names untracked tickers as "not tracked" in
+    "Not backtested".
+  - **Labels.** Only the first row's labels are drawn. The rest are visually hidden, so every
+    input keeps its label.
+  - **Phone width.** The weight column narrows, since a ticker needs the room.
+  - **`labs_form.js`** unhides "Add another asset". It clones a `<template>` row, numbers its
+    ids, and gives it a Remove that only takes it off the page.
+
+  *Rejected:*
+  - *Rejecting weights that don't total 100%.* The default mix's rounding would trip it, and
+    scaling is what a reader expects of "60 and 60".
+  - *Backtesting only the valid rows on an error.* The figures would belong to a mix nobody
+    asked for, since a mistyped 50% asset would vanish and the rest would be re-weighted.
+  - *The form above the table.* With 50 holdings, it would push the figures a screen down.
+
+  *Known cost:* the URL carries the mix twice once it has been edited. Even at 50 assets, that
+  is a few KB, well within what browsers and servers accept.
 - **Display formatting (UI-5) is one fixed convention, applied by Jinja filters from a pure
   module.** `formatting.py` defines `money`, `signed_money`, `qty`, `pct` and `date` (plus UI-6's
   `share`, an unsigned percentage for weights, and `delta_class`), registered on

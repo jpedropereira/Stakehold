@@ -444,7 +444,13 @@ Every route `web` serves, with what it requires and which upstream calls it make
   from the old per-account URL (PF-2), in one handler (see "Key decisions").
 - `api/labs.py` (LB-6) — `GET /labs`, the Labs backtest page, on its own router for the
   same file-size reason as `api/overview.py`. Fetches holdings, then the backtest, each failing
-  on its own.
+  on its own. LB-7 added the edited mix: the ticker list is fetched alongside the holdings, or
+  alone for an edited mix, which needs no holdings.
+- `labs_mix.py` (LB-7) — pure: the edited mix's query-string contract (`parse_mix`,
+  `canonical_query`) and its checks (`check_mix`). It sits apart from `labs_view.py` because it
+  owns a different thing: what the user typed and whether it can be sent, where `labs_view.py`
+  derives a mix from holdings. The query string is the whole state, since a lab is never
+  stored.
 - `labs_view.py` (LB-6) — pure: `build_default_mix`, the mix `/labs` sends when the visitor
   hasn't edited one. Reuses `portfolio_view.build_portfolio_holdings` for the weights, so
   `/labs` and `/portfolio` can't disagree about them, and mirrors `portfolio`'s 50-asset cap
@@ -487,7 +493,8 @@ Every route `web` serves, with what it requires and which upstream calls it make
   switch in place), `transaction_form.js` (UI-9, shows the manual-entry fields the chosen type
   and currency need), `password_toggle.js` (UI-12), `confirm_dialog.js` (opens a delete's
   confirmation as a dialog in place of its page), and `holdings_breakdown.js` (shows and hides a
-  `/portfolio` holding's per-account breakdown from its ticker).
+  `/portfolio` holding's per-account breakdown from its ticker), and `labs_form.js` (LB-7, adds
+  rows to the Labs mix form in place).
 - `cli.py` — `web serve` only, mirroring `auth serve`'s lazy-import-uvicorn shape.
 - `scripts/review_pages.py` (UI-13) — a developer tool, not part of the package and not an
   entry point of the service. It screenshots every page against fake clients and checks

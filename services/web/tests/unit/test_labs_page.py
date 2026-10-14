@@ -1,6 +1,6 @@
 """GET /labs (LB-6): the user's current holdings backtested over 1M to Max -- the period table,
 the assets portfolio couldn't backtest, the holdings left out of the mix, and the empty and
-error states.
+error states. And (LB-7) the form that edits the mix, held in the query string.
 
 Like test_portfolio_page.py, it carries its own minimal fakes: only the calls this one page makes.
 """
@@ -52,7 +52,18 @@ class FakePortfolioClient:
         self.list_holdings_error: Exception | None = None
         self.backtest_result: Backtest | None = None
         self.backtest_error: Exception | None = None
+        self.tickers = ["IWDA.AS", "VWRL.AS", "AAPL"]
+        self.tickers_error: Exception | None = None
+        self.tickers_calls = 0
+        # Holdings and backtest calls, in order. The ticker list is counted apart, since it is
+        # fetched alongside the holdings and its place among them isn't fixed.
         self.calls: list[tuple] = []
+
+    async def list_tickers(self):
+        self.tickers_calls += 1
+        if self.tickers_error:
+            raise self.tickers_error
+        return self.tickers
 
     async def list_holdings(self, *, user_id):
         self.calls.append(("list_holdings", user_id))
@@ -532,3 +543,275 @@ def test_every_glossary_link_lands_on_an_entry(client):
 
     assert anchors
     assert {a for a in anchors if f'<dt id="{a}"' not in glossary} == set()
+
+
+# --- editing the mix (LB-7) -------------------------------------------------------------------
+
+
+def _get(test_client, query):
+    response = test_client.get(f"/labs?{query}", follow_redirects=False)
+    assert response.status_code == 200, response.status_code
+    return response.text
+
+
+def _form(html):
+    match = re.search(r'<form[^>]*class="labs-form".*?</form>', html, re.S)
+    assert match, "no mix form"
+    return match.group(0)
+
+
+def _form_rows(html):
+    """(ticker, weight) of each row the form shows, the empty row included."""
+    form = _form(html)
+    tickers = re.findall(r'<input[^>]*name="ticker"[^>]*value="([^"]*)"', form)
+    weights = re.findall(r'<input[^>]*name="weight"[^>]*value="([^"]*)"', form)
+    return list(zip(tickers, weights, strict=True))
+
+
+def _hidden_last(html):
+    form = _form(html)
+    tickers = re.findall(r'<input type="hidden" name="last_ticker" value="([^"]*)"', form)
+    weights = re.findall(r'<input type="hidden" name="last_weight" value="([^"]*)"', form)
+    return list(zip(tickers, weights, strict=True))
+
+
+def _row_errors(html):
+    return re.findall(r'<p class="labs-row-error"[^>]*>(.*?)</p>', _form(html), re.S)
+
+
+def test_the_form_starts_from_the_default_mix_with_an_empty_row(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_backtest(fake_portfolio)
+
+    html = _page(test_client)
+
+    form = _form(html)
+    assert 'method="get"' in form and 'action="/labs"' in form
+    assert _form_rows(html) == [("IWDA.AS", "75"), ("VWRL.AS", "25"), ("", "")]
+    assert _hidden_last(html) == [("IWDA.AS", "75"), ("VWRL.AS", "25")]
+    assert fake_portfolio.tickers_calls == 1
+
+
+def test_the_ticker_field_suggests_every_tracked_ticker(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_backtest(fake_portfolio)
+
+    form = _form(_page(test_client))
+
+    datalist = re.search(r'<datalist id="labs-ticker-options">(.*?)</datalist>', form, re.S)[1]
+    assert re.findall(r'<option value="([^"]+)">', datalist) == ["IWDA.AS", "VWRL.AS", "AAPL"]
+    assert form.count('list="labs-ticker-options"') == 3
+
+
+def test_each_asset_row_has_a_remove_button_naming_it(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_backtest(fake_portfolio)
+
+    form = _form(_page(test_client))
+
+    buttons = re.findall(r'<button[^>]*name="remove"[^>]*>', form)
+    assert len(buttons) == 2
+    assert 'value="0"' in buttons[0] and 'aria-label="Remove IWDA.AS"' in buttons[0]
+    assert 'value="1"' in buttons[1] and 'aria-label="Remove VWRL.AS"' in buttons[1]
+
+
+def test_an_edited_mix_is_backtested_as_fractions_without_loading_holdings(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_backtest(fake_portfolio)
+
+    html = _get(test_client, "ticker=AAPL&weight=60&ticker=iwda.as&weight=40&ticker=&weight=")
+
+    assert fake_portfolio.calls == [
+        ("backtest", (("AAPL", Decimal("0.6")), ("IWDA.AS", Decimal("0.4"))), "1Y"),
+    ]
+    assert _form_rows(html) == [("AAPL", "60"), ("IWDA.AS", "40"), ("", "")]
+    assert _hidden_last(html) == [("AAPL", "60"), ("IWDA.AS", "40")]
+    assert "<table" in html
+
+
+def test_an_edited_mix_shows_no_notes_about_the_holdings(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_backtest(fake_portfolio)
+
+    html = _get(test_client, "ticker=AAPL&weight=100")
+
+    assert "labs-note" not in html
+    assert "your current holdings" not in html
+
+
+def test_the_total_is_shown_and_a_total_off_100_says_it_is_scaled(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_backtest(fake_portfolio)
+
+    html = _get(test_client, "ticker=AAPL&weight=60&ticker=IWDA.AS&weight=60")
+
+    total = re.search(r'<p class="labs-total"[^>]*>(.*?)</p>', _form(html), re.S)[1]
+    assert '<span class="mono">120.00%</span>' in total
+    assert "scaled to 100%" in total
+
+
+def test_a_total_of_100_has_no_scaling_note(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_backtest(fake_portfolio)
+
+    html = _get(test_client, "ticker=AAPL&weight=60&ticker=IWDA.AS&weight=40")
+
+    total = re.search(r'<p class="labs-total"[^>]*>(.*?)</p>', _form(html), re.S)[1]
+    assert '<span class="mono">100.00%</span>' in total
+    assert "scaled" not in total
+
+
+def test_row_errors_show_beside_their_row_and_the_table_keeps_the_last_mix(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_backtest(fake_portfolio)
+
+    html = _get(
+        test_client,
+        "ticker=NOPE&weight=40&ticker=AAPL&weight=0"
+        "&ticker=IWDA.AS&weight=30&ticker=iwda.as&weight=30"
+        "&last_ticker=IWDA.AS&last_weight=75&last_ticker=VWRL.AS&last_weight=25",
+    )
+
+    assert fake_portfolio.calls == [
+        ("backtest", (("IWDA.AS", Decimal("0.75")), ("VWRL.AS", Decimal("0.25"))), "1Y"),
+    ]
+    assert "<table" in html
+    form = _form(html)
+    rows = re.findall(r'<div class="labs-row">.*?<!-- /row -->', form, re.S)
+    assert "track this ticker." in rows[0]
+    assert '<a href="/tickers/new?symbol=NOPE">Add a ticker</a>' in rows[0]
+    assert 'aria-invalid="true"' in rows[0]
+    assert "Enter a weight above 0%." in rows[1]
+    assert "Already in the mix" not in rows[2]
+    assert "Already in the mix above." in rows[3]
+    # The rows keep what was typed, and the hidden fields keep the mix the table shows.
+    assert _form_rows(html)[:4] == [
+        ("NOPE", "40"),
+        ("AAPL", "0"),
+        ("IWDA.AS", "30"),
+        ("IWDA.AS", "30"),
+    ]
+    assert _hidden_last(html) == [("IWDA.AS", "75"), ("VWRL.AS", "25")]
+    assert "the table still shows the last mix that worked" in html
+
+
+def test_errors_with_no_last_mix_show_no_table(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+
+    html = _get(test_client, "ticker=NOPE&weight=100")
+
+    assert fake_portfolio.calls == []
+    assert "<table" not in html
+    assert "Fix the rows marked below to see figures." in html
+    assert _hidden_last(html) == []
+
+
+def test_more_than_fifty_rows_is_an_error_for_the_whole_form(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.tickers = [f"T{i:02d}" for i in range(51)]
+
+    html = _get(test_client, "&".join(f"ticker=T{i:02d}&weight=1" for i in range(51)))
+
+    assert fake_portfolio.calls == []
+    assert "A mix can have at most 50 assets." in _form(html)
+
+
+def test_remove_redirects_to_the_mix_without_that_row(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+
+    response = test_client.get(
+        "/labs?ticker=AAPL&weight=60&ticker=IWDA.AS&weight=40&ticker=&weight="
+        "&last_ticker=AAPL&last_weight=100&remove=0",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == (
+        "/labs?ticker=IWDA.AS&weight=40&last_ticker=AAPL&last_weight=100"
+    )
+    assert fake_portfolio.calls == []
+
+
+def test_removing_the_last_asset_leaves_an_empty_mix_not_the_default(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_backtest(fake_portfolio)
+
+    response = test_client.get("/labs?ticker=AAPL&weight=100&remove=0", follow_redirects=False)
+
+    assert response.headers["location"] == "/labs?ticker="
+    html = _get(test_client, "ticker=")
+    assert fake_portfolio.calls == []
+    assert "Add an asset below to backtest it." in html
+    assert "<table" not in html
+    assert _form_rows(html) == [("", "")]
+
+
+def test_the_form_resets_to_the_portfolio(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_backtest(fake_portfolio)
+
+    form = _form(_get(test_client, "ticker=AAPL&weight=100"))
+
+    assert '<a class="btn btn-secondary" href="/labs">Reset to my portfolio</a>' in form
+
+
+def test_a_ticker_list_failure_shows_a_notice_and_still_runs_the_mix(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_backtest(fake_portfolio)
+    fake_portfolio.tickers_error = PortfolioUnavailable("down")
+
+    html = _get(test_client, "ticker=ANY&weight=100")
+
+    assert fake_portfolio.calls == [("backtest", (("ANY", Decimal("1")),), "1Y")]
+    assert "The ticker list couldn&#39;t be loaded right now" in _form(html)
+
+
+def test_a_holdings_failure_still_offers_an_empty_form(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.list_holdings_error = PortfolioUnavailable("down")
+
+    html = _page(test_client)
+
+    assert _form_rows(html) == [("", "")]
+    assert _hidden_last(html) == []
+
+
+def test_the_page_loads_the_add_row_script(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_backtest(fake_portfolio)
+
+    assert '<script src="/static/labs_form.js" defer></script>' in _page(test_client)
+
+
+def test_logs_an_edited_mix_and_its_errors(client, caplog):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_backtest(fake_portfolio)
+
+    with caplog.at_level(logging.INFO, logger="web.api.labs"):
+        _get(
+            test_client,
+            "ticker=NOPE&weight=50&ticker=AAPL&weight=50&last_ticker=AAPL&last_weight=1",
+        )
+
+    messages = [r.getMessage() for r in caplog.records if r.name == "web.api.labs"]
+    assert any("edited mix, 2 rows, 1 with errors" in m for m in messages), messages
+    assert any(
+        "backtesting the last valid mix" in m and "1 assets" in m for m in messages
+    ), messages

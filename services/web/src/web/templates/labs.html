@@ -16,24 +16,60 @@
 <p class="labs-note">Only your largest {{ max_assets }} holdings are backtested. Left out: <span class="mono">{{ mix.dropped | join(", ") }}</span>.</p>
 {% endif %}
 {%- endmacro %}
+{# One row of the mix form. `row` is a labs_mix.CheckedRow, or none for the empty row that adds
+   an asset; `i` is its place in the form, which a remove button sends back. Each field's error
+   sits under the row and is tied to its input by aria-describedby. #}
+{% macro mix_row(i, row=none) -%}
+<div class="labs-row">
+  <div class="field">
+    <label for="mix-ticker-{{ i }}">Ticker</label>
+    <input type="text" id="mix-ticker-{{ i }}" name="ticker" value="{{ row.ticker if row else '' }}" list="labs-ticker-options" autocomplete="off" class="mono"{% if row and row.ticker_error %} aria-invalid="true" aria-describedby="mix-ticker-{{ i }}-error"{% endif %}>
+  </div>
+  <div class="field">
+    <label for="mix-weight-{{ i }}">Weight %</label>
+    <input type="text" inputmode="decimal" id="mix-weight-{{ i }}" name="weight" value="{{ row.weight if row else '' }}" autocomplete="off" class="mono"{% if row and row.weight_error %} aria-invalid="true" aria-describedby="mix-weight-{{ i }}-error"{% endif %}>
+  </div>
+  {% if row %}
+  <button type="submit" class="btn btn-ghost labs-remove" name="remove" value="{{ i }}" aria-label="Remove {{ row.ticker or 'this row' }}">Remove</button>
+  {% endif %}
+  {% if row and row.ticker_error %}
+  <p class="labs-row-error" id="mix-ticker-{{ i }}-error"><strong>{{ row.ticker or "Ticker" }}:</strong> {{ row.ticker_error }}{% if row.unknown_ticker %} <a href="/tickers/new?symbol={{ row.ticker | urlencode }}">Add a ticker</a>{% endif %}</p>
+  {% endif %}
+  {% if row and row.weight_error %}
+  <p class="labs-row-error" id="mix-weight-{{ i }}-error"><strong>Weight:</strong> {{ row.weight_error }}</p>
+  {% endif %}
+</div><!-- /row -->
+{%- endmacro %}
 {% block content %}
 <section class="card card-wide">
   <h1>Labs</h1>
+  {% if edited %}
+  <p class="entry-subtitle">A {{ term("backtest", "backtest") }} of the mix below: how it would
+    have done over each period, bought on its first day at these weights and held
+    ({{ term("buy and hold", "buy-and-hold") }}).</p>
+  {% else %}
   <p class="entry-subtitle">A {{ term("backtest", "backtest") }} of your current holdings at
     today's weights: how they would have done over each period, bought on its first day and
     held ({{ term("buy and hold", "buy-and-hold") }}).</p>
+  {% endif %}
   <p class="glossary-link"><a href="/glossary">What these figures mean</a></p>
   {% if holdings_error %}
   {% call banner("error") %}<strong>Couldn't load your holdings.</strong> {{ holdings_error }}{% endcall %}
-  {% elif not mix.assets %}
+  {% elif not edited and not mix.assets %}
   <p class="entry-empty">Nothing to backtest yet — Labs starts from your holdings once they have
-    prices. <a href="/accounts">Add transactions to an account</a> to start.</p>
-  {{ left_out_notes(mix) }}
+    prices. <a href="/accounts">Add transactions to an account</a>, or try a mix below.</p>
+  {% elif edited and checked.valid and not sent %}
+  <p class="entry-empty">Add an asset below to backtest it.</p>
+  {% elif not sent %}
+  <p class="entry-empty">Fix the rows marked below to see figures.</p>
   {% else %}
+  {% if showing_last %}
+  {% call banner("warning") %}<strong>Some rows need fixing,</strong> so the table still shows the last mix that worked. <a href="#edit-mix">Edit the mix</a>{% endcall %}
+  {% endif %}
   {% if backtest_error %}
   {% call banner("error") %}<strong>Couldn't run the backtest.</strong> {{ backtest_error }}{% endcall %}
   {% elif backtest.mix is none %}
-  <p class="entry-empty">None of your holdings could be backtested.</p>
+  <p class="entry-empty">None of {{ "these assets" if edited else "your holdings" }} could be backtested.</p>
   {% else %}
   {% set max_period = backtest.mix.periods["Max"] %}
   <p class="as-of">Returns in euros, dividends included, to <span class="mono">{{ backtest.end_date | date }}</span>.</p>
@@ -79,7 +115,49 @@
     {% endfor %}
   </ul>
   {% endif %}
-  {{ left_out_notes(mix) }}
   {% endif %}
+  {% if mix %}{{ left_out_notes(mix) }}{% endif %}
+
+  <h2 id="edit-mix">Edit the mix</h2>
+  {# A GET form, so the mix is the URL: a lab can be bookmarked or reloaded, and nothing is
+     stored. Works without JS: the empty row adds an asset and each Remove button submits the
+     form, which the route answers with the mix that's left. labs_form.js adds rows in place. #}
+  <form method="get" action="/labs" class="labs-form" id="labs-form">
+    {# Enter in a field submits with the first submit button in the form; without this one it
+       would be the first row's Remove. #}
+    <button type="submit" class="visually-hidden" tabindex="-1" aria-hidden="true">Update</button>
+    {% if checked and checked.error %}
+    {% call banner("error") %}<strong>Couldn't run this mix.</strong> {{ checked.error }}{% endcall %}
+    {% endif %}
+    <div data-labs-rows>
+      {% for row in (checked.rows if checked else []) %}
+      {{ mix_row(loop.index0, row) }}
+      {% endfor %}
+      {{ mix_row(checked.rows | length if checked else 0) }}
+    </div>
+    <datalist id="labs-ticker-options">
+      {% for ticker in tickers %}
+      <option value="{{ ticker }}">
+      {% endfor %}
+    </datalist>
+    <p class="field-hint">Weights are percentages. Not in the list? <a href="/tickers/new">Add a ticker</a>.</p>
+    {% if tickers_notice %}<p class="entry-empty">{{ tickers_notice }}</p>{% endif %}
+    {% if checked and checked.rows %}
+    <p class="labs-total">Total <span class="mono">{{ checked.total | share }}</span>{% if checked.total != 1 %} — weights are scaled to 100%, and the table shows the weights used.{% endif %}</p>
+    {% endif %}
+    {% for row in shown %}
+    <input type="hidden" name="last_ticker" value="{{ row.ticker }}">
+    <input type="hidden" name="last_weight" value="{{ row.weight }}">
+    {% endfor %}
+    <div class="labs-actions">
+      <button type="submit" class="btn btn-primary">Update</button>
+      <button type="button" class="btn btn-secondary" data-labs-add hidden>Add another asset</button>
+      <a class="btn btn-secondary" href="/labs">Reset to my portfolio</a>
+    </div>
+  </form>
+  {# labs_form.js's copy for each added row; it numbers the ids and adds a Remove that only
+     takes the row off the page. #}
+  <template id="labs-row-template">{{ mix_row("new") }}</template>
 </section>
+<script src="/static/labs_form.js" defer></script>
 {% endblock %}

@@ -298,8 +298,7 @@ def test_assets_with_no_history_in_common_share_no_period():
 
 
 def test_weights_that_do_not_add_up_are_normalized():
-    # Normalizing is the agreed requirements' assumption, still to be confirmed in LB-7; if
-    # LB-7 chooses to reject instead, this test changes.
+    # Normalizing was agreed in LB-7: web shows the total and the weights actually used.
     a = _asset("A", "30", [(D0, None), (D1, "0.10")])
     b = _asset("B", "30", [(D0, None), (D1, "0.30")])
 

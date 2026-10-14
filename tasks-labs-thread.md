@@ -47,9 +47,9 @@ The previous chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archi
   `GET /instruments/tickers` list), remove assets, and change weights. Weights are entered as
   percentages. A ticker that isn't tracked links to "Add a ticker". A ticker that is tracked but
   has no returns yet (still onboarding) shows "No history yet" and is left out of the mix.
-- **Weights that don't add up to 100%.** *Assumption, to confirm in LB-7:* they are normalized,
-  and the page shows the weights it actually used. The alternative is to reject the mix with a
-  form error.
+- **Weights that don't add up to 100%.** They are normalized, and the page shows the weights
+  it actually used. Agreed in LB-7. Rejecting the mix with a form error was considered and
+  rejected.
 - **Not saved.** The mix is held in the query string, so a lab can be bookmarked or reloaded, but
   nothing is stored. "Reset to my portfolio" is `/labs` with no parameters. Saving labs is
   deferred.
@@ -99,7 +99,7 @@ The previous chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archi
 | LB-4 | [portfolio: backtest endpoint](#lb-4-portfolio-backtest-endpoint) | LB-2, LB-3 | done |
 | LB-5 | [web: client for the backtest](#lb-5-web-client-for-the-backtest) | LB-4 | done |
 | LB-6 | [web: `/labs` page with the period table](#lb-6-web-labs-page-with-the-period-table) | LB-5 | done |
-| LB-7 | [web: edit the mix](#lb-7-web-edit-the-mix) | LB-6 | ready |
+| LB-7 | [web: edit the mix](#lb-7-web-edit-the-mix) | LB-6 | done |
 | LB-8 | [web: growth chart](#lb-8-web-growth-chart) | LB-6 | ready |
 
 ## Tasks
@@ -372,7 +372,7 @@ module, `static/web.css`, `scripts/review_pages.py`, `services/web/docs/ui-archi
 
 ### LB-7. web: edit the mix
 
-**Status:** ready
+**Status:** done
 
 - **The form.** A GET form with one row per asset (ticker and weight %). It works without
   JavaScript: there is an empty row for adding an asset and a remove button on each row, and
@@ -395,6 +395,27 @@ asset.
 
 Files: `web/api/labs.py`, `templates/labs.html`, `static/web.css`, maybe a `static/labs_form.js`,
 `scripts/review_pages.py`, `services/web/docs/ui-architecture.md`.
+
+**As built:**
+- **Normalize, confirmed.** Weights are scaled to 100%, as LB-3 and portfolio already do, so
+  only LB-3's test comment changed. The default mix's own rounding (99.99%) and a capped mix
+  (under 100%) would have tripped a reject.
+- **The query string.** It has repeated `ticker`/`weight` pairs. Any `ticker` key makes the
+  mix an edited one, so an emptied mix is `?ticker=`, not the default. `remove=<n>` answers a
+  303 to the mix that's left, so a reload can't remove a second row. A new pure module,
+  `web/labs_mix.py`, holds the contract and the checks.
+- **"The last valid mix" travels in hidden `last_ticker`/`last_weight` fields.** A form with
+  errors isn't sent. The table re-runs the last mix, with a warning banner. With no last mix
+  (a bookmarked URL with errors), only the form shows.
+- **Tickers match in any case** and take the tracked spelling. If the ticker list can't be
+  loaded, the check is skipped and portfolio's `not_tracked` status reports the ticker instead.
+- **"No history yet"** needed nothing new. portfolio's `no_history` reason already reads that
+  way in the "Not backtested" list.
+- **The form sits below the table**, not above it, since 50 rows would push the figures a
+  screen down.
+- **`labs_form.js` was built.** It adds rows from a `<template>` in place.
+- **The ticker list is fetched alongside the holdings** for the default mix, and alone for an
+  edited one, which needs no holdings.
 
 ### LB-8. web: growth chart
 

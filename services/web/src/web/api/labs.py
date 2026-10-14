@@ -1,9 +1,14 @@
-"""GET /labs (LB-6): the user's current holdings backtested over 1M to Max.
+"""GET /labs (LB-6): the user's current holdings backtested over 1M to Max. And (LB-7) any mix
+the user edits from there, held in the query string (labs_mix.py has the contract).
 
-Two calls, in order: GET /holdings for the default mix (labs_view.build_default_mix), then
+The default mix takes two calls, in order: GET /holdings (labs_view.build_default_mix), then
 portfolio's POST /labs/backtest for it. The second needs the first's answer, so they can't run
 concurrently. Each fails on its own: a failed holdings call shows its notice and runs no
-backtest, and a failed backtest still shows which holdings the mix left out.
+backtest, and a failed backtest still shows which holdings the mix left out. The ticker list for
+the form's suggestions is fetched alongside the holdings, and fails on its own too.
+
+An edited mix needs no holdings. It is checked against the ticker list first. A mix with errors
+isn't sent: the table shows the mix it last showed (the form's last_* fields), if there is one.
 
 The backtest asks for 1Y's growth series, which this page doesn't draw yet: the period only
 picks the series, and 1Y keeps the response well under Max's (about 460 KB for 50 assets,
@@ -14,13 +19,23 @@ it renders through routes.py's _render, so a cookie set earlier in the request s
 the response.
 """
 
+import asyncio
 import logging
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Request, Response
 from web.api.csrf import ensure_csrf_cookie
 from web.api.deps import get_portfolio_client, get_settings, get_templates, require_user
-from web.api.routes import _render
+from web.api.routes import _load_tickers, _redirect, _render
 from web.auth_client.base import AuthUser
+from web.labs_mix import (
+    CheckedMix,
+    MixRow,
+    canonical_query,
+    check_mix,
+    default_rows,
+    parse_mix,
+)
 from web.labs_view import MAX_BACKTEST_ASSETS, DefaultMix, build_default_mix
 from web.portfolio_client.base import BACKTEST_PERIODS, Backtest, PortfolioClient
 from web.portfolio_client.errors import InvalidPortfolioRequest, PortfolioClientError
@@ -55,11 +70,11 @@ async def _load_mix(portfolio_client: PortfolioClient, user_id: str) -> DefaultM
 
 
 async def _run_backtest(
-    portfolio_client: PortfolioClient, mix: DefaultMix
+    portfolio_client: PortfolioClient, assets: tuple[tuple[str, Decimal], ...]
 ) -> tuple[Backtest | None, str | None]:
     """The backtest and None, or None and the message to show in its place."""
     try:
-        result = await portfolio_client.backtest(assets=list(mix.assets), period=_GROWTH_PERIOD)
+        result = await portfolio_client.backtest(assets=list(assets), period=_GROWTH_PERIOD)
     except InvalidPortfolioRequest as exc:
         # portfolio rejected the mix; its message is written to be shown.
         logger.warning("labs: portfolio rejected the mix: %s", exc)
@@ -77,6 +92,16 @@ async def _run_backtest(
     return result, None
 
 
+def _checked_last(last: tuple[MixRow, ...]) -> tuple[tuple[MixRow, ...], CheckedMix | None]:
+    """The last mix the table showed, if it is still one that can be sent. Its tickers were
+    checked when it was shown, so only its shape is checked again: a hand-edited URL with a
+    bad last mix just shows no table."""
+    checked = check_mix(last, None)
+    if not last or not checked.valid:
+        return (), None
+    return last, checked
+
+
 @router.get("/labs")
 async def labs(
     request: Request,
@@ -86,15 +111,62 @@ async def labs(
     user: AuthUser = Depends(require_user),
     portfolio_client: PortfolioClient = Depends(get_portfolio_client),
 ):
+    form = parse_mix(request.query_params.multi_items())
+    if form is not None and form.remove is not None:
+        # A remove button submits the whole form; answer with the mix it leaves, so a reload
+        # doesn't remove the next row too.
+        query = canonical_query(form.without_removed(), form.last)
+        return _redirect(request, response, f"/labs?{query}")
+
     # The header's logout and theme forms need the token, as on every other page.
     csrf_token = ensure_csrf_cookie(request, response, cookie_secure=settings.cookie_secure)
 
-    mix = await _load_mix(portfolio_client, user.user_id)
+    mix: DefaultMix | None = None
+    holdings_error = None
+    checked: CheckedMix | None = None
+    shown: tuple[MixRow, ...] = ()  # the mix the table shows, for the form's last_* fields
+    to_send: tuple[tuple[str, Decimal], ...] = ()
+    if form is None:
+        mix, (tickers, tickers_notice) = await asyncio.gather(
+            _load_mix(portfolio_client, user.user_id), _load_tickers(portfolio_client)
+        )
+        if mix is None:
+            holdings_error = _UNAVAILABLE
+        else:
+            shown, to_send = default_rows(mix), mix.assets
+            checked = check_mix(shown, None)
+            if not mix.assets:
+                logger.info("labs: nothing to backtest, no holding has a market value.")
+    else:
+        tickers, tickers_notice = await _load_tickers(portfolio_client)
+        checked = check_mix(form.rows, None if tickers_notice else tickers)
+        logger.info(
+            "labs: edited mix, %d rows, %d with errors%s.",
+            len(checked.rows),
+            sum(1 for row in checked.rows if row.errors),
+            f", {checked.error}" if checked.error else "",
+        )
+        if checked.valid:
+            # In the tracked spelling, so the table and the form agree.
+            shown = tuple(MixRow(row.ticker, row.weight) for row in checked.rows)
+            to_send = checked.assets
+            if not to_send:
+                logger.info("labs: nothing to backtest, the edited mix is empty.")
+        else:
+            shown, last = _checked_last(form.last)
+            to_send = () if last is None else last.assets
+            logger.info(
+                "labs: %s",
+                (
+                    f"backtesting the last valid mix instead, {len(to_send)} assets."
+                    if to_send
+                    else "no last valid mix to backtest instead."
+                ),
+            )
+
     backtest, backtest_error = None, None
-    if mix is not None and mix.assets:
-        backtest, backtest_error = await _run_backtest(portfolio_client, mix)
-    elif mix is not None:
-        logger.info("labs: nothing to backtest, no holding has a market value.")
+    if to_send:
+        backtest, backtest_error = await _run_backtest(portfolio_client, to_send)
     return _render(
         request,
         response,
@@ -104,9 +176,17 @@ async def labs(
             "user": user,
             "csrf_token": csrf_token,
             "nav_active": "labs",
-            "holdings_error": _UNAVAILABLE if mix is None else None,
+            "edited": form is not None,
+            "holdings_error": holdings_error,
             "mix": mix,
             "max_assets": MAX_BACKTEST_ASSETS,
+            "checked": checked,
+            "shown": shown,
+            "sent": bool(to_send),
+            # The form has errors, so the table shows the mix it showed before.
+            "showing_last": checked is not None and not checked.valid and bool(to_send),
+            "tickers": tickers,
+            "tickers_notice": tickers_notice,
             "backtest": backtest,
             "backtest_error": backtest_error,
             "periods": BACKTEST_PERIODS,
