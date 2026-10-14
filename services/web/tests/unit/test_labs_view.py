@@ -1,12 +1,25 @@
 """labs_view.build_default_mix (LB-6): the mix /labs backtests when the visitor hasn't edited
 one -- the current holdings, weighted by market value as /portfolio weighs them. LB-8:
-build_growth_payload, the growth chart's data island."""
+build_growth_payload, the growth chart's data island. LB-10: mix_left_out_runs, the periods the
+mix's figures leave assets out of."""
 
 from datetime import date
 from decimal import Decimal
 
-from web.labs_view import MAX_BACKTEST_ASSETS, build_default_mix, build_growth_payload
-from web.portfolio_client.base import BacktestGrowth, Holding
+from web.labs_view import (
+    MAX_BACKTEST_ASSETS,
+    LeftOutRun,
+    build_default_mix,
+    build_growth_payload,
+    mix_left_out_runs,
+)
+from web.portfolio_client.base import (
+    BACKTEST_PERIODS,
+    BacktestGrowth,
+    BacktestPeriodReturn,
+    BacktestRow,
+    Holding,
+)
 
 
 def _holding(ticker, value):
@@ -89,12 +102,13 @@ def test_more_holdings_than_the_backtest_takes_keeps_the_largest():
     assert mix.assets[0] == ("T51", Decimal("151") / sum(Decimal(100 + i) for i in range(52)))
 
 
-def _growth(mix, assets):
+def _growth(mix, assets, left_out=()):
     return BacktestGrowth(
         period="Max",
         dates=(date(2021, 3, 15), date(2021, 3, 16)),
         mix=mix,
         assets=assets,
+        left_out=left_out,
     )
 
 
@@ -109,7 +123,18 @@ def test_growth_payload_keeps_the_assets_order_and_their_missing_lines():
         "dates": ["2021-03-15", "2021-03-16"],
         "mix": [0.0, 0.5],
         "assets": [{"ticker": "B", "values": [0.0, 1.0]}, {"ticker": "A", "values": None}],
+        "left_out": [],
     }
+
+
+def test_growth_payload_names_the_assets_the_mixs_line_leaves_out():
+    growth = _growth(
+        mix=(Decimal("0"), Decimal("0.5")),
+        assets={"B": (Decimal("0"), Decimal("0.5")), "A": None},
+        left_out=("A",),
+    )
+
+    assert build_growth_payload(growth)["left_out"] == ["A"]
 
 
 def test_growth_payload_keeps_a_late_assets_null_points():
@@ -131,3 +156,60 @@ def test_growth_payload_rounds_to_six_significant_digits():
     assert payload["mix"] == [0.0, 1.23457]
     assert payload["assets"][0]["values"] == [-0.000123457, 12.3457]
     assert all(type(v) is float for v in payload["mix"] + payload["assets"][0]["values"])
+
+
+# --- the assets the mix leaves out ----------------------------------------------------------
+
+
+def _mix(**left_out):
+    """The mix's row, with each period's left_out from {period: tickers}; others leave none."""
+    return BacktestRow(
+        ticker=None,
+        weight=Decimal("1"),
+        periods={
+            p: BacktestPeriodReturn(
+                start=date(2025, 10, 9),
+                end=date(2026, 10, 9),
+                covered=True,
+                return_pct=Decimal("0.01"),
+                gaps=0,
+                left_out=tuple(left_out.get(p, ())),
+            )
+            for p in BACKTEST_PERIODS
+        },
+    )
+
+
+def test_a_mix_that_leaves_nothing_out_has_no_runs():
+    assert mix_left_out_runs(_mix()) == []
+
+
+def test_consecutive_periods_leaving_out_the_same_assets_are_one_run():
+    mix = _mix(**{"3M": ["BRK-B"], "6M": ["BRK-B"], "1Y": ["BRK-B"], "2Y": ["BRK-B"]})
+
+    assert mix_left_out_runs(mix) == [LeftOutRun(first="3M", last="2Y", tickers=("BRK-B",))]
+
+
+def test_a_single_period_is_a_run_of_one():
+    assert mix_left_out_runs(_mix(**{"5Y": ["A"]})) == [
+        LeftOutRun(first="5Y", last="5Y", tickers=("A",))
+    ]
+
+
+def test_a_change_in_who_is_left_out_starts_a_new_run():
+    # A shorter history drops out a period earlier, so the longer periods leave out more.
+    mix = _mix(**{"1Y": ["A"], "2Y": ["A", "B"], "5Y": ["A", "B"]})
+
+    assert mix_left_out_runs(mix) == [
+        LeftOutRun(first="1Y", last="1Y", tickers=("A",)),
+        LeftOutRun(first="2Y", last="5Y", tickers=("A", "B")),
+    ]
+
+
+def test_a_period_leaving_nothing_out_splits_runs_of_the_same_assets():
+    mix = _mix(**{"1M": ["A"], "6M": ["A"]})
+
+    assert mix_left_out_runs(mix) == [
+        LeftOutRun(first="1M", last="1M", tickers=("A",)),
+        LeftOutRun(first="6M", last="6M", tickers=("A",)),
+    ]

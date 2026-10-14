@@ -1172,7 +1172,8 @@ img.logo-on-dark {
   border-bottom: 1px solid var(--border-control);
 }
 
-/* "from <date>" under the Max header: the longest history the assets share. */
+/* "from <date>" under the Max header, where the mix's Max starts; and under an asset's Max
+   figure when its own history starts later (LB-10). */
 .period-start {
   display: block;
   font: var(--text-caption);
@@ -1405,6 +1406,11 @@ img.logo-on-dark {
   /* Max's start, which the hidden header carries at other widths. */
   .labs-table td[data-start]::before {
     content: attr(data-label) " from " attr(data-start) / "";
+  }
+
+  /* The drawn label above already carries the row's own start. */
+  .labs-table td .period-start {
+    display: none;
   }
 
   .transactions-table .eur-amount {

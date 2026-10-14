@@ -19,6 +19,11 @@
 {# One row of the mix form. `row` is a labs_mix.CheckedRow, or none for the empty row that adds
    an asset; `i` is its place in the form, which a remove button sends back. Each field's error
    sits under the row and is tied to its input by aria-describedby. #}
+{# The mix's figures and line cover only the assets whose history covers the period (LB-9);
+   this names the rest, for `first` to `last` of the periods. #}
+{% macro mix_leaves_out(first, last, tickers) -%}
+{% if first == last %}Over {{ first }}{% else %}From {{ first }} to {{ last }}{% endif %} the mix leaves out <span class="mono">{{ tickers | join(", ") }}</span>: not enough history.
+{%- endmacro %}
 {% macro mix_row(i, row=none) -%}
 <div class="labs-row">
   <div class="field">
@@ -98,14 +103,19 @@
         <td class="num" role="cell" data-label="Weight"><span class="mono">{{ row.weight | share }}</span></td>
         {% for period in periods %}
         {% set figure = row.periods[period] %}
-        {# Stacked at phone width the headers are hidden, so Max's label carries its start. #}
-        <td class="num" role="cell" data-label="{{ period }}"{% if period == "Max" and max_period.covered %} data-start="{{ max_period.start | date }}"{% endif %}>{% if figure.covered %}{{ delta(figure.return_pct, "pct") }}{% else %}<span class="entry-empty">Not enough history</span>{% endif %}</td>
+        {# Stacked at phone width the headers are hidden, so Max's label carries its start: each
+           row's own, since an asset's Max is its whole history (LB-9). An asset that starts
+           after the mix also shows it in the cell, where the header's date isn't its own. #}
+        <td class="num" role="cell" data-label="{{ period }}"{% if period == "Max" and figure.covered %} data-start="{{ figure.start | date }}"{% endif %}>{% if figure.covered %}{{ delta(figure.return_pct, "pct") }}{% if period == "Max" and figure.start != max_period.start %}<span class="period-start">from <span class="mono">{{ figure.start | date }}</span></span>{% endif %}{% else %}<span class="entry-empty">Not enough history</span>{% endif %}</td>
         {% endfor %}
       </tr>
       {% endfor %}
     </tbody>
   </table>
   </div>
+  {% for run in left_out_runs %}
+  <p class="labs-note">{{ mix_leaves_out(run.first, run.last, run.tickers) }}</p>
+  {% endfor %}
   {# The growth chart (LB-8, static/labs_chart.js) for one period. The periods are links, not
      client-side buttons: buy and hold re-bases each period, so the server computes each one.
      The asset toggles ship hidden, since they'd do nothing without the script. #}
@@ -116,24 +126,25 @@
       <a class="btn btn-ghost" href="{{ period_links[p] }}"{% if p == period %} aria-current="true"{% endif %}>{{ p }}</a>
       {% endfor %}
     </nav>
-    {% set lines = growth.assets | selectattr("values") | list if growth else [] %}
-    {% if growth is none or (growth.mix is none and not lines) %}
+    {# The mix has a line whenever any asset covers the period (LB-9), so no mix line means no
+       line at all. #}
+    {% if growth is none or growth.mix is none %}
     <p class="entry-empty">No asset's history covers {{ period }}.</p>
     {% else %}
-    {% if growth.mix is none %}
-    <p class="chart-note">The mix has no line for {{ period }}: not every asset's history covers it.</p>
+    {% if growth.left_out %}
+    <p class="chart-note">{{ mix_leaves_out(period, period, growth.left_out) }}</p>
     {% endif %}
     <div class="chart-frame">
       <canvas id="labs-chart" role="img" aria-label="Cumulative growth over {{ period }}"></canvas>
     </div>
     <fieldset class="labs-series" hidden>
       <legend>Assets on the chart</legend>
-      {% if growth.mix is not none %}<p class="chart-note">The heavier line is the mix.</p>{% endif %}
+      <p class="chart-note">The heavier line is the mix.</p>
       {% for asset in growth.assets %}
       {% if asset["values"] is none %}
       <label><input type="checkbox" data-series="{{ asset.ticker }}" disabled> <span class="mono">{{ asset.ticker }}</span> <span class="entry-empty">Not enough history</span></label>
       {% else %}
-      <label><input type="checkbox" data-series="{{ asset.ticker }}"{% if growth.mix is none %} checked{% endif %}> <span class="mono">{{ asset.ticker }}</span></label>
+      <label><input type="checkbox" data-series="{{ asset.ticker }}"> <span class="mono">{{ asset.ticker }}</span></label>
       {% endif %}
       {% endfor %}
     </fieldset>
