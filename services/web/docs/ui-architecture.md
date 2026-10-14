@@ -586,8 +586,10 @@ described here updates this file in the same change.
   - *Asset lines start hidden*: a mix can have 50 assets, and 50 lines would bury the mix. Each
     asset has a checkbox under the chart (rendered `hidden`, since it does nothing without the
     script); one with no line for the period is disabled and says "Not enough history". When
-    the mix itself has no line (not every asset covers the period), the covered assets start
-    shown, or the chart would open empty, and a note says why the mix is missing. No line at
+    the mix itself has no line, the covered assets start shown, or the chart would open empty,
+    and a note says why the mix is missing. *Dead since LB-9:* the mix now lacks a line only
+    when no asset covers the period, so there is never a covered asset to show; LB-10 removes
+    the fallback. No line at
     all reads "No asset's history covers …" and draws no chart, keeping the period links.
   - *Shared, not copied*: the theme colors and the redraw on `stakehold:themechange` and on a
     `prefers-color-scheme` change moved out of `portfolio_chart.js` into

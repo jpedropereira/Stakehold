@@ -134,9 +134,12 @@ def test_backtest_serializes_a_real_result_end_to_end(monkeypatch, client):
         "covered": True,
         "return_pct": "0.21250000",
         "gaps": 0,
+        "left_out": [],
     }
+    # Two days of history cover no month period, so the mix leaves both out of 1M.
     assert body["mix"]["periods"]["1M"]["covered"] is False
     assert body["mix"]["periods"]["1M"]["return_pct"] is None
+    assert body["mix"]["periods"]["1M"]["left_out"] == ["E", "U"]
     assert [(row["ticker"], row["weight"]) for row in body["assets"]] == [
         ("E", "0.25"),
         ("U", "0.75"),
@@ -147,6 +150,7 @@ def test_backtest_serializes_a_real_result_end_to_end(monkeypatch, client):
         "dates": ["2026-01-05", "2026-01-06"],
         "mix": ["0.00000000", "0.21250000"],
         "assets": {"E": ["0.00000000", "0.10000000"], "U": ["0.00000000", "0.25000000"]},
+        "left_out": [],
     }
     assert body["statuses"] == [
         {"ticker": "E", "status": "included", "reason": None},
@@ -167,3 +171,31 @@ def test_backtest_writes_small_figures_in_fixed_point_not_scientific_notation(mo
     response = client.post("/labs/backtest", json=_body())
 
     assert response.json()["growth"]["mix"] == ["0.00000012"]
+
+
+def test_backtest_serializes_left_out_tickers_and_null_points_in_a_line(monkeypatch, client):
+    period = {
+        "start": date(2026, 1, 5),
+        "end": date(2026, 1, 6),
+        "covered": True,
+        "return_pct": Decimal("0.1"),
+        "gaps": 0,
+        "left_out": ["NEW"],
+    }
+    result = _empty_result([])
+    result["end_date"] = date(2026, 1, 6)
+    result["mix"] = {"ticker": None, "weight": Decimal("1"), "periods": {p: period for p in Period}}
+    result["growth"] = {
+        "period": "Max",
+        "dates": [date(2026, 1, 5), date(2026, 1, 6)],
+        "mix": [Decimal("0"), Decimal("0.1")],
+        "assets": {"LATE": [None, Decimal("0")]},
+        "left_out": ["NEW"],
+    }
+    monkeypatch.setattr(jobs, "get_backtest", lambda **kw: result)
+
+    body = client.post("/labs/backtest", json=_body()).json()
+
+    assert body["mix"]["periods"]["3M"]["left_out"] == ["NEW"]
+    assert body["growth"]["assets"] == {"LATE": [None, "0"]}
+    assert body["growth"]["left_out"] == ["NEW"]

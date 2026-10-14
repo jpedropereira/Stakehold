@@ -149,8 +149,8 @@ def test_an_asset_with_no_prices_is_left_out_as_having_no_history_yet():
 
 
 def test_an_asset_whose_fx_series_starts_late_starts_there():
-    # US has prices from D0 but no rate before D2, so its usable history starts on D2, and Max
-    # (the longest history every asset shares) starts there too.
+    # US has prices from D0 but no rate before D2, so its usable history, and its own Max, start
+    # on D2. The mix's Max starts on EU's first day, D0, and US joins it on D2.
     usd = _asset(
         "US",
         "0.5",
@@ -161,8 +161,10 @@ def test_an_asset_whose_fx_series_starts_late_starts_there():
 
     result = compute_backtest([usd, eur], growth_period=Period.MAX)
 
-    assert result.mix.periods[Period.MAX].start == D2
+    assert _row(result, "US").periods[Period.MAX].start == D2
     assert _row(result, "US").periods[Period.MAX].return_pct == _q("0.10")
+    # EU alone is flat to D2; rebalanced 50/50 there: 0.5 x 1.10 + 0.5 x 1.20 - 1.
+    assert result.mix.periods[Period.MAX].start == D0
     assert result.mix.periods[Period.MAX].return_pct == _q("0.15")
 
 
@@ -196,7 +198,7 @@ def test_a_gap_before_a_period_starts_is_not_counted_in_it():
     assert _row(result, "A").periods[Period.MAX].gaps == 1
 
 
-def test_a_period_longer_than_an_assets_history_has_no_figure_for_it_or_the_mix():
+def test_a_period_longer_than_an_assets_history_leaves_it_out_of_the_mix():
     long = _asset(
         "LONG",
         "0.5",
@@ -210,14 +212,55 @@ def test_a_period_longer_than_an_assets_history_has_no_figure_for_it_or_the_mix(
     assert _row(result, "LONG").periods[Period.M1].return_pct == _q("0.10")
     assert _row(result, "SHORT").periods[Period.M1].return_pct == _q("0.20")
     assert result.mix.periods[Period.M1].return_pct == _q("0.15")
-    # 3M starts 2025-12-31: LONG covers it (1.10 x 1.10 - 1), SHORT doesn't, so the mix has none.
+    assert result.mix.periods[Period.M1].left_out == []
+    # 3M starts 2025-12-31: LONG covers it (1.10 x 1.10 - 1), SHORT doesn't, so the mix is LONG
+    # alone and names SHORT.
     assert _row(result, "LONG").periods[Period.M3].return_pct == _q("0.21")
     assert _row(result, "SHORT").periods[Period.M3].covered is False
-    assert result.mix.periods[Period.M3].covered is False
-    assert result.mix.periods[Period.M3].return_pct is None
+    assert result.mix.periods[Period.M3].covered is True
+    assert result.mix.periods[Period.M3].return_pct == _q("0.21")
+    assert result.mix.periods[Period.M3].left_out == ["SHORT"]
+    # An asset's own row never leaves anything out.
+    assert _row(result, "LONG").periods[Period.M3].left_out == []
 
 
-def test_max_starts_at_the_latest_first_day_for_every_row():
+def test_the_mix_reweights_the_assets_that_cover_a_period_to_100_percent():
+    days = [date(2025, 12, 31), date(2026, 2, 27), date(2026, 3, 31)]
+    long = _asset("LONG", "0.5", list(zip(days, [None, "0.10", "0.10"])))
+    flat = _asset("FLAT", "0.3", list(zip(days, [None, "0", "0"])))
+    short = _asset("SHORT", "0.2", [(date(2026, 2, 15), None), (date(2026, 3, 31), "0.20")])
+
+    result = compute_backtest([long, flat, short], growth_period=Period.M3)
+
+    # 3M: SHORT is left out, so LONG and FLAT hold 0.5/0.8 and 0.3/0.8:
+    # 0.625 x 1.21 + 0.375 x 1 - 1 = 0.13125.
+    assert result.mix.periods[Period.M3].return_pct == _q("0.13125")
+    assert result.mix.periods[Period.M3].left_out == ["SHORT"]
+    # The rows still report the weights given over every available asset.
+    assert [row.weight for row in result.assets] == [
+        Decimal("0.5"),
+        Decimal("0.3"),
+        Decimal("0.2"),
+    ]
+
+
+def test_the_mix_has_no_figure_only_when_no_asset_covers_the_period():
+    # Both start 03-15, after 1M's start (02-28).
+    a = _asset("A", "0.5", [(date(2026, 3, 15), None), (date(2026, 3, 31), "0.10")])
+    b = _asset("B", "0.5", [(date(2026, 3, 15), None), (date(2026, 3, 31), "0.30")])
+
+    result = compute_backtest([b, a], growth_period=Period.M1)
+
+    assert result.mix.periods[Period.M1].covered is False
+    assert result.mix.periods[Period.M1].return_pct is None
+    assert result.mix.periods[Period.M1].left_out == ["B", "A"]
+    assert result.growth.mix is None
+    assert result.growth.left_out == ["B", "A"]
+    # Max covers both: 0.5 x 1.10 + 0.5 x 1.30 - 1.
+    assert result.mix.periods[Period.MAX].return_pct == _q("0.20")
+
+
+def test_each_assets_max_is_its_own_history_and_the_mix_starts_at_the_earliest():
     long = _asset(
         "LONG",
         "0.5",
@@ -228,10 +271,47 @@ def test_max_starts_at_the_latest_first_day_for_every_row():
     result = compute_backtest([long, short], growth_period=Period.MAX)
 
     starts = {row.ticker: row.periods[Period.MAX].start for row in result.assets}
-    assert starts == {"LONG": date(2026, 2, 15), "SHORT": date(2026, 2, 15)}
-    assert result.mix.periods[Period.MAX].start == date(2026, 2, 15)
-    # LONG on 02-15 still stands at its 12-31 value, so both its later days are inside.
+    assert starts == {"LONG": date(2025, 12, 31), "SHORT": date(2026, 2, 15)}
     assert _row(result, "LONG").periods[Period.MAX].return_pct == _q("0.21")
+    assert _row(result, "SHORT").periods[Period.MAX].return_pct == _q("0.20")
+    # The mix holds LONG alone until 02-15, when it still stands at 1.00. SHORT joins there and
+    # the mix is split 50/50 again: 0.5 x 1.21 + 0.5 x 1.20 - 1.
+    assert result.mix.periods[Period.MAX].start == date(2025, 12, 31)
+    assert result.mix.periods[Period.MAX].return_pct == _q("0.205")
+    assert result.mix.periods[Period.MAX].left_out == []
+
+
+def test_an_asset_joining_max_late_rebalances_the_mix_to_its_target_weights():
+    # A and B from D0, C from D2; weights 1/1/2.
+    a = _asset("A", "1", [(D0, None), (D1, "0.10"), (D2, "0"), (D3, "0.20")])
+    b = _asset("B", "1", [(D0, None), (D1, "-0.10"), (D2, "0"), (D3, "0")])
+    c = _asset("C", "2", [(D2, None), (D3, "0.10")])
+
+    result = compute_backtest([a, b, c], growth_period=Period.MAX)
+
+    # Up to D2, A and B 50/50: 0.5 x 1.10 + 0.5 x 0.90 = 1.00. On D2 C joins, and the 1.00 is
+    # split 25/25/50: D3 is 0.25 x 1.20 + 0.25 x 1.00 + 0.5 x 1.10 = 1.10. Keeping A and B's
+    # drifted 55/45 and buying C beside them would give 0.5 x (0.55 x 1.2 + 0.45) + 0.55 = 1.105.
+    assert result.mix.periods[Period.MAX].start == D0
+    assert result.mix.periods[Period.MAX].return_pct == _q("0.10")
+    assert _row(result, "C").periods[Period.MAX].start == D2
+    assert _row(result, "C").periods[Period.MAX].return_pct == _q("0.10")
+
+
+def test_a_late_assets_max_line_is_empty_until_it_starts():
+    a = _asset("A", "1", [(D0, None), (D1, "0.10"), (D2, "0"), (D3, "0.20")])
+    b = _asset("B", "1", [(D0, None), (D1, "-0.10"), (D2, "0"), (D3, "0")])
+    c = _asset("C", "2", [(D2, None), (D3, "0.10")])
+
+    result = compute_backtest([a, b, c], growth_period=Period.MAX)
+
+    growth = result.growth
+    assert growth.dates == [D0, D1, D2, D3]
+    assert growth.assets["C"] == [None, None, _q("0"), _q("0.10")]
+    assert growth.assets["A"] == [_q("0"), _q("0.10"), _q("0.10"), _q("0.32")]
+    # D1 and D2: 0.5 x 1.10 + 0.5 x 0.90 - 1; D3 as in the test above.
+    assert growth.mix == [_q("0"), _q("0"), _q("0"), _q("0.10")]
+    assert growth.left_out == []
 
 
 def test_a_period_starting_on_a_weekend_uses_the_close_before_it():
@@ -284,17 +364,21 @@ def test_every_period_ends_on_the_last_day_all_assets_have():
     assert result.growth.dates == [D0, D1, D2]
 
 
-def test_assets_with_no_history_in_common_share_no_period():
-    # A stops on D1, B starts on D2: everything ends on D1, while Max would start on D2.
+def test_an_asset_starting_after_the_common_end_is_left_out_even_of_max():
+    # A stops on D1, B starts on D2: everything ends on D1, before B has a single day.
     a = _asset("A", "0.5", [(D0, None), (D1, "0.10")])
     b = _asset("B", "0.5", [(D2, None), (D3, "0.10")])
 
     result = compute_backtest([a, b], growth_period=Period.MAX)
 
-    assert result.mix.periods[Period.MAX].covered is False
-    assert _row(result, "A").periods[Period.MAX].covered is False
-    assert result.growth.dates == []
-    assert result.growth.mix is None
+    assert _row(result, "B").periods[Period.MAX].covered is False
+    assert _row(result, "A").periods[Period.MAX].return_pct == _q("0.10")
+    assert result.mix.periods[Period.MAX].return_pct == _q("0.10")
+    assert result.mix.periods[Period.MAX].left_out == ["B"]
+    assert result.growth.dates == [D0, D1]
+    assert result.growth.mix == [_q("0"), _q("0.10")]
+    assert result.growth.assets["B"] is None
+    assert result.growth.left_out == ["B"]
 
 
 def test_weights_that_do_not_add_up_are_normalized():
@@ -336,8 +420,17 @@ def test_the_growth_series_has_no_line_for_an_asset_that_does_not_cover_the_peri
     result = compute_backtest([long, short], growth_period=Period.M3)
 
     assert result.growth.assets["SHORT"] is None
-    assert result.growth.assets["LONG"] is not None
-    assert result.growth.mix is None
+    # SHORT's first day, 02-15, is still a trading day on the chart; LONG stands at 1.00 there.
+    assert result.growth.dates == [
+        date(2025, 12, 31),
+        date(2026, 2, 15),
+        date(2026, 2, 27),
+        date(2026, 3, 31),
+    ]
+    assert result.growth.assets["LONG"] == [_q("0"), _q("0"), _q("0.10"), _q("0.21")]
+    # The mix is LONG alone, and names SHORT.
+    assert result.growth.mix == result.growth.assets["LONG"]
+    assert result.growth.left_out == ["SHORT"]
 
 
 def test_with_nothing_available_there_is_no_result_to_show():
