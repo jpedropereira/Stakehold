@@ -788,7 +788,10 @@ def test_chart_data_island_carries_the_series(client):
         {"date": "2026-01-06", "market_value_eur": 1200.0, "total_return_eur": 200.0},
     ]
     assert '<canvas id="returns-chart"' in card
-    assert '<script src="/static/portfolio_chart.js" defer></script>' in card
+    # The shared theme helper has to run first: deferred scripts run in document order.
+    assert card.index('<script src="/static/chart_theme.js" defer></script>') < card.index(
+        '<script src="/static/portfolio_chart.js" defer></script>'
+    )
 
 
 def test_chart_canvas_sits_alone_in_its_sizing_frame(client):
