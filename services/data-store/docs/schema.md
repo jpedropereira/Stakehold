@@ -129,6 +129,13 @@ the 09-04 run had stored 09-03 bars without a close for 918 tickers, and the nex
 window left 09-03..09-14 unrepaired. `market_returns` then read NULL on 09-15 for 921 tickers,
 since `compute_returns` can't anchor a return to a missing close.
 
+A ticker with no row with a close at all is fetched from the start of its history
+(`UNBOUNDED_EARLIEST_DATE`), not the rolling window. Fetching it the window would give it rows,
+and a plain backfill rerun treats any stored row as done (see "Backfill loading pattern" below),
+so its history would never be filled. That happened to holdings the 2026-08-20 backfill missed:
+in 2026-10, BRK-B, BT-A.L, VOLV-B.ST, 0001.HK, DPLM.L and UNI.MI had 30–39 rows each, while Yahoo
+serves history back to 1988–2000 for all six.
+
 *Known limit:* the catch-up starts from a ticker's *latest* close, so it never looks for a hole
 behind it. A gap left before this rule existed, or one older than the year limit, needs a one-off
 `ingest-market-data --days N` reaching back over it, or a backfill with `--force-refresh`.
@@ -368,8 +375,9 @@ fetch overlapping date windows, and a provider may restate a recent rate.
 
 **Daily catch-up after an outage**: same rule as `raw_market_data`'s. A pair whose latest stored
 `rate_date` is older than `ingest-fx-rates`' window is fetched from that date, up to a year back
-(`get_latest_fx_dates`). The 2026-09 outage left every pair without rates for 09-04..09-14, the
-same hole, with the same known limit.
+(`get_latest_fx_dates`), and a pair with nothing stored is fetched from the start of its history.
+The 2026-09 outage left every pair without rates for 09-04..09-14, the same hole, with the same
+known limit.
 
 **Backfill loading pattern**: identical in shape to `raw_market_data`'s — `data-store
 backfill-fx-rates` fills the stretch of history each pair is still missing, using `fx_rates`

@@ -5,6 +5,10 @@ A fixed rolling window loses data for good when the DAG doesn't run for longer t
 the DAG didn't run from 2026-09-04 to 2026-09-22, the next run fetched only the 7 days before it,
 and 2026-09-04..09-14 was never stored for any ticker or currency pair. backfill can't repair
 that hole either, since it only fetches below a ticker's earliest stored date.
+
+A key with nothing stored is the same problem from the other end: fetching it the rolling window
+gives it rows, after which a plain backfill rerun counts it as done. BRK-B, BT-A.L, VOLV-B.ST and
+three more holdings sat at ~30 rows while Yahoo serves decades of their history.
 """
 
 import logging
@@ -95,10 +99,30 @@ def test_a_ticker_that_fell_behind_is_fetched_from_its_last_stored_close(monkeyp
     assert result["status"] == "ok"
 
 
-def test_a_ticker_with_nothing_stored_uses_the_normal_window(monkeypatch):
+def test_a_ticker_with_nothing_stored_is_fetched_from_the_start_of_its_history(monkeypatch):
     _, fetches, _ = _ingest_market_data(monkeypatch, ["NEW"], {})
 
-    assert fetches == [(["NEW"], START, END)]
+    assert fetches == [(["NEW"], pipeline.UNBOUNDED_EARLIEST_DATE, END)]
+
+
+def test_tickers_with_nothing_stored_share_one_fetch_apart_from_the_normal_window(monkeypatch):
+    _, fetches, _ = _ingest_market_data(
+        monkeypatch, ["AAPL", "BRK-B", "NEW"], {"AAPL": date(2026, 9, 19)}
+    )
+
+    assert fetches == [
+        (["BRK-B", "NEW"], pipeline.UNBOUNDED_EARLIEST_DATE, END),
+        (["AAPL"], START, END),
+    ]
+
+
+def test_fetching_a_tickers_full_history_is_logged_by_name(monkeypatch, caplog):
+    caplog.set_level(logging.INFO)
+
+    _ingest_market_data(monkeypatch, ["AAPL", "BRK-B"], {"AAPL": date(2026, 9, 19)})
+
+    assert "1 ticker(s) with nothing stored" in caplog.text
+    assert "BRK-B" in caplog.text
 
 
 def test_tickers_that_fell_behind_to_the_same_day_share_one_fetch(monkeypatch):
@@ -110,7 +134,9 @@ def test_tickers_that_fell_behind_to_the_same_day_share_one_fetch(monkeypatch):
 
 
 def test_the_lookup_asks_for_each_groups_tickers_under_its_source(monkeypatch):
-    _, _, lookups = _ingest_market_data(monkeypatch, ["AAPL", "MSFT"], {})
+    _, _, lookups = _ingest_market_data(
+        monkeypatch, ["AAPL", "MSFT"], {"AAPL": START, "MSFT": START}
+    )
 
     assert lookups == [("yfinance", ["AAPL", "MSFT"])]
 
@@ -256,10 +282,13 @@ def test_a_pair_that_fell_behind_is_fetched_from_its_last_stored_rate(monkeypatc
     assert result["rows_saved"] == 2
 
 
-def test_a_pair_with_nothing_stored_uses_the_normal_window(monkeypatch):
-    _, fetches, lookups = _ingest_fx_rates(monkeypatch, {})
+def test_a_pair_with_nothing_stored_is_fetched_from_the_start_of_its_history(monkeypatch):
+    _, fetches, lookups = _ingest_fx_rates(monkeypatch, {("EUR", "GBP"): date(2026, 9, 19)})
 
-    assert fetches == [([("EUR", "GBP"), ("EUR", "USD")], START, END)]
+    assert fetches == [
+        ([("EUR", "USD")], pipeline.UNBOUNDED_EARLIEST_DATE, END),
+        ([("EUR", "GBP")], START, END),
+    ]
     assert lookups == [("yfinance", [("EUR", "GBP"), ("EUR", "USD")])]
 
 

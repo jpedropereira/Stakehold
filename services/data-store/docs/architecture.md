@@ -334,8 +334,29 @@ same window again each time; and a run that's down for a day would still depend 
 history being intact. *Rejected:* no limit — a delisted ticker never catches up, so it would
 re-request its whole gap on every run forever. The limit is warned about by name when hit.
 
+**A key with nothing stored is fetched from the start of its history**, not the rolling window,
+by the same `_fetch_windows`. All such keys in a group share one fetch.
+
+*Why:* the daily ingest and backfill disagreed about who fills a new key's history. The daily
+ingest left it to backfill, but a plain backfill rerun treats any stored row as "already walked
+back" (`_backfill_window`). So once the daily ingest stored a rolling window, backfill skipped the
+key for good, and nothing schedules a backfill anyway. Six holdings the 2026-08-20 backfill missed
+(BRK-B among them) sat at about 30 rows. The fix belongs at the point where the first rows are
+written, which is the only moment "nothing stored" really does mean "no history fetched yet".
+
+*Rejected:* making backfill's skip rule stricter, e.g. "done only if rows reach back N years". The
+table records how far back rows exist, not how far back anything looked, and a recent listing
+legitimately has little history. *Rejected:* a scheduled backfill in `daily_pipeline` — on its
+own it still hits the same skip rule.
+
+*Cost:* a key the provider has no data for (delisted, mistyped) has nothing stored on every run,
+so it's requested from the start of its history every run. That costs one request per key, the
+same as the windowed request it replaces, and it comes back empty.
+
 *Known limit:* the catch-up starts from the latest stored date, so a hole *behind* it (one made
-before this rule existed) is not found. Repair is a one-off `--days N` run over it.
+before this rule existed) is not found. Repair is a one-off `--days N` run over it. Keys that
+already got a window before the full-history rule existed need a `backfill-market-data
+--force-refresh --ticker …`.
 
 **Market data ingest, regimes ingest, FX rates ingest and returns calculation share one DAG,
 `daily_pipeline`.** `ingest-market-data`, `ingest-regimes` and `ingest-fx-rates` start together

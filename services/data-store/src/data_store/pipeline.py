@@ -283,7 +283,13 @@ def _fetch_windows(
     instead, so a run after an outage longer than the window fills the outage rather than
     leaving a hole no later run reaches (backfill only fetches below a key's earliest stored
     date). The stored date itself is fetched again: restating it is harmless, and it keeps the
-    window simple. A key with nothing stored keeps start_date -- its history is backfill's job.
+    window simple.
+
+    A key with nothing stored is fetched from UNBOUNDED_EARLIEST_DATE, its whole history. It
+    can't be left to backfill: a plain backfill rerun treats any stored row as "already walked
+    back" (see _backfill_window), so the first rolling window stored here would hide the
+    missing history from it for good. BRK-B and five other holdings missed by the one-off
+    backfill sat at ~30 rows this way while Yahoo serves decades of theirs.
 
     The catch-up stops at catch_up_limit. A key last stored before it is most likely delisted,
     and fetching its whole gap daily would cost every run; a real outage that long is warned
@@ -298,11 +304,15 @@ def _fetch_windows(
 
     latest = latest_dates()
     starts: dict[date, list] = {}
+    unstored = []
     behind = []
     beyond_limit = []
     for key in keys:
         last = latest.get(key)
-        if last is None or last >= start_date:
+        if last is None:
+            key_start = UNBOUNDED_EARLIEST_DATE
+            unstored.append(key)
+        elif last >= start_date:
             key_start = start_date
         elif last < catch_up_limit:
             key_start = catch_up_limit
@@ -312,6 +322,14 @@ def _fetch_windows(
             behind.append(key)
         starts.setdefault(key_start, []).append(key)
 
+    if unstored:
+        logger.info(
+            "%s: %d %s(s) with nothing stored, so fetching their full history: %s",
+            flow,
+            len(unstored),
+            noun,
+            ", ".join(describe(key) for key in unstored),
+        )
     if behind:
         logger.info(
             "%s: %d %s(s) behind the window starting %s; catching up from as early as %s.",
