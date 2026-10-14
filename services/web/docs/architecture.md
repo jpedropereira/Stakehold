@@ -416,9 +416,11 @@ Every route `web` serves, with what it requires and which upstream calls it make
   `BACKTEST_PERIODS` for the column order, since web can't import portfolio's `Period`. A 422 is
   `InvalidPortfolioRequest`. Every other status, a 404 included, is `PortfolioUnavailable`: the
   route has no account, so `_raise_for_status`'s 404-means-`AccountNotFound` would mislead. An
-  asset portfolio can't backtest is a status in the result, never an error. Two checks go beyond
-  typing, so that a broken contract can't render as wrong figures: every row must have all seven
-  periods, and every growth line one value per date. A value can be null: a Max line before its
+  asset portfolio can't backtest is a status in the result, never an error. Three checks go
+  beyond typing, so that a broken contract can't render as wrong figures: every row must have all
+  seven periods, every growth line one value per date, and every period and the growth must carry
+  `left_out` (LB-10), since reading a missing one as "nothing left out" would pass the mix's
+  figure off as every asset's. A value can be null: a Max line before its
   asset's first day (LB-9). The shared 10 s timeout fits: the flow took
   about 2.2 s for 50 assets over Max against the dev data.
 - `rebuild_outcome.py` (UI-7) — pure. Turns the two rebuild statuses into the confirmation

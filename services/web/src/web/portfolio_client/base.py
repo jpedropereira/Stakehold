@@ -281,6 +281,9 @@ class BacktestPeriodReturn:
     covered: bool
     return_pct: Decimal | None
     gaps: int  # NULL returns bridged as flat days inside (start, end]
+    # The assets the mix's figure leaves out for not covering this period, in the mix's order
+    # (LB-9). Only ever non-empty on the mix's row; unavailable assets are in statuses instead.
+    left_out: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -304,6 +307,7 @@ class BacktestGrowth:
     dates: tuple[date, ...]
     mix: tuple[Decimal, ...] | None
     assets: dict[str, tuple[Decimal | None, ...] | None]
+    left_out: tuple[str, ...] = ()  # as BacktestPeriodReturn.left_out, for `period`
 
 
 @dataclass(frozen=True)
