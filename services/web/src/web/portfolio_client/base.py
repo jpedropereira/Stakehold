@@ -296,13 +296,14 @@ class BacktestRow:
 @dataclass(frozen=True)
 class BacktestGrowth:
     """Cumulative growth over `period`, as fractions: 0 on its first date. Every line has one
-    value per date. A line is None when its asset (or, for the mix, any asset) doesn't cover the
-    period."""
+    value per date. An asset's line is None when it doesn't cover the period, and the mix's only
+    when no asset does. For Max, an asset that starts later has None points until its first
+    day (LB-9)."""
 
     period: str
     dates: tuple[date, ...]
     mix: tuple[Decimal, ...] | None
-    assets: dict[str, tuple[Decimal, ...] | None]
+    assets: dict[str, tuple[Decimal | None, ...] | None]
 
 
 @dataclass(frozen=True)

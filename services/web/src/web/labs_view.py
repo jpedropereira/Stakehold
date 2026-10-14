@@ -68,10 +68,11 @@ def _chart_value(value: Decimal) -> float:
 
 def build_growth_payload(growth: BacktestGrowth) -> dict:
     """The growth chart's data island (static/labs_chart.js). Assets are a list, so they keep
-    the table's order; a line is None when it doesn't cover the period."""
+    the table's order; a line is None when it doesn't cover the period, and a point is None
+    before a late asset's Max line starts, which Chart.js draws as no line."""
 
     def line(values):
-        return None if values is None else [_chart_value(v) for v in values]
+        return None if values is None else [None if v is None else _chart_value(v) for v in values]
 
     return {
         "period": growth.period,
