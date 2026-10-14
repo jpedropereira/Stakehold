@@ -240,8 +240,10 @@ img.logo-on-dark {
 }
 
 /* The current choice reads as selected text rather than a link. aria-pressed carries the state
-   for assistive tech; this only mirrors it visually. The chart's view and range buttons too. */
-:is(.theme-toggle, .chart-toggle) [aria-pressed="true"] {
+   for assistive tech; this only mirrors it visually. The chart's view and range buttons too,
+   and /labs' period links, which are links to other pages and so carry aria-current. */
+:is(.theme-toggle, .chart-toggle) [aria-pressed="true"],
+.chart-toggle [aria-current="true"] {
   font-weight: 600;
   text-decoration: none;
 }
@@ -1186,6 +1188,74 @@ img.logo-on-dark {
   margin: var(--space-3) 0 0;
   font: var(--text-caption);
   color: var(--text-muted);
+}
+
+/* The growth chart (LB-8) under the table. The period links wrap like the chart's range
+   buttons on the other chart pages. */
+.labs-growth {
+  margin-top: var(--space-6);
+}
+
+.labs-periods {
+  flex-wrap: wrap;
+  margin-bottom: var(--space-4);
+}
+
+.chart-note {
+  margin: 0 0 var(--space-3);
+  font: var(--text-caption);
+  color: var(--text-muted);
+}
+
+/* The assets' show/hide boxes, under the chart. Rendered hidden: without the chart script they
+   would do nothing, so the script shows them. An explicit rule, because a display value here
+   would otherwise override [hidden]. A hairline above, like the transaction form's groups. */
+.labs-series {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-5);
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: var(--space-4) 0 0;
+  padding: var(--space-3) 0 0;
+  min-width: 0;
+}
+
+.labs-series[hidden] {
+  display: none;
+}
+
+.labs-series legend {
+  float: left;
+  width: 100%;
+  padding: 0;
+  font: var(--text-caption);
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+
+.labs-series .chart-note {
+  width: 100%;
+  margin: 0;
+}
+
+.labs-series label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  cursor: pointer;
+}
+
+/* The app's first checkboxes: ink, not the browser's blue. Not gold either, which on parchment
+   is under the 3:1 a control needs. */
+.labs-series input {
+  accent-color: var(--text);
+}
+
+.labs-series label:has(input:disabled) {
+  cursor: default;
 }
 
 /* ---- stacked tables (UI-13) ---- */

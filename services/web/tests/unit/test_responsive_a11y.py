@@ -646,6 +646,15 @@ def test_review_script_covers_every_chart_view_on_both_chart_pages():
             assert (path, click) in reviewed, f"{path} not reviewed with click {click}"
 
 
+def test_review_script_covers_the_labs_chart_with_and_without_an_asset_line():
+    """LB-8: the default period, the longest one, and an asset's line turned on."""
+    labs = [page for page in _review_script().PAGES if page.path.startswith("/labs")]
+
+    assert any(page.path == "/labs" and page.click is None for page in labs)
+    assert any(page.path == "/labs?period=Max" for page in labs)
+    assert any(page.click and "data-series" in page.click for page in labs)
+
+
 def test_review_script_covers_phone_tablet_desktop_laptop_and_wide():
     """LY-1: the empty sides only show at 1920px, and tables overflowed between 600px and about
     990px unseen, so the review covers each class of screen. LY-4: laptop sits just under the
