@@ -510,15 +510,22 @@ described here updates this file in the same change.
   and a zero would be read as one. It stays on one line like a figure. Wrapping it was tried and
   made rows three lines tall while the table still scrolled. So between phone width and about
   1000px the table scrolls in its `.table-scroll` box, like `/portfolio`'s, and stacks below
-  600px. Max's header carries its start date ("from 2021-11-01"). Stacked, the headers are
-  hidden, so Max's cell carries the date in a `data-start` attribute and its drawn label reads
-  "Max from …". Assets `portfolio` couldn't backtest are listed under "Not backtested" with
+  600px. Max's header carries the mix's start date ("from 2021-11-01"). Since LB-9 each
+  asset's Max is its whole history, so an asset whose history starts later shows its own
+  "from" date under its Max figure (LB-10); one that starts with the mix doesn't repeat the
+  header. Stacked, the headers are hidden, so each Max cell carries its row's own start in a
+  `data-start` attribute, its drawn label reads "Max from …", and the in-cell date is hidden.
+  The mix's figures cover only the assets whose history covers the period (LB-9). Under the
+  table, a muted note per run of periods names the rest: "From 3M to 5Y the mix leaves out
+  BRK-B: not enough history" (`labs_view.mix_left_out_runs`). A run ends where the set
+  changes, so each note says exactly which columns it qualifies. Assets `portfolio` couldn't backtest are listed under "Not backtested" with
   `portfolio`'s own reason. Holdings the page itself left out (no price yet, worth nothing, or
   beyond the 50-asset cap) are named in muted notes, one per reason, under everything else,
   since they qualify the figures without being part of them. Holdings and the backtest each
   fail on their own, and a backtest failure still shows the notes. No holding with a market
   value reads "Nothing to backtest yet" and links to Accounts, where transactions are added.
-  The terms backtest, buy and hold, and Max link to new glossary entries. Gains and losses use
+  The terms backtest, buy and hold, and Max link to new glossary entries; Max's anchor is
+  `max-period` (renamed in LB-10 from `longest-shared-history`, which LB-9 made untrue). Gains and losses use
   `delta`, so forest and oxblood appear only on figures. *Rejected: periods as rows and assets
   as columns*, which reads better for two assets but not for fifty.
 - **Labs mix form (LB-7): a GET form, so the mix is the URL.** Under the table and the chart,
@@ -583,20 +590,38 @@ described here updates this file in the same change.
     gold.* Gold is the one accent, and as a line on parchment it is 2.2:1, under WCAG 1.4.11's
     3:1 for a chart's marks (5.5:1 on dark). The checkboxes are tinted `--text` for the same
     reason: they are the app's first, and the browser's blue isn't in the palette.
-  - *Asset lines start hidden*: a mix can have 50 assets, and 50 lines would bury the mix. Each
-    asset has a checkbox under the chart (rendered `hidden`, since it does nothing without the
-    script); one with no line for the period is disabled and says "Not enough history". When
-    the mix itself has no line, the covered assets start shown, or the chart would open empty,
-    and a note says why the mix is missing. *Dead since LB-9:* the mix now lacks a line only
-    when no asset covers the period, so there is never a covered asset to show; LB-10 removes
-    the fallback. No line at
-    all reads "No asset's history covers …" and draws no chart, keeping the period links.
+  - *Asset lines start hidden, always*: a mix can have 50 assets, and 50 lines would bury the
+    mix. Each asset has a checkbox under the chart (rendered `hidden`, since it does nothing
+    without the script); one with no line for the period is disabled and says "Not enough
+    history". The mix is always the main line: since LB-9 it has one whenever any asset covers
+    the period, over just those assets, and a note above the chart names the ones it leaves out
+    ("Over 5Y the mix leaves out AAPL: not enough history"). *Removed in LB-10:* LB-8 turned the
+    covered assets on when the mix had no line. LB-9 made that state impossible, and on the dev
+    stack it had drawn 11 identical muted lines. No mix line now means no line at all, which
+    reads "No asset's history covers …" and draws no chart, keeping the period links.
+  - *Asset lines are named, not colored (LB-10)*. The palette has no colors to spare, so each
+    shown asset line carries its ticker at its last point, in `--font-mono`, drawn by a small
+    plugin inside `labs_chart.js` (no new vendor file). Labels that would overlap are pushed
+    apart vertically and kept inside the plot's height. A late asset's Max line is null before
+    its first day, so its label goes at its last non-null point. The labels sit in right padding
+    sized to the widest shown ticker, and are redrawn once the mono web font has loaded, since
+    a canvas doesn't wait for it. Hovering within 12px of a shown asset line raises it, as
+    hovering its box does. The tooltip has no color squares (`displayColors: false`), which
+    matched no line, and lists the mix first, then only the shown lines. *Rejected: a color per
+    asset*, which chapter II has no room for. *Rejected: a legend*, which would repeat the
+    checkboxes under the chart.
+  - *The date axis is capped by the plot's real width (LB-10)*. Chart.js's tick skipping sizes
+    the dates against a width that leaves out the y axis, so with the labels' padding at phone
+    width adjacent dates touched. `labs_chart.js` sets `maxTicksLimit` to the dates that fit
+    with a 12px gap, on every redraw and on resize.
   - *Shared, not copied*: the theme colors and the redraw on `stakehold:themechange` and on a
     `prefers-color-scheme` change moved out of `portfolio_chart.js` into
     `static/chart_theme.js` (`window.StakeholdChartTheme`), loaded before each chart script;
     the frame is the same `.chart-frame`, so `review_pages.py`'s chart-size check covers it.
-    The review adds `/labs?period=Max`, `/labs?period=5Y` (no mix line) and `/labs` with an
-    asset's line turned on.
+    The review adds `/labs?period=Max`, `/labs?period=5Y` (AAPL left out of the mix), `/labs`
+    with an asset's line turned on, and `/labs?period=Max` with both asset lines on (AAPL's
+    starts late, and the two labels are pushed apart). `review_pages.Page.click` takes a tuple
+    of selectors for that.
   - *Payload size*: the island's figures are floats to six significant digits, the fewest
     that keep the tooltip's hundredths of a percent exact (up to 10,000%). That is only about
     30% shorter than `portfolio`'s eight-place strings: a synthetic 50-asset, five-year Max

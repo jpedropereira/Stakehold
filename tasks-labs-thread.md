@@ -116,7 +116,7 @@ The previous chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archi
 | LB-7 | [web: edit the mix](#lb-7-web-edit-the-mix) | LB-6 | done |
 | LB-8 | [web: growth chart](#lb-8-web-growth-chart) | LB-6 | done |
 | LB-9 | [portfolio: mix over the assets that cover each period](#lb-9-portfolio-mix-over-the-assets-that-cover-each-period) | — | done |
-| LB-10 | [web: chart shows the mix, assets on demand](#lb-10-web-chart-shows-the-mix-assets-on-demand) | LB-7, LB-9 | ready |
+| LB-10 | [web: chart shows the mix, assets on demand](#lb-10-web-chart-shows-the-mix-assets-on-demand) | LB-7, LB-9 | done |
 
 ## Tasks
 
@@ -534,7 +534,7 @@ Files: `portfolio/labs/calculator.py`, `portfolio/api/` (the response model), th
 
 ### LB-10. web: chart shows the mix, assets on demand
 
-**Status:** blocked
+**Status:** done
 
 The user expects the chart to show the portfolio's returns, with assets as lines they choose.
 LB-8 instead turns every covered asset on when the mix has no line (`labs.html`, `checked`
@@ -574,6 +574,27 @@ no asset covers it.
 Files: `web/portfolio_client/{base,http_client}.py`, `web/labs_view.py`, `templates/labs.html`,
 `static/labs_chart.js`, `static/web.css`, `scripts/review_pages.py`, their tests,
 `services/web/docs/ui-architecture.md`.
+
+**As built:**
+- **`left_out`'s key is required, its fields default to `()`.** portfolio always sends it, so a
+  missing one is a malformed response, as `simple_return` was in LB-2. Reading it as "nothing
+  left out" would pass the mix's figure off as every asset's. The defaults kept every existing
+  fake building.
+- **The table's notes are runs of periods** (`labs_view.mix_left_out_runs`). A run ends where
+  the set changes, a period leaving nothing out included, so each note names exactly the
+  columns it qualifies. A single period reads "Over 1Y …", as the chart's note does.
+- **Max per row.** Each Max cell's `data-start` is its row's own start. An asset that starts
+  after the mix also shows "from …" under its figure, which the stacked layout hides, since
+  its drawn label already says it.
+- **The anchor is `max-period`.** The term's link text was already "Max".
+- **Line hover raises within 12px** of a shown asset line. LB-8 only raised a line from its box.
+- **The date axis is capped by the plot's width.** The labels' right padding showed that
+  Chart.js sizes its tick skipping against a width without the y axis. At phone width, adjacent
+  dates touched. `labs_chart.js` now sets `maxTicksLimit` from the measured width.
+- **The mix gets no end label.** Its weight and gain/loss color already set it apart.
+- `review_pages.py`'s fake now has AAPL starting in November 2021: left out of the mix's 5Y,
+  and joining its Max late. `labs-no-mix-line` became `labs-left-out`. `labs-two-lines` shows
+  both Max lines, whose labels collide, and `Page.click` takes a tuple for it.
 
 ## Deferred
 
