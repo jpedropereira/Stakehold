@@ -23,7 +23,7 @@ from portfolio.accounts.repository import Account
 from portfolio.datastore_client.http_client import HttpDataStoreClient
 from portfolio.holdings import flows as holdings_flows
 from portfolio.labs import flows as labs_flows
-from portfolio.labs.calculator import Period
+from portfolio.labs.calculator import BacktestResult, Period
 from portfolio.run_result import build_run_result
 from portfolio.settings import Settings, SettingsError, load_settings
 from portfolio.ticker_mapping.repository import TickerMappingRow
@@ -1324,6 +1324,7 @@ def get_backtest(
     logger.info("backtest: %d asset(s), growth series for %s.", len(assets), period)
     outcome = labs_flows.run_backtest(datastore_client, assets, period)
 
+    _log_mix_left_out(outcome.result)
     included = sum(1 for s in outcome.statuses if s.status == labs_flows.INCLUDED)
     left_out = len(outcome.statuses) - included
     if included:
@@ -1341,3 +1342,19 @@ def get_backtest(
     result = asdict(outcome.result)
     del result["unavailable"]  # `statuses` covers every asset left out, with its reason
     return {**result, "statuses": [asdict(s) for s in outcome.statuses]}
+
+
+def _log_mix_left_out(result: BacktestResult) -> None:
+    """One line per included asset the mix left out of any period for not covering it."""
+    if result.mix is None:
+        return
+    periods_by_ticker: dict[str, list[str]] = {}
+    for period, figure in result.mix.periods.items():
+        for ticker in figure.left_out:
+            periods_by_ticker.setdefault(ticker, []).append(period)
+    for ticker, periods in periods_by_ticker.items():
+        logger.info(
+            "backtest: the mix leaves out %s for %s: not enough history.",
+            ticker,
+            ", ".join(periods),
+        )

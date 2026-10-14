@@ -391,6 +391,9 @@ class PeriodReturnResponse(BaseModel):
     covered: bool
     return_pct: BacktestDecimal | None  # null exactly when not covered
     gaps: int  # NULL returns bridged as flat days inside (start, end]
+    # The mix's only: included assets that don't cover the period, so the mix left them out
+    # and re-weighted the rest. Always empty on an asset's row.
+    left_out: list[str] = []
 
 
 class BacktestRowResponse(BaseModel):
@@ -401,12 +404,14 @@ class BacktestRowResponse(BaseModel):
 
 class GrowthSeriesResponse(BaseModel):
     """Cumulative growth over `period`: 0 on its start date, then one point per trading day of
-    any asset. A line is null when its asset (or, for the mix, any asset) doesn't cover it."""
+    any asset. An asset's line is null when it doesn't cover the period, and the mix's only when
+    no asset does. For Max, an asset that starts later has null points until its first day."""
 
     period: Period
     dates: list[date]
     mix: list[BacktestDecimal] | None
-    assets: dict[str, list[BacktestDecimal] | None]
+    assets: dict[str, list[BacktestDecimal | None] | None]
+    left_out: list[str] = []  # as PeriodReturnResponse.left_out, for `period`
 
 
 class AssetStatusResponse(BaseModel):

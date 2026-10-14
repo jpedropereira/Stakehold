@@ -420,10 +420,22 @@ and the response is
     {"end_date", "mix": Row | null, "assets": [Row, ...], "growth": Growth | null,
      "statuses": [{"ticker", "status", "reason"}, ...]}
 
-where a `Row` is `{ticker, weight, periods: {"1M": {start, end, covered, return_pct, gaps},
-..., "Max": ...}}` and `Growth` is `{period, dates, mix, assets: {ticker: [...]}}`. Every figure
-is a fraction (0.10 is +10%), written in fixed-point. The arithmetic and its rules are in
-`labs/calculator.py`'s docstring.
+where a `Row` is `{ticker, weight, periods: {"1M": {start, end, covered, return_pct, gaps,
+left_out}, ..., "Max": ...}}` and `Growth` is `{period, dates, mix, assets: {ticker: [...]},
+left_out}`. Every figure is a fraction (0.10 is +10%), written in fixed-point. The arithmetic
+and its rules are in `labs/calculator.py`'s docstring.
+
+- **The mix holds the assets that cover each period (LB-9).** An included asset whose history
+  starts after a period's start is left out of the mix for that period, the rest are
+  re-weighted to 100%, and `left_out` names it, on the mix's period and on `growth`. It is
+  always empty on an asset's row, and never lists an asset that isn't `included` (its status
+  says why). The mix has no figure, and no growth line, only when no asset covers the period.
+- **Max is each asset's whole history.** An asset's Max `start` is its own first day; the
+  mix's is the earliest one. A later asset joins the mix on its first day, when the mix is split
+  again by the target weights. Its Max growth line is null on the dates before that day, so
+  every line still has one value per date.
+- The job logs one line per asset the mix left out, with the periods: "the mix leaves out BRK-B
+  for 3M, 6M, 1Y, 2Y, 5Y: not enough history."
 
 `labs/flows.run_backtest` fetches in two concurrent phases, through a pool of 8 threads:
 
