@@ -52,8 +52,9 @@ class Page:
     path: str
     # "anon", "user" or "admin": who is logged in when the page is opened.
     viewer: str
-    # Clicked once the page has loaded, for a state only a click reaches (an open dialog).
-    click: str | None = None
+    # Clicked once the page has loaded, for a state only a click reaches (an open dialog). A
+    # tuple is clicked in order.
+    click: str | tuple[str, ...] | None = None
 
 
 PAGES = [
@@ -104,9 +105,20 @@ PAGES = [
     Page("labs-added-row", "/labs", "user", click="[data-labs-add]"),
     # The longest period, and an asset's line shown beside the mix's (LB-8).
     Page("labs-max", "/labs?period=Max", "user"),
-    # AAPL doesn't cover 5Y, so the mix has no line and VWCE.DE's starts shown.
-    Page("labs-no-mix-line", "/labs?period=5Y", "user"),
+    # AAPL doesn't cover 5Y, so the mix's figure and line leave it out, and say so (LB-10).
+    Page("labs-left-out", "/labs?period=5Y", "user"),
     Page("labs-asset-line", "/labs", "user", click='.labs-series input[data-series="AAPL"]'),
+    # Both assets' Max lines, labelled at their ends: AAPL's starts late, and the two end close
+    # enough that their labels are pushed apart (LB-10).
+    Page(
+        "labs-two-lines",
+        "/labs?period=Max",
+        "user",
+        click=(
+            '.labs-series input[data-series="VWCE.DE"]',
+            '.labs-series input[data-series="AAPL"]',
+        ),
+    ),
     Page("glossary", "/glossary", "user"),
     # Followed from a holdings page's "Total return" header: the entry it lands on is marked.
     Page("glossary-total-return", "/glossary#total-return", "user"),
@@ -614,15 +626,17 @@ def _fakes():
 
         async def backtest(self, *, assets, period):
             """The review holdings' mix (VWCE.DE and AAPL; NEWCO.DE has no price, so the page
-            leaves it out). AAPL's history is too short for 5Y, so neither it nor the mix has
-            a 5Y figure or a 5Y line. 7203.T was never requested: it is there so the review shows
-            the list of assets portfolio couldn't backtest. The growth lines are smooth curves
-            ending at the period's figure, one point per weekday, and the mix is their buy and
-            hold."""
+            leaves it out). AAPL's history starts in November 2021: too short for 5Y, so the
+            mix's 5Y figure and line are VWCE.DE's alone and name AAPL as left out, and its Max
+            starts after the mix's, which joins it then (LB-9). The two Max lines end close
+            together, so their labels are pushed apart. 7203.T was never requested: it is there
+            so the review shows the list of assets portfolio couldn't backtest. The growth lines
+            are smooth curves ending at the period's figure, one point per weekday, and the mix
+            is their buy and hold."""
             returns = {
-                None: ("0.0123", "0.0410", "-0.0215", "0.1180", "0.2402", None, "0.3071"),
-                "VWCE.DE": ("0.0141", "0.0388", "-0.0102", "0.1305", "0.2650", "0.6120", "0.3390"),
-                "AAPL": ("0.0087", "0.0452", "-0.0440", "0.0930", "0.1910", None, "0.2442"),
+                None: ("0.0123", "0.0410", "-0.0215", "0.1180", "0.2402", "0.4120", "0.4950"),
+                "VWCE.DE": ("0.0141", "0.0388", "-0.0102", "0.1305", "0.2650", "0.4120", "0.4380"),
+                "AAPL": ("0.0087", "0.0452", "-0.0440", "0.0930", "0.1910", None, "0.4310"),
             }
             starts = (
                 date(2026, 9, 9),
@@ -631,26 +645,40 @@ def _fakes():
                 date(2025, 10, 9),
                 date(2024, 10, 9),
                 date(2021, 10, 9),
-                date(2021, 11, 1),  # Max: AAPL's first day in the review data
+                date(2019, 7, 25),  # Max: VWCE.DE's first day, so the mix's
             )
+            # Each asset's own Max start, where it is later than the mix's.
+            max_starts = {"AAPL": date(2021, 11, 1)}
+            column = BACKTEST_PERIODS.index(period)
+
+            def figures_of(ticker):
+                # An edited mix can name a ticker the review data has no figures for.
+                return returns.get(ticker, returns["VWCE.DE"])
+
+            def left_out_of(p):
+                """The assets with no figure for period `p`, which the mix's leaves out."""
+                return tuple(
+                    t for t, _ in assets if figures_of(t)[BACKTEST_PERIODS.index(p)] is None
+                )
+
+            covered = [(t, w) for t, w in assets if t not in left_out_of(period)]
 
             def row(ticker, weight):
-                # An edited mix can name a ticker the review data has no figures for.
-                figures = returns.get(ticker, returns["VWCE.DE"])
+                figures = figures_of(ticker)
                 periods = {
                     p: BacktestPeriodReturn(
-                        start=start,
+                        start=max_starts.get(ticker, start) if p == "Max" else start,
                         end=today,
                         covered=figure is not None,
                         return_pct=None if figure is None else Decimal(figure),
                         gaps=0,
+                        left_out=left_out_of(p) if ticker is None else (),
                     )
                     for p, start, figure in zip(BACKTEST_PERIODS, starts, figures, strict=True)
                 }
                 return BacktestRow(ticker=ticker, weight=weight, periods=periods)
 
             total = sum((w for _, w in assets), Decimal("0"))
-            column = BACKTEST_PERIODS.index(period)
             days = [
                 starts[column] + timedelta(days=n)
                 for n in range((today - starts[column]).days + 1)
@@ -658,30 +686,57 @@ def _fakes():
             ]
 
             def line(ticker, wobble):
-                figure = returns[ticker][column]
+                figure = figures_of(ticker)[column]
                 if figure is None:
                     return None
-                last = len(days) - 1
+                # A late Max line is null before its own first day, then 0 on it.
+                first = 0
+                if period == "Max" and ticker in max_starts:
+                    first = next(i for i, d in enumerate(days) if d >= max_starts[ticker])
+                last = len(days) - 1 - first
                 return tuple(
-                    Decimal(str(round(float(figure) * i / last + wobble * math.sin(i / 9), 6)))
+                    (
+                        None
+                        if i < first
+                        else Decimal(
+                            str(
+                                round(
+                                    float(figure) * (i - first) / last
+                                    + wobble * math.sin((i - first) / 9),
+                                    6,
+                                )
+                            )
+                        )
+                    )
                     for i in range(len(days))
                 )
 
             lines = {t: line(t, 0.004 * (k + 1) * (-1) ** k) for k, (t, _) in enumerate(assets)}
-            covered = all(v is not None for v in lines.values())
-            mix_line = (
-                tuple(
-                    sum((w / total * (1 + v[i]) for (t, w), v in zip(assets, lines.values()))) - 1
-                    for i in range(len(days))
-                )
-                if covered
-                else None
-            )
+
+            def mix_line():
+                """Buy and hold over the covered assets, split again by their weights each
+                time a late one joins."""
+                if not covered:
+                    return None
+                values, base, segment, weights = [], Decimal("1"), 0, {}
+                for i in range(len(days)):
+                    present = [(t, w) for t, w in covered if lines[t][i] is not None]
+                    if {t for t, _ in present} != set(weights):
+                        base = base if i == 0 else 1 + values[-1]
+                        segment = i
+                        held = sum((w for _, w in present), Decimal("0"))
+                        weights = {t: w / held for t, w in present}
+                    growth = sum(
+                        w * (1 + lines[t][i]) / (1 + lines[t][segment]) for t, w in weights.items()
+                    )
+                    values.append(base * growth - 1)
+                return tuple(values)
+
             return Backtest(
                 end_date=today,
                 mix=row(None, Decimal("1")),
                 assets=tuple(row(t, w / total) for t, w in assets),
-                growth=BacktestGrowth(period, tuple(days), mix_line, lines),
+                growth=BacktestGrowth(period, tuple(days), mix_line(), lines, left_out_of(period)),
                 statuses=tuple(BacktestAssetStatus(t, "included", None) for t, _ in assets)
                 + (
                     BacktestAssetStatus(
@@ -811,8 +866,9 @@ def _review(browser, base_url, page_spec, theme, width_name, out) -> list[str]:
     page.on("console", on_console)
     page.on("pageerror", lambda e: console.append(str(e)))
     page.goto(url, wait_until="networkidle")
-    if page_spec.click:
-        page.click(page_spec.click)
+    clicks = (page_spec.click,) if isinstance(page_spec.click, str) else page_spec.click or ()
+    for selector in clicks:
+        page.click(selector)
 
     # Before the checks: the focus walk scrolls whatever it tabs into.
     page.screenshot(path=out / f"{page_spec.name}-{theme}-{width_name}.png", full_page=True)
