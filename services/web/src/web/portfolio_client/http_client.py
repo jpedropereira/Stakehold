@@ -339,6 +339,16 @@ def _int(item: dict, key: str) -> int:
     return value
 
 
+def _tickers(item: dict, key: str) -> tuple[str, ...]:
+    """A required list of tickers. portfolio always sends `left_out`, so a missing key is a
+    contract break: reading it as "none left out" would let the mix's figure pass for every
+    asset's."""
+    value = item[key]
+    if not isinstance(value, list) or not all(isinstance(t, str) for t in value):
+        raise TypeError(f"{key} is not a list of tickers")
+    return tuple(value)
+
+
 def _backtest_period(item: dict) -> BacktestPeriodReturn:
     return BacktestPeriodReturn(
         start=date.fromisoformat(item["start"]),
@@ -346,6 +356,7 @@ def _backtest_period(item: dict) -> BacktestPeriodReturn:
         covered=_bool(item, "covered"),
         return_pct=_opt_decimal(item["return_pct"]),
         gaps=_int(item, "gaps"),
+        left_out=_tickers(item, "left_out"),
     )
 
 
@@ -380,6 +391,7 @@ def _backtest_growth(item: dict) -> BacktestGrowth:
         dates=dates,
         mix=_growth_line(item["mix"], len(dates)),
         assets={t: _growth_line(v, len(dates)) for t, v in item["assets"].items()},
+        left_out=_tickers(item, "left_out"),
     )
 
 

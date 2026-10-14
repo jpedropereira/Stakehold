@@ -31,8 +31,15 @@ def _client(handler) -> HttpPortfolioClient:
     return HttpPortfolioClient(http_client, INTERNAL_SECRET)
 
 
-def _period(return_pct="0.01000000", *, start="2026-09-09", covered=True, gaps=0):
-    return {"start": start, "end": END, "covered": covered, "return_pct": return_pct, "gaps": gaps}
+def _period(return_pct="0.01000000", *, start="2026-09-09", covered=True, gaps=0, left_out=()):
+    return {
+        "start": start,
+        "end": END,
+        "covered": covered,
+        "return_pct": return_pct,
+        "gaps": gaps,
+        "left_out": list(left_out),
+    }
 
 
 def _row(ticker, weight, **overrides):
@@ -54,6 +61,7 @@ def _body(**changes):
                 "VWCE.DE": ["0.00000000", "0.00500000", "0.01200000"],
                 "IWDA.AS": ["0.00000000", "0.00250000", "0.00700000"],
             },
+            "left_out": [],
         },
         "statuses": [
             {"ticker": "VWCE.DE", "status": "included", "reason": None},
@@ -140,6 +148,7 @@ async def test_backtest_keeps_an_asset_that_isnt_included_apart():
             "dates": ["2026-09-09", END],
             "mix": None,
             "assets": {"VWCE.DE": None},
+            "left_out": [],
         },
         statuses=[
             {"ticker": "VWCE.DE", "status": "included", "reason": None},
@@ -169,12 +178,29 @@ async def test_backtest_keeps_the_null_points_before_a_late_assets_max_line_star
             "dates": ["2026-09-09", "2026-09-10", END],
             "mix": ["0.00000000", "0.00400000", "0.01000000"],
             "assets": {"VWCE.DE": None, "IWDA.AS": [None, "0.00000000", "0.00700000"]},
+            "left_out": [],
         }
     )
 
     result = await _ok(body).backtest(assets=[("IWDA.AS", Decimal("1"))], period="Max")
 
     assert result.growth.assets["IWDA.AS"] == (None, Decimal("0"), Decimal("0.007"))
+
+
+async def test_backtest_names_the_assets_the_mix_left_out():
+    # LB-9: a period an asset doesn't cover leaves it out of the mix's figure and line.
+    body = _body(
+        mix=_row(None, "1", **{"1Y": _period(left_out=["IWDA.AS"])}),
+        growth=_growth(period="1Y", left_out=["IWDA.AS"]),
+    )
+
+    result = await _ok(body).backtest(
+        assets=[("VWCE.DE", Decimal("1")), ("IWDA.AS", Decimal("1"))], period="1Y"
+    )
+
+    assert result.mix.periods["1Y"].left_out == ("IWDA.AS",)
+    assert result.mix.periods["1M"].left_out == ()
+    assert result.growth.left_out == ("IWDA.AS",)
 
 
 async def test_backtest_with_no_asset_included():
@@ -245,6 +271,10 @@ def _growth(**changes):
     return {**_body()["growth"], **changes}
 
 
+def _period_without(key):
+    return _without(_period(), key)
+
+
 @pytest.mark.parametrize(
     "body",
     [
@@ -267,6 +297,17 @@ def _growth(**changes):
             _body(statuses=[{"ticker": "VWCE.DE", "status": "included"}]),
             id="status-missing-reason",
         ),
+        # portfolio always sends left_out; a missing one is a contract break, not "none".
+        pytest.param(
+            _body(mix=_row(None, "1", **{"1M": _period_without("left_out")})),
+            id="period-missing-left-out",
+        ),
+        pytest.param(_body(growth=_without(_growth(), "left_out")), id="growth-missing-left-out"),
+        pytest.param(
+            _body(mix=_row(None, "1", **{"1M": {**_period(), "left_out": "IWDA.AS"}})),
+            id="left-out-is-a-string",
+        ),
+        pytest.param(_body(growth=_growth(left_out=[None])), id="left-out-holds-a-non-string"),
     ],
 )
 async def test_backtest_malformed_body_raises_portfolio_unavailable(body):
