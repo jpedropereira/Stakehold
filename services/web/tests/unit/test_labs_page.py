@@ -1,7 +1,8 @@
 """GET /labs (LB-6): the user's current holdings backtested over 1M to Max -- the period table,
 the assets portfolio couldn't backtest, the holdings left out of the mix, and the empty and
 error states. LB-7: the form that edits the mix, held in the query string. LB-8: the growth
-chart for one period, chosen in the query string.
+chart for one period, chosen in the query string. LB-10: the assets the mix leaves out for
+not covering a period, each row's own Max start, and asset lines that always start hidden.
 
 Like test_portfolio_page.py, it carries its own minimal fakes: only the calls this one page makes.
 """
@@ -135,23 +136,29 @@ def _holding(ticker, value):
     )
 
 
-def _periods(returns):
+def _periods(returns, max_start=MAX_START, left_out=None):
     """A row's periods from {period: fraction or None}; a period not given is 0, None is
-    "Not enough history"."""
+    "Not enough history". `left_out` is {period: tickers} for the mix's row."""
+    left_out = left_out or {}
     return {
         p: BacktestPeriodReturn(
-            start=MAX_START if p == "Max" else date(2025, 10, 9),
+            start=max_start if p == "Max" else date(2025, 10, 9),
             end=END,
             covered=returns.get(p, "0") is not None,
             return_pct=None if returns.get(p, "0") is None else Decimal(returns.get(p, "0")),
             gaps=0,
+            left_out=tuple(left_out.get(p, ())),
         )
         for p in BACKTEST_PERIODS
     }
 
 
-def _row(ticker, weight, **returns):
-    return BacktestRow(ticker=ticker, weight=Decimal(weight), periods=_periods(returns))
+def _row(ticker, weight, *, max_start=MAX_START, left_out=None, **returns):
+    return BacktestRow(
+        ticker=ticker,
+        weight=Decimal(weight),
+        periods=_periods(returns, max_start, left_out),
+    )
 
 
 def _status(ticker, status="included", reason=None):
@@ -180,7 +187,7 @@ def _with_a_backtest(fake_portfolio):
     )
 
 
-def _growth(mix, assets, period="1Y"):
+def _growth(mix, assets, period="1Y", left_out=()):
     """A growth series over three days; a line given as None doesn't cover the period."""
     line = lambda values: None if values is None else tuple(Decimal(v) for v in values)  # noqa
     return BacktestGrowth(
@@ -188,7 +195,12 @@ def _growth(mix, assets, period="1Y"):
         dates=(date(2025, 10, 9), date(2025, 10, 10), date(2025, 10, 13)),
         mix=line(mix),
         assets={ticker: line(values) for ticker, values in assets.items()},
+        left_out=tuple(left_out),
     )
+
+
+def _text(html):
+    return " ".join(re.sub(r"<[^>]+>", "", html).split())
 
 
 def _page(test_client, query=""):
@@ -381,6 +393,82 @@ def test_a_period_longer_than_the_history_says_so_for_the_asset_and_the_mix(clie
     assert "Not enough history" in _cell(vwrl, "5Y")
     assert "Not enough history" not in _cell(iwda, "5Y")
     assert "mono" not in _cell(vwrl, "5Y")
+
+
+def _with_a_short_history(fake_portfolio, left_out):
+    """VWRL.AS's history is too short for some periods; `left_out` is {period: tickers} on the
+    mix's row."""
+    result = fake_portfolio.backtest_result
+    fake_portfolio.backtest_result = Backtest(
+        end_date=END,
+        mix=_row(None, "1", left_out=left_out),
+        assets=result.assets,
+        growth=result.growth,
+        statuses=result.statuses,
+    )
+
+
+def _table_notes(html):
+    """The notes between the table and the growth section."""
+    between = html.split("</table>", 1)[1].split('<section class="labs-growth"', 1)[0]
+    return [_text(note) for note in re.findall(r'<p class="labs-note">(.*?)</p>', between, re.S)]
+
+
+def test_the_mix_names_the_assets_it_leaves_out_by_run_of_periods(client):
+    """LB-9: the mix's figure covers only the assets whose history covers the period. The note
+    says which columns that changes, once per run of periods."""
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_backtest(fake_portfolio)
+    _with_a_short_history(
+        fake_portfolio,
+        {p: ["VWRL.AS"] for p in ("3M", "6M", "1Y", "2Y")} | {"5Y": ["IWDA.AS", "VWRL.AS"]},
+    )
+
+    html = _page(test_client)
+
+    assert _table_notes(html) == [
+        "From 3M to 2Y the mix leaves out VWRL.AS: not enough history.",
+        "Over 5Y the mix leaves out IWDA.AS, VWRL.AS: not enough history.",
+    ]
+    between = html.split("</table>", 1)[1].split('<section class="labs-growth"', 1)[0]
+    assert '<span class="mono">IWDA.AS, VWRL.AS</span>' in between
+
+
+def test_no_left_out_note_when_the_mix_covers_every_asset(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_backtest(fake_portfolio)
+
+    assert _table_notes(_page(test_client)) == []
+
+
+def test_an_asset_whose_max_starts_later_shows_its_own_start(client):
+    """LB-9: each asset's Max is its whole history, and the mix's starts on the earliest
+    asset's first day, so the header's date is the mix's and a later one is the asset's own."""
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_backtest(fake_portfolio)
+    result = fake_portfolio.backtest_result
+    fake_portfolio.backtest_result = Backtest(
+        end_date=END,
+        mix=result.mix,
+        assets=(
+            _row("IWDA.AS", "0.75"),
+            _row("VWRL.AS", "0.25", max_start=date(2024, 1, 2)),
+        ),
+        growth=result.growth,
+        statuses=result.statuses,
+    )
+
+    mix, iwda, vwrl = _body_rows(_page(test_client))
+
+    assert '<span class="mono">2024-01-02</span>' in _cell(vwrl, "Max")
+    assert re.search(r'data-label="Max"[^>]*data-start="2024-01-02"', vwrl)
+    # The same start as the mix's: the header already says it.
+    assert "period-start" not in _cell(iwda, "Max")
+    assert re.search(r'data-label="Max"[^>]*data-start="2021-03-15"', iwda)
+    assert "period-start" not in _cell(mix, "Max")
 
 
 def test_assets_portfolio_couldnt_backtest_are_listed_with_their_reason(client):
@@ -666,7 +754,10 @@ def test_the_data_island_carries_every_series_for_the_period(client):
         mix=fake_portfolio.backtest_result.mix,
         assets=fake_portfolio.backtest_result.assets,
         growth=_growth(
-            mix=None, assets={"IWDA.AS": ("0", "0.02", "-0.04"), "VWRL.AS": None}, period="5Y"
+            mix=("0", "0.02", "-0.04"),
+            assets={"IWDA.AS": ("0", "0.02", "-0.04"), "VWRL.AS": None},
+            period="5Y",
+            left_out=("VWRL.AS",),
         ),
         statuses=fake_portfolio.backtest_result.statuses,
     )
@@ -676,11 +767,12 @@ def test_the_data_island_carries_every_series_for_the_period(client):
     assert island == {
         "period": "5Y",
         "dates": ["2025-10-09", "2025-10-10", "2025-10-13"],
-        "mix": None,
+        "mix": [0.0, 0.02, -0.04],
         "assets": [
             {"ticker": "IWDA.AS", "values": [0.0, 0.02, -0.04]},
             {"ticker": "VWRL.AS", "values": None},
         ],
+        "left_out": ["VWRL.AS"],
     }
 
 
@@ -714,21 +806,30 @@ def test_asset_lines_start_hidden_beside_the_mixs(client):
     assert not [box for box in boxes if "checked" in box]
 
 
-def test_asset_toggles_ship_hidden_one_per_asset_in_table_order(client):
-    """Without the script they'd do nothing, so it reveals them. An asset with no line for the
-    period can't be shown, and says why. With no mix line, the assets' lines start shown, or
-    the chart would start empty."""
-    test_client, fake_auth, fake_portfolio = client
-    _logged_in(test_client, fake_auth)
-    _with_a_backtest(fake_portfolio)
+def _with_a_line_leaving_out_vwrl(fake_portfolio):
+    """LB-9: VWRL.AS doesn't cover 1Y, so it has no line and the mix's line is IWDA.AS's."""
     result = fake_portfolio.backtest_result
     fake_portfolio.backtest_result = Backtest(
         end_date=END,
         mix=result.mix,
         assets=result.assets,
-        growth=_growth(mix=None, assets={"IWDA.AS": ("0", "0.1", "0.2"), "VWRL.AS": None}),
+        growth=_growth(
+            mix=("0", "0.1", "0.2"),
+            assets={"IWDA.AS": ("0", "0.1", "0.2"), "VWRL.AS": None},
+            left_out=("VWRL.AS",),
+        ),
         statuses=result.statuses,
     )
+
+
+def test_asset_toggles_ship_hidden_one_per_asset_in_table_order(client):
+    """Without the script they'd do nothing, so it reveals them. An asset with no line for the
+    period can't be shown, and says why. Every box starts unchecked even when the mix leaves an
+    asset out (LB-10): the mix is always the main line."""
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_backtest(fake_portfolio)
+    _with_a_line_leaving_out_vwrl(fake_portfolio)
 
     section = _growth_section(_page(test_client))
 
@@ -737,38 +838,32 @@ def test_asset_toggles_ship_hidden_one_per_asset_in_table_order(client):
     boxes = re.findall(r"<input [^>]*>", toggles.group(0))
     assert len(boxes) == 2
     assert 'data-series="IWDA.AS"' in boxes[0] and "disabled" not in boxes[0]
-    assert "checked" in boxes[0]
     assert 'data-series="VWRL.AS"' in boxes[1] and "disabled" in boxes[1]
-    assert "checked" not in boxes[1]
+    assert not [box for box in boxes if "checked" in box]
     labels = re.findall(r"<label[^>]*>(.*?)</label>", toggles.group(0), re.S)
     assert "Not enough history" in labels[1] and "Not enough history" not in labels[0]
+    assert "The heavier line is the mix." in toggles.group(0)
 
 
-def test_a_mix_without_a_line_for_the_period_says_why(client):
+def test_a_mix_line_that_leaves_assets_out_names_them(client):
     test_client, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)
     _with_a_backtest(fake_portfolio)
-    result = fake_portfolio.backtest_result
-    fake_portfolio.backtest_result = Backtest(
-        end_date=END,
-        mix=result.mix,
-        assets=result.assets,
-        growth=_growth(mix=None, assets={"IWDA.AS": ("0", "0.1", "0.2"), "VWRL.AS": None}),
-        statuses=result.statuses,
-    )
+    _with_a_line_leaving_out_vwrl(fake_portfolio)
 
     section = _growth_section(_page(test_client))
 
-    assert "The mix has no line for 1Y" in section
+    notes = [_text(n) for n in re.findall(r'<p class="chart-note">(.*?)</p>', section, re.S)]
+    assert "Over 1Y the mix leaves out VWRL.AS: not enough history." in notes
     assert '<canvas id="labs-chart"' in section
 
 
-def test_a_full_mix_has_no_coverage_note(client):
+def test_a_mix_line_over_every_asset_has_no_left_out_note(client):
     test_client, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)
     _with_a_backtest(fake_portfolio)
 
-    assert "has no line" not in _growth_section(_page(test_client))
+    assert "leaves out" not in _growth_section(_page(test_client))
 
 
 def test_no_line_at_all_draws_no_chart_but_keeps_the_period_links(client):

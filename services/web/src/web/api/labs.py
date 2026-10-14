@@ -43,6 +43,7 @@ from web.labs_view import (
     DefaultMix,
     build_default_mix,
     build_growth_payload,
+    mix_left_out_runs,
 )
 from web.portfolio_client.base import BACKTEST_PERIODS, Backtest, PortfolioClient
 from web.portfolio_client.errors import InvalidPortfolioRequest, PortfolioClientError
@@ -223,6 +224,9 @@ async def labs(
                 None
                 if backtest is None or backtest.growth is None
                 else build_growth_payload(backtest.growth)
+            ),
+            "left_out_runs": (
+                [] if backtest is None or backtest.mix is None else mix_left_out_runs(backtest.mix)
             ),
             "unavailable": (
                 [] if backtest is None else [s for s in backtest.statuses if s.status != "included"]

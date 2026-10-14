@@ -1,5 +1,6 @@
 """The mix /labs backtests (LB-6): the user's current holdings, weighted by market value. And
-the growth chart's data island (LB-8).
+the growth chart's data island (LB-8), and the periods the mix's figures leave assets out of
+(LB-10).
 
 Pure, like portfolio_view.py: the router fetches, this decides what is sent. Editing the mix
 (LB-7) replaces this default; it doesn't change how a mix is backtested.
@@ -9,7 +10,12 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 
-from web.portfolio_client.base import BacktestGrowth, Holding
+from web.portfolio_client.base import (
+    BACKTEST_PERIODS,
+    BacktestGrowth,
+    BacktestRow,
+    Holding,
+)
 from web.portfolio_view import build_portfolio_holdings
 
 # portfolio's POST /labs/backtest rejects a larger mix with a 422 (LB-4). Mirrored here so a
@@ -59,6 +65,35 @@ def build_default_mix(holdings: Sequence[Holding]) -> DefaultMix:
     )
 
 
+@dataclass(frozen=True)
+class LeftOutRun:
+    """Consecutive periods, `first` to `last` in BACKTEST_PERIODS order, whose mix figure leaves
+    out the same `tickers` for not covering them."""
+
+    first: str
+    last: str
+    tickers: tuple[str, ...]
+
+
+def mix_left_out_runs(mix: BacktestRow) -> list[LeftOutRun]:
+    """The mix's left-out assets as runs of periods, for one note each under the table.
+
+    A run ends where the set changes, a period leaving nothing out included: the notes then say
+    exactly which columns each applies to. A short history is usually left out of every period
+    from some length up, so this is most often one run, e.g. 3M to 5Y.
+    """
+    runs: list[LeftOutRun] = []
+    previous: tuple[str, ...] = ()
+    for period in BACKTEST_PERIODS:
+        tickers = mix.periods[period].left_out
+        if tickers and tickers == previous:
+            runs[-1] = LeftOutRun(runs[-1].first, period, tickers)
+        elif tickers:
+            runs.append(LeftOutRun(period, period, tickers))
+        previous = tickers
+    return runs
+
+
 def _chart_value(value: Decimal) -> float:
     """A growth fraction to six significant digits, about 30% shorter in JSON than portfolio's
     eight-place strings. Not fewer: the tooltip shows hundredths of a percent, which six digits
@@ -81,4 +116,6 @@ def build_growth_payload(growth: BacktestGrowth) -> dict:
         "assets": [
             {"ticker": ticker, "values": line(values)} for ticker, values in growth.assets.items()
         ],
+        # The page names these under the chart; the script doesn't read them.
+        "left_out": list(growth.left_out),
     }
