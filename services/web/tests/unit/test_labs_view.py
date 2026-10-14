@@ -112,6 +112,12 @@ def test_growth_payload_keeps_the_assets_order_and_their_missing_lines():
     }
 
 
+def test_growth_payload_keeps_a_late_assets_null_points():
+    growth = _growth(mix=(Decimal("0"), Decimal("0.5")), assets={"A": (None, Decimal("0"))})
+
+    assert build_growth_payload(growth)["assets"] == [{"ticker": "A", "values": [None, 0.0]}]
+
+
 def test_growth_payload_rounds_to_six_significant_digits():
     """Shorter than portfolio's eight-place strings, and still exact to the hundredth of a
     percent the tooltip shows."""

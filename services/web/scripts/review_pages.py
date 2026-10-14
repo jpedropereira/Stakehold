@@ -91,6 +91,17 @@ PAGES = [
     Page("tickers-user", "/tickers", "user"),
     Page("tickers-new", "/tickers/new?symbol=SXR8.DE", "user"),
     Page("labs", "/labs", "user"),
+    # LB-7: an edited mix whose weights add up to 120%, a form with an error of every kind
+    # (the table keeps the last mix that worked), and a row added in place by labs_form.js.
+    Page("labs-edited", "/labs?ticker=VWCE.DE&weight=70&ticker=AAPL&weight=50", "user"),
+    Page(
+        "labs-errors",
+        "/labs?ticker=VWCE.DE&weight=60&ticker=NOPE.XX&weight=20&ticker=AAPL&weight=0"
+        "&ticker=vwce.de&weight=20&last_ticker=VWCE.DE&last_weight=60&last_ticker=AAPL"
+        "&last_weight=40",
+        "user",
+    ),
+    Page("labs-added-row", "/labs", "user", click="[data-labs-add]"),
     # The longest period, and an asset's line shown beside the mix's (LB-8).
     Page("labs-max", "/labs?period=Max", "user"),
     # AAPL doesn't cover 5Y, so the mix has no line and VWCE.DE's starts shown.
@@ -624,6 +635,8 @@ def _fakes():
             )
 
             def row(ticker, weight):
+                # An edited mix can name a ticker the review data has no figures for.
+                figures = returns.get(ticker, returns["VWCE.DE"])
                 periods = {
                     p: BacktestPeriodReturn(
                         start=start,
@@ -632,9 +645,7 @@ def _fakes():
                         return_pct=None if figure is None else Decimal(figure),
                         gaps=0,
                     )
-                    for p, start, figure in zip(
-                        BACKTEST_PERIODS, starts, returns[ticker], strict=True
-                    )
+                    for p, start, figure in zip(BACKTEST_PERIODS, starts, figures, strict=True)
                 }
                 return BacktestRow(ticker=ticker, weight=weight, periods=periods)
 

@@ -1258,6 +1258,93 @@ img.logo-on-dark {
   cursor: default;
 }
 
+/* The rows space themselves; the card's form gap would double it. */
+.card form.labs-form {
+  gap: 0;
+}
+
+/* The mix form (LB-7): one line per asset, the ticker taking the room left by a narrow weight
+   and the Remove action. A field's error takes the row's full width below it. */
+.labs-row {
+  display: grid;
+  /* A fixed last column, so the empty row, which has no Remove, lines up with the rest. */
+  grid-template-columns: minmax(0, 1fr) 7.5rem 4rem;
+  gap: 0 var(--space-3);
+  align-items: end;
+  padding-bottom: var(--space-2);
+}
+
+.labs-row .field {
+  margin-top: 0;
+}
+
+.labs-row .field input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* Beside the inputs' text, not their labels: the inputs' padding plus a hairline. */
+.labs-remove {
+  justify-self: end;
+  padding-bottom: 12px;
+}
+
+/* The first row's labels head the columns; below it each row's labels are only for screen
+   readers, as .visually-hidden hides them. */
+.labs-row + .labs-row label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* The charter's ink rule for errors (chapter II), as the banner draws it: a bar in the text
+   color and a bold lead, never oxblood, which means a loss. The invalid input carries the same
+   ink on its edge. */
+.labs-row-error {
+  grid-column: 1 / -1;
+  margin: var(--space-2) 0 0;
+  padding-left: var(--space-3);
+  border-left: 3px solid var(--text);
+  font: var(--text-caption);
+  color: var(--text);
+}
+
+.labs-row input[aria-invalid="true"] {
+  border-color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--text);
+}
+
+.labs-total {
+  margin: var(--space-2) 0 0;
+  font: var(--text-caption);
+  color: var(--text-muted);
+}
+
+.labs-total .mono {
+  color: var(--text);
+}
+
+.labs-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+}
+
+/* The row-height of the primary button, so the three actions line up. */
+.labs-actions .btn-secondary {
+  padding: var(--space-3);
+}
+
+/* labs_form.js unhides it; an explicit rule, since .btn's display would override [hidden]. */
+.labs-actions [hidden] {
+  display: none;
+}
+
 /* ---- stacked tables (UI-13) ---- */
 
 /* The holdings and transactions tables at phone width: each row becomes a block with the
@@ -1349,6 +1436,14 @@ img.logo-on-dark {
     overflow: hidden;
     text-overflow: ellipsis;
     vertical-align: middle;
+  }
+}
+
+/* A phone's width goes to the ticker; a weight needs only a few digits. */
+@media (max-width: 600px) {
+  .labs-row {
+    grid-template-columns: minmax(0, 1fr) 4.5rem 3.75rem;
+    gap: 0 var(--space-2);
   }
 }
 

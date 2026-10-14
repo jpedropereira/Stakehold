@@ -32,14 +32,27 @@ The previous chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archi
   - **End date.** Every period ends on the latest date for which every asset in the mix has data.
   - **Start date.** Each period starts that many calendar months earlier. The day of the month is
     clamped, as `rangeStart` in `portfolio_chart.js` already does.
-  - **Max** starts at the latest first date among the mix's assets, which is the longest history
-    they all share.
+  - **Max** is each asset's whole history. The mix's Max starts on the earliest asset's first
+    date, and each other asset joins on its own first date. *Changed in LB-9:* Max was the
+    longest history all the assets shared, so one recently onboarded ticker cut every row's Max
+    to its few weeks.
   - **Short history.** A period longer than an asset's history shows "Not enough history" for
-    that asset. The mix's figure for that period is shown only when every asset covers it.
+    that asset. The mix's figure and growth line for that period use only the assets that
+    cover it, re-weighted to 100%, and the page names the assets left out. The mix has no
+    figure only when no asset covers the period. *Changed in LB-9:* the rule was that the mix
+    had a figure only when every asset covered the period. One ticker onboarded a month
+    earlier then emptied the mix's line and figures for 3M to 5Y, and the chart showed only
+    asset lines.
+  - **An asset joining Max rebalances the mix.** On its first date, the mix's value is split
+    again by the target weights, normalized over every asset present by then. Between those
+    dates it is buy and hold. Agreed in LB-9. Keeping Max to the shared history was the
+    assumption until then. Buying the new asset with fresh money beside the drifted holdings was
+    considered and rejected: the return would need time-weighting to stay a percentage.
 - **Buy and hold.** The mix is bought at its weights on the period's first day. Weights then
   drift with prices, with no rebalancing. Each period starts again from the target weights on its
   own first day. With Gᵢ(t) as asset i's growth since the start date s, the mix grows as
-  V(t) = Σ wᵢ · Gᵢ(t) / Gᵢ(s).
+  V(t) = Σ wᵢ · Gᵢ(t) / Gᵢ(s). The one rebalance is an asset joining Max (Short history,
+  above).
 - **Total return in EUR.** Each asset's daily return includes dividends: data-store's
   `market_returns.simple_return`, chained. It is converted to EUR through `fx_rates`, so a USD
   asset's return includes the USD/EUR move. Returns are percentages only.
@@ -47,16 +60,17 @@ The previous chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archi
   `GET /instruments/tickers` list), remove assets, and change weights. Weights are entered as
   percentages. A ticker that isn't tracked links to "Add a ticker". A ticker that is tracked but
   has no returns yet (still onboarding) shows "No history yet" and is left out of the mix.
-- **Weights that don't add up to 100%.** *Assumption, to confirm in LB-7:* they are normalized,
-  and the page shows the weights it actually used. The alternative is to reject the mix with a
-  form error.
+- **Weights that don't add up to 100%.** They are normalized, and the page shows the weights
+  it actually used. Agreed in LB-7. Rejecting the mix with a form error was considered and
+  rejected.
 - **Not saved.** The mix is held in the query string, so a lab can be bookmarked or reloaded, but
   nothing is stored. "Reset to my portfolio" is `/labs` with no parameters. Saving labs is
   deferred.
 - **Outputs.** There are two:
   - A table: a row for the mix and a row for each asset, with the seven periods as columns.
   - A growth chart: the mix's cumulative % growth over a chosen period, with each asset's growth
-    available as a line.
+    available as a line. The mix's line is always the main one. Asset lines are off until the
+    user picks them (LB-10).
 
   Annualized returns and a side-by-side comparison with the unedited portfolio were considered
   and deferred.
@@ -99,8 +113,10 @@ The previous chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archi
 | LB-4 | [portfolio: backtest endpoint](#lb-4-portfolio-backtest-endpoint) | LB-2, LB-3 | done |
 | LB-5 | [web: client for the backtest](#lb-5-web-client-for-the-backtest) | LB-4 | done |
 | LB-6 | [web: `/labs` page with the period table](#lb-6-web-labs-page-with-the-period-table) | LB-5 | done |
-| LB-7 | [web: edit the mix](#lb-7-web-edit-the-mix) | LB-6 | ready |
+| LB-7 | [web: edit the mix](#lb-7-web-edit-the-mix) | LB-6 | done |
 | LB-8 | [web: growth chart](#lb-8-web-growth-chart) | LB-6 | done |
+| LB-9 | [portfolio: mix over the assets that cover each period](#lb-9-portfolio-mix-over-the-assets-that-cover-each-period) | — | done |
+| LB-10 | [web: chart shows the mix, assets on demand](#lb-10-web-chart-shows-the-mix-assets-on-demand) | LB-7, LB-9 | ready |
 
 ## Tasks
 
@@ -372,7 +388,7 @@ module, `static/web.css`, `scripts/review_pages.py`, `services/web/docs/ui-archi
 
 ### LB-7. web: edit the mix
 
-**Status:** ready
+**Status:** done
 
 - **The form.** A GET form with one row per asset (ticker and weight %). It works without
   JavaScript: there is an empty row for adding an asset and a remove button on each row, and
@@ -395,6 +411,29 @@ asset.
 
 Files: `web/api/labs.py`, `templates/labs.html`, `static/web.css`, maybe a `static/labs_form.js`,
 `scripts/review_pages.py`, `services/web/docs/ui-architecture.md`.
+
+**As built:**
+- **Normalize, confirmed.** Weights are scaled to 100%, as LB-3 and portfolio already do, so
+  only LB-3's test comment changed. The default mix's own rounding (99.99%) and a capped mix
+  (under 100%) would have tripped a reject.
+- **The query string.** It has repeated `ticker`/`weight` pairs. Any `ticker` key makes the
+  mix an edited one, so an emptied mix is `?ticker=`, not the default. `remove=<n>` answers a
+  303 to the mix that's left, so a reload can't remove a second row. A new pure module,
+  `web/labs_mix.py`, holds the contract and the checks.
+- **"The last valid mix" travels in hidden `last_ticker`/`last_weight` fields.** A form with
+  errors isn't sent. The table re-runs the last mix, with a warning banner. With no last mix
+  (a bookmarked URL with errors), only the form shows.
+- **Tickers match in any case** and take the tracked spelling. If the ticker list can't be
+  loaded, the check is skipped and portfolio's `not_tracked` status reports the ticker instead.
+- **"No history yet"** needed nothing new. portfolio's `no_history` reason already reads that
+  way in the "Not backtested" list.
+- **The form sits below the table**, not above it, since 50 rows would push the figures a
+  screen down.
+- **`labs_form.js` was built.** It adds rows from a `<template>` in place.
+- **The ticker list is fetched alongside the holdings** for the default mix, and alone for an
+  edited one, which needs no holdings.
+- **With LB-8's chart.** LB-8 merged first. The form carries the chart's `period` as a hidden
+  field, and a Remove's redirect keeps it, so editing the mix doesn't reset the chart.
 
 ### LB-8. web: growth chart
 
@@ -438,6 +477,103 @@ Files: `static/labs_chart.js`, `templates/labs.html`, `static/web.css`, `scripts
   strings: a synthetic 50-asset, five-year Max island was about 645 KB. Thinning long periods to
   weekly points would be the next step if it matters.
 - The gap count is still not shown.
+
+### LB-9. portfolio: mix over the assets that cover each period
+
+**Status:** done
+
+On the dev stack, a portfolio holding BRK-B, which has about a month of history in
+data-store, gets no mix line on the chart and no mix figure from 3M to 5Y.
+`calculator.py`'s `_mix_period` gives the mix a figure only when every asset covers the
+period, and the growth mix is `None` unless `len(covered) == len(series)`. This task applies
+the rewritten **Short history** requirement.
+
+- **The mix over the covered assets.** For each period, the mix uses only the assets that
+  cover it, with their weights normalized to 100%. Buy and hold is unchanged:
+  V(t) = Σ wᵢ′ · Gᵢ(t) / Gᵢ(s) over the covered assets. The same rule applies to the mix's
+  growth series. The mix has no figure and no line only when no asset covers the period.
+- **Name the assets left out.** Each of the mix's `PeriodReturn`s and the `GrowthSeries` carry
+  `left_out`: the tickers left out for not covering that period, in the request's order.
+  Unavailable assets are not in it, because `statuses` already reports them. The endpoint's
+  response gains the field. The change is additive, so web's client keeps working until
+  LB-10 reads the field.
+- **Max** ~~stays the longest history all the assets share~~. *Changed when confirming it:* Max
+  is each asset's whole history, and an asset joining the mix rebalances it (Agreed
+  requirements, Short history).
+
+Tests: hand-computed fixtures. A short asset left out of 1Y but included in 1M. The weights
+re-normalized over the covered assets. No asset covering a period, which gives no figure.
+LB-3's test for a period longer than one asset's history now expects a mix figure. The route
+serializes `left_out`.
+
+Files: `portfolio/labs/calculator.py`, `portfolio/api/` (the response model), their tests,
+`services/portfolio/docs/architecture.md`, `services/portfolio/docs/flows.md`.
+
+**As built:**
+- **Stacked on LB-7's branch** (#95), which had defined this task and was still open.
+- **One mix engine for both rules.** The mix runs over an "entry plan" of segments, each a date
+  and the assets held from it. A month period has one segment, which is plain buy and hold.
+  Max has one segment per distinct first day, and their growth is chained. The segments'
+  starting values are computed once, so a 50-asset, 20-year Max with staggered starts takes
+  about 0.3 s.
+- **Each row's Max has its own `start`.** The mix's Max starts on the earliest first day. An
+  asset whose first day falls after the common end date (the histories don't overlap) doesn't
+  cover even its own Max, and the mix's Max leaves it out.
+- **`left_out` is on every `PeriodReturn`**, so one shape serves both rows, but only the mix's is
+  ever non-empty. It lists tickers in request order. Unavailable assets are never in it.
+- **Max growth lines can hold nulls**: a late asset's line is null before its first day and 0
+  on it. That isn't additive for web, whose client turned every point into a `Decimal`. So
+  web's `_growth_line` and `build_growth_payload` now keep a null point, in a commit of their
+  own. Chart.js draws a null as no line and leaves it out of the `index` tooltip (checked in
+  the vendored build).
+- **Logging.** `jobs.get_backtest` logs one line per asset the mix left out, naming the periods.
+- **The glossary's Max entry** was rewritten here, since it would have been wrong the moment
+  this merged. Its `longest-shared-history` anchor and label are left to LB-10.
+- LB-8's "covered assets start shown" fallback can no longer fire: the mix now lacks a line only
+  when no asset covers the period. web's `ui-architecture.md` says so, and LB-10 removes it.
+
+### LB-10. web: chart shows the mix, assets on demand
+
+**Status:** blocked
+
+The user expects the chart to show the portfolio's returns, with assets as lines they choose.
+LB-8 instead turns every covered asset on when the mix has no line (`labs.html`, `checked`
+when `growth.mix is none`). On the dev stack that drew 11 identical muted lines with nothing
+to tell them apart. The tooltip's coloured squares are Chart.js's defaults: they match no
+line and aren't brand colours.
+
+- **The client.** `portfolio_client` parses `left_out` from LB-9 on the mix's period figures
+  and on the growth series. Add it to the fakes in the tests and in `review_pages.py`.
+- **The table.** The mix row's cells now fill. A note under the table names, per period, the
+  assets the mix left out, e.g. "From 3M to 5Y the mix leaves out BRK-B: not enough history."
+- **The mix is always the main line.** Asset boxes always start unchecked, so LB-8's "covered
+  assets start shown" fallback goes. A note under the chart names the assets the mix left out
+  for the period shown. The "no line" note remains only for the case where no asset covers
+  the period.
+- **Tell asset lines apart by name, not colour.** The brand has no spare colours. Each shown
+  asset line keeps its muted colour and has its ticker at its last point, drawn by a small
+  Chart.js plugin inside `labs_chart.js`, with no new vendor file. Labels that would overlap
+  are nudged apart. Hovering a line or its box still raises it.
+- **The tooltip.** No colour squares (`displayColors: false`). The mix comes first, and only
+  the shown lines are listed.
+- **Max's start per row (LB-9).** Each asset's Max now runs from its own first day, and the
+  mix's from the earliest asset's. The Max header's "from" date is the mix's. Show each
+  asset's own start where it differs, e.g. in the cell or its `data-start`.
+- **The Max glossary term.** LB-9 rewrote the definition. Its anchor
+  (`longest-shared-history`) and the term's link text still say "longest shared history".
+  Rename the anchor and update every `term` call with it.
+- **Late Max lines.** A late asset's Max line has null points before its first day. Check that
+  its end-of-line label and hover behave with them.
+- **Review.** Add a `review_pages.py` variant with a short-history asset and two assets
+  checked. Regenerate the screenshots at every width, in both themes.
+
+Tests: the client parses `left_out`. The page renders the left-out notes. The boxes start
+unchecked even when an asset doesn't cover the period. The "no line" note appears only when
+no asset covers it.
+
+Files: `web/portfolio_client/{base,http_client}.py`, `web/labs_view.py`, `templates/labs.html`,
+`static/labs_chart.js`, `static/web.css`, `scripts/review_pages.py`, their tests,
+`services/web/docs/ui-architecture.md`.
 
 ## Deferred
 

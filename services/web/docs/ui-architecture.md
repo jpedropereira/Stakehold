@@ -521,6 +521,51 @@ described here updates this file in the same change.
   The terms backtest, buy and hold, and Max link to new glossary entries. Gains and losses use
   `delta`, so forest and oxblood appear only on figures. *Rejected: periods as rows and assets
   as columns*, which reads better for two assets but not for fifty.
+- **Labs mix form (LB-7): a GET form, so the mix is the URL.** Under the table and the chart,
+  "Edit the mix" has one row per asset (ticker and weight %), then an empty row that adds one. Nothing is
+  stored, so a lab can be bookmarked or reloaded, and "Reset to my portfolio" is plain `/labs`.
+  It works without JS: submitting reloads the page with the new query string, and a hidden
+  `period` field keeps the chart's period (LB-8). Each row's Remove
+  is a submit button whose value is the row's place, and the route answers it with a 303 to
+  the mix that's left (`labs_mix.canonical_query`). Otherwise a reload would remove the next
+  row as well. A visually hidden Update button comes first in the form, because Enter submits
+  with the first submit button, which would otherwise be the first row's Remove. Removing every
+  row leaves `?ticker=`, an empty edited mix that reads "Add an asset below", not the default.
+  - **Errors sit under their row.** The ink rule's bar and bold lead (the ticker, or
+    "Weight") are used, never oxblood. Each error is tied to its input by `aria-describedby`
+    and marks it `aria-invalid`. The errors are:
+    - an untracked ticker, linking to "Add a ticker" with the symbol filled in,
+    - a repeat of an earlier row,
+    - a missing weight or one that isn't a positive number, with `%` and a decimal comma
+      accepted,
+    - more than 50 rows, for the form as a whole.
+  - **Matching.** Tickers match the tracked list in any case and take its spelling.
+  - **The last valid mix.** A mix with errors isn't sent. The table keeps showing the mix it
+    last showed, which the form carries as hidden `last_ticker`/`last_weight` fields. A
+    warning banner above the table says so and links to the form. A bookmarked URL with
+    errors and no last mix shows only the form.
+  - **Weights.** They are normalized. The form shows their total and, when it isn't 100%,
+    says they're scaled, and the table's Weight column shows what was used. The default mix
+    fills the form with its weights to two places, which can total 99.99%, or less than 100%
+    past the cap.
+  - **Without the ticker list.** If the list fails to load, the form keeps working with a
+    notice and no suggestions, and `portfolio` names untracked tickers as "not tracked" in
+    "Not backtested".
+  - **Labels.** Only the first row's labels are drawn. The rest are visually hidden, so every
+    input keeps its label.
+  - **Phone width.** The weight column narrows, since a ticker needs the room.
+  - **`labs_form.js`** unhides "Add another asset". It clones a `<template>` row, numbers its
+    ids, and gives it a Remove that only takes it off the page.
+
+  *Rejected:*
+  - *Rejecting weights that don't total 100%.* The default mix's rounding would trip it, and
+    scaling is what a reader expects of "60 and 60".
+  - *Backtesting only the valid rows on an error.* The figures would belong to a mix nobody
+    asked for, since a mistyped 50% asset would vanish and the rest would be re-weighted.
+  - *The form above the table.* With 50 holdings, it would push the figures a screen down.
+
+  *Known cost:* the URL carries the mix twice once it has been edited. Even at 50 assets, that
+  is a few KB, well within what browsers and servers accept.
 - **The Labs growth chart (LB-8): one period at a time, chosen on the server.** Under the
   table, `static/labs_chart.js` draws the cumulative % growth of the mix and its assets over
   one period, from a `#labs-chart-data` island (`labs_view.build_growth_payload`).
@@ -541,8 +586,10 @@ described here updates this file in the same change.
   - *Asset lines start hidden*: a mix can have 50 assets, and 50 lines would bury the mix. Each
     asset has a checkbox under the chart (rendered `hidden`, since it does nothing without the
     script); one with no line for the period is disabled and says "Not enough history". When
-    the mix itself has no line (not every asset covers the period), the covered assets start
-    shown, or the chart would open empty, and a note says why the mix is missing. No line at
+    the mix itself has no line, the covered assets start shown, or the chart would open empty,
+    and a note says why the mix is missing. *Dead since LB-9:* the mix now lacks a line only
+    when no asset covers the period, so there is never a covered asset to show; LB-10 removes
+    the fallback. No line at
     all reads "No asset's history covers …" and draws no chart, keeping the period links.
   - *Shared, not copied*: the theme colors and the redraw on `stakehold:themechange` and on a
     `prefers-color-scheme` change moved out of `portfolio_chart.js` into

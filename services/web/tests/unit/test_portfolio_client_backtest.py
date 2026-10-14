@@ -162,6 +162,21 @@ async def test_backtest_keeps_an_asset_that_isnt_included_apart():
     assert result.growth.assets == {"VWCE.DE": None}
 
 
+async def test_backtest_keeps_the_null_points_before_a_late_assets_max_line_starts():
+    body = _body(
+        growth={
+            "period": "Max",
+            "dates": ["2026-09-09", "2026-09-10", END],
+            "mix": ["0.00000000", "0.00400000", "0.01000000"],
+            "assets": {"VWCE.DE": None, "IWDA.AS": [None, "0.00000000", "0.00700000"]},
+        }
+    )
+
+    result = await _ok(body).backtest(assets=[("IWDA.AS", Decimal("1"))], period="Max")
+
+    assert result.growth.assets["IWDA.AS"] == (None, Decimal("0"), Decimal("0.007"))
+
+
 async def test_backtest_with_no_asset_included():
     body = {
         "end_date": None,

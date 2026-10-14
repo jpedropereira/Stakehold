@@ -18,13 +18,23 @@ The rules, as agreed for the labs chunk (tasks-labs-thread.md):
   value forward on days it didn't trade.
 - **Periods.** Every period ends on the last day every asset has data. A month period starts
   that many calendar months earlier, the day of the month clamped as web's rangeStart does;
-  each asset's base is its value on or before that start. Max starts on the latest first day
-  among the assets. An asset whose history starts after a period's start doesn't cover it, and
-  the mix then has no figure for that period either.
+  each asset's base is its value on or before that start. An asset whose history starts after a
+  period's start doesn't cover it. The mix then holds only the assets that do, re-weighted to
+  100%, and names the rest in `left_out`; it has no figure only when no asset covers the period.
+  (Until LB-9 the mix needed every asset, so one ticker onboarded a month earlier blanked the
+  mix from 3M to 5Y.)
+- **Max** is each asset's whole history, so its start differs per row. The mix's Max starts on
+  the earliest asset's first day, and each asset joins the mix on its own first day. Shortening
+  Max to the history all assets share was the alternative; it was rejected (LB-9) because a new
+  ticker then cut every asset's Max to that ticker's few weeks.
 - **Buy and hold.** The mix is bought at its weights on each period's own start and not
   rebalanced: V(t) = sum of w_i * G_i(t) / G_i(start). Weights are normalized to sum to 1 over
   the assets that are available; an asset with no prices or no usable FX rate is reported as
-  unavailable and left out.
+  unavailable and left out. The one exception is an asset joining Max: on its first day the
+  mix's value is split again by the target weights, normalized over every asset present by then,
+  and held from there. Buying the newcomer with fresh money beside the drifted holdings was the
+  alternative; it would need a time-weighted return to stay a percentage, whereas rebalancing
+  keeps the mix's return a plain ratio of values.
 - **Gaps.** A NULL simple_return after an asset's first day is a gap: data-store either judged
   that day implausible or couldn't anchor it to a prior close. It is bridged as a flat day and
   counted in the period's `gaps`, so a caller can say so. A read-only check of data-store's dev
@@ -37,7 +47,7 @@ The rules, as agreed for the labs chunk (tasks-labs-thread.md):
 import calendar
 from bisect import bisect_left, bisect_right
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 from enum import StrEnum
@@ -90,6 +100,9 @@ class PeriodReturn:
     covered: bool
     return_pct: Decimal | None  # None exactly when not covered
     gaps: int  # NULL returns bridged inside (start, end]
+    # The mix's only: available assets that don't cover the period, in input order. The
+    # unavailable ones are in BacktestResult.unavailable instead.
+    left_out: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -108,12 +121,14 @@ class Unavailable:
 @dataclass(frozen=True)
 class GrowthSeries:
     """Cumulative growth over one period: a point on its start date (0), then one per trading
-    day of any asset up to its end."""
+    day of any asset up to its end. For Max, an asset that starts later has None points before
+    its first day and 0 on it."""
 
     period: Period
     dates: list[date]
-    mix: list[Decimal] | None  # None when some asset doesn't cover the period
-    assets: dict[str, list[Decimal] | None]  # None for an asset that doesn't cover it
+    mix: list[Decimal] | None  # None only when no asset covers the period
+    assets: dict[str, list[Decimal | None] | None]  # None for an asset that doesn't cover it
+    left_out: list[str]  # as PeriodReturn.left_out, for this period
 
 
 @dataclass(frozen=True)
@@ -191,12 +206,13 @@ def compute_backtest(assets: Sequence[AssetInput], *, growth_period: Period) -> 
 
     asset_rows = []
     for s in series:
-        periods = {period: _asset_period(s, starts[period], end) for period in Period}
+        periods = {
+            period: _asset_period(s, _asset_start(period, s, starts), end) for period in Period
+        }
         asset_rows.append(Row(ticker=s.ticker, weight=weights[s.ticker], periods=periods))
 
     mix_periods = {
-        period: _mix_period(series, weights, starts[period], end, asset_rows, period)
-        for period in Period
+        period: _mix_period(series, weights, period, starts[period], end) for period in Period
     }
     mix = Row(ticker=None, weight=_ONE, periods=mix_periods)
 
@@ -259,9 +275,15 @@ def _build_series(asset: AssetInput) -> _Series | Unavailable:
 
 
 def _period_start(period: Period, end: date, series: list[_Series]) -> date:
+    """The mix's start. For Max, that is the earliest first day; each asset's own Max starts on
+    its own first day (_asset_start)."""
     if period is Period.MAX:
-        return max(s.first for s in series)
+        return min(s.first for s in series)
     return _months_before(end, _MONTHS[period])
+
+
+def _asset_start(period: Period, s: _Series, starts: dict[Period, date]) -> date:
+    return s.first if period is Period.MAX else starts[period]
 
 
 def _months_before(day: date, months: int) -> date:
@@ -273,8 +295,57 @@ def _months_before(day: date, months: int) -> date:
 
 
 def _covers(s: _Series, start: date, end: date) -> bool:
-    # start > end happens only for Max when two assets' histories don't overlap at all.
+    # start > end happens only for an asset whose first day is after the common end, when the
+    # assets' histories don't overlap at all.
     return s.first <= start <= end
+
+
+def _members(series: list[_Series], period: Period, start: date, end: date) -> list[_Series]:
+    """The assets the mix holds over a period: for Max, every asset with a day on or before the
+    end (each joins on its first day); otherwise those covering the whole period."""
+    if period is Period.MAX:
+        return [s for s in series if s.first <= end]
+    return [s for s in series if _covers(s, start, end)]
+
+
+def _left_out(series: list[_Series], members: list[_Series]) -> list[str]:
+    held = {s.ticker for s in members}
+    return [s.ticker for s in series if s.ticker not in held]
+
+
+# One segment of the mix: from its date, the members held at their re-normalized weights.
+_Segment = tuple[date, list[_Series]]
+
+
+def _entry_plan(members: list[_Series], period: Period, start: date) -> list[_Segment]:
+    """Buy and hold from `start`, plus, for Max, a rebalance on each later first day."""
+    if period is not Period.MAX:
+        return [(start, members)]
+    entries = sorted({s.first for s in members})
+    return [(entry, [s for s in members if s.first <= entry]) for entry in entries]
+
+
+def _segment_value(segment: _Segment, weights: dict[str, Decimal], day: date) -> Decimal:
+    entry, held = segment
+    total = sum(weights[s.ticker] for s in held)
+    return sum(weights[s.ticker] / total * s.growth(day, entry) for s in held)
+
+
+class _MixCurve:
+    """V(day) / V(start) for an entry plan: each earlier segment's growth up to the next entry,
+    chained once here, times the current segment's growth since its entry."""
+
+    def __init__(self, plan: list[_Segment], weights: dict[str, Decimal]):
+        self._plan = plan
+        self._weights = weights
+        self._entries = [entry for entry, _ in plan]
+        self._bases = [_ONE]
+        for segment, (following, _) in zip(plan, plan[1:]):
+            self._bases.append(self._bases[-1] * _segment_value(segment, weights, following))
+
+    def value(self, day: date) -> Decimal:
+        k = bisect_right(self._entries, day) - 1
+        return self._bases[k] * _segment_value(self._plan[k], self._weights, day)
 
 
 def _asset_period(s: _Series, start: date, end: date) -> PeriodReturn:
@@ -292,17 +363,25 @@ def _asset_period(s: _Series, start: date, end: date) -> PeriodReturn:
 def _mix_period(
     series: list[_Series],
     weights: dict[str, Decimal],
+    period: Period,
     start: date,
     end: date,
-    asset_rows: list[Row],
-    period: Period,
 ) -> PeriodReturn:
-    gaps = sum(row.periods[period].gaps for row in asset_rows)
-    if not all(_covers(s, start, end) for s in series):
-        return PeriodReturn(start=start, end=end, covered=False, return_pct=None, gaps=gaps)
-    value = sum(weights[s.ticker] * s.growth(end, start) for s in series)
+    members = _members(series, period, start, end)
+    left_out = _left_out(series, members)
+    if not members:
+        return PeriodReturn(
+            start=start, end=end, covered=False, return_pct=None, gaps=0, left_out=left_out
+        )
+    value = _MixCurve(_entry_plan(members, period, start), weights).value(end)
+    gaps = sum(s.gaps_between(max(start, s.first), end) for s in members)
     return PeriodReturn(
-        start=start, end=end, covered=True, return_pct=_quantize(value - _ONE), gaps=gaps
+        start=start,
+        end=end,
+        covered=True,
+        return_pct=_quantize(value - _ONE),
+        gaps=gaps,
+        left_out=left_out,
     )
 
 
@@ -313,26 +392,23 @@ def _growth_series(
     start: date,
     end: date,
 ) -> GrowthSeries:
-    if start > end:
-        return GrowthSeries(
-            period=period, dates=[], mix=None, assets={s.ticker: None for s in series}
-        )
-
+    members = _members(series, period, start, end)
+    left_out = _left_out(series, members)
     trading_days = sorted({day for s in series for day in s.dates if start < day <= end})
     dates = [start, *trading_days]
-    covered = [s for s in series if _covers(s, start, end)]
 
-    assets: dict[str, list[Decimal] | None] = {s.ticker: None for s in series}
-    for s in covered:
-        assets[s.ticker] = [_quantize(s.growth(day, start) - _ONE) for day in dates]
+    assets: dict[str, list[Decimal | None] | None] = {s.ticker: None for s in series}
+    for s in members:
+        own_start = max(start, s.first)
+        assets[s.ticker] = [
+            None if day < own_start else _quantize(s.growth(day, own_start) - _ONE) for day in dates
+        ]
 
     mix = None
-    if len(covered) == len(series):
-        mix = [
-            _quantize(sum(weights[s.ticker] * s.growth(day, start) for s in series) - _ONE)
-            for day in dates
-        ]
-    return GrowthSeries(period=period, dates=dates, mix=mix, assets=assets)
+    if members:
+        curve = _MixCurve(_entry_plan(members, period, start), weights)
+        mix = [_quantize(curve.value(day) - _ONE) for day in dates]
+    return GrowthSeries(period=period, dates=dates, mix=mix, assets=assets, left_out=left_out)
 
 
 def _quantize(value: Decimal) -> Decimal:

@@ -59,9 +59,10 @@
       its own first day.</dd>
 
     <dt id="longest-shared-history">Max</dt>
-    <dd>The longest history every asset in the mix shares: it starts on the first day the
-      youngest asset has a price. A shorter period an asset doesn't cover shows “Not enough
-      history” for that asset, and for the mix.</dd>
+    <dd>Each asset's whole history. For the mix, it starts on the first day the oldest asset
+      has a price, and each other asset joins on its own first day, when the mix is split again
+      by the weights you set. A shorter period an asset doesn't cover shows “Not enough
+      history” for that asset, and the mix leaves it out of that period.</dd>
   </dl>
 </section>
 {% endblock %}

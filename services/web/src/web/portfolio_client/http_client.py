@@ -362,10 +362,11 @@ def _backtest_row(item: dict) -> BacktestRow:
     )
 
 
-def _growth_line(values, length: int) -> tuple[Decimal, ...] | None:
+def _growth_line(values, length: int) -> tuple[Decimal | None, ...] | None:
     if values is None:
         return None
-    line = tuple(Decimal(v) for v in values)
+    # A null point is a Max asset line before its first day (LB-9).
+    line = tuple(None if v is None else Decimal(v) for v in values)
     if len(line) != length:
         # One value per date, or the chart would draw each point against the wrong day.
         raise ValueError(f"growth line has {len(line)} values for {length} dates")
