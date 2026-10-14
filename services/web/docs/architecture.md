@@ -442,6 +442,13 @@ Every route `web` serves, with what it requires and which upstream calls it make
   transactions and import pages.
 - `api/portfolio.py` — `GET /portfolio`: the combined page across accounts (PF-4) and the 308
   from the old per-account URL (PF-2), in one handler (see "Key decisions").
+- `api/labs.py` (LB-6) — `GET /labs`, the Labs backtest page, on its own router for the
+  same file-size reason as `api/overview.py`. Fetches holdings, then the backtest, each failing
+  on its own.
+- `labs_view.py` (LB-6) — pure: `build_default_mix`, the mix `/labs` sends when the visitor
+  hasn't edited one. Reuses `portfolio_view.build_portfolio_holdings` for the weights, so
+  `/labs` and `/portfolio` can't disagree about them, and mirrors `portfolio`'s 50-asset cap
+  (`MAX_BACKTEST_ASSETS`) so a large portfolio is cut to its largest holdings, not rejected.
 - `api/tickers.py` (TK-8) — the Tickers pages, on their own router for the same file-size
   reason, rendering through `routes.py`'s helpers so CSRF and cookie handling stay identical.
 - `ticker_status.py` (TK-8/TK-9) — how a tracked ticker's status reads (labels, a holding's

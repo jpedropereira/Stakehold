@@ -14,6 +14,7 @@ from web.api.deps import AdminRequired, AuthRequired
 from web.api.glossary import router as glossary_router
 from web.api.holdings import router as holdings_router
 from web.api.htmx import htmx_or_redirect
+from web.api.labs import router as labs_router
 from web.api.overview import router as overview_router
 from web.api.portfolio import router as portfolio_router
 from web.api.routes import health_router, router
@@ -100,6 +101,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(overview_router)
     app.include_router(holdings_router)
     app.include_router(portfolio_router)
+    app.include_router(labs_router)
     app.include_router(router)
     app.include_router(deletion_router)
     app.include_router(theme_router)

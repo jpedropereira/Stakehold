@@ -1,13 +1,13 @@
 {% extends "base.html" %}
 {% block title %}Glossary — Stakehold{% endblock %}
 {% block content %}
-{# Each term's id is the anchor the holdings pages link to (/glossary#<id>), from their column
-   headers and tile labels: renaming one breaks those links, and their tests say so. Every
-   amount is in euros unless it says otherwise. #}
+{# Each term's id is the anchor the holdings pages and /labs link to (/glossary#<id>), from
+   their column headers and tile labels: renaming one breaks those links, and their tests say
+   so. Every amount is in euros unless it says otherwise. #}
 <section class="card glossary">
   <h1>Glossary</h1>
-  <p class="entry-subtitle">What each figure on your holdings means. Amounts are in euros unless
-    a figure says otherwise.</p>
+  <p class="entry-subtitle">What each figure on your holdings and in Labs means. Amounts are in
+    euros unless a figure says otherwise.</p>
   <dl class="glossary-terms">
     <dt id="units">Units</dt>
     <dd>How many shares of the holding you own. An account's own page calls this Quantity.</dd>
@@ -46,6 +46,22 @@
     <dt id="prices-as-of">Prices as of</dt>
     <dd>The trading day of the latest closing price used. Prices update daily, and returns are
       recalculated a few times a day.</dd>
+
+    <dt id="backtest">Backtest</dt>
+    <dd>How a mix of assets would have done if you had bought it at the start of each period
+      and held it until the latest day every asset has a price. Labs starts from your current
+      holdings, with today's weights. Returns are in euros, include dividends, and are
+      percentages only: how much you hold plays no part.</dd>
+
+    <dt id="buy-and-hold">Buy and hold</dt>
+    <dd>The mix is bought at its weights on the period's first day and never rebalanced, so an
+      asset that rises comes to weigh more. Each period starts again from the same weights on
+      its own first day.</dd>
+
+    <dt id="longest-shared-history">Max</dt>
+    <dd>The longest history every asset in the mix shares: it starts on the first day the
+      youngest asset has a price. A shorter period an asset doesn't cover shows “Not enough
+      history” for that asset, and for the mix.</dd>
   </dl>
 </section>
 {% endblock %}

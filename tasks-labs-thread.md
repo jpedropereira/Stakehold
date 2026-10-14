@@ -98,9 +98,9 @@ The previous chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archi
 | LB-3 | [portfolio: backtest calculator](#lb-3-portfolio-backtest-calculator) | — | done |
 | LB-4 | [portfolio: backtest endpoint](#lb-4-portfolio-backtest-endpoint) | LB-2, LB-3 | done |
 | LB-5 | [web: client for the backtest](#lb-5-web-client-for-the-backtest) | LB-4 | done |
-| LB-6 | [web: `/labs` page with the period table](#lb-6-web-labs-page-with-the-period-table) | LB-5 | ready |
-| LB-7 | [web: edit the mix](#lb-7-web-edit-the-mix) | LB-6 | blocked |
-| LB-8 | [web: growth chart](#lb-8-web-growth-chart) | LB-6 | blocked |
+| LB-6 | [web: `/labs` page with the period table](#lb-6-web-labs-page-with-the-period-table) | LB-5 | done |
+| LB-7 | [web: edit the mix](#lb-7-web-edit-the-mix) | LB-6 | ready |
+| LB-8 | [web: growth chart](#lb-8-web-growth-chart) | LB-6 | ready |
 
 ## Tasks
 
@@ -316,7 +316,7 @@ Files: `web/portfolio_client/{base,http_client}.py`, their tests,
 
 ### LB-6. web: `/labs` page with the period table
 
-**Status:** blocked
+**Status:** done
 
 The first visible page. It only reads; editing is LB-7.
 
@@ -345,9 +345,34 @@ the glossary. Unpriced holdings are named in the note.
 Files: `web/api/labs.py`, `web/api/app.py`, `templates/{base,labs,glossary}.html`, a view builder
 module, `static/web.css`, `scripts/review_pages.py`, `services/web/docs/ui-architecture.md`.
 
+**As built:**
+- **web's `architecture.md` was split first**, in a commit of its own. Its Endpoint surface
+  table moved verbatim to `docs/endpoints.md`, which leaves room for LB-7 and LB-8.
+- **`labs_view.build_default_mix`** reuses `build_portfolio_holdings` for the weights, so
+  `/labs` and `/portfolio` can't disagree. It sends the largest first, with ties by ticker.
+  Holdings left out are named in notes, one per reason: no price yet, a market value of zero
+  (portfolio rejects the whole mix over one weight ≤ 0), or beyond the 50-asset cap. Past the
+  cap, the weights sent are still shares of the whole portfolio, and portfolio re-normalizes
+  them.
+- **Holdings, then the backtest, in sequence**, each failing on its own. A 422 shows
+  portfolio's message. A holdings failure runs no backtest.
+- **The backtest asks for 1Y's growth series**, which the page discards until LB-8 makes the
+  period a parameter. 1Y keeps the response far under Max's.
+- **"Add an asset" links to Accounts** for now, where transactions are added.
+  `/transactions/new` needs an account. LB-7's form becomes the real way to add an asset.
+- **The gap count isn't shown.** `BacktestPeriodReturn.gaps` is parsed but no row displays
+  it.
+- **The table scrolls between phone width and about 1000px**, as `/portfolio`'s does, with
+  "Not enough history" kept on one line. Stacked at phone width, Max's label carries its start
+  date.
+- The Labs nav link sits after Portfolio. `test_portfolio_page.py`'s nav-order test changed
+  with it.
+- `review_pages.py`'s fake backtest reports `7203.T` as `no_fx_rate`, though it was never sent,
+  so that the review shows the "Not backtested" list.
+
 ### LB-7. web: edit the mix
 
-**Status:** blocked
+**Status:** ready
 
 - **The form.** A GET form with one row per asset (ticker and weight %). It works without
   JavaScript: there is an empty row for adding an asset and a remove button on each row, and
@@ -373,7 +398,7 @@ Files: `web/api/labs.py`, `templates/labs.html`, `static/web.css`, maybe a `stat
 
 ### LB-8. web: growth chart
 
-**Status:** blocked
+**Status:** ready
 
 `portfolio_chart.js` draws one € line, with fixed element ids and no legend. Labs needs several
 % lines.
