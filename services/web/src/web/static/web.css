@@ -1149,6 +1149,45 @@ img.logo-on-dark {
   border-bottom: none;
 }
 
+/* ---- labs (LB-6) ---- */
+
+/* Nine columns of short figures: the portfolio table's tighter cells. "Not enough history"
+   stays on one line, as a figure does; wrapping it only made rows taller, since the table
+   still needs about 900px inside the card. Below that it scrolls in its .table-scroll box,
+   as /portfolio's does, until it stacks at phone width. */
+.labs-table th,
+.labs-table td {
+  padding-inline: var(--space-2);
+}
+
+.labs-table .mono {
+  font-size: 13px;
+}
+
+/* The mix is the figure the page is about; its assets follow below a rule. */
+.labs-mix-row td {
+  font-weight: 600;
+  border-bottom: 1px solid var(--border-control);
+}
+
+/* "from <date>" under the Max header: the longest history the assets share. */
+.period-start {
+  display: block;
+  font: var(--text-caption);
+  color: var(--text-muted);
+}
+
+.labs-unavailable {
+  margin: 0 0 var(--space-3);
+  padding-left: var(--space-5);
+}
+
+.labs-note {
+  margin: var(--space-3) 0 0;
+  font: var(--text-caption);
+  color: var(--text-muted);
+}
+
 /* ---- stacked tables (UI-13) ---- */
 
 /* The holdings and transactions tables at phone width: each row becomes a block with the
@@ -1204,6 +1243,11 @@ img.logo-on-dark {
     font: var(--text-caption);
     color: var(--text-muted);
     text-align: left;
+  }
+
+  /* Max's start, which the hidden header carries at other widths. */
+  .labs-table td[data-start]::before {
+    content: attr(data-label) " from " attr(data-start) / "";
   }
 
   .transactions-table .eur-amount {

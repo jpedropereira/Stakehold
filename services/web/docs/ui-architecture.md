@@ -486,7 +486,7 @@ described here updates this file in the same change.
 - **Glossary: one page, linked from each figure's label.** The holdings tables show two
   percentages side by side (unrealized return and total return; a third, growth, has since been
   removed), and nothing on the page said how they differ. `/glossary` defines every figure the holdings pages and the overview
-  show, one `<dt id>` per term. Each column header and tile label on `/`, `/portfolio` and
+  show, and (LB-6) the Labs terms, one `<dt id>` per term. Each column header and tile label on `/`, `/portfolio` and
   `/accounts/holdings` links to its entry through the `term` macro
   (`partials/_term.html`). The link inherits the label's colour with a dotted underline, so a
   row of headers doesn't turn into a row of accent links. At phone width a stacked table hides
@@ -498,6 +498,28 @@ described here updates this file in the same change.
   three copies to keep in step. *Known cost:* an anchor renamed in `glossary.html` breaks its
   links silently in a browser. Each page's tests fetch `/glossary` and check every link lands
   on an entry.
+- **Labs (LB-6): one table, the mix first, every period a column.** `/labs` backtests the
+  user's current holdings at `/portfolio`'s weights. It has a "Labs" link in the nav after
+  "Portfolio", since it's an analysis of the portfolio rather than of an account. The table has
+  a row for the mix, set apart by a heavier rule and weight, then one row per asset in the
+  order sent (largest weight first), with the weight `portfolio` actually used. 1M to Max are
+  columns, so each row reads left to right as one asset's history. A period an asset doesn't
+  cover reads "Not enough history" in muted text, never a dash or 0%, because no figure exists
+  and a zero would be read as one. It stays on one line like a figure. Wrapping it was tried and
+  made rows three lines tall while the table still scrolled. So between phone width and about
+  1000px the table scrolls in its `.table-scroll` box, like `/portfolio`'s, and stacks below
+  600px. Max's header carries its start date ("from 2021-11-01"). Stacked, the headers are
+  hidden, so Max's cell carries the date in a `data-start` attribute and its drawn label reads
+  "Max from …". Assets `portfolio` couldn't backtest are listed under "Not backtested" with
+  `portfolio`'s own reason. Holdings the page itself left out (no price yet, worth nothing, or
+  beyond the 50-asset cap) are named in muted notes, one per reason, under everything else,
+  since they qualify the figures without being part of them. Holdings and the backtest each
+  fail on their own, and a backtest failure still shows the notes. No holding with a market
+  value reads "Nothing to backtest yet" and links to Accounts, where transactions are added.
+  The terms backtest, buy and hold, and Max link to new glossary entries. Gains and losses use
+  `delta`, so forest and oxblood appear only on figures. *Rejected: periods as rows and assets
+  as columns*, which reads better for two assets but not for fifty. *Known cost:* the page
+  requests 1Y's growth series and throws it away until the chart (LB-8) draws it.
 - **Display formatting (UI-5) is one fixed convention, applied by Jinja filters from a pure
   module.** `formatting.py` defines `money`, `signed_money`, `qty`, `pct` and `date` (plus UI-6's
   `share`, an unsigned percentage for weights, and `delta_class`), registered on

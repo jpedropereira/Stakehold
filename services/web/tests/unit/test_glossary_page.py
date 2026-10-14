@@ -20,7 +20,8 @@ from web.settings import Settings
 
 SESSION_COOKIE = "stakehold_session=tok; Path=/; HttpOnly; SameSite=lax"
 
-# Every term the glossary defines, by anchor. The holdings pages' links point at these.
+# Every term the glossary defines, by anchor. The holdings pages' and /labs' links point at
+# these.
 ENTRIES = (
     "units",
     "avg-cost",
@@ -31,6 +32,9 @@ ENTRIES = (
     "dividends",
     "total-return",
     "prices-as-of",
+    "backtest",
+    "buy-and-hold",
+    "longest-shared-history",
 )
 
 

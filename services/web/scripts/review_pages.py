@@ -90,6 +90,7 @@ PAGES = [
     Page("tickers", "/tickers", "admin"),
     Page("tickers-user", "/tickers", "user"),
     Page("tickers-new", "/tickers/new?symbol=SXR8.DE", "user"),
+    Page("labs", "/labs", "user"),
     Page("glossary", "/glossary", "user"),
     # Followed from a holdings page's "Total return" header: the entry it lands on is marked.
     Page("glossary-total-return", "/glossary#total-return", "user"),
@@ -305,7 +306,12 @@ def _fakes():
     from web.auth_client.base import AuthResult, AuthUser
     from web.auth_client.errors import SessionInvalid
     from web.portfolio_client.base import (
+        BACKTEST_PERIODS,
         Account,
+        Backtest,
+        BacktestAssetStatus,
+        BacktestPeriodReturn,
+        BacktestRow,
         Broker,
         Holding,
         HoldingAccount,
@@ -586,6 +592,55 @@ def _fakes():
                     dividends_received_eur=Decimal("31.20"),
                     total_return_eur=total,
                     total_return_pct=total / cost,
+                ),
+            )
+
+        async def backtest(self, *, assets, period):
+            """The review holdings' mix (VWCE.DE and AAPL; NEWCO.DE has no price, so the page
+            leaves it out). AAPL's history is too short for 5Y, so neither it nor the mix has
+            a 5Y figure. 7203.T was never requested: it is there so the review shows the list of
+            assets portfolio couldn't backtest."""
+            returns = {
+                None: ("0.0123", "0.0410", "-0.0215", "0.1180", "0.2402", None, "0.3071"),
+                "VWCE.DE": ("0.0141", "0.0388", "-0.0102", "0.1305", "0.2650", "0.6120", "0.3390"),
+                "AAPL": ("0.0087", "0.0452", "-0.0440", "0.0930", "0.1910", None, "0.2442"),
+            }
+            starts = (
+                date(2026, 9, 9),
+                date(2026, 7, 9),
+                date(2026, 4, 9),
+                date(2025, 10, 9),
+                date(2024, 10, 9),
+                date(2021, 10, 9),
+                date(2021, 11, 1),  # Max: AAPL's first day in the review data
+            )
+
+            def row(ticker, weight):
+                periods = {
+                    p: BacktestPeriodReturn(
+                        start=start,
+                        end=today,
+                        covered=figure is not None,
+                        return_pct=None if figure is None else Decimal(figure),
+                        gaps=0,
+                    )
+                    for p, start, figure in zip(
+                        BACKTEST_PERIODS, starts, returns[ticker], strict=True
+                    )
+                }
+                return BacktestRow(ticker=ticker, weight=weight, periods=periods)
+
+            total = sum((w for _, w in assets), Decimal("0"))
+            return Backtest(
+                end_date=today,
+                mix=row(None, Decimal("1")),
+                assets=tuple(row(t, w / total) for t, w in assets),
+                growth=None,
+                statuses=tuple(BacktestAssetStatus(t, "included", None) for t, _ in assets)
+                + (
+                    BacktestAssetStatus(
+                        "7203.T", "no_fx_rate", "Stakehold has no JPY exchange rates."
+                    ),
                 ),
             )
 

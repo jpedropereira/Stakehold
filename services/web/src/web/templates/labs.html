@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% from "partials/_banner.html" import banner %}
+{% from "partials/_delta.html" import delta %}
+{% from "partials/_term.html" import term %}
+{% block title %}Labs — Stakehold{% endblock %}
+{# The holdings the default mix left out, one line per reason (labs_view.DefaultMix). Shown
+   whatever the backtest did, since it says what the figures don't cover. #}
+{% macro left_out_notes(mix) -%}
+{% if mix.unpriced %}
+<p class="labs-note">Left out: <span class="mono">{{ mix.unpriced | join(", ") }}</span> — no price yet, so no weight.</p>
+{% endif %}
+{% if mix.unweighted %}
+<p class="labs-note">Left out: <span class="mono">{{ mix.unweighted | join(", ") }}</span> — a market value of zero, so no weight.</p>
+{% endif %}
+{% if mix.dropped %}
+<p class="labs-note">Only your largest {{ max_assets }} holdings are backtested. Left out: <span class="mono">{{ mix.dropped | join(", ") }}</span>.</p>
+{% endif %}
+{%- endmacro %}
+{% block content %}
+<section class="card card-wide">
+  <h1>Labs</h1>
+  <p class="entry-subtitle">A {{ term("backtest", "backtest") }} of your current holdings at
+    today's weights: how they would have done over each period, bought on its first day and
+    held ({{ term("buy and hold", "buy-and-hold") }}).</p>
+  <p class="glossary-link"><a href="/glossary">What these figures mean</a></p>
+  {% if holdings_error %}
+  {% call banner("error") %}<strong>Couldn't load your holdings.</strong> {{ holdings_error }}{% endcall %}
+  {% elif not mix.assets %}
+  <p class="entry-empty">Nothing to backtest yet — Labs starts from your holdings once they have
+    prices. <a href="/accounts">Add transactions to an account</a> to start.</p>
+  {{ left_out_notes(mix) }}
+  {% else %}
+  {% if backtest_error %}
+  {% call banner("error") %}<strong>Couldn't run the backtest.</strong> {{ backtest_error }}{% endcall %}
+  {% elif backtest.mix is none %}
+  <p class="entry-empty">None of your holdings could be backtested.</p>
+  {% else %}
+  {% set max_period = backtest.mix.periods["Max"] %}
+  <p class="as-of">Returns in euros, dividends included, to <span class="mono">{{ backtest.end_date | date }}</span>.</p>
+  {# Stacks at phone width like the holdings tables (web.css, .stack-table), with the same
+     explicit roles and data-labels; between phone width and the point its nine columns fit, it
+     scrolls in its own focusable box rather than moving the page. #}
+  <div class="table-scroll" tabindex="0" role="region" aria-label="Backtest returns">
+  <table class="positions-table holdings-table labs-table stack-table" role="table">
+    <thead role="rowgroup">
+      <tr role="row">
+        <th role="columnheader">Asset</th>
+        <th class="num" role="columnheader">Weight</th>
+        {% for period in periods %}
+        {% if period == "Max" %}
+        <th class="num" role="columnheader">{{ term("Max", "longest-shared-history") }}{% if max_period.covered %}<span class="period-start">from <span class="mono">{{ max_period.start | date }}</span></span>{% endif %}</th>
+        {% else %}
+        <th class="num" role="columnheader">{{ period }}</th>
+        {% endif %}
+        {% endfor %}
+      </tr>
+    </thead>
+    <tbody role="rowgroup">
+      {% for row in [backtest.mix] + backtest.assets | list %}
+      <tr role="row"{% if loop.first %} class="labs-mix-row"{% endif %}>
+        <td role="cell">{% if row.ticker is none %}Mix{% else %}<span class="mono">{{ row.ticker }}</span>{% endif %}</td>
+        <td class="num" role="cell" data-label="Weight"><span class="mono">{{ row.weight | share }}</span></td>
+        {% for period in periods %}
+        {% set figure = row.periods[period] %}
+        {# Stacked at phone width the headers are hidden, so Max's label carries its start. #}
+        <td class="num" role="cell" data-label="{{ period }}"{% if period == "Max" and max_period.covered %} data-start="{{ max_period.start | date }}"{% endif %}>{% if figure.covered %}{{ delta(figure.return_pct, "pct") }}{% else %}<span class="entry-empty">Not enough history</span>{% endif %}</td>
+        {% endfor %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% endif %}
+  {% if unavailable %}
+  <h2>Not backtested</h2>
+  <ul class="labs-unavailable">
+    {% for status in unavailable %}
+    <li><span class="mono">{{ status.ticker }}</span> — {{ status.reason }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  {{ left_out_notes(mix) }}
+  {% endif %}
+</section>
+{% endblock %}
