@@ -577,8 +577,8 @@ is reported in that asset's `status`. See "Labs backtest" above.
 
 ## Cross-service prerequisite: the data-store read API
 
-**This section describes what portfolio needs from it; `data-store`'s own `docs/architecture.md`
-("Read API" section) owns the design and is authoritative on the current shape.** Built as task 3
+**This section describes what portfolio needs from it; `data-store`'s own `docs/read-api.md` owns
+the design and is authoritative on the current shape.** Built as task 3
 of the walking-skeleton roadmap (`docs/roadmap-archive/walking-skeleton.md`). `http_client.py` now implements every operation below.
 
 `returns/` (and any future "current market value of a position" feature) needs, conceptually,

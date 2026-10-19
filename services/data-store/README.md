@@ -394,9 +394,9 @@ data before adding it.
 ## Running the read API
 
 A FastAPI app exposing three read-only endpoints over `market_returns`/`raw_market_data` and
-`fx_rates`, for other services (`portfolio`, `web`) to consume — see `docs/architecture.md`'s
-"Read API" section for the design. Requires `INTERNAL_API_SECRET` (see `.env.example`); the app
-refuses to start without one.
+`fx_rates`, for other services (`portfolio`, `web`) to consume — see
+[`docs/read-api.md`](docs/read-api.md) for the design. Requires `INTERNAL_API_SECRET` (see
+`.env.example`); the app refuses to start without one.
 
 ```bash
 uv run uvicorn data_store.api.app:create_app --factory --host 0.0.0.0 --port 8000
@@ -406,7 +406,7 @@ Or as part of the compose stack (`docker compose up -d api`), reachable at
 `http://localhost:${DATA_STORE_API_PORT:-8082}`. Every route but `/health` requires
 `Authorization: Bearer <INTERNAL_API_SECRET>`. There is no `/docs`, `/redoc` or `/openapi.json`
 — those can't be served behind the bearer, so the endpoint list below is the contract; see
-`docs/architecture.md`'s "Read API" section for why.
+[`docs/read-api.md`](docs/read-api.md) for why.
 
 | Endpoint | Returns |
 |---|---|
