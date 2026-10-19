@@ -1,0 +1,582 @@
+# Tasks
+
+Roadmap for the risk chunk: measure how risky a portfolio is and whether the risk was worth it,
+how its holdings move together, what adding a candidate would change, and where it is
+concentrated. The domain rules — formulas, windows, minimums, gap handling, labels — are in
+[`docs/domain/risk.md`](docs/domain/risk.md) (the spec), and this file cites them by section and
+rule number (§5.4, R12). It doesn't restate them. The other open thread is
+[`tasks-labs-thread.md`](tasks-labs-thread.md). Its Deferred items "Annualized return (CAGR)",
+"A benchmark line" and "Risk figures: volatility and maximum drawdown" are delivered here
+(RK-9, RK-14).
+
+**Task IDs are prefixed `RK-`** so they can't be confused with the walking-skeleton's bare
+"task N" references or the other chunks' `UI-N`, `TK-N`, `PF-N`, `LY-N` and `LB-N`.
+
+**Status** is one of:
+- `done`: implemented, tested, merged.
+- `ready`: every dependency is `done`, so it can be started now.
+- `blocked`: waiting on at least one dependency.
+
+## Discovery (spec Phase 0)
+
+The spec's Phase 0 was done read-only, against the code and the dev DB, on 2026-10-17.
+Findings, and what they change:
+
+- **There is no portfolio TWR.** `GET /returns/portfolio` (`returns/performance.py`) sums EUR
+  market value per date. Its percentage is the total return on cost basis. Nothing tracks cash:
+  DEPOSIT and WITHDRAWAL are recorded but never summed. Spec stream 3 is therefore built in
+  RK-10, as a TWR of **invested positions only**. Ex-post figures are labelled "invested assets
+  risk" (spec §6.1). The calendar is the union of the holdings' price dates, which the empirical
+  q in §4.4 handles.
+- **Per-ticker TWR (stream 3b) doesn't exist either.** `return_snapshots` covers the holding
+  period, on cost basis. "Risk while I held it" is deferred.
+- **EUR conversion** is Labs' `_Series.growth` (`labs/calculator.py`). It is private, and its
+  input is built by `_build_series`, which also bridges NULLs as flat days. RK-5 extracts the
+  conversion so that Labs and the risk path share it (spec §4.2 CHECK). The conversion stays in
+  portfolio, not data-store: §9's "data-store owns EUR conversion" is superseded, because
+  portfolio already owns it and Labs must give identical numbers.
+- **The benchmark tickers:** `VWCE.DE` is EUR-listed, from 2019-07-29. `IWDA.AS` is EUR-listed,
+  from 2009-09-25.
+- **FX comes from yfinance** (`fx_rates`, source `yfinance`). There are no HKD, JPY, CAD, DKK,
+  AUD or SEK series, so assets in those currencies are ineligible ("no FX series for <CCY>").
+- **Asset types are unreliable for ETCs.** `tracked_tickers` stores EGLN.L (gold) and ISLN.L
+  (silver) as `equity`. This matters to RK-22.
+- **No settings table** exists in any service. The benchmark is a request parameter (below).
+
+## Domain review (2026-10-20)
+
+A finance review of the spec. The golden tests (§5.7, §6.3) and §4.2's example were recomputed
+independently, and every value matches. The spec's §13 lists the rules it revised. The facts it
+checked against the code, docs and dev DB:
+
+- **`market_returns.simple_return` is a total return**, with the dividend on its ex-date
+  (`(close_t + dividends_t) / close_(t−1) − 1`).
+- **Portfolio's market value is price-only**, and `DIVIDEND` transactions are dated on
+  payment (`position_snapshots.dividends_received_eur` sums by `trade_datetime`). This matters
+  to RK-10.
+- **NULL returns are suppressed implausible rows**, usually a pair around a garbage close on a
+  zero-volume day. The real move across them is lost, not just missing (spec R5).
+- **No VWRL** (or other long-history All-World ticker) is tracked. Only `VWCE.DE` (from
+  2019-07-29) and `IWDA.AS` (from 2009-09-25) are. This matters to RK-13.
+
+## Agreed requirements
+
+- **Benchmark.** It is chosen per request, as a query parameter, and is not saved. The default
+  is `VWCE.DE`. One benchmark serves every window: a window it doesn't cover is greyed, with no
+  fallback to `IWDA.AS` (spec §5.6, D2; changed by the domain review, because the two track
+  different indices). Saving a choice is deferred, because it needs a schema.
+- **Frequencies** (spec §4.3, changed by the domain review): volatility, downside deviation,
+  Sharpe and Sortino are weekly, like correlation and beta. Cumulative return, CAGR, drawdown
+  and VaR stay daily.
+- **Ex-post means invested assets only.** Cash isn't tracked. Spec §6.2's cash toggle and §7.2's
+  "from cash" funding rule are deferred until it is.
+- **Ex-ante takes a mix, as Labs does.** Risk endpoints take `{assets: [{ticker, weight}]}`. web
+  builds the default mix from holdings with `labs_view.build_default_mix`. This keeps weights
+  computed in one place, `build_portfolio_holdings`, and lets the what-if and Labs reuse the same
+  shape.
+- **The rest of the spec's decisions D1–D10 stand** unless a task below changes one and says so.
+
+## Constraints that apply to every task
+
+- **Schema changes are agreed first.** RK-2 adds a table. Propose its columns, types and keys,
+  and get sign-off before writing DDL (`.claude/rules/data-schema.md`). Update `docs/schema.md`
+  in the same change. No other task changes a schema. If one turns out to need it, stop.
+- **web talks only to portfolio.** Risk-free, benchmark and holdings data reach web through
+  portfolio endpoints.
+- **Returns come from `simple_return`, never from close prices.**
+- **A NULL return is a gap (R5).** In the risk path it is excluded, never 0. The Labs growth
+  chart keeps its flat-day bridging (D6).
+- **Spec golden tests are hand-checked, not regenerated.** §5.7 and §6.3 are pinned values. If
+  the code disagrees, find out which side is wrong before changing either.
+- **Every figure carries its metadata.** That is its window, frequency, q, `n_obs`, `n_gaps`,
+  flags, and ex-post/ex-ante label (§9, §10). Insufficient history is greyed with its reason
+  (R9), never shown as 0 or left blank.
+- **Copy says "historical", never "expected" (R15).**
+- **Brand.** Use tokens only. Every number is in `--font-mono`. Gold is the only accent. Forest
+  and oxblood are used only on gains and losses: a volatility or a correlation is not a gain or
+  a loss.
+- **Tests first** (`.claude/rules/testing.md`). Integration tests run only against
+  `docker-compose.test.yml`.
+- **Logging** follows `.claude/rules/logging.md`: a start line, an outcome for each asset
+  (including why one was left out), and a summary. data-store also follows its own
+  `logging.md`.
+- **Docs change in the same change as the code.** That means each touched service's
+  `docs/architecture.md`, plus portfolio `flows.md` and web `ui-architecture.md`.
+- **Files stay under 64 KB.** If a doc would cross the limit, split it first, in a commit of its
+  own (as LB-4 and LB-6 did).
+- **Visual review.** Every web task adds `review_pages.py` entries. It regenerates the
+  screenshots and looks at them at every width, in both themes.
+
+## Status table
+
+| ID | Task | Depends on | Status |
+|----|------|------------|--------|
+| RK-0 | [Roadmap housekeeping](#rk-0-roadmap-housekeeping) | — | done |
+| RK-1 | [data-store: split `architecture.md`](#rk-1-data-store-split-architecturemd) | — | ready |
+| RK-2 | [data-store: risk-free rate ingestion (€STR + EONIA)](#rk-2-data-store-risk-free-rate-ingestion-str--eonia) | RK-1 | blocked |
+| RK-3 | [data-store: risk-free endpoint](#rk-3-data-store-risk-free-endpoint) | RK-2 | blocked |
+| RK-4 | [portfolio: client reads the risk-free series](#rk-4-portfolio-client-reads-the-risk-free-series) | RK-3 | blocked |
+| RK-5 | [portfolio: shared EUR daily returns](#rk-5-portfolio-shared-eur-daily-returns) | — | ready |
+| RK-6 | [portfolio: risk library foundations](#rk-6-portfolio-risk-library-foundations) | — | ready |
+| RK-7 | [portfolio: single-series measures](#rk-7-portfolio-single-series-measures) | RK-6 | blocked |
+| RK-8 | [portfolio: Labs risk in the backtest](#rk-8-portfolio-labs-risk-in-the-backtest) | RK-4, RK-5, RK-7 | blocked |
+| RK-9 | [web: Labs risk panel and drawdown chart](#rk-9-web-labs-risk-panel-and-drawdown-chart) | RK-8 | blocked |
+| RK-10 | [portfolio: daily TWR of invested positions](#rk-10-portfolio-daily-twr-of-invested-positions) | RK-5 | blocked |
+| RK-11 | [portfolio: ex-post risk endpoint](#rk-11-portfolio-ex-post-risk-endpoint) | RK-4, RK-7, RK-10 | blocked |
+| RK-12 | [web: `/risk` page with the ex-post summary](#rk-12-web-risk-page-with-the-ex-post-summary) | RK-11 | blocked |
+| RK-13 | [portfolio: benchmark and relative measures](#rk-13-portfolio-benchmark-and-relative-measures) | RK-8, RK-11 | blocked |
+| RK-14 | [web: benchmark selector, relative measures, benchmark line](#rk-14-web-benchmark-selector-relative-measures-benchmark-line) | RK-9, RK-12, RK-13 | blocked |
+| RK-15 | [portfolio: ex-ante covariance and risk decomposition](#rk-15-portfolio-ex-ante-covariance-and-risk-decomposition) | RK-6, RK-7 | blocked |
+| RK-16 | [portfolio: correlation matrix](#rk-16-portfolio-correlation-matrix) | RK-6 | blocked |
+| RK-17 | [portfolio: ex-ante endpoint](#rk-17-portfolio-ex-ante-endpoint) | RK-4, RK-5, RK-13, RK-15, RK-16 | blocked |
+| RK-18 | [web: ex-ante summary, decomposition and heatmap](#rk-18-web-ex-ante-summary-decomposition-and-heatmap) | RK-12, RK-17 | blocked |
+| RK-19 | [portfolio: candidate what-if](#rk-19-portfolio-candidate-what-if) | RK-17 | blocked |
+| RK-20 | [web: what-if form](#rk-20-web-what-if-form) | RK-18, RK-19 | blocked |
+| RK-21 | [data-store: ETF holdings endpoint](#rk-21-data-store-etf-holdings-endpoint) | RK-1 | blocked |
+| RK-22 | [portfolio: look-through exposures](#rk-22-portfolio-look-through-exposures) | RK-21 | blocked |
+| RK-23 | [web: concentration section](#rk-23-web-concentration-section) | RK-12, RK-22 | blocked |
+| RK-24 | [portfolio: rolling windows](#rk-24-portfolio-rolling-windows) | RK-11, RK-16, RK-17 | blocked |
+| RK-25 | [web: rolling charts](#rk-25-web-rolling-charts) | RK-18, RK-24 | blocked |
+| RK-26 | [FX decomposition (portfolio and web)](#rk-26-fx-decomposition-portfolio-and-web) | RK-18 | blocked |
+| RK-27 | [data-store: regimes endpoint](#rk-27-data-store-regimes-endpoint) | RK-1 | blocked |
+| RK-28 | [Regime view (portfolio and web)](#rk-28-regime-view-portfolio-and-web) | RK-14, RK-27 | blocked |
+| RK-29 | [Candidate ranking mode](#rk-29-candidate-ranking-mode) | RK-20 | blocked |
+| RK-30 | [Ledoit–Wolf shrinkage (optional)](#rk-30-ledoitwolf-shrinkage-optional) | RK-15 | blocked |
+
+## Tasks
+
+### RK-0. Roadmap housekeeping
+
+**Status:** done
+
+Move `dev/risk.md` to `docs/domain/risk.md`, the location it names. Amend it only where
+Discovery made it false, and mark each amendment as such:
+- §3 streams 3 and 3b don't exist yet. 3 is built in RK-10.
+- §6.1 is resolved: invested assets only, on the union calendar.
+- §9: EUR conversion stays in portfolio.
+- §4.2: FX is from yfinance.
+
+Link this file from the spec's header.
+
+**As built:** `dev/` is gitignored, so the spec enters the repo with this move. Each amendment
+is a note marked "Amended (RK-0)" beside the text it corrects, and the original text is kept.
+The header notes the amendments.
+
+### RK-1. data-store: split `architecture.md`
+
+**Status:** ready
+
+At 63.7 KB, it has no room for RK-2, RK-21 or RK-27. Move a self-contained section verbatim,
+e.g. the endpoint table, to `docs/endpoints.md`, as web did in LB-6. This is docs only.
+
+### RK-2. data-store: risk-free rate ingestion (€STR + EONIA)
+
+**Status:** blocked
+
+- **Schema first.** Propose a new table and agree it. `macro_indicator_rates` doesn't fit (its
+  key has no series code, and `rate_value` is a YoY %). Recommended: store each published series
+  raw, one row per (series, rate_date, source), and splice at read time in RK-3. Then the stored
+  numbers stay checkable against the ECB, and the −0.085 pp spread is a single named constant.
+- **Source:** the ECB Data Portal. The €STR series is probably `EST.B.EU000A2X2A25.WT` and EONIA
+  `EON.D.EONIA_TO.RATE`. **CHECK** both against the portal before coding, and fetch a known
+  published value to confirm the units.
+- A new source module behind its own small Protocol, retries as `macro/retry.py` does, a CLI
+  command, and a task in `daily_pipeline` (plus a backfill path). Negative rates are stored as
+  they are (§4.1).
+
+Tests: parsing a recorded portal response (unit). Upsert idempotency, and both series stored
+(integration). Logging counts.
+
+### RK-3. data-store: risk-free endpoint
+
+**Status:** blocked
+
+`GET /rates/risk-free?start&end` returns the spliced daily `rf_eur` (annualised %), one point
+per published day, each with its source (`estr` / `eonia_adjusted`). It also returns the series'
+first date, so that consumers can apply R4. It doesn't forward-fill: portfolio does that, under
+§4.1's convention.
+
+Tests: the splice boundary (2019-09-30 is EONIA − 0.085, 2019-10-01 is €STR), a window before
+1999, and an empty range.
+
+### RK-4. portfolio: client reads the risk-free series
+
+**Status:** blocked
+
+Add `get_risk_free_series` to the data-store client Protocol, the HTTP client and the fakes.
+
+Tests: parsing, a negative rate, and a missing key raising `DataStoreApiError` (as in LB-2).
+
+### RK-5. portfolio: shared EUR daily returns
+
+**Status:** ready
+
+A preparatory refactor. Extract a pure function that turns an asset's `PricePoint`s and
+`FxPoint`s into a daily EUR return series: r_eur = (1 + r_local)·fx₍t−1₎/fxₜ − 1 (§4.2), with
+FX taken on or before each date. **NULLs are kept as NULLs.** The result is "ineligible: no FX
+series for <CCY>" when there is no FX. Labs' `_Series` then builds its levels on this function,
+and bridges NULLs itself.
+
+The result also exposes its two components, `r_local` and `r_fx`, beside `r_eur`. RK-16's
+local-currency correlation and RK-26's FX decomposition need them, and recomputing them
+elsewhere would make a second copy of the conversion.
+
+Tests:
+- §4.2's worked example, including its `r_local` and `r_fx`.
+- An EUR asset.
+- The series starting at the later of the first return and the first FX date.
+- **An equality test**: a no-gap fixture's chained EUR returns equal Labs' growth exactly, and
+  every existing Labs test passes unchanged.
+
+### RK-6. portfolio: risk library foundations
+
+**Status:** ready
+
+- A new pure module, `portfolio/risk/`. It does no I/O and works on floats.
+- **Add numpy to portfolio.** *Recommendation (confidence: medium–high):* §6.3 and §7 are matrix
+  maths, and §5.5 needs a documented quantile method. numpy gives both, tested, and handles
+  20-year daily series cheaply. Risk figures are statistical estimates, not ledger amounts, so
+  floats are right here. `Decimal` stays for money. The alternatives were pure Python
+  (`statistics` + hand-written matrices), which means more code to get wrong, and pandas, which
+  isn't needed for index-aligned arrays. Confirm before adding the dependency.
+- **Types:** a return series (dates, values with NULLs, frequency). A window. A result,
+  `RiskFigure(value, window_start, window_end, frequency, q, n_obs, n_gaps, flags)`, with the
+  flags §9 lists.
+- **Building blocks:**
+  - weekly W-FRI aggregation with NULL propagation (R6)
+  - gap accounting and the 2% warning (R8)
+  - `has_suspect_rows`
+  - the empirical q (§4.4)
+  - ACT/360 risk-free compounding with forward-fill (§4.1), and R4's `rf_partial`
+  - the minimum-history check (§4.5, R9)
+  - standard windows ending at the latest common date (§4.5)
+  - the VaR day mask: days on which every included asset's exchange traded (R7, §5.5)
+
+Tests: a week with a NULL becomes NULL. A week with no trades is NULL. A holiday Friday keeps
+its label. rf compounding over a weekend. Empirical q for a union calendar. Each minimum's
+boundary. The VaR mask drops a day on which one asset's exchange was closed.
+
+### RK-7. portfolio: single-series measures
+
+**Status:** blocked
+
+§5.1–5.5, each function frequency-agnostic (q is a parameter). A thin layer applies §4.3's
+frequency rule, so callers can't feed a daily series to a weekly measure by accident:
+- cumulative return and CAGR (not annualised under 1Y), daily
+- volatility and downside deviation (divisor N), weekly
+- drawdown: MDD, peak/trough/recovery dates, max time under water, and the DD series, daily
+- Sharpe ± SE (Lo 2002), Sortino, weekly; Calmar (`short_window` under 3Y) from daily CAGR and MDD
+- 1-day historical VaR/CVaR 95/99, with linear interpolation, documented; on RK-6's day mask,
+  with `nonsync_daily` for multi-market series and `tail_unstable` below 1,000 obs (§4.5)
+
+Tests: **§5.7's golden test** (at its pinned q = 252). A recovered and an unrecovered drawdown.
+VaR on a known ordered sample. Every insufficient-history path, including the weekly minimum of
+52. The `tail_unstable` boundary.
+
+### RK-8. portfolio: Labs risk in the backtest
+
+**Status:** blocked
+
+Add a `risk` section to `POST /labs/backtest`, for the mix and each asset:
+- §5.1–5.5's measures per window
+- the drawdown series for the requested growth period
+- CAGR
+
+The mix uses Labs' buy-and-hold series, **drift included** (R3), re-based at each window's
+start, as Labs' periods are.
+
+Rules to agree in this task:
+- **Windows.** The spec has 1Y/3Y/5Y/10Y/Max, and Labs' periods are 1M–5Y/Max. Recommended: the
+  risk table uses the spec's windows, so the calculator also builds 3Y and 10Y, and periods
+  under 1Y never get risk figures.
+- **Gaps.** For the risk path, the mix's daily return on a day when any included asset's return
+  is NULL is itself a gap, while the levels stay bridged as Labs builds them.
+- **Frequencies.** Volatility, Sharpe and Sortino come from the mix's weekly returns (spec
+  §4.3), so the drifting mix needs a weekly series as well as a daily one. VaR uses RK-6's day
+  mask and carries `nonsync_daily` when the mix spans markets or currencies.
+
+The flow also fetches the risk-free series. Extending the backtest route, rather than adding a
+new one, keeps one fetch and one set of statuses. Measure the response size against LB-5's
+figure.
+
+Tests: hand-computed fixtures. The drifting mix differs from constant weights. A NULL day is
+excluded from the mix's stats but still in its chart. Per-asset rows under R10's common-window
+rule.
+
+### RK-9. web: Labs risk panel and drawdown chart
+
+**Status:** blocked
+
+- The client parses `risk`.
+- A risk table: CAGR, volatility, MDD, Sharpe ± SE (labelled "1 s.e."), Sortino and Calmar per
+  window, formatted as §10 says, greyed with its reason where insufficient. Each figure's hover
+  names its frequency (weekly or daily).
+- A drawdown chart under the growth chart. It reuses `chart_theme.js` and `.chart-frame`.
+  **Agree its styling before building.** A drawdown isn't a loss figure, so whether oxblood
+  applies is a brand question.
+- Glossary entries for every measure, linked with `term`, saying "historical".
+- Labelled "buy & hold (drifting)" (R3).
+
+### RK-10. portfolio: daily TWR of invested positions
+
+**Status:** blocked
+
+Build spec stream 3, computed on read, on the union calendar.
+
+**Definition (agreed 2026-10-20): holdings-based.**
+rₜ = Σᵢ wᵢ,ₜ₋₁ · r_eur,i,t, where:
+- wᵢ,ₜ₋₁ is ticker i's share of the EUR market value at the previous close, from
+  `return_snapshots.market_value_eur`, summed across accounts by ticker.
+- r_eur,i,t is RK-5's daily EUR total return, with the dividend on its ex-date.
+
+**Why holdings-based.** A flow-based TWR, (MVₜ + Dₜ − Fₜ) / MV₍t−1₎ − 1, would need each
+`DIVIDEND` transaction moved from its pay date to its ex-date (spec §6.1), by matching it to
+data-store's dividend events. That is a matching step, with a fallback for unmatched rows, that
+can go wrong. The holdings-based form has no flows to time and no dividends to match, and it
+shares RK-5's return definition with ex-ante and Labs.
+
+**What it gives up, stated in the docs and in the figure's hover text:**
+- dividends count gross of withholding tax
+- fees and the gap between trade price and close are ignored
+- a position's first day counts from the next close, and its last day runs close to close
+
+These are small next to the risk figures' own sampling error. The cost-basis return on
+`GET /returns/portfolio` remains the figure for what was actually earned.
+
+Rules:
+- **Buys and sells don't move the return.** They only change the next day's weights.
+- **An empty portfolio** (total market value 0 at t−1) has no return that day. The chain
+  restarts at the next day with holdings.
+- **A NULL r_eur for a held ticker** makes that day a gap (R5), as for any mix.
+- **An ineligible holding** (no FX series) is named, not dropped silently. Its weight is
+  excluded and the remaining weights are renormalised, with `n_excluded` and the tickers in the
+  result.
+- It is exposed as a `twr_growth` field on `GET /returns/portfolio`'s points, or as its own
+  endpoint, whichever keeps the existing EUR chart's payload unchanged.
+- No schema change.
+
+Tests: hand-computed fixtures. A buy mid-series doesn't move the return. A sell. A dividend
+whose ex-date and pay date differ: the gain lands on the ex-date, and the pay date shows no
+swing. A full exit and re-entry. Two accounts holding one ticker. An FX move on a USD holding. A
+NULL day. An ineligible holding.
+
+### RK-11. portfolio: ex-post risk endpoint
+
+**Status:** blocked
+
+`GET /risk/ex-post?user_id=` returns the §5.1–5.5 measures from RK-10's series over the
+standard windows, labelled "ex-post · invested assets". It has its own `portfolio/risk/flows.py`
+and jobs entry. It logs a start line, each window's outcome and a summary.
+
+### RK-12. web: `/risk` page with the ex-post summary
+
+**Status:** blocked
+
+- A new router `web/api/risk.py`, a "Risk" nav link, `templates/risk.html`, and a view builder.
+- First section: the ex-post summary, with every figure's window, `n_obs` and label on hover
+  (§10).
+- Failures are isolated per section, as `/labs` does.
+- If `ui-architecture.md` would cross 64 KB, split it first.
+
+### RK-13. portfolio: benchmark and relative measures
+
+**Status:** blocked
+
+- Library: weekly beta, correlation, tracking error and information ratio (§5.6).
+- A `benchmark` parameter on the backtest and ex-post endpoints, defaulting to VWCE.DE. One
+  benchmark serves every window. A window it doesn't cover is greyed, "benchmark history too
+  short (from <date>)", with no fallback to another index (spec §5.6). Each figure names the
+  benchmark and its start date.
+- **Agree** whether to offer a longer All-World history: track VWRL (same FTSE index,
+  ~2012, not tracked today), or a VWCE-on-IWDA splice exposed as its own, named benchmark. Either
+  is opt-in, never a silent default.
+- The backtest also returns the benchmark's growth line for the chart period.
+
+Tests: beta/correlation on a constructed series with a known answer. VWCE.DE on a 10Y window
+greyed with its start date, not swapped for IWDA.AS. An unknown benchmark ticker reported, not
+fatal.
+
+### RK-14. web: benchmark selector, relative measures, benchmark line
+
+**Status:** blocked
+
+- A benchmark field (a datalist of tickers) on `/labs` and `/risk`, kept in the query string.
+- Relative-measure rows.
+- The benchmark line on the Labs growth chart, with **its style agreed** (LB-8's palette
+  constraints apply).
+
+### RK-15. portfolio: ex-ante covariance and risk decomposition
+
+**Status:** blocked
+
+- Library (§6.2–6.3): the listwise weekly window (R12), with the limiting holding named, and Σ
+  annualised ×52.
+- σ_p, MCR, CR, PCR, correlation with the portfolio, the diversification ratio and the effective
+  N.
+- The constant-weight series of "today's mix": daily for drawdown and VaR (a NULL in any holding
+  excludes that day), weekly for volatility, Sharpe and Sortino (spec §6.2).
+
+Tests: **§6.3's golden test**. CR sums to σ_p. PCR sums to 100%. A negative-PCR hedge. The
+listwise window shortened by one late holding. The constant-weight weekly series' stdev × √52
+equals σ_p on the same window.
+
+### RK-16. portfolio: correlation matrix
+
+**Status:** blocked
+
+Pearson on weekly returns:
+- **Pairwise for display**: each cell carries its own `n_obs` and start date.
+- **Listwise for maths** (R13). The type system keeps a pairwise matrix out of any portfolio
+  calculation.
+- EUR or local-currency returns.
+- Clustering order by √(2(1−ρ)) (optional within this task).
+
+Tests: pairwise cells with different overlaps. EUR raises two USD assets' correlation over local
+in a constructed FX fixture.
+
+### RK-17. portfolio: ex-ante endpoint
+
+**Status:** blocked
+
+`POST /risk/ex-ante` takes `{assets, window, benchmark, exclude?}`. It returns σ_p, the
+decomposition table, the constant-weight measures, and the correlation matrix over the holdings
+plus the benchmark. It names the holding that limits the window. Per-asset statuses work as in
+LB-4 (`no_fx_rate`, `no_history`, …). The € tail figures (§5.5) are left to web, which knows the
+market value.
+
+### RK-18. web: ex-ante summary, decomposition and heatmap
+
+**Status:** blocked
+
+- Ex-ante summary, labelled "ex-ante · constant weights" beside the ex-post one (R2).
+- The decomposition table, with weight % beside risk %, and the 10%-weight/25%-risk insight
+  surfaced.
+- The VaR € figure ("on a bad day (1 in 20)…").
+- The correlation heatmap. **Agree its colour scale against the brand charter before building.**
+  Forest and oxblood are off-limits for correlation.
+- A control to exclude the holding that limits the window.
+
+### RK-19. portfolio: candidate what-if
+
+**Status:** blocked
+
+- Extend the ex-ante endpoint, or add a sibling, with `candidate {ticker, weight}` and
+  `funding: pro_rata | replace:<ticker>`. "From cash" is deferred.
+- Before and after on the same listwise window. If adding the candidate shortens the window, it
+  says so and recomputes "before" (§7.2).
+- The table in §7.2, with the risk deltas (Δσ_p, Δ diversification ratio, the candidate's % of
+  risk) first and ΔSharpe second, with its SE.
+- The threshold SR_c > ρ(c,p)·SR_p, with its inputs, **under pro-rata funding only**. All three
+  come from weekly returns on the listwise window (spec §7.2).
+- R14's survivorship flag, when the candidate isn't in `tracked_tickers`. **CHECK** which field
+  of `TickerInfo` tells that.
+
+Tests: pro-rata and replace weights. The shortened window. The threshold on a constructed case,
+checked against a numerical derivative of the mix's Sharpe. No threshold under "replace". The
+flag.
+
+### RK-20. web: what-if form
+
+**Status:** blocked
+
+A GET form on `/risk` (ticker, weight %, funding), working without JS as LB-7's does. It renders
+the before/after table, the threshold explanation and the survivorship warning.
+
+### RK-21. data-store: ETF holdings endpoint
+
+**Status:** blocked
+
+`GET /etf-holdings/{fund_key}/latest` returns the snapshot date and constituents (ticker, name,
+sector, asset class, location, currency, weight %). **CHECK** how a fund_key maps to the
+tradeable ticker (IWDA.AS), and expose that mapping.
+
+### RK-22. portfolio: look-through exposures
+
+**Status:** blocked
+
+§8 by currency, sector, country and asset class:
+- a direct stock looked up in the latest snapshot, otherwise "unknown"
+- IWDA through its holdings
+- other ETFs in an "unmapped: <ETF>" bucket
+- top-N weights, Herfindahl and the effective number per dimension
+- the snapshot date
+- R16: constituent currency vs listing currency, labelled "listing currency of holdings"
+- single-name overlap: look-through aggregated by issuer, so a stock held directly and through
+  IWDA is one exposure
+- currency-hedged ETFs as "hedged: <ETF>" in the currency view. **CHECK** whether any holding is
+  hedged, and agree how that's known.
+
+**ETCs:** `asset_type` is wrong for EGLN.L and ISLN.L (Discovery). Agree where commodity and
+underlying currency come from (e.g. a small config mapping) before building. Don't trust
+`asset_type`.
+
+Tests: hand-computed look-through. The unmapped share. A world ETF in EUR whose exposure is
+mostly USD. A stock held directly and through IWDA, summed. A hedged ETF kept out of the
+constituent currencies.
+
+### RK-23. web: concentration section
+
+**Status:** blocked
+
+Exposure tables or bars per dimension, with the unmapped share shown prominently, the
+listing-vs-exposure currency view, the top look-through single names, and the snapshot date.
+
+### RK-24. portfolio: rolling windows
+
+**Status:** blocked
+
+- Rolling 1Y volatility and Sharpe, stepped monthly (ex-post and ex-ante).
+- Rolling 52-week correlation, stepped weekly, for a pair or for an asset against the portfolio.
+- A window below its minimum yields a gap, not a point.
+
+### RK-25. web: rolling charts
+
+**Status:** blocked
+
+Charts for RK-24, on `/risk`.
+
+### RK-26. FX decomposition (portfolio and web)
+
+**Status:** blocked
+
+§6.4 for each non-EUR holding, on weekly returns: local volatility, FX volatility,
+corr(r_local, r_fx), and EUR volatility. It reuses RK-5's `r_local` and `r_fx`.
+
+### RK-27. data-store: regimes endpoint
+
+**Status:** blocked
+
+`GET /regimes?start&end` returns the rows that overlap the range.
+
+### RK-28. Regime view (portfolio and web)
+
+**Status:** blocked
+
+For each regime overlapping the window, the portfolio's and the benchmark's return and MDD inside
+it. This is descriptive only, so `known_from` isn't applied (§11 phase 5).
+
+### RK-29. Candidate ranking mode
+
+**Status:** blocked
+
+Score many candidates at a fixed weight on a common window, showing each candidate's history
+length, with R14's warning once at the top. Rank by Δσ_p and Δ diversification ratio. ΔSharpe
+is shown with its SE but is never the ranking key, because picking the best of many noisy
+historical Sharpe deltas is data-mining (spec §7.2). Agree the candidate universe and a cap on it
+before building, since every candidate is a data-store fetch.
+
+### RK-30. Ledoit–Wolf shrinkage (optional)
+
+**Status:** blocked
+
+Shrink Σ when the assets exceed about ¼ of the weekly observations. It is flagged in the result.
+Build it only if RK-18's matrices show the need.
+
+## Deferred
+
+- "Risk while I held it" from a per-ticker TWR (spec stream 3b).
+- Cash in ex-ante (§6.2's toggle) and the "from cash" funding rule (§7.2). Both need cash
+  tracking.
+- A saved benchmark choice per user. It needs a settings schema.
+- FX series for HKD, JPY, CAD, DKK, AUD and SEK, so those assets become eligible.
+- Look-through for VWCE, EM IMI and Small Cap. It needs their holdings ingested.
