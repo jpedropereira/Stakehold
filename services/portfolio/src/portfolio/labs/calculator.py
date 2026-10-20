@@ -10,10 +10,13 @@ caller's job too, so this module never looks at a currency code.
 
 The rules, as agreed for the labs chunk (tasks-labs-thread.md):
 
-- **Total return in EUR.** An asset's native growth is its simple_return chained (dividends
-  included, splits already accounted for). Its EUR growth divides that by the FX rate (units of
-  the currency per 1 EUR, as fx_rates stores it), taken as the latest rate on or before each
-  date with no age limit. FX moves count on days the asset itself didn't trade.
+- **Total return in EUR.** The conversion is eur_returns/calculator.py's (RK-5), shared with
+  the risk path so the two give the same numbers: an asset's native growth is its r_local
+  (simple_return: dividends included, splits already accounted for) chained from the anchor, and
+  its EUR growth divides that by the FX rate from the same FxSeries (units of the currency per
+  1 EUR, latest on or before each date). Labs prices on the union calendar, so it keeps the
+  levels rather than chaining r_eur: an FX move then counts on days the asset itself didn't
+  trade, and a flat price under a moving rate stays exact.
 - **Calendars.** Assets are lined up on the union of their trading days, each carrying its last
   value forward on days it didn't trade.
 - **Periods.** Every period ends on the last day every asset has data. A month period starts
@@ -45,7 +48,7 @@ The rules, as agreed for the labs chunk (tasks-labs-thread.md):
 """
 
 import calendar
-from bisect import bisect_left, bisect_right
+from bisect import bisect_right
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date
@@ -53,14 +56,22 @@ from decimal import ROUND_HALF_UP, Decimal
 from enum import StrEnum
 
 from portfolio.datastore_client.base import FxPoint, PricePoint
+from portfolio.eur_returns.calculator import (
+    NO_FX_SERIES,
+    NO_HISTORY,
+    FxSeries,
+    Ineligible,
+    eur_daily_returns,
+)
 
 # Match portfolio's other pct figures (return_snapshots' NUMERIC(18,8)). Quantized only at
 # emission; the chained indexes stay at full Decimal precision.
 _EIGHT_PLACES = Decimal("0.00000001")
 _ONE = Decimal("1")
 
-NO_HISTORY = "no history yet"
 NO_FX_RATE = "no FX rate"
+# Labs words a missing FX series as it always has; eur_returns' own reasons mapped to it.
+_UNAVAILABLE_REASONS = {NO_HISTORY: NO_HISTORY, NO_FX_SERIES: NO_FX_RATE}
 
 
 class Period(StrEnum):
@@ -149,8 +160,7 @@ class _Series:
     dates: list[date]
     native: list[Decimal]
     gap_dates: list[date]
-    fx_dates: list[date] | None  # None for a EUR asset
-    fx_rates: list[Decimal] | None
+    fx: FxSeries | None  # None for a EUR asset
 
     @property
     def first(self) -> date:
@@ -164,9 +174,7 @@ class _Series:
         return self.native[bisect_right(self.dates, day) - 1]
 
     def _fx_on(self, day: date) -> Decimal:
-        if self.fx_dates is None:
-            return _ONE
-        return self.fx_rates[bisect_right(self.fx_dates, day) - 1]
+        return _ONE if self.fx is None else self.fx.on(day)
 
     def growth(self, day: date, start: date) -> Decimal:
         """G(day) / G(start), both taken on or before the date. Written as two ratios rather
@@ -235,43 +243,23 @@ def _validate(assets: Sequence[AssetInput]) -> None:
 
 
 def _build_series(asset: AssetInput) -> _Series | Unavailable:
-    if not asset.prices:
-        return Unavailable(asset.ticker, NO_HISTORY)
+    returns = eur_daily_returns(asset.prices, asset.fx)
+    if isinstance(returns, Ineligible):
+        return Unavailable(asset.ticker, _UNAVAILABLE_REASONS[returns.reason])
 
-    # The first row is the anchor: its return (normally NULL, as data-store's first day is) is
-    # ignored. Every later NULL is a gap, bridged as a flat day.
-    dates = [asset.prices[0].date]
+    # The levels start at 1 on the anchor. Every NULL return after it is a gap, bridged as a flat
+    # day.
+    dates = [returns.anchor, *returns.dates]
     native = [_ONE]
     gap_dates = []
-    for point in asset.prices[1:]:
-        if point.simple_return is None:
-            gap_dates.append(point.date)
+    for day, r_local in zip(returns.dates, returns.r_local):
+        if r_local is None:
+            gap_dates.append(day)
             factor = _ONE
         else:
-            factor = _ONE + point.simple_return
-        dates.append(point.date)
+            factor = _ONE + r_local
         native.append(native[-1] * factor)
-
-    if asset.fx is None:
-        return _Series(asset.ticker, asset.weight, dates, native, gap_dates, None, None)
-
-    if not asset.fx:
-        return Unavailable(asset.ticker, NO_FX_RATE)
-    fx_dates = [point.date for point in asset.fx]
-    fx_rates = [point.rate for point in asset.fx]
-    # Usable history starts on the first day that has a rate on or before it.
-    usable = bisect_left(dates, fx_dates[0])
-    if usable == len(dates):
-        return Unavailable(asset.ticker, NO_FX_RATE)
-    return _Series(
-        asset.ticker,
-        asset.weight,
-        dates[usable:],
-        native[usable:],
-        gap_dates,
-        fx_dates,
-        fx_rates,
-    )
+    return _Series(asset.ticker, asset.weight, dates, native, gap_dates, returns.fx)
 
 
 def _period_start(period: Period, end: date, series: list[_Series]) -> date:
