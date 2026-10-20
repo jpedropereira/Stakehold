@@ -71,6 +71,7 @@ flowchart TD
         SCHEMA["db/schema.sql"]
         RESULT["run_result.py"]
         RETRY["yfinance_retry.py<br/><i>shared transient-error classifier</i>"]
+        PRETRY["provider_retry.py<br/><i>provider-agnostic retry loop</i>"]
         RESOLVE["ticker_resolution.py<br/><i>holding → provider ticker</i>"]
     end
 
@@ -114,6 +115,7 @@ flowchart TD
     TRK --> RETRY
     MKT --> RETRY
     FX --> RETRY
+    MACRO --> PRETRY
     HOLD --> PG
     MKT --> PG
     FX --> PG
@@ -214,10 +216,12 @@ a derived one: `base.py` (the `MacroIndicatorSource` Protocol, shared by both pr
 talk to genuinely different APIs, a fixed-series pull vs. a dimension-filtered dataset query —
 and `repository.py` (raw upsert plus the read-back `get_raw_indicators` the calculator needs),
 plus `calculator.py` (pure YoY-normalization arithmetic, no I/O, mirroring `returns/calculator.py`
-exactly). `retry.py` holds the transient-error classifier both `*_source.py` files share — scoped
-to this domain rather than promoted to a foundation module like `yfinance_retry.py`, since both
-callers live inside `macro/` itself rather than spanning two domains the way `market_data/` and
-`fx/` share `yfinance_retry.py`.
+exactly). Both `*_source.py` files retry through `provider_retry.py`, a foundation module. It
+began as `macro/retry.py`, scoped to this domain while both its callers lived here. It moved out
+when `risk_free/` needed the same loop, for the same reason `yfinance_retry.py` left
+`market_data/`: one domain importing another's helper isn't a foundation to build on. Its
+classifier knows no provider's specific errors (unlike `yfinance_retry.py`'s), which is what
+lets a third provider share it.
 
 `fx/` follows the standard three-file shape exactly, and is the second implementation of it (after
 `market_data/`) rather than the first — deliberately kept as a *separate* domain rather than folded

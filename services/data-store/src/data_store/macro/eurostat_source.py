@@ -3,7 +3,7 @@ from datetime import date
 
 import eurostat
 import pandas as pd
-from data_store.macro.retry import with_retries
+from data_store.provider_retry import with_retries
 
 logger = logging.getLogger(__name__)
 

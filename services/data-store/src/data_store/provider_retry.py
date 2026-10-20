@@ -1,12 +1,11 @@
-"""Transient-error classifier and retry loop shared by fred_source.py and eurostat_source.py.
+"""Provider-agnostic transient-error classifier and retry loop, for the HTTP providers that
+aren't yfinance (FRED, Eurostat, the ECB).
 
-Scoped to this domain rather than promoted to a foundation module like `yfinance_retry.py`:
-that classifier is shared across two different *domains* (market_data/, fx/) that both talk to
-yfinance; here both callers are within macro/ itself, talking to two different providers whose
-errors don't share yfinance's specific signatures, so a fresh, provider-agnostic classifier
-matching *these* two providers' error shapes belongs next to them instead. The retry *loop*
-around that classifier, unlike the classifier itself, has no such provider-specific content --
-it's just attempt-counting, backoff and logging -- so both callers share one copy of it here too.
+Kept apart from `yfinance_retry.py` because that classifier matches yfinance's specific error
+signatures, and these providers' errors share none of them. It started as `macro/retry.py`,
+while FRED and Eurostat were its only callers. It became a foundation module when `risk_free/`
+needed it too, because one domain importing another's helper is the shape `yfinance_retry.py`
+was promoted to avoid.
 """
 
 import logging
