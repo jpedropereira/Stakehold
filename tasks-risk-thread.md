@@ -116,12 +116,12 @@ checked against the code, docs and dev DB:
 | RK-2 | [data-store: risk-free rate ingestion (€STR + EONIA)](#rk-2-data-store-risk-free-rate-ingestion-str--eonia) | RK-1 | ready |
 | RK-3 | [data-store: risk-free endpoint](#rk-3-data-store-risk-free-endpoint) | RK-2 | blocked |
 | RK-4 | [portfolio: client reads the risk-free series](#rk-4-portfolio-client-reads-the-risk-free-series) | RK-3 | blocked |
-| RK-5 | [portfolio: shared EUR daily returns](#rk-5-portfolio-shared-eur-daily-returns) | — | ready |
+| RK-5 | [portfolio: shared EUR daily returns](#rk-5-portfolio-shared-eur-daily-returns) | — | done |
 | RK-6 | [portfolio: risk library foundations](#rk-6-portfolio-risk-library-foundations) | — | done |
 | RK-7 | [portfolio: single-series measures](#rk-7-portfolio-single-series-measures) | RK-6 | ready |
 | RK-8 | [portfolio: Labs risk in the backtest](#rk-8-portfolio-labs-risk-in-the-backtest) | RK-4, RK-5, RK-7 | blocked |
 | RK-9 | [web: Labs risk panel and drawdown chart](#rk-9-web-labs-risk-panel-and-drawdown-chart) | RK-8 | blocked |
-| RK-10 | [portfolio: daily TWR of invested positions](#rk-10-portfolio-daily-twr-of-invested-positions) | RK-5 | blocked |
+| RK-10 | [portfolio: daily TWR of invested positions](#rk-10-portfolio-daily-twr-of-invested-positions) | RK-5 | ready |
 | RK-11 | [portfolio: ex-post risk endpoint](#rk-11-portfolio-ex-post-risk-endpoint) | RK-4, RK-7, RK-10 | blocked |
 | RK-12 | [web: `/risk` page with the ex-post summary](#rk-12-web-risk-page-with-the-ex-post-summary) | RK-11 | blocked |
 | RK-13 | [portfolio: benchmark and relative measures](#rk-13-portfolio-benchmark-and-relative-measures) | RK-8, RK-11 | blocked |
@@ -217,7 +217,7 @@ Tests: parsing, a negative rate, and a missing key raising `DataStoreApiError` (
 
 ### RK-5. portfolio: shared EUR daily returns
 
-**Status:** ready
+**Status:** done
 
 A preparatory refactor. Extract a pure function that turns an asset's `PricePoint`s and
 `FxPoint`s into a daily EUR return series: r_eur = (1 + r_local)·fx₍t−1₎/fxₜ − 1 (§4.2), with
@@ -235,6 +235,16 @@ Tests:
 - The series starting at the later of the first return and the first FX date.
 - **An equality test**: a no-gap fixture's chained EUR returns equal Labs' growth exactly, and
   every existing Labs test passes unchanged.
+
+**As built:** `portfolio/eur_returns/calculator.py`, `eur_daily_returns(prices, fx)` →
+`EurReturns(anchor, dates, r_local, r_fx, r_eur, fx)` or `Ineligible(reason)`. It is Decimal, like
+Labs; RK-6's float library converts at its boundary. The ineligible reason is a code
+(`NO_HISTORY`, `NO_FX_SERIES`), not a message: the caller words "no FX series for <CCY>" from
+`TickerInfo.fx_currency`, and Labs keeps its "no FX rate". Labs chains `r_local` into its levels
+and prices them with the module's `FxSeries`, rather than chaining `r_eur`, because it prices on
+the union calendar, where an FX move on a day the asset didn't trade has no `r_eur` of its own.
+The equality test (USD and EUR) pins that the two forms agree on the asset's own dates, at Labs'
+8 places.
 
 ### RK-6. portfolio: risk library foundations
 
@@ -343,7 +353,7 @@ rule.
 
 ### RK-10. portfolio: daily TWR of invested positions
 
-**Status:** blocked
+**Status:** ready
 
 Build spec stream 3, computed on read, on the union calendar.
 
