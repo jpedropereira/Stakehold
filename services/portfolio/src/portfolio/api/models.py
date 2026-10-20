@@ -128,6 +128,31 @@ class PortfolioReturnsResponse(BaseModel):
     series: list[PortfolioReturnPointResponse]
 
 
+class TwrPointResponse(BaseModel):
+    """One day of the portfolio's TWR of invested positions (RK-10). twr_return is a fraction,
+    null on a gap; twr_growth is 1 at base_date and flat across a gap."""
+
+    price_date: date
+    twr_return: Decimal | None
+    twr_growth: Decimal
+
+
+class ExcludedHoldingResponse(BaseModel):
+    ticker: str
+    # not_tracked, no_history, no_fx_rate or failed.
+    status: str
+    reason: str
+
+
+class PortfolioTwrResponse(BaseModel):
+    base_date: date | None  # null when there's no series
+    points: list[TwrPointResponse]
+    n_gaps: int
+    n_excluded: int
+    # Held tickers left out of the weights, by ticker; the rest were renormalised to 100%.
+    excluded: list[ExcludedHoldingResponse]
+
+
 class HoldingAccountResponse(BaseModel):
     """One account's share of a holding. The value fields are null while that account has no
     return row for the ticker yet."""

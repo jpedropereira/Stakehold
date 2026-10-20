@@ -27,6 +27,7 @@ from portfolio.labs.calculator import BacktestResult, Period
 from portfolio.run_result import build_run_result
 from portfolio.settings import Settings, SettingsError, load_settings
 from portfolio.ticker_mapping.repository import TickerMappingRow
+from portfolio.twr import flows as twr_flows
 from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict
 from shared.db.connection import apply_schema, get_connection, transaction
@@ -1306,6 +1307,41 @@ def get_portfolio_returns(
             "report."
         )
     return asdict(result)
+
+
+def get_portfolio_twr(*, user_id: UUID, settings: Settings | None = None) -> dict:
+    """This user's daily TWR of invested positions across every account, and the holdings left
+    out of it (see twr/flows.compute_portfolio_twr). Read-only: never triggers a rebuild."""
+    configure_logging()
+    settings = settings or load_settings()
+    datastore_client = _require_datastore_client(settings, command="the portfolio TWR")
+    conn = get_connection(settings.database_url)
+    try:
+        logger.info("get-portfolio-twr: computing the TWR across accounts for user %s.", user_id)
+        result = twr_flows.compute_portfolio_twr(conn, datastore_client, user_id=user_id)
+    finally:
+        conn.close()
+
+    if result.points:
+        logger.info(
+            "get-portfolio-twr: done, %d day(s) from %s to %s, %d gap(s), %d holding(s) left out.",
+            len(result.points),
+            result.points[0].price_date,
+            result.points[-1].price_date,
+            result.n_gaps,
+            len(result.excluded),
+        )
+    elif result.base_date is None and not result.excluded:
+        logger.info(
+            "get-portfolio-twr: done, no return rows in any account yet, so no series to report."
+        )
+    else:
+        logger.warning(
+            "get-portfolio-twr: done, no returns: %d holding(s) left out, and the rest held "
+            "nothing on two consecutive dates.",
+            len(result.excluded),
+        )
+    return {**asdict(result), "n_excluded": len(result.excluded)}
 
 
 def get_backtest(

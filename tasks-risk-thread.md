@@ -121,7 +121,7 @@ checked against the code, docs and dev DB:
 | RK-7 | [portfolio: single-series measures](#rk-7-portfolio-single-series-measures) | RK-6 | done |
 | RK-8 | [portfolio: Labs risk in the backtest](#rk-8-portfolio-labs-risk-in-the-backtest) | RK-4, RK-5, RK-7 | blocked |
 | RK-9 | [web: Labs risk panel and drawdown chart](#rk-9-web-labs-risk-panel-and-drawdown-chart) | RK-8 | blocked |
-| RK-10 | [portfolio: daily TWR of invested positions](#rk-10-portfolio-daily-twr-of-invested-positions) | RK-5 | ready |
+| RK-10 | [portfolio: daily TWR of invested positions](#rk-10-portfolio-daily-twr-of-invested-positions) | RK-5 | done |
 | RK-11 | [portfolio: ex-post risk endpoint](#rk-11-portfolio-ex-post-risk-endpoint) | RK-4, RK-7, RK-10 | blocked |
 | RK-12 | [web: `/risk` page with the ex-post summary](#rk-12-web-risk-page-with-the-ex-post-summary) | RK-11 | blocked |
 | RK-13 | [portfolio: benchmark and relative measures](#rk-13-portfolio-benchmark-and-relative-measures) | RK-8, RK-11 | blocked |
@@ -396,7 +396,7 @@ rule.
 
 ### RK-10. portfolio: daily TWR of invested positions
 
-**Status:** ready
+**Status:** done
 
 Build spec stream 3, computed on read, on the union calendar.
 
@@ -436,6 +436,25 @@ Tests: hand-computed fixtures. A buy mid-series doesn't move the return. A sell.
 whose ex-date and pay date differ: the gain lands on the ex-date, and the pay date shows no
 swing. A full exit and re-entry. Two accounts holding one ticker. An FX move on a USD holding. A
 NULL day. An ineligible holding.
+
+**As built:** a new package, `portfolio/twr/`: `calculator.py` (pure, Decimal) and `flows.py`.
+It is its own route, `GET /returns/portfolio/twr?user_id=`, so `GET /returns/portfolio`'s
+payload is unchanged and that route still doesn't call data-store. Decisions:
+- **The fetch is shared** (agreed). Labs' concurrent ticker-info, price and FX fetch moved to
+  `eur_returns/fetch.py` in a preparatory commit, with Labs' tests unchanged. It takes a start
+  per ticker, so the TWR fetches each ticker from its first row. RK-8, RK-11 and RK-17 can use
+  it too.
+- **Dates with nothing held are left out** (agreed), not marked as gaps. After a full exit, the
+  series resumes on the first date after re-entry, and R8's budget isn't spent on time out of
+  the market. A week with no dates at all becomes a NULL weekly return in RK-11.
+- **Returns between two calendar dates are compounded** into the later one, so a ticker's
+  return dated where no snapshot row is (snapshots older than data-store's prices) still counts.
+- **A closed pair counts only through its last row.** A sale dated on a day with no price row
+  leaves that pair's last return row with quantity above 0. A forward-fill would hold its weight
+  for good. Closed pairs come from the latest `position_snapshots`.
+- The response carries `n_excluded` and `excluded` (ticker, status, reason). The statuses are
+  Labs' own, and the reason for a missing FX series is "no FX series for <CCY>".
+- portfolio's `architecture.md` was split first: its Testing section is now `docs/testing.md`.
 
 ### RK-11. portfolio: ex-post risk endpoint
 
