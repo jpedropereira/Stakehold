@@ -28,7 +28,7 @@ def create_app() -> FastAPI:
     # and contradicting "every route but /health requires Authorization". Serving them behind
     # the bearer instead wouldn't work either: Swagger UI fetches the schema from the browser
     # with no way to attach the secret. This is a service-to-service API whose contract is
-    # documented in README.md and docs/architecture.md, so the interactive explorer isn't worth
+    # documented in README.md and docs/read-api.md, so the interactive explorer isn't worth
     # an open endpoint.
     fastapi_app = FastAPI(
         title="data-store read API", docs_url=None, redoc_url=None, openapi_url=None

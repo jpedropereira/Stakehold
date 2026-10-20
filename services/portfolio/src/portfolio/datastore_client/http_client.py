@@ -1,5 +1,5 @@
 """The real DataStoreClient implementation, calling data-store's read API (task 3). See
-data-store/docs/architecture.md's "Read API" section for the endpoint contract this depends on.
+data-store/docs/read-api.md for the endpoint contract this depends on.
 """
 
 from dataclasses import fields
