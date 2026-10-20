@@ -1147,6 +1147,7 @@ version = "0.1.0"
 source = { editable = "services/portfolio" }
 dependencies = [
     { name = "fastapi" },
+    { name = "numpy" },
     { name = "psycopg", extra = ["binary"] },
     { name = "python-dotenv" },
     { name = "python-multipart" },
@@ -1158,6 +1159,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
+    { name = "numpy", specifier = ">=2.3" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.3" },
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "python-multipart", specifier = ">=0.0.20" },
