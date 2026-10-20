@@ -142,7 +142,7 @@ checked against the code, docs and dev DB:
 | RK-28 | [Regime view (portfolio and web)](#rk-28-regime-view-portfolio-and-web) | RK-14, RK-27 | blocked |
 | RK-29 | [Candidate ranking mode](#rk-29-candidate-ranking-mode) | RK-20 | blocked |
 | RK-30 | [Ledoit–Wolf shrinkage (optional)](#rk-30-ledoitwolf-shrinkage-optional) | RK-15 | blocked |
-| RK-31 | [VaR day mask on traded volume](#rk-31-var-day-mask-on-traded-volume) | RK-1 | blocked |
+| RK-31 | [VaR day mask on traded volume](#rk-31-var-day-mask-on-traded-volume) | RK-1 | ready |
 
 ## Tasks
 
@@ -598,7 +598,7 @@ Build it only if RK-18's matrices show the need.
 
 ### RK-31. VaR day mask on traded volume
 
-**Status:** blocked
+**Status:** ready
 
 Surfaced by RK-6. The VaR day mask (R7, §5.5) counts a day as traded when data-store has a
 price row for it. data-store keeps rows for some zero-volume holidays, such as UK bank
@@ -606,7 +606,8 @@ holidays, so such a day passes the mask, and its near-zero return crowds the dis
 centre.
 - **data-store:** the price endpoint adds each row's `volume`, joining `raw_market_data`
   (`market_returns` doesn't carry it). A NULL volume stays NULL, as data-store's suppression
-  rule treats it: it is not zero. No schema change.
+  rule treats it: it is not zero. No schema change. The endpoint change is documented in
+  data-store's `docs/read-api.md` (RK-1).
 - **portfolio:** `PricePoint` gains `volume`, and the HTTP client and fakes parse it. A missing
   key raises `DataStoreApiError`, as in LB-2. The trading days handed to `var_days` are those
   with volume > 0. Decide here whether a NULL volume counts as traded.
