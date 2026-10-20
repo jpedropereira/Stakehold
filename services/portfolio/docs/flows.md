@@ -34,6 +34,7 @@ this file; references to sections that stayed in `architecture.md` name it.
 | Return listing | — (CLI has none) | `GET /returns`, `GET /returns/latest` | on demand | `return_snapshots`, optionally filtered by ticker/date range | — (read-only report) |
 | Holdings across accounts | — (CLI has none) | `GET /holdings?user_id=` | on demand (web's `/portfolio` page, PF-4) | `accounts` by `user_id`, then each account's latest `position_snapshots` and `return_snapshots` rows | — (computed on read, see "Holdings across accounts") |
 | Portfolio return series | — (CLI has none) | `GET /returns/portfolio?user_id=[&start=&end=]` | on demand (web's `/portfolio` chart, PF-6) | `accounts` by `user_id`, then each account's full `return_snapshots` history | — (computed on read, see "Portfolio return series") |
+| Portfolio TWR | — (CLI has none) | `GET /returns/portfolio/twr?user_id=` | on demand (ex-post risk, RK-11) | `accounts` by `user_id`, then each account's full `return_snapshots` and latest `position_snapshots`; `data-store`'s `GET /tickers/{t}`, `GET /prices/{t}` and `GET /fx/EUR/{c}` per held ticker | — |
 | Labs backtest | — (CLI has none) | `POST /labs/backtest` | on demand (web's `/labs` page, LB-6) | `data-store`'s `GET /tickers/{t}`, `GET /prices/{t}` and `GET /fx/EUR/{c}` per asset; no portfolio table | — (read-only: nothing is stored) |
 
 **No separate `brokers` table** ever materialized — `schema.md` settled on `broker` as a plain
@@ -408,6 +409,35 @@ A user with no accounts, or no rows yet, gets `{"series": []}`, not a 404. Why i
 here, and why the forward-fill is in Python, is in `architecture.md`'s "The portfolio series is
 summed here, on read".
 
+### Portfolio TWR
+
+The whole portfolio's daily time-weighted return, invested positions only (RK-10): the series
+ex-post risk is measured on. `twr/flows.compute_portfolio_twr` lists the user's accounts through
+`accounts/repository`, reads each one's full `return_snapshots` history and latest
+`position_snapshots`, fetches every held ticker's prices and FX from data-store (through
+`eur_returns/fetch.py`, from the ticker's first row to today), converts them to EUR returns
+(`eur_returns/calculator.py`), and hands it all to `twr/calculator.py`. The response is
+
+    {"base_date", "points": [{price_date, twr_return, twr_growth}, ...], "n_gaps",
+     "n_excluded", "excluded": [{"ticker", "status", "reason"}, ...]}
+
+- **`twr_return`** on date t is `Σ w_(i,t−1) · r_eur,i,t`: each ticker's share of the EUR market
+  value at the previous date, times its EUR total return. A buy or a sell only changes the next
+  date's weights, and a dividend counts on its ex-date. It is null on a gap: a held ticker's
+  return was NULL that day. `n_gaps` counts them.
+- **`twr_growth`** is 1 at `base_date`, the first date with holdings, and is flat across a gap.
+- **A date with nothing held at the previous date has no point**, so after a full exit the
+  series resumes at the first date after re-entry. That isn't a gap.
+- **`excluded`** names each held ticker left out, by ticker, and the rest are renormalised to
+  100%: `not_tracked` ("not tracked"), `no_history` ("no history yet"), `no_fx_rate` ("no FX
+  series for USD", for example) or `failed` ("couldn't reach data-store"; the exception is
+  logged, not returned).
+
+A user with no accounts, or no rows yet, gets an empty series, not a 404. The flow logs one line
+per ticker (included, or left out and why); the job logs a start line and a summary, which says
+whether there were no rows at all or every holding was left out. Why it is holdings-based, and
+what that gives up, is in `architecture.md`'s `twr/` row.
+
 ### Labs backtest
 
 How a mix of assets, bought at its weights and held, would have done over 1M, 3M, 6M, 1Y, 2Y,
@@ -553,6 +583,10 @@ until they are summed. It returns the summed EUR figures; see "Portfolio return 
 
 `GET /holdings` sums across accounts rather than across dates: one row per ticker from each
 account's latest rows, so no calendar question arises. See "Holdings across accounts" above.
+
+`GET /returns/portfolio/twr` uses the same union calendar and keying, with one difference: a
+closed holding counts only through its last row. Like the backtest, a data-store failure doesn't
+make it a 502: the ticker is listed in `excluded`. See "Portfolio TWR" above.
 
 `POST /labs/backtest` answers the calendar question the way `GET /returns/portfolio` does: each
 asset carries its last value over days it didn't trade. Unlike every other route here, an

@@ -213,3 +213,40 @@ def test_portfolio_returns_requires_user_id(client):
     response = client.get("/returns/portfolio")
 
     assert response.status_code == 422
+
+
+# --- GET /returns/portfolio/twr ---
+
+_PORTFOLIO_TWR = {
+    "base_date": "2026-01-05",
+    "points": [
+        {"price_date": "2026-01-06", "twr_return": None, "twr_growth": "1.00000000"},
+        {"price_date": "2026-01-07", "twr_return": "0.01000000", "twr_growth": "1.01000000"},
+    ],
+    "n_gaps": 1,
+    "n_excluded": 1,
+    "excluded": [{"ticker": "U", "status": "no_fx_rate", "reason": "no FX series for HKD"}],
+}
+
+
+def test_portfolio_twr_passes_the_user_through_and_returns_the_jobs_own_dict(monkeypatch, client):
+    captured = {}
+
+    def fake_get_portfolio_twr(**kw):
+        captured.update(kw)
+        return _PORTFOLIO_TWR
+
+    monkeypatch.setattr(jobs, "get_portfolio_twr", fake_get_portfolio_twr)
+    user_id = uuid.uuid4()
+
+    response = client.get("/returns/portfolio/twr", params={"user_id": str(user_id)})
+
+    assert response.status_code == 200
+    assert response.json() == _PORTFOLIO_TWR
+    assert captured["user_id"] == user_id
+
+
+def test_portfolio_twr_requires_a_user(client):
+    response = client.get("/returns/portfolio/twr")
+
+    assert response.status_code == 422

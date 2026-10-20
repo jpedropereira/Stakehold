@@ -14,7 +14,7 @@ Calculated on read, never stored. No I/O, no Postgres: holdings/flows.py reads t
 them in as plain data, the same split returns/calculator.py uses.
 """
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
@@ -41,7 +41,33 @@ class PortfolioPoint:
     total_return_pct: Decimal | None
 
 
-_Key = tuple[int, str]  # (account_id, canonical_ticker)
+Key = tuple[int, str]  # (account_id, canonical_ticker)
+
+
+def forward_filled(
+    snapshots: Sequence[ReturnSnapshot],
+) -> Iterator[tuple[date, Mapping[Key, ReturnSnapshot]]]:
+    """Every date any (account, ticker) has a row for, oldest first, each with every pair's
+    latest row on or before it. A pair with no row on a date holds its last row; before its
+    first row it is absent. The mapping is rebuilt per date, so it can be kept.
+
+    twr/calculator.py walks the same calendar for its weights (RK-10)."""
+    by_key: dict[Key, list[ReturnSnapshot]] = {}
+    for row in snapshots:
+        by_key.setdefault((row.account_id, row.canonical_ticker), []).append(row)
+    series = {key: sorted(rows, key=lambda r: r.price_date) for key, rows in by_key.items()}
+
+    pointers = {key: -1 for key in series}
+    for current_date in sorted({row.price_date for row in snapshots}):
+        current: dict[Key, ReturnSnapshot] = {}
+        for key, rows in series.items():
+            idx = pointers[key]
+            while idx + 1 < len(rows) and rows[idx + 1].price_date <= current_date:
+                idx += 1
+            pointers[key] = idx
+            if idx != -1:
+                current[key] = rows[idx]
+        yield current_date, current
 
 
 def compute_series(snapshots: Sequence[ReturnSnapshot]) -> list[PortfolioPoint]:
@@ -50,32 +76,12 @@ def compute_series(snapshots: Sequence[ReturnSnapshot]) -> list[PortfolioPoint]:
     A pair with no row on a date holds its last row's value, the same forward-fill web's chart
     uses; before its first row it contributes nothing.
     """
-    by_key: dict[_Key, list[ReturnSnapshot]] = {}
-    for row in snapshots:
-        by_key.setdefault((row.account_id, row.canonical_ticker), []).append(row)
-    series = {key: sorted(rows, key=lambda r: r.price_date) for key, rows in by_key.items()}
-
-    pointers = {key: -1 for key in series}
     points: list[PortfolioPoint] = []
-
-    for current_date in sorted({row.price_date for row in snapshots}):
-        value = _ZERO
-        cost = _ZERO
-        dividends = _ZERO
-        total_return = _ZERO
-        for key, rows in series.items():
-            idx = pointers[key]
-            while idx + 1 < len(rows) and rows[idx + 1].price_date <= current_date:
-                idx += 1
-            pointers[key] = idx
-            if idx == -1:
-                continue  # not held yet as of this date -- contributes nothing
-            row = rows[idx]
-            value += row.market_value_eur
-            cost += row.cost_basis_eur
-            dividends += row.dividends_received_eur
-            total_return += row.total_return_eur
-
+    for current_date, rows in forward_filled(snapshots):
+        value = sum((row.market_value_eur for row in rows.values()), _ZERO)
+        cost = sum((row.cost_basis_eur for row in rows.values()), _ZERO)
+        dividends = sum((row.dividends_received_eur for row in rows.values()), _ZERO)
+        total_return = sum((row.total_return_eur for row in rows.values()), _ZERO)
         points.append(
             PortfolioPoint(
                 price_date=current_date,
