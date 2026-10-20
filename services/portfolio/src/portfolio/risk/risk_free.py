@@ -25,8 +25,8 @@ _ONE_DAY = timedelta(days=1)
 
 @dataclass(frozen=True)
 class RatePoint:
-    """One published rate, annualised %. RK-4 adds data-store's client type; this local one
-    keeps the library free of the client."""
+    """One published rate, annualised %. The risk flows convert datastore_client's
+    RiskFreePoint (Decimal) to this, which keeps the library free of the client."""
 
     date: date
     rate_pct: float

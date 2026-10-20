@@ -115,14 +115,14 @@ checked against the code, docs and dev DB:
 | RK-1 | [data-store: split `architecture.md`](#rk-1-data-store-split-architecturemd) | — | done |
 | RK-2 | [data-store: risk-free rate ingestion (€STR + EONIA)](#rk-2-data-store-risk-free-rate-ingestion-str--eonia) | RK-1 | done |
 | RK-3 | [data-store: risk-free endpoint](#rk-3-data-store-risk-free-endpoint) | RK-2 | done |
-| RK-4 | [portfolio: client reads the risk-free series](#rk-4-portfolio-client-reads-the-risk-free-series) | RK-3 | ready |
+| RK-4 | [portfolio: client reads the risk-free series](#rk-4-portfolio-client-reads-the-risk-free-series) | RK-3 | done |
 | RK-5 | [portfolio: shared EUR daily returns](#rk-5-portfolio-shared-eur-daily-returns) | — | done |
 | RK-6 | [portfolio: risk library foundations](#rk-6-portfolio-risk-library-foundations) | — | done |
 | RK-7 | [portfolio: single-series measures](#rk-7-portfolio-single-series-measures) | RK-6 | done |
-| RK-8 | [portfolio: Labs risk in the backtest](#rk-8-portfolio-labs-risk-in-the-backtest) | RK-4, RK-5, RK-7 | blocked |
+| RK-8 | [portfolio: Labs risk in the backtest](#rk-8-portfolio-labs-risk-in-the-backtest) | RK-4, RK-5, RK-7 | ready |
 | RK-9 | [web: Labs risk panel and drawdown chart](#rk-9-web-labs-risk-panel-and-drawdown-chart) | RK-8 | blocked |
 | RK-10 | [portfolio: daily TWR of invested positions](#rk-10-portfolio-daily-twr-of-invested-positions) | RK-5 | done |
-| RK-11 | [portfolio: ex-post risk endpoint](#rk-11-portfolio-ex-post-risk-endpoint) | RK-4, RK-7, RK-10 | blocked |
+| RK-11 | [portfolio: ex-post risk endpoint](#rk-11-portfolio-ex-post-risk-endpoint) | RK-4, RK-7, RK-10 | ready |
 | RK-12 | [web: `/risk` page with the ex-post summary](#rk-12-web-risk-page-with-the-ex-post-summary) | RK-11 | blocked |
 | RK-13 | [portfolio: benchmark and relative measures](#rk-13-portfolio-benchmark-and-relative-measures) | RK-8, RK-11 | blocked |
 | RK-14 | [web: benchmark selector, relative measures, benchmark line](#rk-14-web-benchmark-selector-relative-measures-benchmark-line) | RK-9, RK-12, RK-13 | blocked |
@@ -234,11 +234,21 @@ Tests: the splice boundary (2019-09-30 is EONIA − 0.085, 2019-10-01 is €STR)
 
 ### RK-4. portfolio: client reads the risk-free series
 
-**Status:** ready
+**Status:** done
 
 Add `get_risk_free_series` to the data-store client Protocol, the HTTP client and the fakes.
 
 Tests: parsing, a negative rate, and a missing key raising `DataStoreApiError` (as in LB-2).
+
+**As built:** `get_risk_free_series(start, end)` → `RiskFreeSeries(first_date, points)`, each
+point a `RiskFreePoint(date, rate, series)` with a `Decimal` rate, unfilled. Decisions:
+- **Nothing stored is `None`** (agreed), as `get_fx_rate`'s no-rate is: data-store's
+  `first_date: null` can't reach a caller as rf = 0, and RK-8/RK-11 grey the rf figures
+  rather than fail. Points with a null `first_date` are a `DataStoreApiError`.
+- **`risk/risk_free.py` keeps its float `RatePoint`**, so `risk/` still imports nothing from
+  `datastore_client`. The risk flows convert.
+- **No fake gains the method yet** (agreed). Each is a per-file duck type and nothing calls it,
+  so RK-8 and RK-11 add it to the fakes their flow tests use.
 
 ### RK-5. portfolio: shared EUR daily returns
 
@@ -352,7 +362,7 @@ Testing section to `docs/testing.md` first, to stay under 64 KB. Decisions:
 
 ### RK-8. portfolio: Labs risk in the backtest
 
-**Status:** blocked
+**Status:** ready
 
 Add a `risk` section to `POST /labs/backtest`, for the mix and each asset:
 - §5.1–5.5's measures per window
@@ -458,7 +468,7 @@ payload is unchanged and that route still doesn't call data-store. Decisions:
 
 ### RK-11. portfolio: ex-post risk endpoint
 
-**Status:** blocked
+**Status:** ready
 
 `GET /risk/ex-post?user_id=` returns the §5.1–5.5 measures from RK-10's series over the
 standard windows, labelled "ex-post · invested assets". It has its own `portfolio/risk/flows.py`

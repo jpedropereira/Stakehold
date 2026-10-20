@@ -8,7 +8,13 @@ from decimal import Decimal
 
 import pytest
 import requests
-from portfolio.datastore_client.base import FxPoint, PricePoint, TickerInfo
+from portfolio.datastore_client.base import (
+    FxPoint,
+    PricePoint,
+    RiskFreePoint,
+    RiskFreeSeries,
+    TickerInfo,
+)
 from portfolio.datastore_client.http_client import HttpDataStoreClient
 from portfolio.errors import DataStoreApiError
 
@@ -348,6 +354,153 @@ def test_get_fx_rate_series_raises_when_the_request_itself_fails(client, monkeyp
 
     with pytest.raises(DataStoreApiError):
         client.get_fx_rate_series("EUR", "USD", date(2026, 1, 8), date(2026, 1, 9))
+
+
+# --- get_risk_free_series ---
+
+
+def _risk_free_body(points, first_date="1999-01-04"):
+    return {"source": "ecb", "first_date": first_date, "points": points}
+
+
+def test_get_risk_free_series_returns_every_point(client, monkeypatch):
+    captured = {}
+
+    def fake_get(url, params, headers, timeout):
+        captured.update(url=url, params=params, headers=headers)
+        return FakeResponse(
+            200,
+            _risk_free_body(
+                [
+                    {"date": "2026-01-08", "rate": "1.9310", "series": "estr"},
+                    {"date": "2026-01-09", "rate": "1.9320", "series": "estr"},
+                ]
+            ),
+        )
+
+    monkeypatch.setattr(requests, "get", fake_get)
+
+    result = client.get_risk_free_series(date(2026, 1, 8), date(2026, 1, 9))
+
+    assert result == RiskFreeSeries(
+        first_date=date(1999, 1, 4),
+        points=[
+            RiskFreePoint(date=date(2026, 1, 8), rate=Decimal("1.9310"), series="estr"),
+            RiskFreePoint(date=date(2026, 1, 9), rate=Decimal("1.9320"), series="estr"),
+        ],
+    )
+    assert captured["url"] == "http://datastore:8000/rates/risk-free"
+    assert captured["params"] == {"start": "2026-01-08", "end": "2026-01-09"}
+    assert captured["headers"]["Authorization"] == "Bearer secret"
+
+
+def test_get_risk_free_series_keeps_a_negative_rate_as_published(client, monkeypatch):
+    # Either side of the splice: EONIA - 0.085 up to 2019-09-30, €STR from 2019-10-01.
+    monkeypatch.setattr(
+        requests,
+        "get",
+        lambda *a, **kw: FakeResponse(
+            200,
+            _risk_free_body(
+                [
+                    {"date": "2019-09-30", "rate": "-0.5500", "series": "eonia_adjusted"},
+                    {"date": "2019-10-01", "rate": "-0.5490", "series": "estr"},
+                ]
+            ),
+        ),
+    )
+
+    result = client.get_risk_free_series(date(2019, 9, 30), date(2019, 10, 1))
+
+    assert [(point.rate, point.series) for point in result.points] == [
+        (Decimal("-0.5500"), "eonia_adjusted"),
+        (Decimal("-0.5490"), "estr"),
+    ]
+
+
+def test_get_risk_free_series_with_no_points_in_range_still_carries_first_date(client, monkeypatch):
+    # A window before 1999 (or a weekend) has no points, but the series exists: R4 needs to
+    # know where it begins, so this is a series, not None.
+    monkeypatch.setattr(requests, "get", lambda *a, **kw: FakeResponse(200, _risk_free_body([])))
+
+    result = client.get_risk_free_series(date(1998, 1, 1), date(1998, 12, 31))
+
+    assert result == RiskFreeSeries(first_date=date(1999, 1, 4), points=[])
+
+
+def test_get_risk_free_series_returns_none_when_nothing_is_stored(client, monkeypatch):
+    # first_date null is data-store's "no risk-free data at all" -- never rf = 0.
+    monkeypatch.setattr(
+        requests, "get", lambda *a, **kw: FakeResponse(200, _risk_free_body([], first_date=None))
+    )
+
+    assert client.get_risk_free_series(date(2026, 1, 8), date(2026, 1, 9)) is None
+
+
+def test_get_risk_free_series_raises_on_points_without_a_first_date(client, monkeypatch):
+    monkeypatch.setattr(
+        requests,
+        "get",
+        lambda *a, **kw: FakeResponse(
+            200,
+            _risk_free_body(
+                [{"date": "2026-01-08", "rate": "1.9310", "series": "estr"}], first_date=None
+            ),
+        ),
+    )
+
+    with pytest.raises(DataStoreApiError):
+        client.get_risk_free_series(date(2026, 1, 8), date(2026, 1, 9))
+
+
+@pytest.mark.parametrize("key", ["first_date", "points"])
+def test_get_risk_free_series_raises_on_a_response_missing_a_key(client, monkeypatch, key):
+    body = _risk_free_body([])
+    del body[key]
+    monkeypatch.setattr(requests, "get", lambda *a, **kw: FakeResponse(200, body))
+
+    with pytest.raises(DataStoreApiError):
+        client.get_risk_free_series(date(2026, 1, 8), date(2026, 1, 9))
+
+
+@pytest.mark.parametrize("key", ["date", "rate", "series"])
+def test_get_risk_free_series_raises_on_a_point_missing_a_key(client, monkeypatch, key):
+    point = {"date": "2026-01-08", "rate": "1.9310", "series": "estr"}
+    del point[key]
+    monkeypatch.setattr(
+        requests, "get", lambda *a, **kw: FakeResponse(200, _risk_free_body([point]))
+    )
+
+    with pytest.raises(DataStoreApiError):
+        client.get_risk_free_series(date(2026, 1, 8), date(2026, 1, 9))
+
+
+def test_get_risk_free_series_raises_on_an_unparseable_rate(client, monkeypatch):
+    point = {"date": "2026-01-08", "rate": "n/a", "series": "estr"}
+    monkeypatch.setattr(
+        requests, "get", lambda *a, **kw: FakeResponse(200, _risk_free_body([point]))
+    )
+
+    with pytest.raises(DataStoreApiError):
+        client.get_risk_free_series(date(2026, 1, 8), date(2026, 1, 9))
+
+
+@pytest.mark.parametrize("status_code", [422, 500])
+def test_get_risk_free_series_raises_on_an_error_status(client, monkeypatch, status_code):
+    monkeypatch.setattr(requests, "get", lambda *a, **kw: FakeResponse(status_code))
+
+    with pytest.raises(DataStoreApiError):
+        client.get_risk_free_series(date(2026, 1, 8), date(2026, 1, 9))
+
+
+def test_get_risk_free_series_raises_when_the_request_itself_fails(client, monkeypatch):
+    def boom(*a, **kw):
+        raise requests.ConnectionError("connection refused")
+
+    monkeypatch.setattr(requests, "get", boom)
+
+    with pytest.raises(DataStoreApiError):
+        client.get_risk_free_series(date(2026, 1, 8), date(2026, 1, 9))
 
 
 # --- get_ticker_info ---

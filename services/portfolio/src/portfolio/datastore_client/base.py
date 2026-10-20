@@ -28,6 +28,24 @@ class FxPoint:
 
 
 @dataclass(frozen=True)
+class RiskFreePoint:
+    date: date
+    # Annualised %, ACT/360 (risk spec §4.1). Negative rates are kept as published.
+    rate: Decimal
+    # "estr" or "eonia_adjusted" (EONIA - 0.085) -- data-store's risk_free/splice.py.
+    series: str
+
+
+@dataclass(frozen=True)
+class RiskFreeSeries:
+    # The first day the whole series covers, whatever the requested window: what a caller
+    # applies R4's rf_partial against.
+    first_date: date
+    # Published days only. Forward-filling weekends and holidays is risk/risk_free.py's job.
+    points: list[RiskFreePoint]
+
+
+@dataclass(frozen=True)
 class TickerInfo:
     exists: bool
     has_returns: bool
@@ -100,6 +118,15 @@ class DataStoreClient(Protocol):
         counterpart to get_fx_rate, for a caller that needs to look up "the latest rate at or
         before" many dates without one HTTP call per date. An empty list means no rate was ever
         tracked for this pair in the window, same as get_fx_rate's None.
+        """
+        ...
+
+    def get_risk_free_series(self, start: date, end: date) -> RiskFreeSeries | None:
+        """The spliced daily rf_eur (€STR, EONIA - 0.085 before 2019-10-01) published in
+        [start, end], ascending by date. Returns None when data-store has no risk-free data
+        stored at all -- a caller must report that, never read it as rf = 0. A series with no
+        points is normal (a weekend, a window before 1999): its first_date still says where
+        coverage begins.
         """
         ...
 
