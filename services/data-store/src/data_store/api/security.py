@@ -1,8 +1,8 @@
 """Shared-secret check for internal service-to-service callers.
 
 This is the trust model `auth/docs/architecture.md` describes: a bearer token proves "a
-legitimate internal caller", not a specific caller's identity -- see docs/architecture.md's Read
-API section for that accepted gap. Every route but /health depends on this.
+legitimate internal caller", not a specific caller's identity -- see docs/read-api.md for
+that accepted gap. Every route but /health depends on this.
 """
 
 import secrets

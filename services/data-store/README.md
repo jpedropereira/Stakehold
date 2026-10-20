@@ -393,10 +393,11 @@ data before adding it.
 
 ## Running the read API
 
-A FastAPI app exposing three read-only endpoints over `market_returns`/`raw_market_data` and
-`fx_rates`, for other services (`portfolio`, `web`) to consume — see `docs/architecture.md`'s
-"Read API" section for the design. Requires `INTERNAL_API_SECRET` (see `.env.example`); the app
-refuses to start without one.
+A FastAPI app over the tables this service owns, for other services (`portfolio`, `web`) to
+consume. It is mostly read-only: the tracked-ticker routes, which queue and manage tickers for
+onboarding, are the exception. See
+[`docs/read-api.md`](docs/read-api.md) for the design. Requires `INTERNAL_API_SECRET` (see
+`.env.example`); the app refuses to start without one.
 
 ```bash
 uv run uvicorn data_store.api.app:create_app --factory --host 0.0.0.0 --port 8000
@@ -406,13 +407,14 @@ Or as part of the compose stack (`docker compose up -d api`), reachable at
 `http://localhost:${DATA_STORE_API_PORT:-8082}`. Every route but `/health` requires
 `Authorization: Bearer <INTERNAL_API_SECRET>`. There is no `/docs`, `/redoc` or `/openapi.json`
 — those can't be served behind the bearer, so the endpoint list below is the contract; see
-`docs/architecture.md`'s "Read API" section for why.
+[`docs/read-api.md`](docs/read-api.md) for why.
 
 | Endpoint | Returns |
 |---|---|
 | `GET /health` | Liveness, unauthenticated |
 | `GET /prices/{ticker}?start=&end=&source=yfinance` | `market_returns` series: split-adjusted close, future split factor, the four return columns |
 | `GET /fx/{base}/{quote}?start=&end=&source=yfinance` | FX rate series for any pair of enabled currencies — direct, inverse, or triangulated through `config/currencies.yaml`'s `base_currency` as needed |
+| `GET /tickers?source=yfinance` | Every ingested ticker, sorted and unpaginated |
 | `GET /tickers/{ticker}?source=yfinance` | Existence/validity: whether the ticker is ingested, whether returns have been computed for it, and its onboarding `status` if it's tracked |
 | `GET /tickers/{ticker}/lookup?source=yfinance` | What adding the ticker would do: already `tracked` (with its status), `available`, `unsupported`, `not_found`, or `unavailable` |
 | `POST /tracked-tickers` | Add a ticker for onboarding. Body: `{ticker, requested_by, enforce_limit, source}`. 201 added / 200 already tracked; 404, 422, 429 (daily limit), 503 |

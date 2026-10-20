@@ -112,8 +112,8 @@ checked against the code, docs and dev DB:
 | ID | Task | Depends on | Status |
 |----|------|------------|--------|
 | RK-0 | [Roadmap housekeeping](#rk-0-roadmap-housekeeping) | — | done |
-| RK-1 | [data-store: split `architecture.md`](#rk-1-data-store-split-architecturemd) | — | ready |
-| RK-2 | [data-store: risk-free rate ingestion (€STR + EONIA)](#rk-2-data-store-risk-free-rate-ingestion-str--eonia) | RK-1 | blocked |
+| RK-1 | [data-store: split `architecture.md`](#rk-1-data-store-split-architecturemd) | — | done |
+| RK-2 | [data-store: risk-free rate ingestion (€STR + EONIA)](#rk-2-data-store-risk-free-rate-ingestion-str--eonia) | RK-1 | ready |
 | RK-3 | [data-store: risk-free endpoint](#rk-3-data-store-risk-free-endpoint) | RK-2 | blocked |
 | RK-4 | [portfolio: client reads the risk-free series](#rk-4-portfolio-client-reads-the-risk-free-series) | RK-3 | blocked |
 | RK-5 | [portfolio: shared EUR daily returns](#rk-5-portfolio-shared-eur-daily-returns) | — | done |
@@ -132,13 +132,13 @@ checked against the code, docs and dev DB:
 | RK-18 | [web: ex-ante summary, decomposition and heatmap](#rk-18-web-ex-ante-summary-decomposition-and-heatmap) | RK-12, RK-17 | blocked |
 | RK-19 | [portfolio: candidate what-if](#rk-19-portfolio-candidate-what-if) | RK-17 | blocked |
 | RK-20 | [web: what-if form](#rk-20-web-what-if-form) | RK-18, RK-19 | blocked |
-| RK-21 | [data-store: ETF holdings endpoint](#rk-21-data-store-etf-holdings-endpoint) | RK-1 | blocked |
+| RK-21 | [data-store: ETF holdings endpoint](#rk-21-data-store-etf-holdings-endpoint) | RK-1 | ready |
 | RK-22 | [portfolio: look-through exposures](#rk-22-portfolio-look-through-exposures) | RK-21 | blocked |
 | RK-23 | [web: concentration section](#rk-23-web-concentration-section) | RK-12, RK-22 | blocked |
 | RK-24 | [portfolio: rolling windows](#rk-24-portfolio-rolling-windows) | RK-11, RK-16, RK-17 | blocked |
 | RK-25 | [web: rolling charts](#rk-25-web-rolling-charts) | RK-18, RK-24 | blocked |
 | RK-26 | [FX decomposition (portfolio and web)](#rk-26-fx-decomposition-portfolio-and-web) | RK-18 | blocked |
-| RK-27 | [data-store: regimes endpoint](#rk-27-data-store-regimes-endpoint) | RK-1 | blocked |
+| RK-27 | [data-store: regimes endpoint](#rk-27-data-store-regimes-endpoint) | RK-1 | ready |
 | RK-28 | [Regime view (portfolio and web)](#rk-28-regime-view-portfolio-and-web) | RK-14, RK-27 | blocked |
 | RK-29 | [Candidate ranking mode](#rk-29-candidate-ranking-mode) | RK-20 | blocked |
 | RK-30 | [Ledoit–Wolf shrinkage (optional)](#rk-30-ledoitwolf-shrinkage-optional) | RK-15 | blocked |
@@ -164,14 +164,21 @@ The header notes the amendments.
 
 ### RK-1. data-store: split `architecture.md`
 
-**Status:** ready
+**Status:** done
 
-At 63.7 KB, it has no room for RK-2, RK-21 or RK-27. Move a self-contained section verbatim,
-e.g. the endpoint table, to `docs/endpoints.md`, as web did in LB-6. This is docs only.
+At 63.7 KB, it has no room for RK-2, RK-21 or RK-27. Move a self-contained section verbatim to
+a file of its own, as web did in LB-6. This is docs only.
+
+**As built:** the whole "Read API" section moved, not just its endpoint table, which would have
+freed only 2.3 KB for three new endpoints and an ingestion design. It is now
+`docs/read-api.md` (10.6 KB), verbatim apart from its header and three "above"/"below" pointers
+that now link back to `architecture.md`. `architecture.md` keeps a short "Read API" stub that
+links to it, and is 54.2 KB. RK-3, RK-21 and RK-27's endpoints and their reasoning go in
+`read-api.md`; RK-2's ingestion goes in `architecture.md`.
 
 ### RK-2. data-store: risk-free rate ingestion (€STR + EONIA)
 
-**Status:** blocked
+**Status:** ready
 
 - **Schema first.** Propose a new table and agree it. `macro_indicator_rates` doesn't fit (its
   key has no series code, and `rate_value` is a YoY %). Recommended: store each published series
@@ -494,7 +501,7 @@ the before/after table, the threshold explanation and the survivorship warning.
 
 ### RK-21. data-store: ETF holdings endpoint
 
-**Status:** blocked
+**Status:** ready
 
 `GET /etf-holdings/{fund_key}/latest` returns the snapshot date and constituents (ticker, name,
 sector, asset class, location, currency, weight %). **CHECK** how a fund_key maps to the
@@ -554,7 +561,7 @@ corr(r_local, r_fx), and EUR volatility. It reuses RK-5's `r_local` and `r_fx`.
 
 ### RK-27. data-store: regimes endpoint
 
-**Status:** blocked
+**Status:** ready
 
 `GET /regimes?start&end` returns the rows that overlap the range.
 
