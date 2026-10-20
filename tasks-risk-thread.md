@@ -117,8 +117,8 @@ checked against the code, docs and dev DB:
 | RK-3 | [data-store: risk-free endpoint](#rk-3-data-store-risk-free-endpoint) | RK-2 | blocked |
 | RK-4 | [portfolio: client reads the risk-free series](#rk-4-portfolio-client-reads-the-risk-free-series) | RK-3 | blocked |
 | RK-5 | [portfolio: shared EUR daily returns](#rk-5-portfolio-shared-eur-daily-returns) | — | ready |
-| RK-6 | [portfolio: risk library foundations](#rk-6-portfolio-risk-library-foundations) | — | ready |
-| RK-7 | [portfolio: single-series measures](#rk-7-portfolio-single-series-measures) | RK-6 | blocked |
+| RK-6 | [portfolio: risk library foundations](#rk-6-portfolio-risk-library-foundations) | — | done |
+| RK-7 | [portfolio: single-series measures](#rk-7-portfolio-single-series-measures) | RK-6 | ready |
 | RK-8 | [portfolio: Labs risk in the backtest](#rk-8-portfolio-labs-risk-in-the-backtest) | RK-4, RK-5, RK-7 | blocked |
 | RK-9 | [web: Labs risk panel and drawdown chart](#rk-9-web-labs-risk-panel-and-drawdown-chart) | RK-8 | blocked |
 | RK-10 | [portfolio: daily TWR of invested positions](#rk-10-portfolio-daily-twr-of-invested-positions) | RK-5 | blocked |
@@ -127,7 +127,7 @@ checked against the code, docs and dev DB:
 | RK-13 | [portfolio: benchmark and relative measures](#rk-13-portfolio-benchmark-and-relative-measures) | RK-8, RK-11 | blocked |
 | RK-14 | [web: benchmark selector, relative measures, benchmark line](#rk-14-web-benchmark-selector-relative-measures-benchmark-line) | RK-9, RK-12, RK-13 | blocked |
 | RK-15 | [portfolio: ex-ante covariance and risk decomposition](#rk-15-portfolio-ex-ante-covariance-and-risk-decomposition) | RK-6, RK-7 | blocked |
-| RK-16 | [portfolio: correlation matrix](#rk-16-portfolio-correlation-matrix) | RK-6 | blocked |
+| RK-16 | [portfolio: correlation matrix](#rk-16-portfolio-correlation-matrix) | RK-6 | ready |
 | RK-17 | [portfolio: ex-ante endpoint](#rk-17-portfolio-ex-ante-endpoint) | RK-4, RK-5, RK-13, RK-15, RK-16 | blocked |
 | RK-18 | [web: ex-ante summary, decomposition and heatmap](#rk-18-web-ex-ante-summary-decomposition-and-heatmap) | RK-12, RK-17 | blocked |
 | RK-19 | [portfolio: candidate what-if](#rk-19-portfolio-candidate-what-if) | RK-17 | blocked |
@@ -142,6 +142,7 @@ checked against the code, docs and dev DB:
 | RK-28 | [Regime view (portfolio and web)](#rk-28-regime-view-portfolio-and-web) | RK-14, RK-27 | blocked |
 | RK-29 | [Candidate ranking mode](#rk-29-candidate-ranking-mode) | RK-20 | blocked |
 | RK-30 | [Ledoit–Wolf shrinkage (optional)](#rk-30-ledoitwolf-shrinkage-optional) | RK-15 | blocked |
+| RK-31 | [VaR day mask on traded volume](#rk-31-var-day-mask-on-traded-volume) | RK-1 | blocked |
 
 ## Tasks
 
@@ -230,7 +231,7 @@ Tests:
 
 ### RK-6. portfolio: risk library foundations
 
-**Status:** ready
+**Status:** done
 
 - A new pure module, `portfolio/risk/`. It does no I/O and works on floats.
 - **Add numpy to portfolio.** *Recommendation (confidence: medium–high):* §6.3 and §7 are matrix
@@ -256,9 +257,25 @@ Tests: a week with a NULL becomes NULL. A week with no trades is NULL. A holiday
 its label. rf compounding over a weekend. Empirical q for a union calendar. Each minimum's
 boundary. The VaR mask drops a day on which one asset's exchange was closed.
 
+**As built:** numpy is added to portfolio (agreed). `portfolio/risk/` has `types`, `weekly`,
+`quality`, `history`, `windows`, `risk_free` and `var_mask`, and no caller yet. Decisions:
+- **Weekly edges** (agreed): partial weeks at either end are dropped, so every week runs
+  Friday to Friday. `to_weekly` takes an `as_of` date, so a last week ending on a holiday Friday
+  counts once that Friday has passed.
+- **VaR mask** (agreed): an asset traded on a day if data-store has a price row for it.
+  data-store keeps rows for some zero-volume holidays, so one can pass the mask. The fix is
+  exposing `volume` on the price endpoint: RK-31.
+- `has_suspect_rows` is any non-NULL |r| > 100%. data-store nulls every other such row, so this
+  catches exactly the ones it kept.
+- The daily empirical q counts NULL days as days of the calendar (`n_obs + n_gaps`).
+- R8's budget is a new flag, `data_gaps`. `RiskFigure` also has a `reason`, for R9's text.
+- `risk_free` uses a local `RatePoint` until RK-4 adds the client type. It compounds exactly,
+  not by §4.1's simple approximation. A day after the series begins with no rate on or before it
+  is an error, never a rate filled forward from nothing.
+
 ### RK-7. portfolio: single-series measures
 
-**Status:** blocked
+**Status:** ready
 
 §5.1–5.5, each function frequency-agnostic (q is a parameter). A thin layer applies §4.3's
 frequency rule, so callers can't feed a daily series to a weekly measure by accident:
@@ -422,7 +439,7 @@ equals σ_p on the same window.
 
 ### RK-16. portfolio: correlation matrix
 
-**Status:** blocked
+**Status:** ready
 
 Pearson on weekly returns:
 - **Pairwise for display**: each cell carries its own `n_obs` and start date.
@@ -571,6 +588,26 @@ before building, since every candidate is a data-store fetch.
 
 Shrink Σ when the assets exceed about ¼ of the weekly observations. It is flagged in the result.
 Build it only if RK-18's matrices show the need.
+
+### RK-31. VaR day mask on traded volume
+
+**Status:** blocked
+
+Surfaced by RK-6. The VaR day mask (R7, §5.5) counts a day as traded when data-store has a
+price row for it. data-store keeps rows for some zero-volume holidays, such as UK bank
+holidays, so such a day passes the mask, and its near-zero return crowds the distribution's
+centre.
+- **data-store:** the price endpoint adds each row's `volume`, joining `raw_market_data`
+  (`market_returns` doesn't carry it). A NULL volume stays NULL, as data-store's suppression
+  rule treats it: it is not zero. No schema change.
+- **portfolio:** `PricePoint` gains `volume`, and the HTTP client and fakes parse it. A missing
+  key raises `DataStoreApiError`, as in LB-2. The trading days handed to `var_days` are those
+  with volume > 0. Decide here whether a NULL volume counts as traded.
+- Update `risk/var_mask.py`'s docstring and portfolio's `architecture.md`, both of which name
+  this as the known limitation.
+
+Tests: endpoint parsing with and without volume. A zero-volume holiday row left out of the
+mask. A NULL-volume day handled as agreed.
 
 ## Deferred
 
