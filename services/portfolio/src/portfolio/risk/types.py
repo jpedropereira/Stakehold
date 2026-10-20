@@ -87,7 +87,8 @@ class Flag(StrEnum):
 @dataclass(frozen=True)
 class RiskFigure:
     """One reported figure with the metadata §9 and §10 require. `value` is None exactly when
-    the figure is greyed, and `reason` then says why (R9) -- never 0, never blank."""
+    the figure is greyed, and `reason` then says why (R9) -- never 0, never blank.
+    `standard_error` is set on a Sharpe only (§5.4, shown as "± SE, 1 s.e.")."""
 
     value: float | None
     window_start: date
@@ -98,6 +99,7 @@ class RiskFigure:
     n_gaps: int
     flags: frozenset[Flag]
     reason: str | None = None
+    standard_error: float | None = None
 
 
 def to_array(series: ReturnSeries) -> np.ndarray:
