@@ -437,7 +437,8 @@ and its rules are in `labs/calculator.py`'s docstring.
 - The job logs one line per asset the mix left out, with the periods: "the mix leaves out BRK-B
   for 3M, 6M, 1Y, 2Y, 5Y: not enough history."
 
-`labs/flows.run_backtest` fetches in two concurrent phases, through a pool of 8 threads:
+`labs/flows.run_backtest` fetches through `eur_returns/fetch.fetch_series` (shared with the
+portfolio TWR since RK-10), in two concurrent phases, through a pool of 8 threads:
 
 1. `get_ticker_info` for every asset.
 2. `get_price_series` for every asset that exists and has returns, and `get_fx_rate_series`
