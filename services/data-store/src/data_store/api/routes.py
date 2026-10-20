@@ -13,6 +13,7 @@ from data_store import jobs, ticker_onboarding
 from data_store.api.models import (
     FxSeries,
     PriceSeries,
+    RiskFreeSeries,
     TickerInfo,
     TickerList,
     TickerLookup,
@@ -74,6 +75,17 @@ def get_fx(
         return jobs.get_fx_series(base=base, quote=quote, source=source, start=start, end=end)
     except CurrencyNotTracked as e:
         raise HTTPException(404, f"currency not tracked: {e}")
+
+
+@router.get("/rates/risk-free", response_model=RiskFreeSeries)
+def get_risk_free(
+    start: date = Query(...),
+    end: date = Query(...),
+    source: str = Query("ecb"),
+) -> dict:
+    _validate_range(start, end)
+    logger.info("risk-free: source=%s %s..%s", source, start, end)
+    return jobs.get_risk_free_series(source=source, start=start, end=end)
 
 
 @router.get("/tickers", response_model=TickerList)

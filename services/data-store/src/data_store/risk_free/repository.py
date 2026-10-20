@@ -65,3 +65,40 @@ def get_latest_risk_free_dates(conn, source: str, series: list[str]) -> dict[str
             (source, list(series)),
         )
         return {row[0]: row[1] for row in cur.fetchall()}
+
+
+def get_first_risk_free_dates(conn, source: str, series: list[str]) -> dict[str, date]:
+    """{series: first stored rate_date}, the MIN counterpart of get_latest_risk_free_dates. The
+    read side reports where rf_eur's coverage begins from it (spec R4), whatever window was
+    asked for. A series with nothing stored is absent."""
+    if not series:
+        return {}
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT series, MIN(rate_date)
+            FROM risk_free_rates
+            WHERE source = %s AND series = ANY(%s)
+            GROUP BY series
+            """,
+            (source, list(series)),
+        )
+        return {row[0]: row[1] for row in cur.fetchall()}
+
+
+def get_risk_free_rate_series(
+    conn, source: str, series: str, start: date, end: date
+) -> list[tuple]:
+    """Raw (rate_date, rate) rows of one series over an inclusive range, in date order, exactly
+    as stored. Joining €STR and EONIA is risk_free.splice's job, not this layer's."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT rate_date, rate
+            FROM risk_free_rates
+            WHERE series = %s AND source = %s AND rate_date BETWEEN %s AND %s
+            ORDER BY rate_date
+            """,
+            (series, source, start, end),
+        )
+        return cur.fetchall()

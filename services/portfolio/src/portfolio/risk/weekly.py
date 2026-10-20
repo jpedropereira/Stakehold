@@ -13,12 +13,14 @@
 - A week is complete once its Friday is on or before `as_of`, the date the caller knows the data
   runs through. It defaults to the series' last date, so a series ending on a Thursday drops its
   last week unless the caller says Friday has passed (a holiday Friday).
+- `weekly_window` shrinks a measurement window to the same whole weeks (RK-7), so a weekly
+  measure's window starts and ends on Fridays the weekly series has.
 """
 
 from datetime import date, timedelta
 
 import numpy as np
-from portfolio.risk.types import Frequency, ReturnSeries
+from portfolio.risk.types import Frequency, ReturnSeries, Window
 
 _FRIDAY = 4
 _WEEK = timedelta(days=7)
@@ -45,6 +47,15 @@ def to_weekly(daily: ReturnSeries, as_of: date | None = None) -> ReturnSeries:
         values.append(_compound(weeks.get(friday)))
         friday += _WEEK
     return ReturnSeries(Frequency.WEEKLY, first_friday, tuple(dates), tuple(values))
+
+
+def weekly_window(window: Window) -> Window | None:
+    """The window shrunk to whole weeks: the Friday on or after its start to the Friday on or
+    before its end, matching the edges `to_weekly` drops. Without it a window ending on a
+    weekday other than Friday would end after the weekly series does. None when no whole week
+    fits."""
+    start, end = _friday_on_or_after(window.start), _friday_on_or_before(window.end)
+    return Window(window.label, start, end) if start <= end else None
 
 
 def _compound(days: list[float | None] | None) -> float | None:
