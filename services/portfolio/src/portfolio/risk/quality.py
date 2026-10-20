@@ -13,6 +13,8 @@
   calendar whose move was lost, not a day that didn't exist.
 """
 
+from collections.abc import Iterable
+
 from portfolio.risk.types import Frequency, ReturnSeries
 
 WEEKLY_Q = 52
@@ -33,7 +35,11 @@ def over_gap_budget(n_obs: int, n_gaps: int) -> bool:
 
 
 def has_suspect_rows(series: ReturnSeries) -> bool:
-    return any(v is not None and abs(v) > _SUSPECT_THRESHOLD for v in series.values)
+    return any_suspect(series.values)
+
+
+def any_suspect(values: Iterable[float | None]) -> bool:
+    return any(v is not None and abs(v) > _SUSPECT_THRESHOLD for v in values)
 
 
 def empirical_q(series: ReturnSeries) -> float:

@@ -127,7 +127,7 @@ checked against the code, docs and dev DB:
 | RK-13 | [portfolio: benchmark and relative measures](#rk-13-portfolio-benchmark-and-relative-measures) | RK-8, RK-11 | blocked |
 | RK-14 | [web: benchmark selector, relative measures, benchmark line](#rk-14-web-benchmark-selector-relative-measures-benchmark-line) | RK-9, RK-12, RK-13 | blocked |
 | RK-15 | [portfolio: ex-ante covariance and risk decomposition](#rk-15-portfolio-ex-ante-covariance-and-risk-decomposition) | RK-6, RK-7 | done |
-| RK-16 | [portfolio: correlation matrix](#rk-16-portfolio-correlation-matrix) | RK-6 | ready |
+| RK-16 | [portfolio: correlation matrix](#rk-16-portfolio-correlation-matrix) | RK-6 | done |
 | RK-17 | [portfolio: ex-ante endpoint](#rk-17-portfolio-ex-ante-endpoint) | RK-4, RK-5, RK-13, RK-15, RK-16 | blocked |
 | RK-18 | [web: ex-ante summary, decomposition and heatmap](#rk-18-web-ex-ante-summary-decomposition-and-heatmap) | RK-12, RK-17 | blocked |
 | RK-19 | [portfolio: candidate what-if](#rk-19-portfolio-candidate-what-if) | RK-17 | blocked |
@@ -538,7 +538,7 @@ use is `risk/ex_ante.py`: `decomposition_figures(weekly, weights, window)` and
 
 ### RK-16. portfolio: correlation matrix
 
-**Status:** ready
+**Status:** done
 
 Pearson on weekly returns:
 - **Pairwise for display**: each cell carries its own `n_obs` and start date.
@@ -549,6 +549,24 @@ Pearson on weekly returns:
 
 Tests: pairwise cells with different overlaps. EUR raises two USD assets' correlation over local
 in a constructed FX fixture.
+
+**As built:** `risk/correlation.py`. Decisions:
+- **The listwise ρ is built on RK-15's `ListwiseReturns`** (`risk/listwise.py`), as RK-15's note
+  asks. RK-16 was planned to own R12's panel, with RK-15 building on it. RK-15 merged first, so
+  RK-16 dropped its own panel when merging main. R12 has one implementation, and the listwise ρ
+  and Σ always come from the same weeks.
+- **Pairwise is kept out of maths by construction and at runtime** (agreed; portfolio runs no
+  type checker). `PairwiseCorrelation` exposes only `cell(a, b)` (`RiskFigure`s), never an array,
+  and `listwise_correlation` raises `TypeError` on anything but a `ListwiseReturns`.
+- **A pairwise cell** covers the weeks that pair shares inside the window, so a series needn't
+  cover the window. Its start is the base of its first shared week. The diagonal is computed like
+  any cell.
+- **A constant series is greyed**, "no variation in returns" (the listwise reason names it),
+  never inf or 0.
+- **Currency is the caller's**: the same functions take weekly series from `r_eur` or `r_local`.
+  RK-17 picks and labels.
+- **No clustering order** (agreed). It's left to RK-18, its first consumer.
+- `quality.any_suspect` checks loose values, so the threshold stays in one place.
 
 ### RK-17. portfolio: ex-ante endpoint
 
