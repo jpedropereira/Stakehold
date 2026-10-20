@@ -113,8 +113,8 @@ checked against the code, docs and dev DB:
 |----|------|------------|--------|
 | RK-0 | [Roadmap housekeeping](#rk-0-roadmap-housekeeping) | — | done |
 | RK-1 | [data-store: split `architecture.md`](#rk-1-data-store-split-architecturemd) | — | done |
-| RK-2 | [data-store: risk-free rate ingestion (€STR + EONIA)](#rk-2-data-store-risk-free-rate-ingestion-str--eonia) | RK-1 | ready |
-| RK-3 | [data-store: risk-free endpoint](#rk-3-data-store-risk-free-endpoint) | RK-2 | blocked |
+| RK-2 | [data-store: risk-free rate ingestion (€STR + EONIA)](#rk-2-data-store-risk-free-rate-ingestion-str--eonia) | RK-1 | done |
+| RK-3 | [data-store: risk-free endpoint](#rk-3-data-store-risk-free-endpoint) | RK-2 | ready |
 | RK-4 | [portfolio: client reads the risk-free series](#rk-4-portfolio-client-reads-the-risk-free-series) | RK-3 | blocked |
 | RK-5 | [portfolio: shared EUR daily returns](#rk-5-portfolio-shared-eur-daily-returns) | — | ready |
 | RK-6 | [portfolio: risk library foundations](#rk-6-portfolio-risk-library-foundations) | — | ready |
@@ -178,7 +178,7 @@ links to it, and is 54.2 KB. RK-3, RK-21 and RK-27's endpoints and their reasoni
 
 ### RK-2. data-store: risk-free rate ingestion (€STR + EONIA)
 
-**Status:** ready
+**Status:** done
 
 - **Schema first.** Propose a new table and agree it. `macro_indicator_rates` doesn't fit (its
   key has no series code, and `rate_value` is a YoY %). Recommended: store each published series
@@ -194,9 +194,20 @@ links to it, and is 54.2 KB. RK-3, RK-21 and RK-27's endpoints and their reasoni
 Tests: parsing a recorded portal response (unit). Upsert idempotency, and both series stored
 (integration). Logging counts.
 
+Done as specified, with these outcomes:
+- **Both keys were confirmed** on 2026-10-20. The units are % per year, ACT/360.
+- **The table is `risk_free_rates`:** `(series, rate_date, source)`, with `rate NUMERIC(8,4)`.
+  The series are named `estr` and `eonia`.
+- **There's no separate backfill command.** `ingest-risk-free-rates` fetches a series' whole
+  history when none of it is stored, and skips EONIA (closed on 2021-12-31) once it's stored.
+- **The retry loop moved to `provider_retry.py`.** A 4xx other than 429 from the ECB isn't
+  retried.
+- **For RK-3:** EONIA rows after 2019-09-30 are stored too, and are €STR + 0.085 by
+  construction. The join has to take EONIA only up to 2019-09-30.
+
 ### RK-3. data-store: risk-free endpoint
 
-**Status:** blocked
+**Status:** ready
 
 `GET /rates/risk-free?start&end` returns the spliced daily `rf_eur` (annualised %), one point
 per published day, each with its source (`estr` / `eonia_adjusted`). It also returns the series'
