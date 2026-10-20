@@ -88,6 +88,11 @@ def _backfill_fx_rates(args: argparse.Namespace) -> int:
     return _report(result, "fx rate rows")
 
 
+def _ingest_risk_free_rates(args: argparse.Namespace) -> int:
+    result = jobs.run_ingest_risk_free_rates(days=args.days)
+    return _report(result, "risk-free rate rows")
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="data-store")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -293,6 +298,18 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     backfill_fx_rates_parser.set_defaults(handler=_backfill_fx_rates)
+
+    ingest_risk_free_rates_parser = subparsers.add_parser(
+        "ingest-risk-free-rates",
+        help=(
+            "Fetch and load the ECB's euro overnight rates (€STR, EONIA). A series with "
+            "nothing stored is fetched over its whole history, so the first run is the backfill."
+        ),
+    )
+    ingest_risk_free_rates_parser.add_argument(
+        "--days", type=int, default=7, help="Lookback window in days (default: 7)"
+    )
+    ingest_risk_free_rates_parser.set_defaults(handler=_ingest_risk_free_rates)
 
     return parser
 

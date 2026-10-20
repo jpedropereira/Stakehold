@@ -8,7 +8,7 @@ decisions that would otherwise look arbitrary. The read API's endpoints and thei
 
 ## What the service is responsible for
 
-Getting external financial data into Postgres, correctly and repeatably. Three things go in:
+Getting external financial data into Postgres, correctly and repeatably. Five things go in:
 
 - **ETF holdings** — scraped from a fund provider's website (iShares today).
 - **Raw daily market data** — OHLCV prices, dividends and stock splits, for every ticker those
@@ -20,6 +20,9 @@ Getting external financial data into Postgres, correctly and repeatably. Three t
   carry.
 - **Macro indicators** — monthly/quarterly US inflation and GDP (FRED) and EU/euro-area
   inflation and GDP growth (Eurostat), landed verbatim in `raw_macro_indicators`.
+- **Daily risk-free rates** — the ECB's euro overnight rates, €STR and the discontinued EONIA,
+  landed verbatim in `risk_free_rates`. Joining them into one risk-free series is left to the
+  read side (RK-3), so each stored number can still be checked against the ECB.
 
 Two things are derived, not fetched: **`market_returns`** — split-adjusted price and
 price/dividend/simple/log returns, rebuilt from `raw_market_data` by `calculate-returns` — and
@@ -62,6 +65,7 @@ flowchart TD
         RET["returns/<br/>calculator · repository"]
         REG["regimes/<br/>loader · repository"]
         MACRO["macro/<br/>fred_source · eurostat_source · repository · calculator"]
+        RF["risk_free/<br/>ecb_source · repository"]
         TRK["tracked_tickers/<br/>yfinance_source (lookup) · repository"]
     end
 
@@ -71,6 +75,7 @@ flowchart TD
         SCHEMA["db/schema.sql"]
         RESULT["run_result.py"]
         RETRY["yfinance_retry.py<br/><i>shared transient-error classifier</i>"]
+        PRETRY["provider_retry.py<br/><i>provider-agnostic retry loop</i>"]
         RESOLVE["ticker_resolution.py<br/><i>holding → provider ticker</i>"]
     end
 
@@ -80,7 +85,7 @@ flowchart TD
 
     PG[("Postgres")]
     EXT(["External: iShares, yfinance"])
-    EXT2(["External: FRED, Eurostat"])
+    EXT2(["External: FRED, Eurostat, ECB"])
 
     DAGS -->|subprocess| CLI
     CLI --> JOBS
@@ -98,6 +103,7 @@ flowchart TD
     PIPE --> RET
     PIPE --> REG
     PIPE --> MACRO
+    PIPE --> RF
     PIPE --> RESOLVE
     READ --> FX
     READ --> RET
@@ -110,16 +116,20 @@ flowchart TD
     MKT --> EXT
     FX --> EXT
     MACRO --> EXT2
+    RF --> EXT2
     TRK --> EXT
     TRK --> RETRY
     MKT --> RETRY
     FX --> RETRY
+    MACRO --> PRETRY
+    RF --> PRETRY
     HOLD --> PG
     MKT --> PG
     FX --> PG
     RET --> PG
     REG --> PG
     MACRO --> PG
+    RF --> PG
     TRK --> PG
     DB --> PG
 ```
@@ -214,10 +224,12 @@ a derived one: `base.py` (the `MacroIndicatorSource` Protocol, shared by both pr
 talk to genuinely different APIs, a fixed-series pull vs. a dimension-filtered dataset query —
 and `repository.py` (raw upsert plus the read-back `get_raw_indicators` the calculator needs),
 plus `calculator.py` (pure YoY-normalization arithmetic, no I/O, mirroring `returns/calculator.py`
-exactly). `retry.py` holds the transient-error classifier both `*_source.py` files share — scoped
-to this domain rather than promoted to a foundation module like `yfinance_retry.py`, since both
-callers live inside `macro/` itself rather than spanning two domains the way `market_data/` and
-`fx/` share `yfinance_retry.py`.
+exactly). Both `*_source.py` files retry through `provider_retry.py`, a foundation module. It
+began as `macro/retry.py`, scoped to this domain while both its callers lived here. It moved out
+when `risk_free/` needed the same loop, for the same reason `yfinance_retry.py` left
+`market_data/`: one domain importing another's helper isn't a foundation to build on. Its
+classifier knows no provider's specific errors (unlike `yfinance_retry.py`'s), which is what
+lets a third provider share it.
 
 `fx/` follows the standard three-file shape exactly, and is the second implementation of it (after
 `market_data/`) rather than the first — deliberately kept as a *separate* domain rather than folded
@@ -229,9 +241,29 @@ isn't free. `fx/yfinance_source.py` and `market_data/yfinance_source.py` do shar
 to a foundation module (not under either domain package) when `fx/` needed it too — sibling domain
 modules reaching into each other's private helpers wasn't a foundation worth building on.
 
+`risk_free/` is the standard three-file shape again, for the ECB's €STR and EONIA (the inputs to
+the risk measures' risk-free rate). It's a domain of its own rather than a third `macro/` provider,
+because the two don't fit the same interface. `MacroIndicatorSource.fetch` takes regions and
+returns monthly or quarterly indicators. A risk-free series has no region, and it's fetched by
+date range like `fx/`. Some details:
+
+- **One series per call.** `RiskFreeRateSource.fetch` takes one series, so the flow can count a
+  failed series rather than have it disappear inside the source, which is what happens to a
+  failed Eurostat dataset.
+- **The source declares its series and which of them are closed** (`series`, `discontinued`).
+  The flow then decides what to fetch without knowing it's talking to the ECB.
+- **Retries go through `provider_retry.py`, with one change.** `requests.HTTPError` is an
+  `OSError`, so the shared classifier would retry a 404. `ecb_source.py` re-raises a 4xx other
+  than 429 as a non-retried type. This is kept local rather than changed in the classifier,
+  because changing the classifier would change how Eurostat retries, outside RK-2's scope.
+  **Known sharp edge:** the `eurostat` package also uses `requests`, so a permanent 4xx from
+  Eurostat is probably retried as if it were transient. The fix is to classify
+  `requests.HTTPError` by status code in `provider_retry.is_transient`, and then drop the
+  ECB-local re-raise.
+
 ## Extension points
 
-New providers are registry entries, not new branches. All three registries live at the top of
+New providers are registry entries, not new branches. All five registries live at the top of
 `pipeline.py`:
 
 ```python
@@ -239,6 +271,7 @@ SCRAPERS              = {"ishares": get_holdings_csv_url}
 MARKET_DATA_SOURCES   = {"yfinance": YFinanceMarketDataSource}
 FX_RATE_SOURCES       = {"yfinance": YFinanceFxRateSource}
 MACRO_INDICATOR_SOURCES = {"fred": FredMacroIndicatorSource, "eurostat": EurostatMacroIndicatorSource}
+RISK_FREE_RATE_SOURCES  = {"ecb": EcbRiskFreeRateSource}
 ```
 
 Adding a second market-data (or FX-rate) provider means writing a class satisfying
@@ -256,6 +289,11 @@ looked up by a config-selected key. Whether each is actually *called*, though, d
 `eu_regions`: `ingest_macro_indicators` skips Eurostat's `fetch()` (and says so in its log) when
 `config/macro_regions.yaml` is absent or empty — see the `macro_regions.yaml` note below.
 
+`RISK_FREE_RATE_SOURCES` is like `FX_RATE_SOURCES`: one entry, looked up under the literal
+`"ecb"` key, with no config choosing it. Which series to fetch is the source's own `series`, not
+config, because the risk-free rate is defined as these two series (spec §4.1). Adding a series
+there is a change to that definition, not a deployment setting.
+
 **A disclosed trade-off of one combined registry**: before the OHLCV/dividend fetch merge, prices
 and dividends had separate registries and Protocols, because they were genuinely separate
 fetches with different `fetch()` shapes. Now that one fetch returns both, a future
@@ -272,18 +310,19 @@ reason not to.
 
 ## The flows
 
-Nine live in `pipeline.py`. Two, the tracked-ticker sync and ticker onboarding, live in
+Ten live in `pipeline.py`. Two, the tracked-ticker sync and ticker onboarding, live in
 `ticker_onboarding.py`. All are exposed as CLI subcommands.
 
 | Flow | Command | Cadence | Reads | Writes |
 |---|---|---|---|---|
 | Holdings ingest | `ingest-holdings` | weekly | provider site | `etf_holdings` |
-| Market data ingest | `ingest-market-data` | daily, in parallel with regimes and FX ingest | `etf_holdings` + `tracked_tickers` (`ready` rows only) | `raw_market_data` |
+| Market data ingest | `ingest-market-data` | daily, in parallel with regimes, FX and risk-free ingest | `etf_holdings` + `tracked_tickers` (`ready` rows only) | `raw_market_data` |
 | Market data backfill | `backfill-market-data` | manual | `raw_market_data` + `tracked_tickers` (every enabled row) | `raw_market_data` |
 | Returns calculation | `calculate-returns` | daily, immediately after market data ingest succeeds (same run) | `raw_market_data` | `market_returns` |
-| Regimes ingest | `ingest-regimes` | daily, in parallel with market data and FX ingest | `config/regimes.csv` | `regimes` |
-| FX rates ingest | `ingest-fx-rates` | daily, in parallel with market data and regimes ingest | `config/currencies.yaml` + `tracked_tickers` currencies | `fx_rates` |
+| Regimes ingest | `ingest-regimes` | daily, in parallel with market data, FX and risk-free ingest | `config/regimes.csv` | `regimes` |
+| FX rates ingest | `ingest-fx-rates` | daily, in parallel with market data, regimes and risk-free ingest | `config/currencies.yaml` + `tracked_tickers` currencies | `fx_rates` |
 | FX rates backfill | `backfill-fx-rates` | manual | `fx_rates` | `fx_rates` |
+| Risk-free rates ingest | `ingest-risk-free-rates` | daily, in parallel with market data, regimes and FX ingest | ECB Data Portal + `risk_free_rates` (latest date per series) | `risk_free_rates` |
 | Macro indicators ingest | `ingest-macro-indicators` | monthly, own DAG | FRED + Eurostat + `config/macro_regions.yaml` | `raw_macro_indicators` |
 | Macro indicator rates | `calculate-macro-indicator-rates` | monthly, immediately after macro ingest succeeds (same run) | `raw_macro_indicators` | `macro_indicator_rates` |
 | Tracked-ticker sync | `sync-tracked-tickers` | at the start of every market data ingest, backfill and onboarding run; also runnable on its own | `config/tracked_tickers.yaml` | `tracked_tickers` |
@@ -359,16 +398,19 @@ before this rule existed) is not found. Repair is a one-off `--days N` run over 
 already got a window before the full-history rule existed need a `backfill-market-data
 --force-refresh --ticker …`.
 
-**Market data ingest, regimes ingest, FX rates ingest and returns calculation share one DAG,
-`daily_pipeline`.** `ingest-market-data`, `ingest-regimes` and `ingest-fx-rates` start together
-with no dependency between any pair of them — a hand-curated CSV of market regimes, a currency
-conversion rate, and a security's price have nothing to do with each other, so there is no reason
-for one to wait on another, and running them in parallel gets all three done faster.
+**Market data ingest, regimes ingest, FX rates ingest, risk-free rates ingest and returns
+calculation share one DAG, `daily_pipeline`.** `ingest-market-data`, `ingest-regimes`,
+`ingest-fx-rates` and `ingest-risk-free-rates` start together with no dependency between any pair
+of them — a hand-curated CSV of market regimes, a currency conversion rate, an overnight interest
+rate, and a security's price have nothing to do with each other, so there is no reason for one to
+wait on another, and running them in parallel gets them all done faster. Risk-free rates are
+daily rather than in the monthly `macro_indicators` DAG because €STR is published every business
+day, and the risk measures read it day by day.
 `calculate-returns` runs afterward, but is gated specifically on `ingest-market-data`'s result
 check succeeding, not merely on the task finishing: it rebuilds `market_returns` from whatever
 `ingest-market-data` just landed in `raw_market_data`, so an "ok" ingest that silently saved zero
 rows must not unlock a returns rebuild any more than a raised exception would. It has no
-dependency on the regimes or FX branches, which touch different, unrelated tables. Each
+dependency on the regimes, FX or risk-free branches, which touch different, unrelated tables. Each
 `ingest-regimes` run still replaces the entire `regimes` table from the current CSV file — the
 source is still a hand-curated CSV, edited manually when new market events occur or existing
 regime definitions change, but the load into the database is now scheduled daily like the other

@@ -39,6 +39,7 @@ from data_store.pipeline import (
     ingest_macro_indicators,
     ingest_market_data,
     ingest_regimes,
+    ingest_risk_free_rates,
 )
 from data_store.read_flows import fx_rate_series, price_series, ticker_info, ticker_list
 from data_store.run_result import build_run_result
@@ -270,6 +271,25 @@ def run_backfill_fx_rates(
             delay_seconds,
             only_currencies=set(currencies) if currencies else None,
             force_refresh=force_refresh,
+        )
+    finally:
+        conn.close()
+
+
+def run_ingest_risk_free_rates(*, days: int = 7) -> dict[str, int | str]:
+    """The ECB's €STR and EONIA over a rolling window, reaching further back, up to
+    CATCH_UP_DAYS, for a series that fell behind it. A series with nothing stored yet is fetched
+    in full -- see pipeline.ingest_risk_free_rates."""
+    configure_logging()
+    settings = load_settings()
+    end_date = date.today()
+    conn = get_connection(settings.database_url)
+    try:
+        return ingest_risk_free_rates(
+            conn,
+            end_date - timedelta(days=days),
+            end_date,
+            catch_up_limit=end_date - timedelta(days=CATCH_UP_DAYS),
         )
     finally:
         conn.close()

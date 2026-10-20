@@ -1,4 +1,4 @@
-from data_store.macro.retry import with_retries
+from data_store.provider_retry import with_retries
 
 
 def make_flaky(*, fail_times, error, result="ok"):

@@ -1,5 +1,5 @@
 import pandas as pd
-from data_store.macro.retry import with_retries
+from data_store.provider_retry import with_retries
 from fredapi import Fred
 
 _OUTPUT_COLUMNS = [

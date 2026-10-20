@@ -42,6 +42,11 @@ from data_store.returns.repository import (
     iter_price_series,
     save_market_returns,
 )
+from data_store.risk_free.ecb_source import EcbRiskFreeRateSource
+from data_store.risk_free.repository import (
+    get_latest_risk_free_dates,
+    save_risk_free_rates,
+)
 from data_store.run_result import build_run_result
 from data_store.ticker_resolution import holding_symbol, resolve_yfinance_ticker
 
@@ -79,6 +84,10 @@ FX_RATE_SOURCES = {
 MACRO_INDICATOR_SOURCES = {
     "fred": FredMacroIndicatorSource,
     "eurostat": EurostatMacroIndicatorSource,
+}
+
+RISK_FREE_RATE_SOURCES = {
+    "ecb": EcbRiskFreeRateSource,
 }
 
 
@@ -615,6 +624,88 @@ def ingest_fx_rates(
         currencies_unmatched=unmatched,
         rows_saved=saved,
         failed=unmatched,
+    )
+
+
+def ingest_risk_free_rates(
+    conn,
+    start_date: date,
+    end_date: date,
+    catch_up_limit: date | None = None,
+) -> dict[str, int | str]:
+    """The ECB's euro overnight rates (€STR, EONIA) into risk_free_rates, one series at a time.
+
+    There's no separate backfill. A series with nothing stored is fetched over its whole
+    history, which _fetch_windows already does for any key it finds unstored. That costs one
+    request per series, because the full histories are a few thousand rows each. A live series
+    that is stored is fetched over the rolling window, catching up after an outage. A
+    discontinued series that is stored is skipped: nothing new can appear for it, and leaving
+    it to _fetch_windows would warn every day that it has fallen behind the catch-up limit.
+    """
+    source = RISK_FREE_RATE_SOURCES["ecb"]()
+    series = list(source.series)
+    logger.info(f"ingest-risk-free-rates: checking {len(series)} series (source={source.name}).")
+
+    latest = get_latest_risk_free_dates(conn, source.name, series)
+    skipped = 0
+    to_fetch = []
+    for code in series:
+        closed_on = source.discontinued.get(code)
+        if closed_on is not None and code in latest:
+            skipped += 1
+            logger.info(
+                f"ingest-risk-free-rates: {code} was discontinued on {closed_on} and is stored "
+                f"through {latest[code]}, skipping."
+            )
+            continue
+        to_fetch.append(code)
+
+    windows = _fetch_windows(
+        "ingest-risk-free-rates",
+        "series",
+        to_fetch,
+        start_date,
+        catch_up_limit,
+        lambda: latest,
+        str,
+    )
+    saved = 0
+    fetched = failed = 0
+    for window_start, window_series in windows:
+        for code in window_series:
+            # fetch and save in one try/except: a series that fails on either costs only itself.
+            try:
+                data = source.fetch(code, window_start, end_date)
+                rows = save_risk_free_rates(conn, source.name, data) if not data.empty else 0
+            except Exception as e:
+                failed += 1
+                logger.warning(
+                    "ingest-risk-free-rates: %s failed, skipping: %s", code, e, exc_info=True
+                )
+                continue
+            fetched += 1
+            saved += rows
+            if data.empty:
+                logger.info(
+                    f"ingest-risk-free-rates: {code} -> no data ({window_start} to {end_date})"
+                )
+            else:
+                logger.info(
+                    f"ingest-risk-free-rates: {code} -> {rows} row(s) "
+                    f"({window_start} to {end_date})"
+                )
+
+    logger.info(
+        f"ingest-risk-free-rates complete: {saved} row(s) saved; {fetched} series fetched, "
+        f"{skipped} skipped, {failed} failed."
+    )
+    return build_run_result(
+        units_total=len(series),
+        rows_saved=saved,
+        failed=failed,
+        series_fetched=fetched,
+        series_skipped=skipped,
+        series_failed=failed,
     )
 
 

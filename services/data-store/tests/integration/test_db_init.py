@@ -29,6 +29,37 @@ def test_db_init_creates_expected_tables():
     assert tables == ["etf_holdings", "market_returns", "raw_market_data"]
 
 
+def test_db_init_creates_risk_free_rates_with_its_key():
+    assert cli.main(["db", "init"]) == 0
+
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT column_name, data_type, numeric_precision, numeric_scale, is_nullable
+                FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'risk_free_rates'
+                ORDER BY ordinal_position
+                """)
+            columns = cur.fetchall()
+            cur.execute("""
+                SELECT a.attname
+                FROM pg_index i
+                JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+                WHERE i.indrelid = 'risk_free_rates'::regclass AND i.indisprimary
+                ORDER BY array_position(i.indkey, a.attnum)
+                """)
+            key = [row[0] for row in cur.fetchall()]
+
+    assert columns == [
+        ("series", "character varying", None, None, "NO"),
+        ("rate_date", "date", None, None, "NO"),
+        ("source", "character varying", None, None, "NO"),
+        ("rate", "numeric", 8, 4, "NO"),
+        ("ingested_at", "timestamp with time zone", None, None, "NO"),
+    ]
+    assert key == ["series", "rate_date", "source"]
+
+
 def test_db_init_is_idempotent():
     cli.main(["db", "init"])
 

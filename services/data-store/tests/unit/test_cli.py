@@ -30,6 +30,7 @@ def calls(monkeypatch):
         "run_calculate_returns",
         "run_ingest_fx_rates",
         "run_backfill_fx_rates",
+        "run_ingest_risk_free_rates",
         "run_ingest_macro_indicators",
         "run_calculate_macro_indicator_rates",
         "run_sync_tracked_tickers",
@@ -408,3 +409,38 @@ def test_process_ticker_requests_reports_rows_and_exits_nonzero_on_partial(monke
 
     assert cli.main(["process-ticker-requests"]) == 1
     assert "7 market data rows" in capsys.readouterr().out
+
+
+# --- ingest-risk-free-rates ----------------------------------------------------------------------
+
+
+def test_ingest_risk_free_rates_defaults_to_a_seven_day_window(calls):
+    cli.main(["ingest-risk-free-rates"])
+
+    assert calls["run_ingest_risk_free_rates"] == {"days": 7}
+
+
+def test_ingest_risk_free_rates_passes_days_through(calls):
+    cli.main(["ingest-risk-free-rates", "--days", "30"])
+
+    assert calls["run_ingest_risk_free_rates"] == {"days": 30}
+
+
+def test_ingest_risk_free_rates_exit_code_reflects_the_run_status(monkeypatch):
+    monkeypatch.setattr(
+        cli.jobs,
+        "run_ingest_risk_free_rates",
+        lambda **kw: {"status": "partial", "rows_saved": 1},
+    )
+
+    assert cli.main(["ingest-risk-free-rates"]) == 1
+
+
+def test_ingest_risk_free_rates_reports_the_row_count_it_saved(monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli.jobs, "run_ingest_risk_free_rates", lambda **kw: {"status": "ok", "rows_saved": 5}
+    )
+
+    cli.main(["ingest-risk-free-rates"])
+
+    assert "5 risk-free rate rows" in capsys.readouterr().out

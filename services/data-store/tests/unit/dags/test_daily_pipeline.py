@@ -80,3 +80,19 @@ def test_returns_does_not_depend_on_fx_rates_check(dagbag):
     checked_fx_rates = dag.get_task("check_fx_rates_run")
 
     assert checked_fx_rates.task_id not in returns_task.upstream_task_ids
+
+
+def test_risk_free_rates_starts_with_the_run_and_depends_on_no_other_ingest(dagbag):
+    dag = dagbag.dags["daily_pipeline"]
+    risk_free_task = dag.get_task("ingest_risk_free_rates")
+
+    assert risk_free_task.upstream_task_ids == {"start"}
+    assert risk_free_task.downstream_task_ids == {"check_risk_free_rates_run"}
+
+
+def test_risk_free_rates_check_gates_the_end_of_the_run(dagbag):
+    dag = dagbag.dags["daily_pipeline"]
+    checked_risk_free = dag.get_task("check_risk_free_rates_run")
+
+    assert "end" in checked_risk_free.downstream_task_ids
+    assert "calculate_returns" not in checked_risk_free.downstream_task_ids

@@ -955,6 +955,63 @@ def test_ingest_fx_rates_closes_the_connection(monkeypatch, fake_settings):
     assert closed == [True]
 
 
+# --- run_ingest_risk_free_rates ------------------------------------------------------------------
+
+
+def test_ingest_risk_free_rates_uses_a_seven_day_window_and_a_year_of_catch_up(
+    monkeypatch, fake_settings
+):
+    calls = []
+
+    monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(
+        jobs,
+        "ingest_risk_free_rates",
+        lambda conn, s, e, catch_up_limit=None: calls.append((s, e, catch_up_limit))
+        or flow_result(2),
+    )
+
+    result = jobs.run_ingest_risk_free_rates()
+
+    assert result["status"] == "ok"
+    start_date, end_date, catch_up_limit = calls[0]
+    assert end_date == date.today()
+    assert (end_date - start_date).days == 7
+    assert (end_date - catch_up_limit).days == 366
+
+
+def test_ingest_risk_free_rates_respects_days_flag(monkeypatch, fake_settings):
+    calls = []
+
+    monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn([]))
+    monkeypatch.setattr(
+        jobs,
+        "ingest_risk_free_rates",
+        lambda conn, s, e, catch_up_limit=None: calls.append((s, e)) or flow_result(1),
+    )
+
+    jobs.run_ingest_risk_free_rates(days=30)
+
+    start_date, end_date = calls[0]
+    assert (end_date - start_date).days == 30
+
+
+def test_ingest_risk_free_rates_closes_the_connection(monkeypatch, fake_settings):
+    closed = []
+
+    monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn(closed))
+    monkeypatch.setattr(
+        jobs, "ingest_risk_free_rates", lambda conn, s, e, catch_up_limit=None: flow_result(1)
+    )
+
+    jobs.run_ingest_risk_free_rates()
+
+    assert closed == [True]
+
+
 # --- run_backfill_fx_rates -----------------------------------------------------------------------
 
 

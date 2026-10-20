@@ -106,6 +106,17 @@ CREATE TABLE IF NOT EXISTS fx_rates (
 
 CREATE INDEX IF NOT EXISTS idx_fx_rates_date ON fx_rates (rate_date);
 
+-- €STR and EONIA exactly as the ECB publishes them; spliced into one risk-free series on read.
+-- See docs/schema.md.
+CREATE TABLE IF NOT EXISTS risk_free_rates (
+    series      VARCHAR(20)   NOT NULL,
+    rate_date   DATE          NOT NULL,
+    source      VARCHAR(20)   NOT NULL,
+    rate        NUMERIC(8,4)  NOT NULL,
+    ingested_at TIMESTAMPTZ   NOT NULL DEFAULT now(),
+    PRIMARY KEY (series, rate_date, source)
+);
+
 CREATE TABLE IF NOT EXISTS regimes (
     regime_id   VARCHAR(50)   PRIMARY KEY,
     dimension   VARCHAR(30)   NOT NULL,
