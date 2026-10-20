@@ -387,6 +387,53 @@ for the same reasons documented under `raw_market_data`'s "Backfill loading patt
 rates have no split-restatement concern, so `--force-refresh` exists here only for symmetry and
 general repair, not a specific known failure mode the way it does for `raw_market_data`.
 
+## `risk_free_rates`
+
+One row per `(series, rate_date, source)`: a daily euro overnight rate as the ECB publishes it.
+The risk measures' risk-free series `rf_eur` (spec `docs/domain/risk.md` §4.1) is €STR from
+2019-10-01 and EONIA − 0.085 pp before that, back to 1999-01-04. This table holds the two inputs
+to that join, not the joined series.
+
+| Column        | Type           | Notes |
+|---------------|----------------|-------|
+| `series`      | `VARCHAR(20)`  | Part of PK. Our own name for the series, `'estr'` or `'eonia'`. The ECB's series keys are pinned in `risk_free/ecb_source.py` (`ECB_SERIES`), so a key change at the ECB is a code change, not a data migration. |
+| `rate_date`   | `DATE`         | Part of PK. The day the rate applies to (the ECB's `TIME_PERIOD`), not the day it was published. €STR for day T is published on T+1. |
+| `source`      | `VARCHAR(20)`  | Part of PK, `'ecb'`. Same reason as `fx_rates.source`: a second provider (FRED republishes €STR) could coexist without colliding. |
+| `rate`        | `NUMERIC(8,4)` | The published value as it stands: an annualised percentage on an ACT/360 basis (`-0.549` means −0.549% a year). Negative rates (2014–2022) are stored as-is, never floored. The ECB publishes 3 decimal places. |
+| `ingested_at` | `TIMESTAMPTZ`  | Defaults to `now()`. |
+
+No index beyond the PK. The one read, a series over a date range, is the PK's own order.
+
+**Rows exist only for published days.** €STR is published on TARGET2 business days, so there are
+no rows for weekends or holidays. Filling those gaps (the latest rate on or before each day) is
+portfolio's job under §4.1's convention, not this table's.
+
+**Why a table of its own.** `macro_indicator_rates` was the other candidate. Its key has no
+series code, so €STR and EONIA would collide on the same date, and its `rate_value` is a
+year-over-year change, a different quantity from an annualised interest rate.
+
+**Why the rates are stored raw and joined on read.** Each stored number can be checked directly
+against the ECB's own page. The −0.085 pp spread lives once, as a named constant in the read path
+(RK-3), not baked into 5,000 stored EONIA rows. EONIA rows after 2019-09-30 are kept too: by
+then EONIA was itself €STR + 8.5 bp, which makes them a check on the spread.
+
+**Series keys, verified against the ECB Data Portal API on 2026-10-20:**
+
+| `series` | ECB key | Published range | Check value |
+|----------|---------|-----------------|-------------|
+| `estr`   | `EST.B.EU000A2X2A25.WT` (volume-weighted trimmed mean) | 2019-10-01 → today | 2019-10-01 = −0.549 |
+| `eonia`  | `EON.D.EONIA_TO.RATE` | 1999-01-04 → 2021-12-31 (discontinued) | 2019-10-01 = −0.464, which is €STR + 0.085 |
+
+**Loading strategy: true upsert** (`INSERT ... ON CONFLICT (series, rate_date, source) DO
+UPDATE`), the same as `fx_rates`: the daily window refetches days that are already stored, and
+the ECB can republish a day's €STR.
+
+**There's no separate backfill.** `ingest-risk-free-rates` fetches a series' whole history when
+none of it is stored, and the whole history is small (about 7,700 rows in two requests). After
+that, €STR is refetched over a rolling window, with the same outage catch-up as `fx_rates`.
+EONIA is closed, so once it is stored it is skipped. The one gap: to refetch EONIA, delete its
+rows first.
+
 ## `regimes`
 
 One row per unique regime identifier — a historical market/economic event or condition (recession,
