@@ -1,6 +1,7 @@
 """risk/correlation.py: Pearson on weekly returns (spec §7.1). Pairwise for display, each cell
 over its own overlap with its own n_obs and start date; listwise for maths, over R12's window
-(only the weeks in which every series has a return), and the two kept apart by type (R13).
+(RK-15's `listwise`: only the weeks in which every series has a return), and the two kept apart
+by type (R13). The panel itself is tested in test_listwise.py; here, what correlation adds.
 
 Calendar: 2020-01-03 is a Friday, F0. A weekly fixture's week k (from 0) is dated F0 + (k + 1)
 weeks, so a series starting at week s has base date F0 + s weeks. The patterns are built so
@@ -20,11 +21,10 @@ from portfolio.datastore_client.base import FxPoint, PricePoint
 from portfolio.eur_returns.calculator import EurReturns, eur_daily_returns
 from portfolio.risk.correlation import (
     ListwiseCorrelation,
-    ListwisePanel,
     listwise_correlation,
-    listwise_panel,
     pairwise_correlation,
 )
+from portfolio.risk.listwise import listwise
 from portfolio.risk.types import Flag, Frequency, ReturnSeries, Window
 from portfolio.risk.weekly import to_weekly
 
@@ -81,7 +81,7 @@ def test_pairwise_refuses_a_daily_series():
 def test_pairwise_cells_each_use_their_own_overlap():
     result = pairwise_correlation(_staggered(), FULL)
 
-    assert result.labels == ("A", "B", "C")
+    assert result.keys == ("A", "B", "C")
     ab, ac, bc = result.cell("A", "B"), result.cell("A", "C"), result.cell("B", "C")
     # A-B overlap weeks 20-159: 140 obs, measured from week 20's base.
     assert (ab.n_obs, ab.window_start, ab.window_end) == (140, F0 + 20 * WEEK, _friday(159))
@@ -218,68 +218,14 @@ def test_pairwise_result_carries_no_matrix():
 # --- listwise ---------------------------------------------------------------------------------
 
 
-def test_listwise_panel_starts_at_the_latest_start_and_names_it():
-    panel = listwise_panel(_staggered(), FULL)
-
-    assert isinstance(panel, ListwisePanel)
-    assert panel.labels == ("A", "B", "C")
-    assert panel.limiting == "C"
-    assert (panel.window.start, panel.window.end) == (F0 + 40 * WEEK, _friday(159))
-    assert panel.dates == tuple(_friday(k) for k in range(40, 160))
-    assert panel.returns.shape == (120, 3)
-    assert (panel.n_obs, panel.n_gaps) == (120, 0)
-    assert panel.returns[0].tolist() == [_p(40), _q(40), -_p(40)]
-
-
-def test_listwise_panel_names_no_limit_when_every_series_covers_the_window():
-    series = {"A": _pattern(_p, 0, 160), "B": _pattern(_q, 0, 160)}
-    panel = listwise_panel(series, Window("3Y", _friday(9), _friday(159)))
-
-    assert panel.limiting is None
-    assert panel.window.start == _friday(9)
-    assert panel.n_obs == 150
-
-
-def test_listwise_panel_ends_at_the_earliest_last_date():
-    series = {"A": _pattern(_p, 0, 160), "B": _pattern(_q, 0, 140)}
-    panel = listwise_panel(series, FULL)
-
-    assert panel.window.end == _friday(139)
-    assert panel.n_obs == 140
-
-
-def test_listwise_panel_drops_a_week_with_a_null_in_any_series():
-    series = _staggered()
-    a = series["A"]
-    values = list(a.values)
-    values[50] = None
-    series["A"] = ReturnSeries(a.frequency, a.base_date, a.dates, tuple(values))
-
-    panel = listwise_panel(series, FULL)
-
-    assert (panel.n_obs, panel.n_gaps) == (119, 1)
-    assert _friday(50) not in panel.dates
-    assert not np.isnan(panel.returns).any()
-
-
-def test_listwise_panel_refuses_a_daily_series():
-    daily = ReturnSeries(Frequency.DAILY, F0, (F0 + timedelta(days=3),), (0.01,))
-    with pytest.raises(ValueError, match="weekly"):
-        listwise_panel({"A": _pattern(_p, 0, 110), "D": daily}, FULL)
-
-
-def test_listwise_panel_returns_are_read_only():
-    panel = listwise_panel(_staggered(), FULL)
-    with pytest.raises(ValueError):
-        panel.returns[0, 0] = 0.5
-
-
 def test_listwise_correlation_uses_the_common_weeks_only():
-    result = listwise_correlation(listwise_panel(_staggered(), FULL))
+    result = listwise_correlation(listwise(_staggered(), FULL))
 
     assert isinstance(result, ListwiseCorrelation)
     assert result.reason is None
-    assert (result.n_obs, result.limiting) == (120, "C")
+    assert result.keys == ("A", "B", "C")
+    assert (result.n_obs, result.limited_by) == (120, ("C",))
+    assert (result.window.start, result.window.end) == (F0 + 40 * WEEK, _friday(159))
     # Over weeks 40-159 B is Q throughout, so ρ(A, B) = 0, where the pairwise cell said 20/140.
     expected = np.array([[1.0, 0.0, -1.0], [0.0, 1.0, 0.0], [-1.0, 0.0, 1.0]])
     np.testing.assert_allclose(result.matrix, expected, atol=1e-12)
@@ -289,17 +235,17 @@ def test_listwise_correlation_uses_the_common_weeks_only():
 
 def test_listwise_correlation_minimum_is_104_common_weeks():
     series = {"A": _pattern(_p, 0, 160), "B": _pattern(_q, 57, 160)}  # 103 common weeks
-    result = listwise_correlation(listwise_panel(series, FULL))
+    result = listwise_correlation(listwise(series, FULL))
 
     assert result.matrix is None
     assert result.reason == "insufficient history (have 103, need 104)"
     assert Flag.INSUFFICIENT_HISTORY in result.flags
-    assert result.limiting == "B"
+    assert result.limited_by == ("B",)
 
 
 def test_listwise_correlation_names_a_constant_series():
     series = {"A": _pattern(_p, 0, 120), "F": _weekly(0, [0.01] * 120)}
-    result = listwise_correlation(listwise_panel(series, FULL))
+    result = listwise_correlation(listwise(series, FULL))
 
     assert result.matrix is None
     assert result.reason == "no variation in returns (F)"
@@ -307,11 +253,9 @@ def test_listwise_correlation_names_a_constant_series():
 
 def test_listwise_without_overlap_is_greyed_not_raised():
     series = {"A": _pattern(_p, 0, 120), "B": _pattern(_q, 130, 250)}
-    panel = listwise_panel(series, Window("Max", F0, _friday(249)))
+    panel = listwise(series, Window("Max", F0, _friday(249)))
 
-    assert panel.window is None
     assert panel.n_obs == 0
-    assert panel.returns.shape == (0, 2)
     result = listwise_correlation(panel)
     assert result.matrix is None
     assert result.reason == "insufficient history (have 0, need 104)"
@@ -322,18 +266,28 @@ def test_listwise_correlation_flags_data_gaps():
     for k in (10, 20, 30):
         values[k] = None
     series = {"A": _weekly(0, values), "B": _pattern(_q, 0, 107)}
-    result = listwise_correlation(listwise_panel(series, FULL))
+    result = listwise_correlation(listwise(series, FULL))
 
     assert (result.n_obs, result.n_gaps) == (104, 3)
     assert Flag.DATA_GAPS in result.flags
 
 
+def test_listwise_correlation_flags_suspect_rows():
+    values = [_p(k) for k in range(120)]
+    values[5] = 1.5
+    series = {"A": _pattern(_q, 0, 120), "S": _weekly(0, values)}
+    result = listwise_correlation(listwise(series, FULL))
+
+    assert result.flags == frozenset({Flag.HAS_SUSPECT_ROWS})
+    assert result.matrix is not None
+
+
 def test_listwise_correlation_refuses_a_pairwise_matrix():
     # R13: a pairwise matrix must never reach portfolio maths.
     pairwise = pairwise_correlation(_staggered(), FULL)
-    with pytest.raises(TypeError, match="ListwisePanel"):
+    with pytest.raises(TypeError, match="ListwiseReturns"):
         listwise_correlation(pairwise)
-    with pytest.raises(TypeError, match="ListwisePanel"):
+    with pytest.raises(TypeError, match="ListwiseReturns"):
         listwise_correlation(np.eye(3))
 
 
