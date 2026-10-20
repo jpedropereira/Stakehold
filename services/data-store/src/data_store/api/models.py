@@ -52,6 +52,24 @@ class FxSeries(BaseModel):
     points: list[FxPoint]
 
 
+class RiskFreePoint(BaseModel):
+    date: date
+    # Annualised %, ACT/360, as rf_eur defines it (spec §4.1): negative rates kept as-is.
+    rate: Decimal
+    # "estr" or "eonia_adjusted" (EONIA - 0.085) -- see risk_free/splice.py.
+    series: str
+
+
+class RiskFreeSeries(BaseModel):
+    source: str
+    # The first day the whole series covers, whatever the requested window -- what a caller
+    # applies R4 against. None only when nothing is stored for `source`.
+    first_date: date | None
+    # Published days only: weekends and holidays have no point, and filling them is the
+    # caller's job.
+    points: list[RiskFreePoint]
+
+
 class TickerList(BaseModel):
     tickers: list[str]
 

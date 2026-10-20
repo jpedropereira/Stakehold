@@ -8,6 +8,7 @@ from data_store.read_flows import (
     TickerNotFound,
     fx_rate_series,
     price_series,
+    risk_free_series,
     ticker_info,
     ticker_list,
 )
@@ -666,3 +667,114 @@ def test_ticker_list_is_empty_for_a_source_with_nothing_ingested(monkeypatch):
     monkeypatch.setattr(read_flows, "returns_repository", FakeReturnsRepo())
 
     assert ticker_list(None, "other") == {"tickers": []}
+
+
+# --- risk_free_series ---------------------------------------------------------------------
+
+
+class FakeRiskFreeRepo:
+    """Stored rows per series; reads honour the requested range as the real query does."""
+
+    def __init__(self, rows_by_series=None):
+        self._rows = rows_by_series or {}
+        self.series_reads = []
+
+    def get_risk_free_rate_series(self, conn, source, series, start, end):
+        self.series_reads.append((source, series, start, end))
+        return [(d, rate) for d, rate in self._rows.get(series, []) if start <= d <= end]
+
+    def get_first_risk_free_dates(self, conn, source, series):
+        return {s: min(d for d, _ in self._rows[s]) for s in series if self._rows.get(s)}
+
+
+_STORED_RATES = {
+    "eonia": [
+        (date(1999, 1, 4), Decimal("3.2000")),
+        (date(2019, 9, 30), Decimal("-0.4680")),
+        (date(2019, 10, 1), Decimal("-0.4640")),
+    ],
+    "estr": [(date(2019, 10, 1), Decimal("-0.5490")), (date(2019, 10, 2), Decimal("-0.5500"))],
+}
+
+
+def _with_rates(monkeypatch, rows_by_series):
+    import data_store.read_flows as read_flows
+
+    repo = FakeRiskFreeRepo(rows_by_series)
+    monkeypatch.setattr(read_flows, "risk_free_repository", repo)
+    return repo
+
+
+def test_risk_free_series_splices_across_the_cutoff(monkeypatch):
+    _with_rates(monkeypatch, _STORED_RATES)
+
+    result = risk_free_series(None, "ecb", date(2019, 9, 27), date(2019, 10, 4))
+
+    assert result == {
+        "source": "ecb",
+        "first_date": date(1999, 1, 4),
+        "points": [
+            {"date": date(2019, 9, 30), "rate": Decimal("-0.5530"), "series": "eonia_adjusted"},
+            {"date": date(2019, 10, 1), "rate": Decimal("-0.5490"), "series": "estr"},
+            {"date": date(2019, 10, 2), "rate": Decimal("-0.5500"), "series": "estr"},
+        ],
+    }
+
+
+def test_risk_free_series_reads_both_series_for_the_requested_source(monkeypatch):
+    repo = _with_rates(monkeypatch, _STORED_RATES)
+
+    risk_free_series(None, "test", date(2019, 9, 27), date(2019, 10, 4))
+
+    assert sorted(repo.series_reads) == [
+        ("test", "eonia", date(2019, 9, 27), date(2019, 10, 4)),
+        ("test", "estr", date(2019, 9, 27), date(2019, 10, 4)),
+    ]
+
+
+def test_risk_free_series_before_1999_is_empty_but_still_names_where_coverage_begins(
+    monkeypatch, caplog
+):
+    _with_rates(monkeypatch, _STORED_RATES)
+    caplog.set_level("INFO")
+
+    result = risk_free_series(None, "ecb", date(1998, 1, 1), date(1998, 12, 31))
+
+    assert result["points"] == []
+    assert result["first_date"] == date(1999, 1, 4)
+    assert "no published days in range" in caplog.text
+
+
+def test_risk_free_series_window_straddling_1999_starts_on_the_first_published_day(monkeypatch):
+    _with_rates(monkeypatch, _STORED_RATES)
+
+    result = risk_free_series(None, "ecb", date(1998, 12, 1), date(1999, 1, 10))
+
+    assert [p["date"] for p in result["points"]] == [date(1999, 1, 4)]
+    assert result["points"][0]["rate"] == Decimal("3.1150")
+
+
+def test_risk_free_series_with_nothing_stored_says_so_apart_from_an_empty_window(
+    monkeypatch, caplog
+):
+    _with_rates(monkeypatch, {})
+    caplog.set_level("INFO")
+
+    result = risk_free_series(None, "ecb", date(2024, 1, 1), date(2024, 1, 31))
+
+    assert result == {"source": "ecb", "first_date": None, "points": []}
+    assert "nothing stored" in caplog.text
+    assert "no published days in range" not in caplog.text
+    assert any(r.levelname == "WARNING" for r in caplog.records)
+
+
+def test_risk_free_series_logs_counts_per_series(monkeypatch, caplog):
+    _with_rates(monkeypatch, _STORED_RATES)
+    caplog.set_level("INFO")
+
+    risk_free_series(None, "ecb", date(2019, 9, 27), date(2019, 10, 4))
+
+    assert "3 point(s)" in caplog.text
+    assert "eonia_adjusted=1" in caplog.text
+    assert "estr=2" in caplog.text
+    assert "first_date=1999-01-04" in caplog.text

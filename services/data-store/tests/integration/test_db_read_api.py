@@ -18,6 +18,7 @@ from data_store.returns.repository import (
     save_market_returns,
     ticker_exists,
 )
+from data_store.risk_free.repository import save_risk_free_rates
 from fastapi.testclient import TestClient
 from shared.db.connection import apply_schema
 
@@ -26,6 +27,7 @@ pytestmark = pytest.mark.integration
 SCHEMA_PATH = Path(__file__).parents[2] / "src" / "data_store" / "db" / "schema.sql"
 TICKER = "TEST_READAPI"
 FUND = "test_fund_readapi"
+RF_SOURCE = "test_readapi"
 AUTH = {"Authorization": "Bearer integration-test-secret"}
 
 HOLDINGS_COLUMNS = [
@@ -109,6 +111,7 @@ def clean_tables():
             cur.execute("DELETE FROM fx_rates WHERE base_currency = %s", ("TST",))
             cur.execute("DELETE FROM etf_holdings WHERE fund_key = %s", (FUND,))
             cur.execute("DELETE FROM tracked_tickers WHERE ticker LIKE 'TEST%%'")
+            cur.execute("DELETE FROM risk_free_rates WHERE source = %s", (RF_SOURCE,))
         conn.commit()
         conn.close()
 
@@ -307,6 +310,40 @@ def test_prices_endpoint_404s_for_an_unknown_ticker(api_client):
     )
 
     assert response.status_code == 404
+
+
+def test_risk_free_endpoint_splices_stored_rows_end_to_end(api_client):
+    conn = _connect()
+    save_risk_free_rates(
+        conn,
+        RF_SOURCE,
+        pd.DataFrame(
+            [
+                ["eonia", date(1999, 1, 4), 3.200],
+                ["eonia", date(2019, 9, 30), -0.468],
+                # EONIA after the cutoff is stored but never served.
+                ["eonia", date(2019, 10, 1), -0.464],
+                ["eonia", date(2019, 10, 2), -0.465],
+                ["estr", date(2019, 10, 1), -0.549],
+            ],
+            columns=["series", "rate_date", "rate"],
+        ),
+    )
+    conn.close()
+
+    response = api_client.get(
+        f"/rates/risk-free?start=2019-09-27&end=2019-10-04&source={RF_SOURCE}", headers=AUTH
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "source": RF_SOURCE,
+        "first_date": "1999-01-04",
+        "points": [
+            {"date": "2019-09-30", "rate": "-0.5530", "series": "eonia_adjusted"},
+            {"date": "2019-10-01", "rate": "-0.5490", "series": "estr"},
+        ],
+    }
 
 
 def test_tickers_endpoint_reports_exists_false_for_an_unknown_ticker(api_client):

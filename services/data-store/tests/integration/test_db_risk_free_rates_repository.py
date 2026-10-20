@@ -1,12 +1,15 @@
 import os
 from datetime import date
+from decimal import Decimal
 from pathlib import Path
 
 import pandas as pd
 import psycopg
 import pytest
 from data_store.risk_free.repository import (
+    get_first_risk_free_dates,
     get_latest_risk_free_dates,
+    get_risk_free_rate_series,
     save_risk_free_rates,
 )
 from shared.db.connection import apply_schema
@@ -108,4 +111,43 @@ def test_get_latest_dates_returns_the_max_per_series_and_omits_unstored_ones():
     assert get_latest_risk_free_dates(conn, SOURCE, ["estr", "eonia"]) == {
         "eonia": date(2021, 12, 31)
     }
+    conn.close()
+
+
+def test_get_first_dates_returns_the_min_per_series_and_omits_unstored_ones():
+    conn = _connect()
+    save_risk_free_rates(
+        conn,
+        SOURCE,
+        make_df([["eonia", date(1999, 1, 5), 3.22], ["eonia", date(1999, 1, 4), 3.20]]),
+    )
+
+    assert get_first_risk_free_dates(conn, SOURCE, ["estr", "eonia"]) == {"eonia": date(1999, 1, 4)}
+    conn.close()
+
+
+def test_get_rate_series_is_one_series_in_date_order_within_inclusive_bounds():
+    conn = _connect()
+    save_risk_free_rates(
+        conn,
+        SOURCE,
+        make_df(
+            [
+                ["estr", date(2019, 10, 3), -0.551],
+                ["estr", date(2019, 10, 1), -0.549],
+                ["estr", date(2019, 10, 2), -0.550],
+                ["estr", date(2019, 10, 4), -0.552],
+                ["eonia", date(2019, 10, 2), -0.465],
+            ]
+        ),
+    )
+
+    rows = get_risk_free_rate_series(conn, SOURCE, "estr", date(2019, 10, 1), date(2019, 10, 3))
+
+    # Decimal at the column's scale, not a float: the splice subtracts the spread exactly.
+    assert rows == [
+        (date(2019, 10, 1), Decimal("-0.5490")),
+        (date(2019, 10, 2), Decimal("-0.5500")),
+        (date(2019, 10, 3), Decimal("-0.5510")),
+    ]
     conn.close()

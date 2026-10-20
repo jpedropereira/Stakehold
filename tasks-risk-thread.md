@@ -114,8 +114,8 @@ checked against the code, docs and dev DB:
 | RK-0 | [Roadmap housekeeping](#rk-0-roadmap-housekeeping) | — | done |
 | RK-1 | [data-store: split `architecture.md`](#rk-1-data-store-split-architecturemd) | — | done |
 | RK-2 | [data-store: risk-free rate ingestion (€STR + EONIA)](#rk-2-data-store-risk-free-rate-ingestion-str--eonia) | RK-1 | done |
-| RK-3 | [data-store: risk-free endpoint](#rk-3-data-store-risk-free-endpoint) | RK-2 | ready |
-| RK-4 | [portfolio: client reads the risk-free series](#rk-4-portfolio-client-reads-the-risk-free-series) | RK-3 | blocked |
+| RK-3 | [data-store: risk-free endpoint](#rk-3-data-store-risk-free-endpoint) | RK-2 | done |
+| RK-4 | [portfolio: client reads the risk-free series](#rk-4-portfolio-client-reads-the-risk-free-series) | RK-3 | ready |
 | RK-5 | [portfolio: shared EUR daily returns](#rk-5-portfolio-shared-eur-daily-returns) | — | done |
 | RK-6 | [portfolio: risk library foundations](#rk-6-portfolio-risk-library-foundations) | — | done |
 | RK-7 | [portfolio: single-series measures](#rk-7-portfolio-single-series-measures) | RK-6 | ready |
@@ -208,7 +208,7 @@ Done as specified, with these outcomes:
 
 ### RK-3. data-store: risk-free endpoint
 
-**Status:** ready
+**Status:** done
 
 `GET /rates/risk-free?start&end` returns the spliced daily `rf_eur` (annualised %), one point
 per published day, each with its source (`estr` / `eonia_adjusted`). It also returns the series'
@@ -218,9 +218,23 @@ first date, so that consumers can apply R4. It doesn't forward-fill: portfolio d
 Tests: the splice boundary (2019-09-30 is EONIA − 0.085, 2019-10-01 is €STR), a window before
 1999, and an empty range.
 
+**As built:** `GET /rates/risk-free?start&end[&source=ecb]` →
+`{source, first_date, points: [{date, rate, series}]}`.
+- **The rule is `risk_free/splice.py`** (`ESTR_FIRST_DAY`, `EONIA_SPREAD`), a pure function. The
+  date alone picks the series, so EONIA rows from 2019-10-01 on are never served, even on a day
+  €STR is missing.
+- **The per-point field is `series`** (`estr` / `eonia_adjusted`), not `source`, which is
+  already the top-level provider field.
+- **`rate` is a string at four places**, like every other read model.
+- **`first_date` covers the whole series, not the window**, so a window entirely before 1999
+  still says where coverage begins.
+- **An empty table is a 200 with `first_date: null`**, logged as a warning. A misspelt `source`
+  gets the same answer.
+- **For RK-4:** treat a null `first_date` as "no risk-free data", never as rf = 0.
+
 ### RK-4. portfolio: client reads the risk-free series
 
-**Status:** blocked
+**Status:** ready
 
 Add `get_risk_free_series` to the data-store client Protocol, the HTTP client and the fakes.
 

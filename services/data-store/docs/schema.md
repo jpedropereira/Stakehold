@@ -414,7 +414,8 @@ year-over-year change, a different quantity from an annualised interest rate.
 
 **Why the rates are stored raw and joined on read.** Each stored number can be checked directly
 against the ECB's own page. The −0.085 pp spread lives once, as a named constant in the read path
-(RK-3), not baked into 5,000 stored EONIA rows. EONIA rows after 2019-09-30 are kept too: by
+(`risk_free/splice.py`'s `EONIA_SPREAD`, served by `GET /rates/risk-free`), not baked into
+5,000 stored EONIA rows. EONIA rows after 2019-09-30 are kept too: by
 then EONIA was itself €STR + 8.5 bp, which makes them a check on the spread.
 
 **Series keys, verified against the ECB Data Portal API on 2026-10-20:**
