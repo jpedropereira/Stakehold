@@ -62,6 +62,7 @@ flowchart TD
         RET["returns/<br/>calculator · repository"]
         REG["regimes/<br/>loader · repository"]
         MACRO["macro/<br/>fred_source · eurostat_source · repository · calculator"]
+        RF["risk_free/<br/>ecb_source · repository"]
         TRK["tracked_tickers/<br/>yfinance_source (lookup) · repository"]
     end
 
@@ -81,7 +82,7 @@ flowchart TD
 
     PG[("Postgres")]
     EXT(["External: iShares, yfinance"])
-    EXT2(["External: FRED, Eurostat"])
+    EXT2(["External: FRED, Eurostat, ECB"])
 
     DAGS -->|subprocess| CLI
     CLI --> JOBS
@@ -99,6 +100,7 @@ flowchart TD
     PIPE --> RET
     PIPE --> REG
     PIPE --> MACRO
+    PIPE --> RF
     PIPE --> RESOLVE
     READ --> FX
     READ --> RET
@@ -111,17 +113,20 @@ flowchart TD
     MKT --> EXT
     FX --> EXT
     MACRO --> EXT2
+    RF --> EXT2
     TRK --> EXT
     TRK --> RETRY
     MKT --> RETRY
     FX --> RETRY
     MACRO --> PRETRY
+    RF --> PRETRY
     HOLD --> PG
     MKT --> PG
     FX --> PG
     RET --> PG
     REG --> PG
     MACRO --> PG
+    RF --> PG
     TRK --> PG
     DB --> PG
 ```
@@ -232,6 +237,26 @@ isn't free. `fx/yfinance_source.py` and `market_data/yfinance_source.py` do shar
 `yfinance_retry.py`'s `_is_transient` classifier, promoted out of `market_data/_yfinance_retry.py`
 to a foundation module (not under either domain package) when `fx/` needed it too — sibling domain
 modules reaching into each other's private helpers wasn't a foundation worth building on.
+
+`risk_free/` is the standard three-file shape again, for the ECB's €STR and EONIA (the inputs to
+the risk measures' risk-free rate). It's a domain of its own rather than a third `macro/` provider,
+because the two don't fit the same interface. `MacroIndicatorSource.fetch` takes regions and
+returns monthly or quarterly indicators. A risk-free series has no region, and it's fetched by
+date range like `fx/`. Some details:
+
+- **One series per call.** `RiskFreeRateSource.fetch` takes one series, so the flow can count a
+  failed series rather than have it disappear inside the source, which is what happens to a
+  failed Eurostat dataset.
+- **The source declares its series and which of them are closed** (`series`, `discontinued`).
+  The flow then decides what to fetch without knowing it's talking to the ECB.
+- **Retries go through `provider_retry.py`, with one change.** `requests.HTTPError` is an
+  `OSError`, so the shared classifier would retry a 404. `ecb_source.py` re-raises a 4xx other
+  than 429 as a non-retried type. This is kept local rather than changed in the classifier,
+  because changing the classifier would change how Eurostat retries, outside RK-2's scope.
+  **Known sharp edge:** the `eurostat` package also uses `requests`, so a permanent 4xx from
+  Eurostat is probably retried as if it were transient. The fix is to classify
+  `requests.HTTPError` by status code in `provider_retry.is_transient`, and then drop the
+  ECB-local re-raise.
 
 ## Extension points
 
