@@ -34,6 +34,13 @@ def ingest_fx_rates() -> dict:
 
 
 @task.external_python(**EXTERNAL_PYTHON_KWARGS)
+def ingest_risk_free_rates() -> dict:
+    from data_store.jobs import run_ingest_risk_free_rates
+
+    return run_ingest_risk_free_rates()
+
+
+@task.external_python(**EXTERNAL_PYTHON_KWARGS)
 def calculate_returns(tickers: list[str]) -> dict:
     from data_store.jobs import run_calculate_returns
 
@@ -43,14 +50,14 @@ def calculate_returns(tickers: list[str]) -> dict:
 with DAG(
     dag_id="daily_pipeline",
     description=(
-        "Daily data refresh: ingests regimes, market data and FX rates in parallel (unrelated "
-        "sources, no dependency between them), then rebuilds market_returns once market data "
-        "ingest succeeds."
+        "Daily data refresh: ingests regimes, market data, FX rates and risk-free rates in "
+        "parallel (unrelated sources, no dependency between them), then rebuilds market_returns "
+        "once market data ingest succeeds."
     ),
     schedule="@daily",
     start_date=datetime(2024, 1, 1),
     catchup=False,
-    tags=["data-store", "prices", "dividends", "returns", "regimes", "fx"],
+    tags=["data-store", "prices", "dividends", "returns", "regimes", "fx", "risk-free"],
     default_args={"execution_timeout": timedelta(hours=2)},
     params={
         "tickers": Param(
@@ -61,7 +68,7 @@ with DAG(
                 "Restrict this run's market-data-ingest and returns-calculation tasks to these "
                 "final, post-suffix-resolution tickers (e.g. 'AAPL', '0700.HK') -- matches any "
                 "currently followed ticker, from fund holdings or tracked_tickers.yaml. Has no "
-                "effect on regimes ingest or FX rate ingest, neither of which has a ticker "
+                "effect on regimes, FX rate or risk-free rate ingest, none of which has a ticker "
                 "concept. Leave empty to run both over everything followed."
             ),
         ),
@@ -78,6 +85,7 @@ with DAG(
     tickers = requested_tickers()
     regimes_result = ingest_regimes()
     fx_rates_result = ingest_fx_rates()
+    risk_free_result = ingest_risk_free_rates()
 
     market_data_result = ingest_market_data(tickers)
     returns_result = calculate_returns(tickers)
@@ -95,10 +103,15 @@ with DAG(
     checked_market_data = check_run.override(task_id="check_market_data_run")(market_data_result)
     checked_returns = check_run.override(task_id="check_returns_run")(returns_result)
     checked_fx_rates = check_run.override(task_id="check_fx_rates_run")(fx_rates_result)
+    # expect_rows=True for risk-free rates too: the 7-day window always spans published €STR
+    # days, and the upsert counts a refetched day as written, so "ok" with zero rows means the
+    # fetch returned nothing it should have.
+    checked_risk_free = check_run.override(task_id="check_risk_free_rates_run")(risk_free_result)
 
     start >> tickers
     start >> regimes_result
     start >> fx_rates_result
+    start >> risk_free_result
 
     # Returns is gated on market-data-ingest's *check* succeeding, not just the raw task
     # finishing -- an "ok" run that saved zero rows must not unlock a returns rebuild any more
@@ -109,3 +122,4 @@ with DAG(
     checked_regimes >> end
     checked_returns >> end
     checked_fx_rates >> end
+    checked_risk_free >> end

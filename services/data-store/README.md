@@ -92,12 +92,14 @@ then marks it `ready` for the daily ingest. It runs `data-store process-ticker-r
 you can also run by hand. A failure is retried after 10, then 20 minutes. Only a ticker given up
 on after the 3rd attempt turns the run red.
 
-`daily_pipeline` runs four flows: `ingest-market-data`, `ingest-regimes` and `ingest-fx-rates`
-start together with no dependency between any pair of them — a hand-curated regimes CSV, a
-currency-conversion rate, and a security's price have nothing to do with each other — and
+`daily_pipeline` runs five flows: `ingest-market-data`, `ingest-regimes`, `ingest-fx-rates` and
+`ingest-risk-free-rates` start together with no dependency between any pair of them — a
+hand-curated regimes CSV, a currency-conversion rate, an overnight interest rate, and a security's
+price have nothing to do with each other — and
 `calculate-returns` runs afterward, gated on `ingest-market-data`'s `check_run` succeeding (not
 merely finishing), since it rebuilds `market_returns` from whatever `ingest-market-data` just
-landed. It does not wait on the regimes or FX branches, which write to unrelated tables.
+landed. It does not wait on the regimes, FX or risk-free branches, which write to unrelated
+tables.
 `ingest-market-data`/`backfill_market_data` fetch prices, dividends and stock splits together in
 one pass — a single `Ticker.history()` call already returns all three, so there's no separate
 price/dividend DAG pair to keep in sync.
@@ -131,6 +133,9 @@ What counts as a failure differs by flow, deliberately:
   went wrong.
 - **`backfill_fx_rates` does not**, for the same reason `backfill_market_data` doesn't — a rerun
   once every pair is covered correctly saves nothing.
+- **`ingest_risk_free_rates` fails on zero rows.** Its 7-day window always spans published €STR
+  days, and the upsert counts a refetched day as written, so zero means the fetch came back empty
+  when it shouldn't have.
 
 Airflow runs on a **custom image** (`Dockerfile.airflow`: the official `apache/airflow` image +
 `uv` + this workspace, baked in at build time, browser included). Bring it up with Docker
@@ -300,6 +305,22 @@ uv run data-store backfill-fx-rates                       # resume: fetch whatev
 uv run data-store backfill-fx-rates --currency USD         # just the EUR/USD pair (or your base's)
 uv run data-store backfill-fx-rates --earliest-date 2010-01-01   # reach further back than before
 ```
+
+### Loading risk-free rates
+
+`ingest-risk-free-rates` fetches the ECB's euro overnight rates, €STR (from 2019-10-01) and
+EONIA (1999-01-04 to 2021-12-31, now discontinued), from the ECB Data Portal into
+`risk_free_rates`. It needs no config and no API key:
+
+```bash
+uv run data-store ingest-risk-free-rates            # rolling 7-day window
+uv run data-store ingest-risk-free-rates --days 30
+```
+
+There is no separate backfill command. A series with nothing stored is fetched over its whole
+history, so the first run is the backfill (about 7,700 rows in two requests). After that, €STR is
+refetched over the window, and EONIA, already stored and closed, is skipped with a log line. See
+`docs/schema.md`'s `risk_free_rates` section for the units and the series keys.
 
 ### Loading market regimes (optional)
 
