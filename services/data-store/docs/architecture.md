@@ -21,8 +21,9 @@ Getting external financial data into Postgres, correctly and repeatably. Five th
 - **Macro indicators** — monthly/quarterly US inflation and GDP (FRED) and EU/euro-area
   inflation and GDP growth (Eurostat), landed verbatim in `raw_macro_indicators`.
 - **Daily risk-free rates** — the ECB's euro overnight rates, €STR and the discontinued EONIA,
-  landed verbatim in `risk_free_rates`. Joining them into one risk-free series is left to the
-  read side (RK-3), so each stored number can still be checked against the ECB.
+  landed verbatim in `risk_free_rates`. They're joined into one risk-free series on read
+  (`risk_free/splice.py`, served by `GET /rates/risk-free`), so each stored number can still be
+  checked against the ECB.
 
 Two things are derived, not fetched: **`market_returns`** — split-adjusted price and
 price/dividend/simple/log returns, rebuilt from `raw_market_data` by `calculate-returns` — and
@@ -65,7 +66,7 @@ flowchart TD
         RET["returns/<br/>calculator · repository"]
         REG["regimes/<br/>loader · repository"]
         MACRO["macro/<br/>fred_source · eurostat_source · repository · calculator"]
-        RF["risk_free/<br/>ecb_source · repository"]
+        RF["risk_free/<br/>ecb_source · repository · splice"]
         TRK["tracked_tickers/<br/>yfinance_source (lookup) · repository"]
     end
 
@@ -242,7 +243,11 @@ to a foundation module (not under either domain package) when `fx/` needed it to
 modules reaching into each other's private helpers wasn't a foundation worth building on.
 
 `risk_free/` is the standard three-file shape again, for the ECB's €STR and EONIA (the inputs to
-the risk measures' risk-free rate). It's a domain of its own rather than a third `macro/` provider,
+the risk measures' risk-free rate), plus `splice.py`, the pure read-side rule that joins them
+(see [`read-api.md`](read-api.md)). The splice sits in the domain package rather than in
+`read_flows.py` because the cutoff and the spread define the risk-free series. They aren't
+choices about orchestrating an HTTP read, and a pure function can be tested without faking a
+repository. It's a domain of its own rather than a third `macro/` provider,
 because the two don't fit the same interface. `MacroIndicatorSource.fetch` takes regions and
 returns monthly or quarterly indicators. A risk-free series has no region, and it's fetched by
 date range like `fx/`. Some details:

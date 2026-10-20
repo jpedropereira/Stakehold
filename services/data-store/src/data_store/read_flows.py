@@ -4,9 +4,9 @@ A sibling of `pipeline.py`, not an addition to it: `pipeline.py` is already clos
 context-management file-size guidance and is entirely about write flows, while FX cross-rate
 derivation is a read-side decision with no write-flow analogue. Like `pipeline.py`, this module
 never touches SQL directly -- reads go through the domain repositories (`returns`, `fx`,
-`holdings`, `tracked_tickers`), imported as modules (not `from ... import fn`) so a test can
-monkeypatch the whole repository namespace the way `jobs.py`'s tests already do for `pipeline`
-functions.
+`holdings`, `tracked_tickers`, `risk_free`), imported as modules (not `from ... import fn`) so
+a test can monkeypatch the whole repository namespace the way `jobs.py`'s tests already do for
+`pipeline` functions.
 """
 
 import logging
@@ -17,6 +17,8 @@ from data_store.config_loader import CurrenciesConfig, TickerResolution
 from data_store.fx import repository as fx_repository
 from data_store.holdings import repository as holdings_repository
 from data_store.returns import repository as returns_repository
+from data_store.risk_free import repository as risk_free_repository
+from data_store.risk_free.splice import EONIA_ADJUSTED, ESTR, splice, spliced_first_date
 from data_store.ticker_onboarding import major_currency
 from data_store.ticker_resolution import holding_symbol, resolve_yfinance_ticker
 from data_store.tracked_tickers import repository as tracked_tickers_repository
@@ -210,3 +212,46 @@ def _fx_result(base, quote, source, derivation, via, rows) -> dict:
         "via": via,
         "points": [{"date": d, "rate": rate} for d, rate in rows],
     }
+
+
+def risk_free_series(conn, source: str, start: date, end: date) -> dict:
+    """rf_eur's published days in [start, end], spliced from €STR and EONIA (risk_free.splice),
+    plus the first day the whole series covers, so a caller can apply R4 to a window that
+    starts before it. No forward-fill: filling weekends and holidays is portfolio's job (§4.1).
+
+    Both raw series are read over the whole range; the splice drops what's on the wrong side
+    of the cutoff. That's at most ~7.7k rows, so clamping each read isn't worth a second copy
+    of the cutoff here."""
+    eonia = risk_free_repository.get_risk_free_rate_series(conn, source, "eonia", start, end)
+    estr = risk_free_repository.get_risk_free_rate_series(conn, source, "estr", start, end)
+    points = splice(eonia, estr)
+
+    first = risk_free_repository.get_first_risk_free_dates(conn, source, ["eonia", "estr"])
+    first_date = spliced_first_date(first.get("eonia"), first.get("estr"))
+
+    if first_date is None:
+        logger.warning(
+            "risk-free: nothing stored for source=%s -- has ingest-risk-free-rates run?", source
+        )
+    elif not points:
+        logger.info(
+            "risk-free: no published days in range %s..%s (first_date=%s).",
+            start,
+            end,
+            first_date,
+        )
+    else:
+        counts = {
+            series: sum(p["series"] == series for p in points) for series in (EONIA_ADJUSTED, ESTR)
+        }
+        logger.info(
+            "risk-free: %d point(s) %s..%s (eonia_adjusted=%d, estr=%d), first_date=%s.",
+            len(points),
+            start,
+            end,
+            counts[EONIA_ADJUSTED],
+            counts[ESTR],
+            first_date,
+        )
+
+    return {"source": source, "first_date": first_date, "points": points}
