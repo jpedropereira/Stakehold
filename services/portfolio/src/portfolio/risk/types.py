@@ -10,6 +10,7 @@ A NULL return is a gap (R5): it is `None` here, NaN inside numpy, and never 0, w
 flat day.
 """
 
+import math
 from dataclasses import dataclass
 from datetime import date
 from enum import StrEnum
@@ -45,6 +46,11 @@ class ReturnSeries:
                     f"{self.base_date}: {day} follows {previous}"
                 )
             previous = day
+        # A gap is None. A NaN would count as an observation and poison every product it
+        # enters, so the caller converting from Decimal must map a NULL to None, not NaN.
+        for day, value in zip(self.dates, self.values):
+            if value is not None and not math.isfinite(value):
+                raise ValueError(f"non-finite return {value} on {day}: a gap must be None")
 
     @property
     def last_date(self) -> date:

@@ -3,7 +3,9 @@
 - A year window starts N calendar years before the end, 29 February clamped to the 28th, as
   Labs clamps its month periods.
 - Max starts at the latest base date among the series compared (R10's common window), so a
-  single series' Max is its whole history.
+  single series' Max is its whole history. `common_span` gives Max's start and every window's
+  end together, and None when the series don't overlap: Labs meets that case too (two assets
+  with disjoint histories), and it must grey the figures, not raise.
 - A window covers a series when the series' base is on or before the start and its data runs
   through the end. Whether an uncovered window is greyed is the caller's call (R9).
 - Slicing measures from the level on the window's start: returns dated after the start and on
@@ -48,6 +50,14 @@ def earliest_common_start(*series: ReturnSeries) -> date:
     if not series:
         raise ValueError("a common start date needs at least one series")
     return max(s.base_date for s in series)
+
+
+def common_span(*series: ReturnSeries) -> tuple[date, date] | None:
+    """(latest base date, earliest last date), or None when no return is dated inside every
+    series -- histories that don't overlap, or only touch. The caller then greys every window
+    rather than building one that ends before it starts."""
+    start, end = earliest_common_start(*series), latest_common_date(*series)
+    return (start, end) if start < end else None
 
 
 def standard_windows(end: date, max_start: date) -> tuple[Window, ...]:

@@ -46,6 +46,14 @@ def test_every_date_must_be_after_the_base_date():
         ReturnSeries(Frequency.DAILY, BASE, (BASE,), (0.01,))
 
 
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+def test_a_non_finite_value_is_refused_rather_than_read_as_a_return(bad):
+    # A gap is None. A NaN let through would count as an observation, not a gap, and would
+    # turn its whole week into NaN instead of NULL (R5).
+    with pytest.raises(ValueError):
+        ReturnSeries(Frequency.DAILY, BASE, (date(2026, 1, 5), date(2026, 1, 6)), (0.01, bad))
+
+
 def test_to_array_turns_a_null_into_nan_not_zero():
     series = ReturnSeries(Frequency.DAILY, BASE, (date(2026, 1, 5), date(2026, 1, 6)), (0.01, None))
 

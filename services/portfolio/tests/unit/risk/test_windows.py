@@ -7,6 +7,7 @@ import pytest
 from portfolio.risk.types import Frequency, ReturnSeries, Window
 from portfolio.risk.windows import (
     StandardWindow,
+    common_span,
     covers,
     earliest_common_start,
     latest_common_date,
@@ -58,6 +59,32 @@ def test_common_dates_need_a_series():
         latest_common_date()
     with pytest.raises(ValueError):
         earliest_common_start()
+    with pytest.raises(ValueError):
+        common_span()
+
+
+def test_the_common_span_runs_from_the_latest_base_to_the_earliest_last_date():
+    a = _daily(date(2020, 1, 2), [(date(2020, 1, 3), 0.01), (date(2026, 10, 16), 0.01)])
+    b = _daily(date(2021, 6, 1), [(date(2021, 6, 2), 0.01), (date(2026, 10, 15), 0.01)])
+
+    assert common_span(a, b) == (date(2021, 6, 1), date(2026, 10, 15))
+
+
+def test_series_that_do_not_overlap_have_no_common_span():
+    # a ends in 2020 and b starts in 2021: no Max window, rather than one that ends before it
+    # starts.
+    a = _daily(date(2020, 1, 2), [(date(2020, 1, 3), 0.01)])
+    b = _daily(date(2021, 1, 4), [(date(2021, 1, 5), 0.01)])
+
+    assert common_span(a, b) is None
+
+
+def test_series_that_only_touch_have_no_common_span():
+    # b is based on a's last day, so no return is dated inside both.
+    a = _daily(date(2020, 1, 2), [(date(2020, 1, 3), 0.01)])
+    b = _daily(date(2020, 1, 3), [(date(2020, 1, 6), 0.01)])
+
+    assert common_span(a, b) is None
 
 
 def test_covers_needs_the_base_on_or_before_the_start_and_data_through_the_end():
