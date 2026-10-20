@@ -19,6 +19,7 @@ from decimal import Decimal
 import pytest
 from portfolio import cli, jobs
 from portfolio.datastore_client.base import PricePoint, TickerInfo
+from portfolio.holdings import flows as holdings_flows
 
 pytestmark = pytest.mark.integration
 
@@ -351,7 +352,11 @@ def test_pruning_leaves_another_accounts_rows_alone(monkeypatch, pg_connect):
         assert cur.fetchall() == [("b",)]
 
 
-def test_a_closed_positions_window_stops_at_the_closing_date(monkeypatch, pg_connect):
+def test_a_position_sold_on_a_day_without_a_price_ends_on_the_next_price_dates_zero_row(
+    monkeypatch, pg_connect
+):
+    # Sold on Saturday 2026-01-10. Without a row after the sale, Tuesday's row (10 units) would be
+    # the pair's last, and the portfolio series would carry its 1000 forward for good.
     user_id = uuid.uuid4()
     _add_account(user_id)
     _add_buy(user_id, account_label="m", ref="t1")
@@ -361,8 +366,10 @@ def test_a_closed_positions_window_stops_at_the_closing_date(monkeypatch, pg_con
         price_series={
             "IWDA.AS": [
                 PricePoint(date=date(2026, 1, 6), split_adjusted_close=Decimal("100.00")),
-                # Beyond the closing date -- must never be fetched or written.
+                # The first price on or after the sale: the zero row.
                 PricePoint(date=date(2026, 1, 12), split_adjusted_close=Decimal("105.00")),
+                # After the zero row -- never written.
+                PricePoint(date=date(2026, 1, 13), split_adjusted_close=Decimal("106.00")),
             ]
         }
     )
@@ -371,9 +378,21 @@ def test_a_closed_positions_window_stops_at_the_closing_date(monkeypatch, pg_con
 
     assert exit_code == 0
     with pg_connect() as conn, conn.cursor() as cur:
-        cur.execute("SELECT price_date FROM return_snapshots")
-        rows = [row[0] for row in cur.fetchall()]
-    assert rows == [date(2026, 1, 6)]
+        cur.execute(
+            "SELECT price_date, quantity, market_value_eur FROM return_snapshots "
+            "ORDER BY price_date"
+        )
+        rows = cur.fetchall()
+    assert rows == [
+        (date(2026, 1, 6), Decimal("10.000000"), Decimal("1000.0000")),
+        (date(2026, 1, 12), Decimal("0.000000"), Decimal("0.0000")),
+    ]
+    with pg_connect() as conn:
+        series = holdings_flows.list_portfolio_returns(conn, user_id=user_id).series
+    assert [(p.price_date, p.market_value_eur) for p in series] == [
+        (date(2026, 1, 6), Decimal("1000.0000")),
+        (date(2026, 1, 12), Decimal("0.0000")),
+    ]
 
 
 def test_an_untracked_ticker_blocks_its_rebuild_and_exits_nonzero(monkeypatch, pg_connect, capsys):

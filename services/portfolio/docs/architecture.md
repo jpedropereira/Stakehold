@@ -257,9 +257,10 @@ the whole run: a ticker data-store doesn't track, or hasn't had `calculate-retur
 blocks only that pair — reported in `blocked`, loudly, never a silent skip, the returns-side
 equivalent of `rebuild_positions`' unmapped-instrument handling. The fetch window per pair is
 bounded, not open-ended: from `position_snapshots`' first stored row (always the position's
-opening date) through today if the latest snapshot is still open, or through its closing date if
-not — `compute_returns` itself never invents a date outside what `get_price_series` actually
-returns for that window. Every pair's compute-and-save (`get_price_series`, `get_fx_rate_series`
+opening date) through today, open or closed. A closed position's rows end on its zero row, the
+first price date on or after its closing date, which can fall after it (see `schema.md`'s
+amendment on `return_snapshots`); `compute_returns` stops there, and never invents a date outside
+what `get_price_series` actually returns for that window. Every pair's compute-and-save (`get_price_series`, `get_fx_rate_series`
 per distinct non-EUR currency, `compute_returns`, `returns_repository.replace_snapshots` inside its
 own `with transaction(conn):`) is wrapped in one `try/except Exception`, deliberately *broader*
 than `rebuild_positions`' own per-pair catch (which only wraps driver-level exceptions, since
@@ -393,9 +394,9 @@ identity — not column-level DDL, which needs its own sign-off pass.
   since a *return* changes every day the price moves even with zero transactions, so it can't be
   event-driven the same way. Mirrors `market_returns`'s own daily grain in data-store. **Bounded,
   not open-ended**: "was open" means from the position's first non-zero `PositionSnapshot` through
-  the trading day it closes to zero, inclusive — `rebuild-returns` stops generating new rows for a
-  ticker once the latest `PositionSnapshot` shows zero quantity with no later re-opening
-  transaction. A closed position's rows stay available for historical charting, because every
+  its zero row, the first price date on or after it closes to zero, inclusive — `rebuild-returns`
+  stops generating new rows for a ticker once that row is written and the latest
+  `PositionSnapshot` shows zero quantity with no later re-opening transaction. A closed position's rows stay available for historical charting, because every
   rebuild recomputes its whole window and replaces its rows with the result; the grain just
   doesn't grow forever for a position nobody still holds. Rows that no current transaction
   supports (before a window start that moved later, or for a ticker with no position snapshots

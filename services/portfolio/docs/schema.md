@@ -237,7 +237,7 @@ Derived, materialized, rebuildable.
 | `market_value_eur` | `NUMERIC(20,4) NOT NULL` | Converted using `data-store`'s FX rate series for `price_date` — see [`flows.md`](flows.md)'s cross-service prerequisite. |
 | `cost_basis_eur` | `NUMERIC(20,4) NOT NULL` | Carried from `position_snapshots.cost_basis_eur`. |
 | `unrealized_return_eur` | `NUMERIC(20,4) NOT NULL` | `market_value_eur - cost_basis_eur`. |
-| `unrealized_return_pct` | `NUMERIC(18,8)` | `unrealized_return_eur / cost_basis_eur`. Nullable — undefined (not zero) when `cost_basis_eur = 0`, i.e. the row for the trading day a position sells down to zero quantity. That row is still written (the position was open that day), but no further rows follow it — see `architecture.md`'s bounded-grain note on `ReturnSnapshot`. |
+| `unrealized_return_pct` | `NUMERIC(18,8)` | `unrealized_return_eur / cost_basis_eur`. Nullable — undefined (not zero) when `cost_basis_eur = 0`, i.e. a closed position's zero row: the first price date on or after the day it sold down to zero quantity (the sale day itself when it has a price). That row is always written, so a closed pair's last row says it is closed, and no further rows follow it — see `architecture.md`'s bounded-grain note on `ReturnSnapshot`. |
 | `dividends_received_eur` | `NUMERIC(20,4) NOT NULL DEFAULT 0` | **Added at task 8, amending this table's original sign-off.** Cumulative signed sum of this `(account_id, canonical_ticker)`'s `DIVIDEND`-type `transactions.eur_amount` with `trade_datetime` (date, UTC) `<= price_date`. Needs no FX arithmetic at all — `eur_amount` is already frozen in EUR at transaction time (this table's own "immutable source of truth" convention, same as `transactions`), so this is a running sum over already-stored data, never a `datastore_client` call. A signed sum also nets out withholding tax automatically **if** the broker plugin types that tax as its own negative `DIVIDEND` row; if a plugin instead types it as a `FEE`, it isn't captured here — `FEE`/`ADJUSTMENT` still feed nothing, the same open gap as the missing `realized_gains` table below. |
 | `total_return_eur` | `NUMERIC(20,4) NOT NULL DEFAULT 0` | **Added at task 8.** `unrealized_return_eur + dividends_received_eur` — price change plus the income the position produced. `unrealized_return_eur` deliberately stays price-only; this is the separate "what did this holding actually return" figure, mirroring how `market_returns` keeps `price_return` and `simple_return` (price+dividend) as separate columns rather than merging them. |
 | `total_return_pct` | `NUMERIC(18,8)` | **Added at task 8.** `total_return_eur / cost_basis_eur`. Nullable on exactly the same rule as `unrealized_return_pct`: undefined, not zero, when `cost_basis_eur = 0`. |
@@ -262,11 +262,20 @@ columns never actually backfills a real row: `return_snapshots` had no writer at
 
 **Loading strategy: delete-then-insert per `(account_id, canonical_ticker)`, plus pruning — the
 same as `position_snapshots`.** Each `rebuild-returns` run computes a pair's whole window (its
-first position snapshot through today, or through its closing date), then replaces that pair's
+first position snapshot through today, or through its zero row if closed), then replaces that pair's
 rows with it in one transaction. A ticker whose position snapshots are all gone loses its return
 rows too, in a transaction of its own. Which dates get a row is still bounded by the open-window
 rule in `architecture.md`'s `ReturnSnapshot` note: `rebuild-returns` stops adding new dates for a
-position once it closes to zero, even as `data-store`'s calendar keeps extending past that point.
+position once it has written its zero row, even as `data-store`'s calendar keeps extending past
+that point.
+
+*Amended (bug fix, no DDL):* a closed pair's rows used to end on the last price date on or before
+its closing date. A sale on a day with no price (a weekend, a holiday, a close not yet stored)
+then left the last row holding the units sold, and the portfolio series and the latest-returns
+read carried that stale value forward indefinitely. The zero row now lands on the next price date
+instead. Until that price exists, the rows still end on the last open day, and the next rebuild
+after it lands (the six-hourly refresh at the latest) writes the zero row. *Known limit:* a
+ticker with no price at all after the sale (delisted, or no longer ingested) never gets one.
 
 *Amended 2026-10-10 (signed off by the user), replacing a true upsert
 (`INSERT ... ON CONFLICT ... DO UPDATE`, matching `market_returns`).* The upsert's reasoning was

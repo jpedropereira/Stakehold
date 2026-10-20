@@ -723,7 +723,7 @@ def test_rebuild_returns_uses_todays_date_as_the_window_end_for_an_open_position
     assert end == date.today()
 
 
-def test_rebuild_returns_uses_the_closing_date_as_the_window_end_for_a_closed_position(
+def test_rebuild_returns_fetches_past_a_closed_positions_closing_date_to_today(
     repos, returns_repo, conn
 ):
     accounts_repo, transactions_repo, positions_repo = repos
@@ -744,9 +744,11 @@ def test_rebuild_returns_uses_the_closing_date_as_the_window_end_for_a_closed_po
 
     pipeline.rebuild_returns(conn, user_id=user_id, mappings=mappings, datastore_client=client)
 
+    # Closed on a Saturday: the zero row lands on the first price date on or after it, which
+    # only a fetch past the closing date can find. compute_returns stops the rows there.
     _, start, end = client.price_series_calls[0]
     assert start == date(2026, 1, 5)
-    assert end == date(2026, 1, 10)
+    assert end == date.today()
 
 
 def test_rebuild_returns_resolves_dividend_transactions_via_mappings(repos, returns_repo, conn):

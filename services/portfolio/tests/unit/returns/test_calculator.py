@@ -206,3 +206,80 @@ def test_a_dividend_during_a_reopened_position_still_accumulates():
     assert while_closed.dividends_received_eur == Decimal("0.0000")
     assert after_reopen.quantity == Decimal("5.000000")
     assert after_reopen.dividends_received_eur == Decimal("5.0000")
+
+
+def _opened_and_closed(closed_on):
+    """10 units bought on 2026-01-05 (a Monday), all sold on `closed_on`."""
+    opened = _position(as_of_date=date(2026, 1, 5))
+    closed = _position(
+        as_of_date=closed_on,
+        quantity=Decimal("0.000000"),
+        average_cost_eur=Decimal("0.000000"),
+        cost_basis_eur=Decimal("0.0000"),
+    )
+    return [opened, closed]
+
+
+def _week_of_prices():
+    """Tue 6th, Fri 9th, then Mon 12th and Tue 13th, after the weekend."""
+    return [
+        _price(date=date(2026, 1, 6)),
+        _price(date=date(2026, 1, 9)),
+        _price(date=date(2026, 1, 12)),
+        _price(date=date(2026, 1, 13)),
+    ]
+
+
+def test_a_position_closed_on_a_day_without_a_price_ends_on_the_next_price_dates_zero_row():
+    # Sold on Saturday the 10th. Friday's row still holds the 10 units; without a row after the
+    # sale, that row would be the pair's last, and every reader carrying it forward would keep
+    # showing a position that was sold. Monday is the first price date on or after the sale, so
+    # it gets the zero row, and nothing follows it.
+    snapshots = compute_returns(
+        1, "IWDA.AS", _opened_and_closed(date(2026, 1, 10)), _week_of_prices(), {}, []
+    )
+
+    assert [(s.price_date, s.quantity) for s in snapshots] == [
+        (date(2026, 1, 6), Decimal("10.000000")),
+        (date(2026, 1, 9), Decimal("10.000000")),
+        (date(2026, 1, 12), Decimal("0.000000")),
+    ]
+    last = snapshots[-1]
+    assert last.market_value_eur == Decimal("0.0000")
+    assert last.cost_basis_eur == Decimal("0.0000")
+
+
+def test_a_position_closed_on_a_price_date_ends_on_that_dates_zero_row():
+    snapshots = compute_returns(
+        1, "IWDA.AS", _opened_and_closed(date(2026, 1, 9)), _week_of_prices(), {}, []
+    )
+
+    assert [(s.price_date, s.quantity) for s in snapshots] == [
+        (date(2026, 1, 6), Decimal("10.000000")),
+        (date(2026, 1, 9), Decimal("0.000000")),
+    ]
+
+
+def test_a_position_closed_after_the_last_price_ends_on_its_last_open_row_for_now():
+    # Sold on the 14th, and data-store has no price for it yet. No date can be invented, so the
+    # rows end at the 13th; the next rebuild after that price lands writes the zero row.
+    snapshots = compute_returns(
+        1, "IWDA.AS", _opened_and_closed(date(2026, 1, 14)), _week_of_prices(), {}, []
+    )
+
+    assert snapshots[-1].price_date == date(2026, 1, 13)
+    assert snapshots[-1].quantity == Decimal("10.000000")
+
+
+def test_a_position_closed_and_reopened_keeps_every_row_after_reopening():
+    reopened = _position(as_of_date=date(2026, 1, 12), quantity=Decimal("5.000000"))
+    positions = _opened_and_closed(date(2026, 1, 10)) + [reopened]
+
+    snapshots = compute_returns(1, "IWDA.AS", positions, _week_of_prices(), {}, [])
+
+    assert [(s.price_date, s.quantity) for s in snapshots] == [
+        (date(2026, 1, 6), Decimal("10.000000")),
+        (date(2026, 1, 9), Decimal("10.000000")),
+        (date(2026, 1, 12), Decimal("5.000000")),
+        (date(2026, 1, 13), Decimal("5.000000")),
+    ]

@@ -891,11 +891,11 @@ def rebuild_returns(
     dependency, and a data-store call failing for one ticker must not abort the run any more than
     a bad database write would.
 
-    The window fetched per pair is bounded, not open-ended (docs/architecture.md's ReturnSnapshot
-    note): from the position's first stored snapshot (always its opening date) through today if
-    still open, or through its closing date if the latest snapshot shows zero quantity --
-    `compute_returns` itself never invents a date outside what data-store's price series actually
-    returns for that window.
+    The rows per pair are bounded, not open-ended (docs/architecture.md's ReturnSnapshot note):
+    prices are fetched from the position's first stored snapshot (always its opening date) to
+    today, and `compute_returns` ends a closed position on its zero row, the first price date on
+    or after its closing date. It never invents a date outside what data-store's price series
+    actually returns.
     """
     if account_label is not None:
         accounts = [_resolve_account(conn, user_id=user_id, account_label=account_label)]
@@ -976,12 +976,10 @@ def rebuild_returns(
                 )
                 continue
 
+            # To today even when the position is closed: its zero row is the first price date
+            # on or after the closing date, which may be after it. compute_returns stops there.
             start = position_snapshots[0].as_of_date
-            end = (
-                position_snapshots[-1].as_of_date
-                if position_snapshots[-1].quantity == 0
-                else date.today()
-            )
+            end = date.today()
 
             try:
                 prices = datastore_client.get_price_series(ticker, start, end)

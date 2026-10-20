@@ -71,8 +71,16 @@ def compute_returns(
 ) -> list[ReturnSnapshot]:
     """One row per price_date present in `prices`, oldest first -- the trading-day calendar
     comes entirely from data-store's series (docs/schema.md's "stable grid, not a fixed one");
-    this function never invents a date of its own, and never bounds the window itself (that's
-    pipeline.rebuild_returns's job, from the position's open/closed state).
+    this function never invents a date of its own. pipeline.rebuild_returns fetches from the
+    position's opening date to today.
+
+    A position that is closed now (its last snapshot is zero) ends on the first price date on or
+    after its closing date: that row is its zero row, and nothing follows it. When the sale fell
+    on a day with no price (a weekend, a holiday, a close data-store hasn't stored yet), the zero
+    row lands on the next price date. Without it, the pair's last row would still hold the units
+    sold, and every reader that carries a pair's last row forward (the portfolio series, the
+    latest-returns read) would keep showing them. Until that next price exists, the rows end on
+    the last open day; the next rebuild after it lands writes the zero row.
 
     position_snapshots, prices, fx_rates' per-currency series, and dividend_events must each be
     ascending by date -- this walks all of them forward in one pass, never re-scanning.
@@ -83,6 +91,7 @@ def compute_returns(
     silently zeroed.
     """
     positions = sorted(position_snapshots, key=lambda s: s.as_of_date)
+    closed_on = positions[-1].as_of_date if positions and positions[-1].quantity == 0 else None
     price_points = sorted(prices, key=lambda p: p.date)
     dividends = sorted(dividend_events, key=lambda d: d.date)
     fx_series = {
@@ -97,6 +106,8 @@ def compute_returns(
 
     for price_point in price_points:
         price_date = price_point.date
+        if closed_on is not None and snapshots and snapshots[-1].price_date >= closed_on:
+            break  # the zero row is written: a closed position's rows end there
 
         while (
             position_idx + 1 < len(positions)
