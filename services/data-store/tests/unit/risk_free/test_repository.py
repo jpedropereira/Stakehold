@@ -1,8 +1,11 @@
 from datetime import date
+from decimal import Decimal
 
 import pandas as pd
 from data_store.risk_free.repository import (
+    get_first_risk_free_dates,
     get_latest_risk_free_dates,
+    get_risk_free_rate_series,
     save_risk_free_rates,
 )
 
@@ -131,3 +134,34 @@ def test_get_latest_dates_with_no_series_skips_the_query():
 
     assert get_latest_risk_free_dates(conn, "ecb", []) == {}
     assert conn._cursor.executed == []
+
+
+def test_get_first_dates_maps_each_stored_series_to_its_first_date():
+    conn = FakeConnection(fetch_result=[("eonia", date(1999, 1, 4))])
+
+    result = get_first_risk_free_dates(conn, "ecb", ["estr", "eonia"])
+
+    assert result == {"eonia": date(1999, 1, 4)}
+    sql, params = conn._cursor.executed[0]
+    assert "MIN(rate_date)" in sql
+    assert params == ("ecb", ["estr", "eonia"])
+
+
+def test_get_first_dates_with_no_series_skips_the_query():
+    conn = FakeConnection()
+
+    assert get_first_risk_free_dates(conn, "ecb", []) == {}
+    assert conn._cursor.executed == []
+
+
+def test_get_rate_series_reads_one_series_over_an_inclusive_range_in_date_order():
+    rows = [(date(2019, 10, 1), Decimal("-0.5490"))]
+    conn = FakeConnection(fetch_result=rows)
+
+    result = get_risk_free_rate_series(conn, "ecb", "estr", date(2019, 10, 1), date(2019, 10, 4))
+
+    assert result == rows
+    sql, params = conn._cursor.executed[0]
+    assert "BETWEEN" in sql
+    assert "ORDER BY rate_date" in sql
+    assert params == ("estr", "ecb", date(2019, 10, 1), date(2019, 10, 4))

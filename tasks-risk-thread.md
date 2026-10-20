@@ -114,11 +114,11 @@ checked against the code, docs and dev DB:
 | RK-0 | [Roadmap housekeeping](#rk-0-roadmap-housekeeping) | — | done |
 | RK-1 | [data-store: split `architecture.md`](#rk-1-data-store-split-architecturemd) | — | done |
 | RK-2 | [data-store: risk-free rate ingestion (€STR + EONIA)](#rk-2-data-store-risk-free-rate-ingestion-str--eonia) | RK-1 | done |
-| RK-3 | [data-store: risk-free endpoint](#rk-3-data-store-risk-free-endpoint) | RK-2 | ready |
-| RK-4 | [portfolio: client reads the risk-free series](#rk-4-portfolio-client-reads-the-risk-free-series) | RK-3 | blocked |
+| RK-3 | [data-store: risk-free endpoint](#rk-3-data-store-risk-free-endpoint) | RK-2 | done |
+| RK-4 | [portfolio: client reads the risk-free series](#rk-4-portfolio-client-reads-the-risk-free-series) | RK-3 | ready |
 | RK-5 | [portfolio: shared EUR daily returns](#rk-5-portfolio-shared-eur-daily-returns) | — | done |
 | RK-6 | [portfolio: risk library foundations](#rk-6-portfolio-risk-library-foundations) | — | done |
-| RK-7 | [portfolio: single-series measures](#rk-7-portfolio-single-series-measures) | RK-6 | ready |
+| RK-7 | [portfolio: single-series measures](#rk-7-portfolio-single-series-measures) | RK-6 | done |
 | RK-8 | [portfolio: Labs risk in the backtest](#rk-8-portfolio-labs-risk-in-the-backtest) | RK-4, RK-5, RK-7 | blocked |
 | RK-9 | [web: Labs risk panel and drawdown chart](#rk-9-web-labs-risk-panel-and-drawdown-chart) | RK-8 | blocked |
 | RK-10 | [portfolio: daily TWR of invested positions](#rk-10-portfolio-daily-twr-of-invested-positions) | RK-5 | ready |
@@ -126,7 +126,7 @@ checked against the code, docs and dev DB:
 | RK-12 | [web: `/risk` page with the ex-post summary](#rk-12-web-risk-page-with-the-ex-post-summary) | RK-11 | blocked |
 | RK-13 | [portfolio: benchmark and relative measures](#rk-13-portfolio-benchmark-and-relative-measures) | RK-8, RK-11 | blocked |
 | RK-14 | [web: benchmark selector, relative measures, benchmark line](#rk-14-web-benchmark-selector-relative-measures-benchmark-line) | RK-9, RK-12, RK-13 | blocked |
-| RK-15 | [portfolio: ex-ante covariance and risk decomposition](#rk-15-portfolio-ex-ante-covariance-and-risk-decomposition) | RK-6, RK-7 | blocked |
+| RK-15 | [portfolio: ex-ante covariance and risk decomposition](#rk-15-portfolio-ex-ante-covariance-and-risk-decomposition) | RK-6, RK-7 | ready |
 | RK-16 | [portfolio: correlation matrix](#rk-16-portfolio-correlation-matrix) | RK-6 | ready |
 | RK-17 | [portfolio: ex-ante endpoint](#rk-17-portfolio-ex-ante-endpoint) | RK-4, RK-5, RK-13, RK-15, RK-16 | blocked |
 | RK-18 | [web: ex-ante summary, decomposition and heatmap](#rk-18-web-ex-ante-summary-decomposition-and-heatmap) | RK-12, RK-17 | blocked |
@@ -208,7 +208,7 @@ Done as specified, with these outcomes:
 
 ### RK-3. data-store: risk-free endpoint
 
-**Status:** ready
+**Status:** done
 
 `GET /rates/risk-free?start&end` returns the spliced daily `rf_eur` (annualised %), one point
 per published day, each with its source (`estr` / `eonia_adjusted`). It also returns the series'
@@ -218,9 +218,23 @@ first date, so that consumers can apply R4. It doesn't forward-fill: portfolio d
 Tests: the splice boundary (2019-09-30 is EONIA − 0.085, 2019-10-01 is €STR), a window before
 1999, and an empty range.
 
+**As built:** `GET /rates/risk-free?start&end[&source=ecb]` →
+`{source, first_date, points: [{date, rate, series}]}`.
+- **The rule is `risk_free/splice.py`** (`ESTR_FIRST_DAY`, `EONIA_SPREAD`), a pure function. The
+  date alone picks the series, so EONIA rows from 2019-10-01 on are never served, even on a day
+  €STR is missing.
+- **The per-point field is `series`** (`estr` / `eonia_adjusted`), not `source`, which is
+  already the top-level provider field.
+- **`rate` is a string at four places**, like every other read model.
+- **`first_date` covers the whole series, not the window**, so a window entirely before 1999
+  still says where coverage begins.
+- **An empty table is a 200 with `first_date: null`**, logged as a warning. A misspelt `source`
+  gets the same answer.
+- **For RK-4:** treat a null `first_date` as "no risk-free data", never as rf = 0.
+
 ### RK-4. portfolio: client reads the risk-free series
 
-**Status:** blocked
+**Status:** ready
 
 Add `get_risk_free_series` to the data-store client Protocol, the HTTP client and the fakes.
 
@@ -303,7 +317,7 @@ boundary. The VaR mask drops a day on which one asset's exchange was closed.
 
 ### RK-7. portfolio: single-series measures
 
-**Status:** ready
+**Status:** done
 
 §5.1–5.5, each function frequency-agnostic (q is a parameter). A thin layer applies §4.3's
 frequency rule, so callers can't feed a daily series to a weekly measure by accident:
@@ -317,6 +331,24 @@ frequency rule, so callers can't feed a daily series to a weekly measure by acci
 Tests: **§5.7's golden test** (at its pinned q = 252). A recovered and an unrecovered drawdown.
 VaR on a known ordered sample. Every insufficient-history path, including the weekly minimum of
 52. The `tail_unstable` boundary.
+
+**As built:** the maths is in `risk/measures.py`, `drawdown.py` and `tail.py`, frequency-agnostic
+with q as a parameter. The layer callers use is `risk/single_series.py`: `return_figures`,
+`drawdown_figures`, `weekly_figures`, `calmar_figure` and `tail_figures`. Each takes an unsliced
+series and a `Window`, and raises on the wrong frequency. §5.7's golden test runs against the maths,
+the only place daily data at q = 252 can reach a Sharpe. portfolio's `architecture.md` moved its
+Testing section to `docs/testing.md` first, to stay under 64 KB. Decisions:
+- **Weekly windows shrink to whole weeks** (Friday on or after the start, to Friday on or before
+  the end), and the figure reports the shrunk window. RK-6 drops partial weeks, so otherwise a
+  daily window rarely fits the weekly series. Risk-free returns run Friday to Friday.
+- **VaR's quantile is numpy's `linear`** (Hyndman–Fan type 7). CVaR averages the returns at or
+  below it.
+- **An undefined ratio** (no variation, no return below rf, no drawdown) is greyed with a reason,
+  never inf or 0.
+- **The Sharpe's SE** is a new `RiskFigure.standard_error`, set on Sharpe only.
+- **`nonsync_daily` is a caller argument.** The library doesn't know a series' markets.
+- **A greyed drawdown keeps its DD series**, with None on gap dates, so RK-8's chart works on
+  periods under a year. Max time under water is the longest episode, which needn't be the deepest.
 
 ### RK-8. portfolio: Labs risk in the backtest
 
@@ -452,7 +484,7 @@ fatal.
 
 ### RK-15. portfolio: ex-ante covariance and risk decomposition
 
-**Status:** blocked
+**Status:** ready
 
 - Library (§6.2–6.3): the listwise weekly window (R12), with the limiting holding named, and Σ
   annualised ×52.

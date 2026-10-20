@@ -41,7 +41,13 @@ from data_store.pipeline import (
     ingest_regimes,
     ingest_risk_free_rates,
 )
-from data_store.read_flows import fx_rate_series, price_series, ticker_info, ticker_list
+from data_store.read_flows import (
+    fx_rate_series,
+    price_series,
+    risk_free_series,
+    ticker_info,
+    ticker_list,
+)
 from data_store.run_result import build_run_result
 from data_store.settings import SettingsError, load_settings
 from data_store.ticker_onboarding import (
@@ -369,6 +375,19 @@ def get_ticker_info(*, ticker: str, source: str) -> dict:
     conn = get_connection(settings.database_url)
     try:
         return ticker_info(conn, ticker, source, resolution)
+    finally:
+        conn.close()
+
+
+def get_risk_free_series(*, source: str, start: date, end: date) -> dict:
+    """The spliced risk-free series (€STR, EONIA before it) for the read API. Never raises for
+    an empty result: an empty window and an empty table are both a payload, told apart by
+    `first_date`."""
+    configure_logging()
+    settings = load_settings()
+    conn = get_connection(settings.database_url)
+    try:
+        return risk_free_series(conn, source, start, end)
     finally:
         conn.close()
 
