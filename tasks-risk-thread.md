@@ -126,7 +126,7 @@ checked against the code, docs and dev DB:
 | RK-12 | [web: `/risk` page with the ex-post summary](#rk-12-web-risk-page-with-the-ex-post-summary) | RK-11 | blocked |
 | RK-13 | [portfolio: benchmark and relative measures](#rk-13-portfolio-benchmark-and-relative-measures) | RK-8, RK-11 | blocked |
 | RK-14 | [web: benchmark selector, relative measures, benchmark line](#rk-14-web-benchmark-selector-relative-measures-benchmark-line) | RK-9, RK-12, RK-13 | blocked |
-| RK-15 | [portfolio: ex-ante covariance and risk decomposition](#rk-15-portfolio-ex-ante-covariance-and-risk-decomposition) | RK-6, RK-7 | ready |
+| RK-15 | [portfolio: ex-ante covariance and risk decomposition](#rk-15-portfolio-ex-ante-covariance-and-risk-decomposition) | RK-6, RK-7 | done |
 | RK-16 | [portfolio: correlation matrix](#rk-16-portfolio-correlation-matrix) | RK-6 | ready |
 | RK-17 | [portfolio: ex-ante endpoint](#rk-17-portfolio-ex-ante-endpoint) | RK-4, RK-5, RK-13, RK-15, RK-16 | blocked |
 | RK-18 | [web: ex-ante summary, decomposition and heatmap](#rk-18-web-ex-ante-summary-decomposition-and-heatmap) | RK-12, RK-17 | blocked |
@@ -141,7 +141,7 @@ checked against the code, docs and dev DB:
 | RK-27 | [data-store: regimes endpoint](#rk-27-data-store-regimes-endpoint) | RK-1 | ready |
 | RK-28 | [Regime view (portfolio and web)](#rk-28-regime-view-portfolio-and-web) | RK-14, RK-27 | blocked |
 | RK-29 | [Candidate ranking mode](#rk-29-candidate-ranking-mode) | RK-20 | blocked |
-| RK-30 | [Ledoit–Wolf shrinkage (optional)](#rk-30-ledoitwolf-shrinkage-optional) | RK-15 | blocked |
+| RK-30 | [Ledoit–Wolf shrinkage (optional)](#rk-30-ledoitwolf-shrinkage-optional) | RK-15 | ready |
 | RK-31 | [VaR day mask on traded volume](#rk-31-var-day-mask-on-traded-volume) | RK-1 | ready |
 
 ## Tasks
@@ -503,7 +503,7 @@ fatal.
 
 ### RK-15. portfolio: ex-ante covariance and risk decomposition
 
-**Status:** ready
+**Status:** done
 
 - Library (§6.2–6.3): the listwise weekly window (R12), with the limiting holding named, and Σ
   annualised ×52.
@@ -515,6 +515,26 @@ fatal.
 Tests: **§6.3's golden test**. CR sums to σ_p. PCR sums to 100%. A negative-PCR hedge. The
 listwise window shortened by one late holding. The constant-weight weekly series' stdev × √52
 equals σ_p on the same window.
+
+**As built:** the maths is `risk/covariance.py`, where §6.3's golden test runs. The layer callers
+use is `risk/ex_ante.py`: `decomposition_figures(weekly, weights, window)` and
+`constant_weight_series(series, weights)`. R12's panel is `risk/listwise.py`'s
+`ListwiseReturns`. Decisions:
+- **A late holding shortens the window** (agreed), as R12 says, rather than greying it. The
+  figures report the shortened window, and `limited_by` names the holding(s) that set its start.
+- **σ_p greys below 52 weeks, the decomposition below 104** (agreed). σ_p equals the
+  constant-weight weekly volatility exactly, so it takes volatility's minimum. MCR, CR, PCR,
+  correlation with the portfolio and the diversification ratio rest on correlations, so they
+  take covariance's. The effective N never greys.
+- **R13 is held by type.** `ex_ante.py` takes a `ListwiseReturns`, never a bare matrix. For
+  RK-16: build its maths path on `listwise.py` and keep the pairwise matrix a different type.
+- **The constant-weight series is a series, not new measures.** Callers pass it to RK-7's
+  `single_series` layer. On its daily union calendar, a holding with no row is a closed
+  exchange at 0% (R7, which `var_days` masks out of VaR), and any NULL makes the day a gap.
+- **Weights are validated, not normalised.** Each must be above 0, they must sum to 1, and
+  they must name the same holdings as the returns. Otherwise the call raises. RK-17 normalises.
+- **A holding with identical returns has exactly zero covariance.** As in `measures.sharpe`,
+  float rounding would otherwise leave about 1e-18.
 
 ### RK-16. portfolio: correlation matrix
 
@@ -663,7 +683,7 @@ before building, since every candidate is a data-store fetch.
 
 ### RK-30. Ledoit–Wolf shrinkage (optional)
 
-**Status:** blocked
+**Status:** ready
 
 Shrink Σ when the assets exceed about ¼ of the weekly observations. It is flagged in the result.
 Build it only if RK-18's matrices show the need.
