@@ -153,6 +153,68 @@ class PortfolioTwrResponse(BaseModel):
     excluded: list[ExcludedHoldingResponse]
 
 
+class RiskFigureResponse(BaseModel):
+    """One risk figure with the metadata spec §9 and §10 require. value is null exactly when the
+    figure is greyed, and reason then says why (R9). Fractions, not %: a volatility of 0.15 is
+    15%; VaR and CVaR are positive losses. standard_error is set on a Sharpe only (1 s.e.)."""
+
+    value: float | None
+    window_start: date
+    window_end: date
+    # daily or weekly (spec §4.3); a weekly figure's window is shrunk to whole weeks.
+    frequency: str
+    q: float
+    n_obs: int
+    n_gaps: int
+    # insufficient_history, short_window, has_suspect_rows, rf_partial, nonsync_daily,
+    # tail_unstable, data_gaps.
+    flags: list[str]
+    reason: str | None
+    standard_error: float | None
+
+
+class ExPostWindowResponse(BaseModel):
+    """One standard window (1Y, 3Y, 5Y, 10Y, Max), all ending at end_date. covered is false when
+    the history starts after the window does: every figure is then greyed."""
+
+    label: str
+    start: date
+    end: date
+    covered: bool
+    cumulative_return: RiskFigureResponse
+    cagr: RiskFigureResponse
+    volatility: RiskFigureResponse
+    downside_deviation: RiskFigureResponse
+    sharpe: RiskFigureResponse
+    sortino: RiskFigureResponse
+    max_drawdown: RiskFigureResponse
+    # The max drawdown's dates, null when it's greyed; recovery_date null also means "not
+    # recovered" by the window's end.
+    peak_date: date | None
+    trough_date: date | None
+    recovery_date: date | None
+    max_days_under_water: int | None
+    calmar: RiskFigureResponse
+    var_95: RiskFigureResponse
+    cvar_95: RiskFigureResponse
+    var_99: RiskFigureResponse
+    cvar_99: RiskFigureResponse
+
+
+class ExPostRiskResponse(BaseModel):
+    """Ex-post risk (RK-11), measured on the TWR of invested positions."""
+
+    label: str  # "ex-post · invested assets"
+    base_date: date | None  # null, with no windows, when there's nothing to measure
+    end_date: date | None
+    # false: downside deviation, Sharpe and Sortino are greyed, "no risk-free rate data".
+    rf_available: bool
+    windows: list[ExPostWindowResponse]
+    n_excluded: int
+    # Held tickers left out of the TWR, by ticker; the rest were renormalised to 100%.
+    excluded: list[ExcludedHoldingResponse]
+
+
 class HoldingAccountResponse(BaseModel):
     """One account's share of a holding. The value fields are null while that account has no
     return row for the ticker yet."""
