@@ -8,6 +8,7 @@ from data_store.read_flows import (
     TickerNotFound,
     fx_rate_series,
     price_series,
+    regimes_overlapping,
     risk_free_series,
     ticker_info,
     ticker_list,
@@ -778,3 +779,113 @@ def test_risk_free_series_logs_counts_per_series(monkeypatch, caplog):
     assert "eonia_adjusted=1" in caplog.text
     assert "estr=2" in caplog.text
     assert "first_date=1999-01-04" in caplog.text
+
+
+# --- regimes_overlapping ------------------------------------------------------------------------
+
+
+class FakeRegimesRepo:
+    def __init__(self, *, rows=(), total=0):
+        self._rows = list(rows)
+        self._total = total
+        self.reads = []
+
+    def get_overlapping_regimes(self, conn, start, end):
+        self.reads.append((start, end))
+        return self._rows
+
+    def count_regimes(self, conn):
+        return self._total
+
+
+def _with_regimes(monkeypatch, **kwargs):
+    import data_store.read_flows as read_flows
+
+    repo = FakeRegimesRepo(**kwargs)
+    monkeypatch.setattr(read_flows, "regimes_repository", repo)
+    return repo
+
+
+_COVID_CRASH = (
+    "spx_bear_2020",
+    "drawdown",
+    "SPX",
+    "COVID crash",
+    date(2020, 2, 19),
+    date(2020, 3, 23),
+    date(2020, 3, 23),
+    "severe",
+    "manual_approx",
+    "about -34%",
+)
+_ONGOING = ("ongoing", "inflation", "EA", "Ongoing", date(2022, 1, 1), None, None, None, "x", None)
+
+
+def test_regimes_overlapping_maps_rows_verbatim_keeping_nulls(monkeypatch):
+    repo = _with_regimes(monkeypatch, rows=[_COVID_CRASH, _ONGOING], total=93)
+
+    result = regimes_overlapping(None, date(2020, 1, 1), date(2024, 12, 31))
+
+    assert repo.reads == [(date(2020, 1, 1), date(2024, 12, 31))]
+    assert result == {
+        "total_regimes": 93,
+        "regimes": [
+            {
+                "regime_id": "spx_bear_2020",
+                "dimension": "drawdown",
+                "scope": "SPX",
+                "name": "COVID crash",
+                "start_date": date(2020, 2, 19),
+                "end_date": date(2020, 3, 23),
+                "known_from": date(2020, 3, 23),
+                "severity": "severe",
+                "source": "manual_approx",
+                "notes": "about -34%",
+            },
+            {
+                "regime_id": "ongoing",
+                "dimension": "inflation",
+                "scope": "EA",
+                "name": "Ongoing",
+                "start_date": date(2022, 1, 1),
+                "end_date": None,
+                "known_from": None,
+                "severity": None,
+                "source": "x",
+                "notes": None,
+            },
+        ],
+    }
+
+
+def test_regimes_overlapping_logs_the_count_against_the_total(monkeypatch, caplog):
+    _with_regimes(monkeypatch, rows=[_COVID_CRASH], total=93)
+    caplog.set_level("INFO")
+
+    regimes_overlapping(None, date(2020, 1, 1), date(2020, 12, 31))
+
+    assert "1 overlapping 2020-01-01..2020-12-31 (of 93 stored)" in caplog.text
+    assert not any(r.levelname == "WARNING" for r in caplog.records)
+
+
+def test_regimes_overlapping_an_empty_range_is_not_an_empty_table(monkeypatch, caplog):
+    _with_regimes(monkeypatch, rows=[], total=93)
+    caplog.set_level("INFO")
+
+    result = regimes_overlapping(None, date(1900, 1, 1), date(1900, 12, 31))
+
+    assert result == {"total_regimes": 93, "regimes": []}
+    assert "none overlapping 1900-01-01..1900-12-31 (of 93 stored)" in caplog.text
+    assert not any(r.levelname == "WARNING" for r in caplog.records)
+
+
+def test_regimes_overlapping_warns_when_nothing_is_stored(monkeypatch, caplog):
+    _with_regimes(monkeypatch, rows=[], total=0)
+    caplog.set_level("INFO")
+
+    result = regimes_overlapping(None, date(2020, 1, 1), date(2020, 12, 31))
+
+    assert result == {"total_regimes": 0, "regimes": []}
+    assert "none stored" in caplog.text
+    assert "none overlapping" not in caplog.text
+    assert any(r.levelname == "WARNING" for r in caplog.records)

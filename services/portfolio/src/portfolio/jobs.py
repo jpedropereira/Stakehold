@@ -26,6 +26,8 @@ from portfolio.datastore_client.http_client import HttpDataStoreClient
 from portfolio.holdings import flows as holdings_flows
 from portfolio.labs import flows as labs_flows
 from portfolio.labs.calculator import BacktestResult, Period
+from portfolio.look_through import flows as look_through_flows
+from portfolio.look_through.calculator import DIMENSION_LABELS, Concentration, Dimension
 from portfolio.risk import flows as risk_flows
 from portfolio.risk.ex_post import WindowFigures
 from portfolio.risk.types import RiskFigure
@@ -1619,3 +1621,92 @@ def _log_mix_left_out(result: BacktestResult) -> None:
             ticker,
             ", ".join(periods),
         )
+
+
+# Every look-through weight is a share of the mix; 8 places is a millionth of a percent.
+_LOOK_THROUGH_PLACES = Decimal("0.00000001")
+
+
+def get_look_through(
+    *, assets: list[tuple[str, Decimal]], settings: Settings | None = None
+) -> dict:
+    """The look-through exposures of `assets` (ticker, weight) pairs (see
+    look_through/flows.look_through_mix). Read-only and per request, like ex-ante: no user data
+    is read, so there is no database connection and no user_id."""
+    configure_logging()
+    settings = settings or load_settings()
+    datastore_client = _require_datastore_client(settings, command="look-through")
+    run = look_through_flows.look_through_mix(datastore_client, assets)
+
+    left_out = sum(1 for a in run.assets if a.status != look_through_flows.INCLUDED)
+    exposures = run.exposures
+    if exposures is None:
+        logger.warning(
+            "get-look-through: done, no asset could be included (%d requested), so there are "
+            "no exposures.",
+            len(assets),
+        )
+        return {"assets": [asdict(a) for a in run.assets], "exposures": None}
+
+    coverage = exposures.coverage
+    logger.info(
+        "get-look-through: done: %s looked through, %s direct and matched in a fund, %s direct "
+        "in no fund, %s commodity, %s unmapped; %d snapshot(s), %d name(s), %d asset(s) left "
+        "out.",
+        *(f"{share * 100:.1f}%" for share in coverage.values()),
+        len(exposures.snapshots),
+        exposures.names.n_names,
+        left_out,
+    )
+    return {
+        "assets": [{**asdict(a), "weight": _look_through_decimal(a.weight)} for a in run.assets],
+        "exposures": {
+            "snapshots": [
+                {**asdict(s), "raw_weight_sum": _look_through_decimal(s.raw_weight_sum)}
+                for s in exposures.snapshots
+            ],
+            "coverage": {k: _look_through_decimal(v) for k, v in coverage.items()},
+            "dimensions": {
+                key: _look_through_dimension(key, getattr(exposures, key))
+                for key in DIMENSION_LABELS
+            },
+            "names": {
+                "top": [
+                    {
+                        "issuer": n.issuer,
+                        "location": n.location,
+                        "weight": _look_through_decimal(n.weight),
+                        "sources": list(n.sources),
+                    }
+                    for n in exposures.names.top
+                ],
+                "n_names": exposures.names.n_names,
+                "concentration": _look_through_concentration(exposures.names.concentration),
+            },
+        },
+    }
+
+
+def _look_through_dimension(key: str, dimension: Dimension) -> dict:
+    return {
+        "label": DIMENSION_LABELS[key],
+        "buckets": [
+            {"label": b.label, "weight": _look_through_decimal(b.weight), "kind": b.kind}
+            for b in dimension.buckets
+        ],
+        "concentration": _look_through_concentration(dimension.concentration),
+    }
+
+
+def _look_through_concentration(c: Concentration) -> dict:
+    return {
+        "top_shares": {n: _look_through_decimal(v) for n, v in c.top_shares.items()},
+        "known_share": _look_through_decimal(c.known_share),
+        "herfindahl": _look_through_decimal(c.herfindahl),
+        "effective_n": _look_through_decimal(c.effective_n),
+        "reason": c.reason,
+    }
+
+
+def _look_through_decimal(value: Decimal | None) -> Decimal | None:
+    return None if value is None else value.quantize(_LOOK_THROUGH_PLACES)

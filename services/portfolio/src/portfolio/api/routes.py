@@ -44,6 +44,8 @@ from portfolio.api.models import (
     ExAnteRiskResponse,
     ExPostRiskResponse,
     HoldingsResponse,
+    LookThroughRequest,
+    LookThroughResponse,
     PortfolioReturnsResponse,
     PortfolioTwrResponse,
     PositionResponse,
@@ -533,6 +535,15 @@ def get_ex_ante_risk(body: ExAnteRiskRequest, settings: Settings = Depends(get_s
         currency=body.currency,
         exclude=body.exclude,
         settings=settings,
+    )
+
+
+@router.post("/risk/look-through", response_model=LookThroughResponse)
+def get_look_through(body: LookThroughRequest, settings: Settings = Depends(get_settings)) -> dict:
+    """Concentration by look-through (RK-22). A POST for the same reason as ex-ante: the mix is a
+    structured body, nothing is stored, and web builds the mix from the holdings."""
+    return jobs.get_look_through(
+        assets=[(asset.ticker, asset.weight) for asset in body.assets], settings=settings
     )
 
 

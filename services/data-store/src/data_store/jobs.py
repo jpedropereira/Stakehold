@@ -46,6 +46,7 @@ from data_store.read_flows import (
     fx_rate_series,
     latest_etf_holdings,
     price_series,
+    regimes_overlapping,
     risk_free_series,
     ticker_info,
     ticker_list,
@@ -390,6 +391,18 @@ def get_risk_free_series(*, source: str, start: date, end: date) -> dict:
     conn = get_connection(settings.database_url)
     try:
         return risk_free_series(conn, source, start, end)
+    finally:
+        conn.close()
+
+
+def get_regimes(*, start: date, end: date) -> dict:
+    """The regimes overlapping [start, end] for the read API. Never raises for an empty result:
+    an empty range and an empty table are both a payload, told apart by `total_regimes`."""
+    configure_logging()
+    settings = load_settings()
+    conn = get_connection(settings.database_url)
+    try:
+        return regimes_overlapping(conn, start, end)
     finally:
         conn.close()
 

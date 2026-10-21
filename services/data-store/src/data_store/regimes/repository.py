@@ -1,3 +1,5 @@
+from datetime import date
+
 from data_store.regimes.loader import RegimeConfig
 from shared.db.connection import transaction
 
@@ -30,3 +32,27 @@ def save_regimes(conn, rows: list[RegimeConfig]) -> int:
                 )
 
         return len(rows)
+
+
+def get_overlapping_regimes(conn, start: date, end: date) -> list[tuple]:
+    """Every regime overlapping [start, end], both ends inclusive, oldest first. A NULL
+    end_date is an ongoing regime, so it overlaps any range ending on or after its start.
+    Columns in `RegimeConfig` order."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT regime_id, dimension, scope, name, start_date,
+                   end_date, known_from, severity, source, notes
+            FROM regimes
+            WHERE start_date <= %s AND (end_date IS NULL OR end_date >= %s)
+            ORDER BY start_date, regime_id
+            """,
+            (end, start),
+        )
+        return cur.fetchall()
+
+
+def count_regimes(conn) -> int:
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM regimes")
+        return cur.fetchone()[0]
