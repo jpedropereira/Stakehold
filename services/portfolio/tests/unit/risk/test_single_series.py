@@ -295,6 +295,41 @@ def test_weekly_figures_from_to_weekly_line_up_with_its_fridays():
     assert figures.volatility.value is not None
 
 
+def test_without_risk_free_data_the_rf_measures_are_greyed_and_volatility_stands():
+    # No risk-free series (none stored, or data-store unreachable): excess returns can't be
+    # formed, so downside deviation, Sharpe and Sortino are greyed -- never computed on rf = 0.
+    weekly = _weekly(_alternating(52))
+    with_rf = weekly_figures(weekly, _whole(weekly), RATES, FIRST_PUBLISHED)
+
+    figures = weekly_figures(weekly, _whole(weekly), None, None)
+
+    assert figures.volatility == with_rf.volatility
+    for figure in (figures.downside_deviation, figures.sharpe, figures.sortino):
+        assert figure.value is None
+        assert figure.reason == "no risk-free rate data"
+        assert figure.standard_error is None
+        assert figure.n_obs == 52
+        assert Flag.RF_PARTIAL not in figure.flags
+
+
+def test_without_risk_free_data_insufficient_history_still_wins():
+    weekly = _weekly(_alternating(51))
+
+    figures = weekly_figures(weekly, _whole(weekly), None, None)
+
+    for figure in (figures.volatility, figures.downside_deviation, figures.sharpe, figures.sortino):
+        assert figure.reason == "insufficient history (have 51, need 52)"
+        assert Flag.INSUFFICIENT_HISTORY in figure.flags
+
+
+@pytest.mark.parametrize("rates, first", [(None, FIRST_PUBLISHED), (RATES, None)])
+def test_rates_and_their_first_date_are_absent_together(rates, first):
+    weekly = _weekly(_alternating(52))
+
+    with pytest.raises(ValueError, match="together"):
+        weekly_figures(weekly, _whole(weekly), rates, first)
+
+
 # --- §5.4: Calmar ---
 
 
