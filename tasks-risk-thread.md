@@ -132,8 +132,8 @@ checked against the code, docs and dev DB:
 | RK-18 | [web: ex-ante summary, decomposition and heatmap](#rk-18-web-ex-ante-summary-decomposition-and-heatmap) | RK-12, RK-17 | blocked |
 | RK-19 | [portfolio: candidate what-if](#rk-19-portfolio-candidate-what-if) | RK-17 | blocked |
 | RK-20 | [web: what-if form](#rk-20-web-what-if-form) | RK-18, RK-19 | blocked |
-| RK-21 | [data-store: ETF holdings endpoint](#rk-21-data-store-etf-holdings-endpoint) | RK-1 | ready |
-| RK-22 | [portfolio: look-through exposures](#rk-22-portfolio-look-through-exposures) | RK-21 | blocked |
+| RK-21 | [data-store: ETF holdings endpoint](#rk-21-data-store-etf-holdings-endpoint) | RK-1 | done |
+| RK-22 | [portfolio: look-through exposures](#rk-22-portfolio-look-through-exposures) | RK-21 | ready |
 | RK-23 | [web: concentration section](#rk-23-web-concentration-section) | RK-12, RK-22 | blocked |
 | RK-24 | [portfolio: rolling windows](#rk-24-portfolio-rolling-windows) | RK-11, RK-16, RK-17 | blocked |
 | RK-25 | [web: rolling charts](#rk-25-web-rolling-charts) | RK-18, RK-24 | blocked |
@@ -628,11 +628,30 @@ the before/after table, the threshold explanation and the survivorship warning.
 
 ### RK-21. data-store: ETF holdings endpoint
 
-**Status:** ready
+**Status:** done
 
 `GET /etf-holdings/{fund_key}/latest` returns the snapshot date and constituents (ticker, name,
 sector, asset class, location, currency, weight %). **CHECK** how a fund_key maps to the
 tradeable ticker (IWDA.AS), and expose that mapping.
+
+**As built:** the CHECK found no mapping. `FundConfig` had no ticker, the deployed `isin` is null,
+and `IWDA.AS` is an unrelated `tracked_tickers` row. Decisions (agreed):
+- **The link is config.** `etfs.yaml` funds gain an optional `ticker`, so there is no schema
+  change. A ticker claimed by two funds is a `ConfigError`. `GET /etf-holdings` lists every
+  configured fund (enabled or not) with `ticker` and `latest_as_of_date`, so RK-22 finds the
+  fund for a holding there.
+- **Every line is served**, including cash, FX, futures and money market (about 0.5% of IWDA),
+  each with its `asset_class`, heaviest first. Weights are as stored, not normalised: IWDA's
+  2026-08-30 snapshot sums to 100.03.
+- **Each line carries `yfinance_ticker`**: what ingest prices it as, resolved with
+  `ticker_resolution.py`. It is null for a line that isn't equity, has no symbol, or is on an
+  unmapped exchange. RK-22 matches a directly held stock to a constituent on it, not on the raw
+  `ticker`.
+- **404 for a `fund_key` outside `etfs.yaml`, and for a configured fund with no snapshot**, with
+  distinct messages. A disabled fund still serves its last snapshot.
+- **For RK-22:** add `ticker: IWDA.AS` to the deployed `etfs.yaml`. `as_of_date` is the scrape
+  date, not iShares' own. `currency` is the listing currency (iShares' `GBP` for London lines).
+  The client method goes on the Protocol, the HTTP client and the fakes, as in RK-4.
 
 ### RK-22. portfolio: look-through exposures
 
