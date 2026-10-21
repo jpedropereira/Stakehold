@@ -138,14 +138,15 @@ def test_pairwise_cell_is_restricted_to_the_window():
     assert ab.value is None  # 100 < 104
 
 
-def test_pairwise_window_shrinks_to_whole_weeks():
-    # A Wednesday start moves to the Friday after it; a Wednesday end to the Friday before.
+def test_pairwise_window_takes_the_whole_weeks_ending_inside_it():
+    # A Wednesday start keeps the week it falls in, which ends inside the window; a Wednesday
+    # end moves to the Friday before, since the week it falls in hasn't ended.
     window = Window("w", _friday(0) - timedelta(days=2), _friday(120) - timedelta(days=2))
     result = pairwise_correlation({"A": _pattern(_p, 0, 160), "B": _pattern(_q, 0, 160)}, window)
 
     cell = result.cell("A", "B")
-    # Weeks 1-119: base is week 0's Friday.
-    assert (cell.window_start, cell.window_end, cell.n_obs) == (_friday(0), _friday(119), 119)
+    # Weeks 0-119: base is the Friday week 0 starts on.
+    assert (cell.window_start, cell.window_end, cell.n_obs) == (F0, _friday(119), 120)
 
 
 def test_pairwise_minimum_is_104_overlapping_weeks():

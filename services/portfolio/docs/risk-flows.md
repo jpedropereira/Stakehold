@@ -21,12 +21,12 @@ returns and their W-FRI weeks. Each covered window then gets a `relative` object
     {"beta", "correlation", "tracking_error", "information_ratio"}
 
 each a figure in the usual shape, all `frequency: "weekly"` on the weeks both the series and the
-benchmark have a return for inside the window (shrunk to whole weeks). A NULL week on either
+benchmark have a return for, among the whole weeks ending inside the window. A NULL week on either
 side is a gap.
 
 - **Minimums.** Beta and correlation need 104 weeks (spec §4.5). Tracking error and the
   information ratio need 52, like volatility and Sharpe: they are the active return's volatility
-  and Sharpe (agreed for RK-13). So a 1Y window, about 51 or 52 whole weeks, never has a beta.
+  and Sharpe (agreed for RK-13). So a 1Y window, 52 or 53 weeks, never has a beta.
 - **A window the benchmark doesn't cover**, one starting before its first day, has all four
   greyed, "benchmark history too short (from 2019-07-29)". Nothing is measured against another
   index in its place. To compare over 10Y, name `IWDA.AS` (from 2009) or `VWRL.AS` (FTSE
@@ -69,8 +69,8 @@ standard_error}`, the metadata spec §9 and §10 ask every number to carry.
   starts at `base_date`. A window that starts before `base_date` has `covered: false`, and every
   figure in it is greyed with "insufficient history (portfolio history from <date>)".
 - **Frequencies** follow spec §4.3: cumulative return, CAGR, drawdown and VaR are daily;
-  volatility, downside deviation, Sharpe and Sortino are weekly, on whole Friday-to-Friday weeks,
-  so their window is the daily one shrunk to Fridays.
+  volatility, downside deviation, Sharpe and Sortino are weekly, on the whole Friday-to-Friday
+  weeks ending inside the daily window, so a 1Y figure has 52 weeks.
 - **A greyed figure** has `value: null` and a `reason`: below its §4.5 minimum, an undefined
   ratio, an uncovered window, or "no risk-free rate data" when `rf_available` is false.
 - **VaR and CVaR** keep only the dates on which every ticker held the day before traded, and
@@ -148,8 +148,8 @@ estimates, not ledger amounts. The rules, argued in `labs/risk.py`'s docstring:
   NULL is a gap in its figures (`n_gaps`), while Labs' period table and growth line still bridge
   it as a flat day.
 - **Volatility, downside deviation, Sharpe and Sortino are weekly** (`frequency: "weekly"`, q =
-  52, their window shrunk to whole Friday-to-Friday weeks). Everything else is daily. VaR counts
-  only days every asset has a price, and carries `nonsync_daily` whenever the row includes a
+  52, on the whole Friday-to-Friday weeks ending inside the window). Everything else is daily.
+  VaR counts only days every asset has a price, and carries `nonsync_daily` whenever the row includes a
   non-EUR asset.
 - **`relative`** is each row against the benchmark ("Relative to a benchmark" above): the mix's
   weekly series re-based at the window's start, or the asset's own. It is null exactly when the

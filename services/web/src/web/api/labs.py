@@ -15,6 +15,12 @@ draws: buy and hold re-bases each period on its own first day, so a longer serie
 sliced client-side. 1Y by default, and in place of anything that isn't a period. The period
 links keep the rest of the query string, so they work with whatever mix it holds.
 
+The backtest also carries risk figures (RK-9): a grid of the mix's measures by window, and
+the mix and its assets compared over one window, `?risk_window=` (1Y by default, and in place of
+anything that isn't a window). Every window is in the one response, so a window link changes
+only what is shown; it still reruns the page, as the period links do, so the page works without
+JS. labs_risk_view.py words the figures.
+
 On its own router, like portfolio.py, because routes.py is close to the repo's 64KB file limit;
 it renders through routes.py's _render, so a cookie set earlier in the request still reaches
 the response.
@@ -38,6 +44,12 @@ from web.labs_mix import (
     default_rows,
     parse_mix,
 )
+from web.labs_risk_view import (
+    RISK_MEASURES,
+    build_comparison,
+    build_drawdown_payload,
+    build_mix_grid,
+)
 from web.labs_view import (
     MAX_BACKTEST_ASSETS,
     DefaultMix,
@@ -45,7 +57,13 @@ from web.labs_view import (
     build_growth_payload,
     mix_left_out_runs,
 )
-from web.portfolio_client.base import BACKTEST_PERIODS, Backtest, PortfolioClient
+from web.portfolio_client.base import (
+    BACKTEST_PERIODS,
+    BACKTEST_RISK_WINDOWS,
+    Backtest,
+    BacktestRisk,
+    PortfolioClient,
+)
 from web.portfolio_client.errors import InvalidPortfolioRequest, PortfolioClientError
 from web.settings import Settings
 
@@ -55,6 +73,7 @@ router = APIRouter()
 
 _UNAVAILABLE = "Can't reach the portfolio service right now, so it can't be shown."
 _DEFAULT_PERIOD = "1Y"
+_DEFAULT_RISK_WINDOW = "1Y"
 
 
 async def _load_mix(portfolio_client: PortfolioClient, user_id: str) -> DefaultMix | None:
@@ -83,6 +102,46 @@ def _chosen_period(requested: str | None) -> str:
         return requested or _DEFAULT_PERIOD
     logger.info("labs: unknown period %r, showing %s.", requested, _DEFAULT_PERIOD)
     return _DEFAULT_PERIOD
+
+
+def _chosen_risk_window(requested: str | None) -> str:
+    """`requested` if it is a risk window, exactly as portfolio spells it; otherwise 1Y."""
+    if requested is None or requested in BACKTEST_RISK_WINDOWS:
+        return requested or _DEFAULT_RISK_WINDOW
+    logger.info("labs: unknown risk window %r, showing %s.", requested, _DEFAULT_RISK_WINDOW)
+    return _DEFAULT_RISK_WINDOW
+
+
+def _risk_window_links(request: Request) -> dict[str, str]:
+    """Each risk window's URL: this page's query string with only `risk_window` changed, back
+    at the risk section, since the page reloads."""
+    kept = [(k, v) for k, v in request.query_params.multi_items() if k != "risk_window"]
+    return {
+        w: "/labs?" + urlencode(kept + [("risk_window", w)]) + "#labs-risk"
+        for w in BACKTEST_RISK_WINDOWS
+    }
+
+
+def _log_risk(risk: BacktestRisk) -> None:
+    covered = sum(1 for w in risk.mix.windows.values() if w.covered)
+    start = (
+        "no common window"
+        if risk.common_start is None
+        else f"windows from {risk.common_start} (limited by {', '.join(risk.limited_by)})"
+    )
+    rf = (
+        "risk-free rate available"
+        if risk.risk_free.available
+        else f"no risk-free rate ({risk.risk_free.reason})"
+    )
+    logger.info(
+        "labs: risk to %s, %s, %d of %d covered, %s.",
+        risk.end_date,
+        start,
+        covered,
+        len(BACKTEST_RISK_WINDOWS),
+        rf,
+    )
 
 
 def _period_links(request: Request) -> dict[str, str]:
@@ -134,6 +193,7 @@ async def labs(
     user: AuthUser = Depends(require_user),
     portfolio_client: PortfolioClient = Depends(get_portfolio_client),
     period: str | None = None,
+    risk_window: str | None = None,
 ):
     form = parse_mix(request.query_params.multi_items())
     if form is not None and form.remove is not None:
@@ -143,12 +203,15 @@ async def labs(
         query = canonical_query(form.without_removed(), form.last)
         if period is not None:
             query += "&" + urlencode([("period", period)])
+        if risk_window is not None:
+            query += "&" + urlencode([("risk_window", risk_window)])
         return _redirect(request, response, f"/labs?{query}")
 
     # The header's logout and theme forms need the token, as on every other page.
     csrf_token = ensure_csrf_cookie(request, response, cookie_secure=settings.cookie_secure)
 
     period = _chosen_period(period)
+    risk_window = _chosen_risk_window(risk_window)
     mix: DefaultMix | None = None
     holdings_error = None
     checked: CheckedMix | None = None
@@ -195,6 +258,9 @@ async def labs(
     backtest, backtest_error = None, None
     if to_send:
         backtest, backtest_error = await _run_backtest(portfolio_client, to_send, period)
+    risk = None if backtest is None else backtest.risk
+    if risk is not None:
+        _log_risk(risk)
     return _render(
         request,
         response,
@@ -227,6 +293,17 @@ async def labs(
             ),
             "left_out_runs": (
                 [] if backtest is None or backtest.mix is None else mix_left_out_runs(backtest.mix)
+            ),
+            "risk": risk,
+            "risk_grid": None if risk is None else build_mix_grid(risk),
+            "risk_comparison": None if risk is None else build_comparison(risk, risk_window),
+            "risk_window": risk_window,
+            "risk_measures": RISK_MEASURES,
+            "risk_window_links": _risk_window_links(request),
+            "drawdown": (
+                None
+                if risk is None or risk.drawdown is None
+                else build_drawdown_payload(risk.drawdown)
             ),
             "unavailable": (
                 [] if backtest is None else [s for s in backtest.statuses if s.status != "included"]

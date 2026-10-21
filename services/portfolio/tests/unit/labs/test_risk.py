@@ -242,6 +242,22 @@ def test_a_one_asset_mix_measures_the_same_as_the_asset():
         assert getattr(mix, name).n_obs == getattr(asset, name).n_obs
 
 
+def test_a_one_year_mix_has_its_52_weeks_like_its_asset():
+    """1Y starts on Monday 2025-06-30. The mix's weekly series is bought on the Friday before,
+    so its first week is whole, as the asset's is. Bought on the Monday it would start at the
+    Friday after, and keep 51 weeks: under the 52-week minimum, greyed beside its asset."""
+    _, risk = _run([_long("A", "1", date(2023, 1, 2), date(2026, 6, 30))])
+
+    mix, asset = risk.mix.windows[StandardWindow.Y1], _row(risk, "A").windows[StandardWindow.Y1]
+    assert asset.volatility.n_obs == 52
+    for name in ("volatility", "downside_deviation", "sharpe", "sortino"):
+        assert getattr(mix, name).n_obs == 52, name
+        assert getattr(mix, name).value == pytest.approx(getattr(asset, name).value, rel=1e-9)
+    # The daily figures still buy on the window's own start.
+    assert mix.cumulative_return.window_start == date(2025, 6, 30)
+    assert mix.cumulative_return.value == pytest.approx(asset.cumulative_return.value, rel=1e-9)
+
+
 def test_a_short_common_history_greys_figures_with_the_r9_reason():
     # About eight months of weekdays: under 200 daily returns and 52 weeks.
     _, risk = _run([_long("A", "1", date(2025, 11, 3), date(2026, 6, 30))])

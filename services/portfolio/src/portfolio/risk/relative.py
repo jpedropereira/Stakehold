@@ -1,8 +1,8 @@
 """Measures relative to a benchmark (spec §5.6, RK-13): beta, correlation, tracking error and
 information ratio, on weekly EUR returns.
 
-- **One overlap for all four**: `pairing.paired_weeks`, the weeks inside the window (shrunk to
-  whole weeks) on which both the series and the benchmark have a return. A NULL on either side
+- **One overlap for all four**: `pairing.paired_weeks`, the whole weeks ending inside the window
+  on which both the series and the benchmark have a return. A NULL on either side
   is a gap (R5), counted against R8's budget. Every figure reports that overlap as its window.
 - **The formulas.** beta = cov(r_p, r_b) / var(r_b); ρ is Pearson's; tracking error =
   stdev(r_p − r_b) × √52; information ratio = mean(r_p − r_b) × 52 / tracking error. Sample

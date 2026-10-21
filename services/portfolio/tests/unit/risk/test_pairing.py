@@ -61,14 +61,15 @@ def test_only_weeks_inside_the_window_count():
     assert (pair.start, pair.end) == (_friday(4), _friday(9))
 
 
-def test_the_window_shrinks_to_whole_weeks():
+def test_the_window_takes_the_whole_weeks_ending_inside_it():
     a = _weekly(0, [0.01] * 20)
     b = _weekly(0, [0.02] * 20)
-    # From a Monday to a Wednesday: whole weeks run from the Friday after to the Friday before.
+    # From a Monday to a Wednesday: the week the Monday falls in ends inside the window, so it
+    # counts; the week the Wednesday falls in hasn't ended, so the end moves to the Friday before.
     window = Window("w", _friday(4) + timedelta(days=3), _friday(9) + timedelta(days=5))
     pair = paired_weeks(a, b, window)
-    assert (pair.start, pair.end) == (_friday(5), _friday(9))
-    assert pair.n_obs == 4
+    assert (pair.start, pair.end) == (_friday(4), _friday(9))
+    assert pair.n_obs == 5
 
 
 def test_no_shared_week_gives_zero_obs_over_the_window():

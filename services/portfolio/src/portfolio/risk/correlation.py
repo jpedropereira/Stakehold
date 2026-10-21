@@ -18,8 +18,9 @@
   or its `r_local`; which one, and the label saying so, belong to the caller.
 
 Inputs are weekly series (`weekly.to_weekly`), keyed by ticker in display order. A pairwise
-cell's overlap is `pairing.paired_weeks`, shared with the relative measures (RK-13): the window
-shrunk to whole weeks, then the weeks both series have.
+cell's overlap is `pairing.paired_weeks`, shared with the relative measures (RK-13): the whole
+weeks ending inside the window (`weekly.weekly_window`), as for the weekly single-series
+measures, then the weeks both series have.
 """
 
 from collections.abc import Mapping

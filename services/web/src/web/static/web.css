@@ -1259,6 +1259,68 @@ img.logo-on-dark {
   cursor: default;
 }
 
+/* ---- labs risk panel (RK-9) ---- */
+
+/* Under the returns table, spaced like the growth chart below it. */
+.labs-risk {
+  margin-top: var(--space-6);
+}
+
+/* The comparison's window links wrap like the growth periods. */
+.labs-risk-windows {
+  flex-wrap: wrap;
+  margin-bottom: var(--space-3);
+}
+
+/* The metadata spec §10 asks for beside every figure, shown rather than hovered: a measure's
+   frequency under its label, and a figure's flags under its value. */
+.risk-frequency,
+.risk-note {
+  display: block;
+  font: var(--text-caption);
+  color: var(--text-muted);
+}
+
+/* A Sharpe's ± 1 s.e. sits beside it, quieter than the figure. */
+.risk-se {
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* A figure is never split across lines; a greyed figure's reason may wrap, since it is a
+   sentence ("insufficient history (have 40, need 52)"), not a value. */
+.labs-risk-table .mono {
+  white-space: nowrap;
+}
+
+.labs-risk-table .risk-reason {
+  display: inline-block;
+  max-width: 14em;
+  white-space: normal;
+}
+
+/* A cell's figure, its ± and its notes as one block. Stacked at phone width, the cell is a
+   flex line of label and value, so this keeps the parts together at the right instead of
+   spreading them across the line. */
+.risk-value {
+  margin-left: auto;
+  text-align: right;
+}
+
+/* The grid's last row says what every figure above it rests on, so it reads as a footnote.
+   Stacked, the row is a block of its own and needs no rule on every line. Breakpoint: above
+   stack. */
+@media (min-width: 601px) {
+  .labs-risk-used td {
+    border-top: 1px solid var(--border-control);
+  }
+}
+
+/* The drawdown chart (RK-9), under the growth chart and its asset boxes. */
+.labs-drawdown {
+  margin-top: var(--space-5);
+}
+
 /* The rows space themselves; the card's form gap would double it. */
 .card form.labs-form {
   gap: 0;

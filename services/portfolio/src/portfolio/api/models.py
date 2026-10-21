@@ -459,7 +459,7 @@ class AssetStatusResponse(BaseModel):
 
 class RiskFigureResponse(BaseModel):
     value: float | None  # null exactly when greyed, and `reason` says why (R9)
-    window_start: date  # the figure's own window: a weekly one is shrunk to whole weeks
+    window_start: date  # the figure's own window: a weekly one is the whole weeks ending in it
     window_end: date
     frequency: str  # daily or weekly
     q: float  # periods per year

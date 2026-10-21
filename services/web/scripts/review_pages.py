@@ -119,6 +119,13 @@ PAGES = [
             '.labs-series input[data-series="AAPL"]',
         ),
     ),
+    # RK-9: the risk comparison over 3Y (AAPL's volatility has a gap note), over 10Y (not
+    # covered, so no table), a mix the fake answers with no risk-free data, and the drawdown
+    # chart over Max.
+    Page("labs-risk-window", "/labs?risk_window=3Y", "user"),
+    Page("labs-risk-uncovered", "/labs?risk_window=10Y", "user"),
+    Page("labs-risk-no-rf", "/labs?ticker=VWCE.DE&weight=60&ticker=NEWCO.DE&weight=40", "user"),
+    Page("labs-drawdown-max", "/labs?period=Max", "user"),
     Page("glossary", "/glossary", "user"),
     # Followed from a holdings page's "Total return" header: the entry it lands on is marked.
     Page("glossary-total-return", "/glossary#total-return", "user"),
@@ -335,13 +342,19 @@ def _fakes():
     from web.auth_client.errors import SessionInvalid
     from web.portfolio_client.base import (
         BACKTEST_PERIODS,
+        BACKTEST_RISK_WINDOWS,
+        RISK_FIGURE_KEYS,
         Account,
         Backtest,
         BacktestAssetStatus,
         BacktestGrowth,
         BacktestPeriodReturn,
+        BacktestRisk,
         BacktestRow,
+        BacktestRowRisk,
+        BacktestWindowRisk,
         Broker,
+        DrawdownSeries,
         Holding,
         HoldingAccount,
         Holdings,
@@ -350,6 +363,8 @@ def _fakes():
         PortfolioSeriesPoint,
         Position,
         Return,
+        RiskFigure,
+        RiskFreeStatus,
         TickerLookup,
         TickerMapping,
         TrackedTicker,
@@ -357,6 +372,115 @@ def _fakes():
         UnmappedInstrument,
     )
     from web.portfolio_view import aggregate_portfolio_returns
+
+    def review_risk(assets, period, days, mix_values):
+        """The backtest's risk section (RK-8) for the review mix. AAPL's history starts on
+        2021-11-01, so with it in the mix every window starts no earlier, and 5Y and 10Y aren't
+        covered; without it, VWCE.DE limits the windows to 2019-07-29. The figures exercise
+        every state the panel shows: a short-window note (1Y's CAGR and Calmar), a gap note
+        (AAPL's 3Y volatility), a greyed ratio with its reason (AAPL's 1Y Sortino), and, for a
+        mix with NEWCO.DE, no risk-free data at all. The drawdown follows the mix's growth line,
+        with one gap date."""
+        firsts = {"VWCE.DE": date(2019, 7, 29), "AAPL": date(2021, 11, 1)}
+        tickers = [t for t, _ in assets]
+        common = max(firsts.get(t, firsts["VWCE.DE"]) for t in tickers)
+        limited_by = tuple(t for t in tickers if firsts.get(t, firsts["VWCE.DE"]) == common)
+        no_rf = "NEWCO.DE" in tickers
+        rf_reason = "no risk-free rate data"
+        years = {"1Y": 1, "3Y": 3, "5Y": 5, "10Y": 10}
+        # (cagr, volatility, max drawdown, sharpe, its SE, sortino) per row, before scaling.
+        base = {
+            None: (0.071, 0.154, -0.184, 0.86, 0.59, 1.23),
+            "VWCE.DE": (0.068, 0.142, -0.171, 0.82, 0.58, 1.17),
+            "AAPL": (0.094, 0.271, -0.309, 0.61, 0.57, 0.88),
+        }
+
+        def figure(value, frequency, n_obs, start, *, flags=(), reason=None, se=None):
+            return RiskFigure(
+                value=None if reason else value,
+                window_start=start,
+                window_end=today,
+                frequency=frequency,
+                q=252.0 if frequency == "daily" else 52.0,
+                n_obs=n_obs,
+                n_gaps=0,
+                flags=tuple(sorted(flags)),
+                reason=reason,
+                standard_error=None if reason else se,
+            )
+
+        def window(ticker, name):
+            start = common if name == "Max" else date(today.year - years[name], 10, 9)
+            if start < common:
+                reason = f"limited by {', '.join(limited_by)} (history from {common})"
+                return BacktestWindowRisk(
+                    None,
+                    today,
+                    False,
+                    reason,
+                    {k: None for k in RISK_FIGURE_KEYS},
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+            span = (today - start).days / 365.25
+            daily, weekly = round(252 * span), int(52 * span)
+            cagr, vol, mdd, sharpe, se, sortino = base.get(ticker, base["VWCE.DE"])
+            scale = 1 + 0.05 * BACKTEST_RISK_WINDOWS.index(name)
+            short = ("short_window",) if span < 3 else ()
+            rf = {"reason": rf_reason} if no_rf else {}
+            greyed = ticker == "AAPL" and name == "1Y" and not no_rf
+            figures = {k: figure(0.01, "daily", daily, start) for k in RISK_FIGURE_KEYS}
+            figures.update(
+                cagr=figure(cagr * scale, "daily", daily, start, flags=short),
+                volatility=figure(
+                    vol * scale,
+                    "weekly",
+                    weekly,
+                    start,
+                    flags=("data_gaps",) if ticker == "AAPL" and name == "3Y" else (),
+                ),
+                max_drawdown=figure(mdd * scale, "daily", daily, start),
+                sharpe=figure(sharpe / scale, "weekly", weekly, start, se=se / span**0.5, **rf),
+                sortino=figure(
+                    sortino / scale,
+                    "weekly",
+                    weekly,
+                    start,
+                    **({"reason": "no weekly return below the risk-free rate"} if greyed else rf),
+                ),
+                calmar=figure(cagr / abs(mdd), "daily", daily, start, flags=short),
+            )
+            return BacktestWindowRisk(
+                start, today, True, None, figures, date(2026, 2, 2), date(2026, 4, 7), None, 249
+            )
+
+        def row(ticker):
+            return BacktestRowRisk(ticker, {w: window(ticker, w) for w in BACKTEST_RISK_WINDOWS})
+
+        drawdown = None
+        if mix_values is not None:
+            peak, values = 1.0, []
+            for i, growth in enumerate(mix_values):
+                level = 1 + float(growth)
+                peak = max(peak, level)
+                values.append(None if i == len(mix_values) // 3 else level / peak - 1)
+            drawdown = DrawdownSeries(period, tuple(days), tuple(values))
+        return BacktestRisk(
+            label="buy & hold (drifting)",
+            end_date=today,
+            common_start=common,
+            limited_by=limited_by,
+            risk_free=(
+                RiskFreeStatus(False, rf_reason, None)
+                if no_rf
+                else RiskFreeStatus(True, None, date(1999, 1, 4))
+            ),
+            mix=row(None),
+            assets=tuple(row(t) for t in tickers),
+            drawdown=drawdown,
+        )
 
     users = {
         "admin-tok": AuthUser("u1", "ann@example.com", "Ann", is_admin=True),
@@ -732,17 +856,19 @@ def _fakes():
                     values.append(base * growth - 1)
                 return tuple(values)
 
+            mix_values = mix_line()
             return Backtest(
                 end_date=today,
                 mix=row(None, Decimal("1")),
                 assets=tuple(row(t, w / total) for t, w in assets),
-                growth=BacktestGrowth(period, tuple(days), mix_line(), lines, left_out_of(period)),
+                growth=BacktestGrowth(period, tuple(days), mix_values, lines, left_out_of(period)),
                 statuses=tuple(BacktestAssetStatus(t, "included", None) for t, _ in assets)
                 + (
                     BacktestAssetStatus(
                         "7203.T", "no_fx_rate", "Stakehold has no JPY exchange rates."
                     ),
                 ),
+                risk=review_risk(assets, period, days, mix_values),
             )
 
         async def list_unmapped_instruments(self, *, user_id):

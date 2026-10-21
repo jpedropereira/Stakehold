@@ -6,8 +6,8 @@
   clipped to the latest base date among the holdings, and `limited_by` names the holding(s)
   whose start set it, so the UI can offer to exclude it (RK-17, RK-18). The window reported is
   the shortened one. The end is clipped to the earliest last date, as `windows.common_span`.
-- **The window first shrinks to whole weeks** (`weekly.weekly_window`), as for every weekly
-  figure (RK-7).
+- **The window first becomes the whole weeks ending inside it** (`weekly.weekly_window`), as
+  for every weekly figure (RK-7).
 - **R13 is held by type**: ex_ante.py takes a `ListwiseReturns`, never a matrix, so a pairwise
   correlation matrix (RK-16), which needn't be positive semi-definite, can't feed σ_p, risk
   contributions or a what-if.
@@ -51,8 +51,8 @@ def listwise(weekly: Mapping[str, ReturnSeries], window: Window) -> ListwiseRetu
                 f"{series.frequency} series for {key}"
             )
     keys = tuple(weekly)
-    whole_weeks = weekly_window(window)
     span = common_span(*weekly.values())
+    whole_weeks = weekly_window(window, None if span is None else span[0])
     if whole_weeks is None or span is None:
         return _empty(keys, whole_weeks or window)
 

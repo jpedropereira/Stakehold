@@ -1,8 +1,9 @@
 """Two weekly series paired on the weeks both have inside a window: the overlap a pairwise
 correlation cell (RK-16, spec §7.1) and the relative measures (RK-13, §5.6) run on.
 
-- **The window shrinks to whole weeks first** (`weekly.weekly_window`), as every weekly figure's
-  does (RK-7).
+- **The window becomes the whole weeks ending inside it first** (`weekly.weekly_window`), as
+  for every weekly figure (RK-7). The week the window starts in counts, since it ends inside
+  it, so a one-year window holds its 52 weeks.
 - **The weeks are those both series have a row for inside it.** Every weekly series sits on the
   same Friday grid, so that is a date intersection. Neither series needs to cover the window: a
   late starter pairs over the history it has.

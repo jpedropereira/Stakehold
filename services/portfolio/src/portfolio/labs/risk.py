@@ -31,9 +31,13 @@ The rules, as agreed for RK-8 (tasks-risk-thread.md):
   levels stay bridged as Labs builds them. An asset's own row is its r_eur from eur_returns/
   (spec stream 1) on its own calendar, NULLs kept.
 - **Frequencies (§4.3).** Cumulative return, CAGR, drawdown and VaR are daily. Volatility,
-  downside deviation, Sharpe and Sortino are weekly, from the same daily series compounded to
-  W-FRI weeks (R6). The mix's weekly series is re-based with its daily one, on the Friday after
-  the window starts.
+  downside deviation, Sharpe and Sortino are weekly, compounded to W-FRI weeks (R6). The weekly
+  figures take the whole weeks ending inside the window, so the mix's weekly series is bought on
+  the Friday on or before the window's start, where its first week starts, when every asset's
+  history reaches it. Bought on the window's start instead, its first week was partial and
+  dropped, leaving a one-year mix 51 weeks, under the 52-week minimum, beside assets with 52.
+  Near the common start (Max) it is bought on the window's start, and its first week is dropped
+  as any series' first partial week is.
 - **VaR (§5.5)** uses the days every asset has a price row (R7, var_mask.py), and carries
   `nonsync_daily` when the row includes a non-EUR asset. `TickerInfo` has no exchange, so the
   rule is by currency: EUR-listed assets close at about the same time, and anything else is
@@ -94,7 +98,7 @@ from portfolio.risk.single_series import (
     weekly_figures_without_rf,
 )
 from portfolio.risk.types import Frequency, ReturnSeries, RiskFigure, Window
-from portfolio.risk.weekly import to_weekly
+from portfolio.risk.weekly import friday_on_or_before, to_weekly
 from portfolio.risk.windows import StandardWindow, standard_windows, years_before
 
 LABEL = "buy & hold (drifting)"
@@ -243,9 +247,18 @@ def compute_backtest_risk(
         return RowRisk(ticker=ticker, windows=out)
 
     levels = {s.ticker: _EurLevels(s) for s in series}
+
+    def mix_series(window: Window) -> tuple[ReturnSeries, ReturnSeries]:
+        daily = _mix_daily(series, levels, weights, window)
+        week_start = friday_on_or_before(window.start)
+        if week_start == window.start or week_start < common_start:
+            return daily, to_weekly(daily)
+        bought_on_friday = Window(window.label, week_start, window.end)
+        return daily, to_weekly(_mix_daily(series, levels, weights, bought_on_friday))
+
     mix = row(
         None,
-        lambda window: _with_weekly(_mix_daily(series, levels, weights, window)),
+        mix_series,
         [trading[s.ticker] for s in series],
         any(s.fx is not None for s in series),
     )

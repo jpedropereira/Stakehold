@@ -9,10 +9,11 @@ drawdown.py and tail.py's numbers into `RiskFigure`s.
 - **Each takes an unsliced series and a `Window`** and slices it, so callers loop over the
   standard windows. The series must cover the window (`windows.covers`); greying a window it
   doesn't cover is the caller's call (R9).
-- **Weekly windows are shrunk to whole weeks** (`weekly.weekly_window`), and the figure reports
-  the shrunk window. The weekly series has no partial weeks at its edges (RK-6), so a daily
-  window's end is usually after the weekly series' last Friday. Risk-free returns then run
-  Friday to Friday, the span each weekly return covers.
+- **A weekly window is the whole weeks ending inside it** (`weekly.weekly_window`), and the
+  figure reports that window. Its first week starts on the Friday on or before the window's
+  start, when the weekly series has that week, so a one-year window holds its 52 weeks. The
+  weekly series has no partial weeks at its edges (RK-6), so a daily window's end is usually
+  after its last Friday. Risk-free returns run Friday to Friday, the span each week covers.
 - **Every figure carries** its window, frequency, q, `n_obs` and `n_gaps` from its own slice,
   R8's `data_gaps`, and `has_suspect_rows` when a kept >100% move is inside it. Below its §4.5
   minimum it is greyed with R9's reason. An undefined ratio (no variation, no downside, no
@@ -311,7 +312,7 @@ def _require(series: ReturnSeries, measure: Measure) -> None:
 
 def _weekly_slice(weekly: ReturnSeries, window: Window) -> _Slice:
     _require(weekly, Measure.VOLATILITY)
-    whole_weeks = weekly_window(window)
+    whole_weeks = weekly_window(window, weekly.base_date)
     if whole_weeks is None:
         return _with_quality(ReturnSeries(Frequency.WEEKLY, window.start, (), ()), window, WEEKLY_Q)
     return _slice(weekly, whole_weeks)

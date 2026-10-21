@@ -13,8 +13,8 @@
 - A week is complete once its Friday is on or before `as_of`, the date the caller knows the data
   runs through. It defaults to the series' last date, so a series ending on a Thursday drops its
   last week unless the caller says Friday has passed (a holiday Friday).
-- `weekly_window` shrinks a measurement window to the same whole weeks (RK-7), so a weekly
-  measure's window starts and ends on Fridays the weekly series has.
+- `weekly_window` turns a measurement window into the whole weeks ending inside it (RK-7), so a
+  weekly measure's window starts and ends on Fridays the weekly series has.
 """
 
 from datetime import date, timedelta
@@ -31,7 +31,7 @@ def to_weekly(daily: ReturnSeries, as_of: date | None = None) -> ReturnSeries:
         raise ValueError(f"to_weekly needs a daily series, got {daily.frequency}")
 
     first_friday = _friday_on_or_after(daily.base_date)
-    last_friday = _friday_on_or_before(as_of or daily.last_date)
+    last_friday = friday_on_or_before(as_of or daily.last_date)
 
     weeks: dict[date, list[float | None]] = {}
     for day, value in zip(daily.dates, daily.values):
@@ -49,13 +49,25 @@ def to_weekly(daily: ReturnSeries, as_of: date | None = None) -> ReturnSeries:
     return ReturnSeries(Frequency.WEEKLY, first_friday, tuple(dates), tuple(values))
 
 
-def weekly_window(window: Window) -> Window | None:
-    """The window shrunk to whole weeks: the Friday on or after its start to the Friday on or
-    before its end, matching the edges `to_weekly` drops. Without it a window ending on a
-    weekday other than Friday would end after the weekly series does. None when no whole week
-    fits."""
-    start, end = _friday_on_or_after(window.start), _friday_on_or_before(window.end)
-    return Window(window.label, start, end) if start <= end else None
+def weekly_window(window: Window, available_from: date | None = None) -> Window | None:
+    """The window's weeks: those ending (on their Friday) inside it, up to the Friday on or
+    before its end. The first is the week the window starts in, which began on the Friday on
+    or before its start, up to six days before the window does.
+
+    Snapping the start forward to the next Friday instead lost that week on most days: a
+    one-year window then held 51 weeks, under §4.5's 52-week minimum, so its weekly figures
+    were greyed. The week is taken only when the weekly data has it: when it starts after that
+    Friday (`available_from`, the caller's weekly base), but no later than the next one, the
+    window starts on the next Friday, as a Max window starting on the series' own first day
+    does. A later `available_from` is left for the caller to clamp, so a holding that starts
+    mid-window still shows as limiting it.
+
+    Without the end's snap a window ending on a weekday other than Friday would end after the
+    weekly series does. None when no week ends inside it."""
+    before, after = friday_on_or_before(window.start), _friday_on_or_after(window.start)
+    start = after if available_from is not None and before < available_from <= after else before
+    end = friday_on_or_before(window.end)
+    return Window(window.label, start, end) if start < end else None
 
 
 def _compound(days: list[float | None] | None) -> float | None:
@@ -68,5 +80,5 @@ def _friday_on_or_after(day: date) -> date:
     return day + timedelta(days=(_FRIDAY - day.weekday()) % 7)
 
 
-def _friday_on_or_before(day: date) -> date:
+def friday_on_or_before(day: date) -> date:
     return day - timedelta(days=(day.weekday() - _FRIDAY) % 7)

@@ -253,9 +253,9 @@ def test_a_measured_window_counts_its_greyed_figures(monkeypatch, caplog):
     one_year = _by_label(result)["1Y"]
     assert Flag.INSUFFICIENT_HISTORY in one_year.tail.var_99.flags
     line = next(r.getMessage() for r in caplog.records if "window 1Y" in r.getMessage())
-    # 1Y holds 52 whole weeks: enough for tracking error and the information ratio, under beta's
-    # and correlation's 104.
-    assert one_year.relative.beta.reason == "insufficient history (have 52, need 104)"
+    # 1Y runs Thursday to Friday, so it holds 53 whole weeks (the week it starts in counts):
+    # enough for tracking error and the information ratio, under beta's and correlation's 104.
+    assert one_year.relative.beta.reason == "insufficient history (have 53, need 104)"
     assert line.endswith(
         f"{one_year.drawdown.max_drawdown.n_obs} daily obs, 2 of 12 greyed; against VWCE.DE, "
         "2 of 4 greyed."
