@@ -1412,20 +1412,28 @@ def get_ex_post_risk(
 def _ex_post_window(window: WindowFigures) -> dict:
     """One window as builtins. The drawdown's DD series stays out: RK-12 shows the summary only
     (agreed for RK-11)."""
-    drawdown = window.drawdown
     return {
         "label": str(window.window.label),
         "start": window.window.start,
         "end": window.window.end,
         "covered": window.covered,
+        **_series_figures(window),
+        "relative": {
+            name: _figure(figure) for name, figure in risk_flows.relative_of(window).items()
+        },
+    }
+
+
+def _series_figures(figures) -> dict:
+    """The 12 §5.1-5.5 figures and the max drawdown's dates, of an ex-post window or ex-ante's
+    constant-weight mix."""
+    drawdown = figures.drawdown
+    return {
         "peak_date": drawdown.peak_date,
         "trough_date": drawdown.trough_date,
         "recovery_date": drawdown.recovery_date,
         "max_days_under_water": drawdown.max_days_under_water,
-        **{name: _figure(figure) for name, figure in risk_flows.figures_of(window).items()},
-        "relative": {
-            name: _figure(figure) for name, figure in risk_flows.relative_of(window).items()
-        },
+        **{name: _figure(figure) for name, figure in risk_flows.figures_of(figures).items()},
     }
 
 

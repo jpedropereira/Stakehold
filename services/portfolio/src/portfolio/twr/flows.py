@@ -5,8 +5,8 @@ and hand all of it to compute_twr.
 Its own package rather than another read in holdings/flows.py, because it is the first
 user-data read that also calls data-store. User isolation stays in accounts/repository.py: the
 accounts are resolved through list_by_user, and every row read is by one of those accounts' own
-ids. The fetch is eur_returns/fetch.py's, shared with Labs, so one failing ticker is excluded and
-named, never failing the whole series.
+ids. The fetch is eur_returns/eligibility.py's, shared with ex-ante risk (on fetch.py's fan-out,
+shared with Labs), so one failing ticker is excluded and named, never failing the whole series.
 
 Every held ticker gets a log line: included, or left out with its reason. The job logs the
 start and the summary.
@@ -19,29 +19,12 @@ from uuid import UUID
 
 from portfolio.accounts import repository as accounts_repository
 from portfolio.datastore_client.base import DataStoreClient
-from portfolio.eur_returns import fetch
-from portfolio.eur_returns.calculator import NO_FX_SERIES, EurReturns, eur_daily_returns
+from portfolio.eur_returns.eligibility import ExcludedHolding, fetch_eur_returns
 from portfolio.positions import repository as positions_repository
 from portfolio.returns import repository as returns_repository
 from portfolio.twr.calculator import TwrDay, TwrPoint, compute_twr
 
 logger = logging.getLogger(__name__)
-
-_REASONS = {
-    fetch.NOT_TRACKED: "not tracked",
-    fetch.NO_HISTORY: "no history yet",
-    # The exception itself goes to the log: it names internal URLs, and the user can only act on
-    # "try again later".
-    fetch.FAILED: "couldn't reach data-store",
-}
-
-
-@dataclass(frozen=True)
-class ExcludedHolding:
-    ticker: str
-    status: str  # not_tracked, no_history, no_fx_rate or failed
-    reason: str
-
 
 @dataclass(frozen=True)
 class PortfolioTwr:
@@ -90,48 +73,15 @@ def compute_portfolio_twr(
         max(row.price_date for row in snapshots),
     )
 
-    returns: dict[str, EurReturns] = {}
-    currencies: dict[str, str] = {}
-    excluded = []
-    for ticker, outcome in fetch.fetch_series(datastore_client, tickers, starts, today).items():
-        if isinstance(outcome, fetch.LeftOut):
-            if outcome.status == fetch.NO_FX_RATE:
-                status, reason = outcome.status, "no FX series for its currency"
-            else:
-                status, reason = outcome.status, _REASONS[outcome.status]
-            if outcome.status == fetch.FAILED:
-                logger.error(
-                    "portfolio-twr: %s: failed, left out -- a data-store call raised: %s",
-                    ticker,
-                    outcome.exc,
-                    exc_info=outcome.exc,
-                )
-            else:
-                logger.warning("portfolio-twr: %s: left out, %s.", ticker, reason)
-            excluded.append(ExcludedHolding(ticker, status, reason))
-            continue
-
-        series = eur_daily_returns(outcome.prices, outcome.fx)
-        if isinstance(series, EurReturns):
-            logger.info(
-                "portfolio-twr: %s: included, %d day(s) of EUR returns.", ticker, len(series.dates)
-            )
-            returns[ticker] = series
-            currencies[ticker] = outcome.info.fx_currency
-            continue
-        if series.reason == NO_FX_SERIES:
-            status, reason = fetch.NO_FX_RATE, f"no FX series for {outcome.info.fx_currency}"
-        else:
-            status, reason = fetch.NO_HISTORY, _REASONS[fetch.NO_HISTORY]
-        logger.warning("portfolio-twr: %s: left out, %s.", ticker, reason)
-        excluded.append(ExcludedHolding(ticker, status, reason))
-
-    series = compute_twr(snapshots, returns, closed=closed)
+    eligible = fetch_eur_returns(
+        datastore_client, tickers, starts, today, logger=logger, context="portfolio-twr"
+    )
+    series = compute_twr(snapshots, eligible.returns, closed=closed)
     return PortfolioTwr(
         base_date=series.base_date,
         points=series.points,
         n_gaps=series.n_gaps,
-        excluded=excluded,
+        excluded=eligible.excluded,
         days=series.days,
-        currencies=currencies,
+        currencies=eligible.currencies,
     )

@@ -57,6 +57,17 @@ NO_RISK_FREE = "no risk-free rate data"  # Labs' wording too (labs/flows.py)
 
 
 @dataclass(frozen=True)
+class SeriesFigures:
+    """One series' §5.1-5.5 figures over one window."""
+
+    returns: ReturnFigures
+    weekly: WeeklyFigures
+    drawdown: DrawdownFigures
+    calmar: RiskFigure
+    tail: TailFigures
+
+
+@dataclass(frozen=True)
 class WindowFigures:
     window: Window
     covered: bool  # False: every figure is greyed, the history starts after the window does
@@ -108,13 +119,61 @@ def ex_post_figures(
 def _measured(
     daily, weekly, window, traded_days, held, currencies, rates, first_published, benchmark
 ):
-    returns = return_figures(daily, window)
-    drawdown = drawdown_figures(daily, window)
     tickers = set().union(*(held[d] for d in daily.dates if window.start < d <= window.end))
     nonsync = not (len(tickers) == 1 and currencies.get(next(iter(tickers))) == _EUR)
+    figures = series_figures(
+        daily,
+        weekly,
+        window,
+        trading_days=[traded_days],
+        nonsync=nonsync,
+        rates=rates,
+        first_published=first_published,
+    )
     return WindowFigures(
         window=window,
         covered=True,
+        returns=figures.returns,
+        weekly=figures.weekly,
+        drawdown=figures.drawdown,
+        calmar=figures.calmar,
+        tail=figures.tail,
+        relative=relative_to(weekly, window, benchmark),
+    )
+
+
+def _uncovered(window: Window, base_date: date) -> WindowFigures:
+    reason = f"insufficient history (portfolio history from {base_date.isoformat()})"
+    figures = greyed_series_figures(window, reason)
+    return WindowFigures(
+        window=window,
+        covered=False,
+        returns=figures.returns,
+        weekly=figures.weekly,
+        drawdown=figures.drawdown,
+        calmar=figures.calmar,
+        tail=figures.tail,
+        relative=relative_greyed(window, reason),
+    )
+
+
+def series_figures(
+    daily: ReturnSeries,
+    weekly: ReturnSeries,
+    window: Window,
+    *,
+    trading_days: Sequence[AbstractSet[date]],
+    nonsync: bool,
+    rates: Sequence[RatePoint] | None,
+    first_published: date | None,
+) -> SeriesFigures:
+    """The §5.1-5.5 figures of one series over `window`: `daily` and `weekly` are the same
+    series at the two frequencies. `trading_days` is VaR's day mask (`tail_figures`). With no
+    risk-free series (`rates` None) the excess-return figures are greyed, `NO_RISK_FREE`. Ex-ante
+    (RK-17) measures its constant-weight mix through this too."""
+    returns = return_figures(daily, window)
+    drawdown = drawdown_figures(daily, window)
+    return SeriesFigures(
         returns=returns,
         weekly=(
             weekly_figures_without_rf(weekly, window, NO_RISK_FREE)
@@ -123,13 +182,12 @@ def _measured(
         ),
         drawdown=drawdown,
         calmar=calmar_figure(returns.cagr, drawdown.max_drawdown),
-        tail=tail_figures(daily, window, [traded_days], nonsync=nonsync),
-        relative=relative_to(weekly, window, benchmark),
+        tail=tail_figures(daily, window, trading_days, nonsync=nonsync),
     )
 
 
-def _uncovered(window: Window, base_date: date) -> WindowFigures:
-    reason = f"insufficient history (portfolio history from {base_date.isoformat()})"
+def greyed_series_figures(window: Window, reason: str) -> SeriesFigures:
+    """Every §5.1-5.5 figure greyed over `window` with `reason`, `insufficient_history` flagged."""
 
     def greyed(frequency: Frequency) -> RiskFigure:
         return RiskFigure(
@@ -146,13 +204,10 @@ def _uncovered(window: Window, base_date: date) -> WindowFigures:
         )
 
     daily, weekly = greyed(Frequency.DAILY), greyed(Frequency.WEEKLY)
-    return WindowFigures(
-        window=window,
-        covered=False,
+    return SeriesFigures(
         returns=ReturnFigures(daily, daily),
         weekly=WeeklyFigures(weekly, weekly, weekly, weekly),
         drawdown=DrawdownFigures(daily, None, None, None, None, ()),
         calmar=daily,
         tail=TailFigures(daily, daily, daily, daily),
-        relative=relative_greyed(window, reason),
     )
