@@ -231,16 +231,18 @@ def test_sharpe_carries_its_standard_error():
     assert sharpe.standard_error > 0
 
 
-def test_the_weekly_window_snaps_to_whole_weeks_and_rf_spans_each_week():
+def test_the_weekly_window_takes_the_weeks_ending_inside_it_and_rf_spans_each_week():
     # Each week returns exactly its risk-free return plus +-1%, so the mean excess return is 0
     # and so is the Sharpe -- unless rf were taken over a different span than the week's.
     daily_base = FRIDAY
-    # 61 weeks; the first is outside the snapped window, leaving 30 of each sign.
+    # 61 weeks; the first ends on Friday 01-10, inside the window, so it counts; the last ends
+    # after the window does, leaving 30 of each sign.
     weekly_values = [RF_WEEK + e for e in _alternating(61)]
     weekly = _weekly(weekly_values, base=daily_base)
-    window = Window("t", date(2020, 1, 7), weekly.last_date + timedelta(days=5))
-    # Tuesday 01-07 snaps forward to Friday 01-10; the end snaps back to the last Friday.
-    expected_start, expected_end = date(2020, 1, 10), weekly.last_date
+    window = Window("t", date(2020, 1, 7), weekly.last_date - timedelta(days=2))
+    # Tuesday 01-07 snaps back to Friday 01-03, where the week ending 01-10 starts; the end
+    # snaps back to the Friday before the last.
+    expected_start, expected_end = date(2020, 1, 3), weekly.last_date - timedelta(weeks=1)
 
     figures = weekly_figures(weekly, window, RATES, FIRST_PUBLISHED)
 
@@ -250,6 +252,19 @@ def test_the_weekly_window_snaps_to_whole_weeks_and_rf_spans_each_week():
     )
     assert figures.sharpe.n_obs == 60
     assert figures.sharpe.value == pytest.approx(0.0, abs=1e-9)
+
+
+def test_a_one_year_window_ending_midweek_has_its_52_weeks():
+    """A 1Y window ending on a Wednesday used to keep 51 whole weeks, under the 52-week
+    minimum, so every 1Y weekly figure was greyed."""
+    weekly = _weekly(_alternating(200))
+    end = weekly.last_date - timedelta(days=2)  # a Wednesday
+    window = Window("1Y", years_before(end, 1), end)
+
+    figures = weekly_figures(weekly, window, RATES, FIRST_PUBLISHED)
+
+    assert figures.volatility.n_obs == 52
+    assert figures.volatility.value is not None
 
 
 def test_a_window_inside_one_week_has_no_weekly_figures():
