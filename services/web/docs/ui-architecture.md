@@ -488,7 +488,7 @@ described here updates this file in the same change.
 - **Glossary: one page, linked from each figure's label.** The holdings tables show two
   percentages side by side (unrealized return and total return; a third, growth, has since been
   removed), and nothing on the page said how they differ. `/glossary` defines every figure the holdings pages and the overview
-  show, and (LB-6) the Labs terms and (RK-12) the risk measures, one `<dt id>` per term. Each column header and tile label on `/`, `/portfolio` and
+  show, and (LB-6) the Labs terms and (RK-12) the risk measures and (RK-14) the benchmark and its four measures, one `<dt id>` per term. Each column header and tile label on `/`, `/portfolio` and
   `/accounts/holdings` links to its entry through the `term` macro
   (`partials/_term.html`). The link inherits the label's colour with a dotted underline, so a
   row of headers doesn't turn into a row of accent links. At phone width a stacked table hides
@@ -564,3 +564,16 @@ described here updates this file in the same change.
     the far edge away from the figure.
   - **Copy says "historical" (R15).** The section's subtitle, and every risk glossary entry,
     describe what happened over the window, never what to expect.
+  - **Against the benchmark (RK-14).** A GET form above the table (`partials/_benchmark_field.html`,
+    shared with `/labs`) picks the benchmark, `?benchmark=`, `VWCE.DE` by default. The choice is
+    the URL, never stored, since saving it needs a settings schema (deferred). The field suggests
+    the tracked tickers from a `<datalist>`, but takes any ticker: portfolio greys an untracked
+    one with its reason, so web doesn't check it. Only an over-long value is caught, and it shows
+    an inline error in the charter's ink style. The four figures (beta, correlation, tracking
+    error, information ratio, all weekly) are a second `<tbody>` under the measures, headed by
+    the benchmark and its first date (spec §5.6 asks for both wherever relative figures appear).
+    They are in ink, because none is a gain or a loss. When the benchmark is unavailable, the
+    heading says why once and each cell says "Unavailable", as an uncovered window's say "Not
+    covered". Each cell's `title` ends "· against <ticker>". *Rejected: a separate table*, which
+    would repeat the five window headers for four rows. *Rejected: checking the ticker against
+    the list in web*, a second copy of portfolio's rule that could drift from it.

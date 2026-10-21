@@ -204,3 +204,45 @@ upstream calls) is in [`architecture.md`](architecture.md) and [`endpoints.md`](
     comparison), a mix with NEWCO.DE (the fake answers it with no risk-free data) and
     `/labs?period=Max` for the drawdown. The fake's risk section uses AAPL's late start, so 5Y
     and 10Y are uncovered on every Labs page.
+- **The benchmark on `/labs` (RK-14).** RK-13 made the backtest measure the mix and each asset
+  against a benchmark and price its growth line. `/labs` shows both.
+  - *Its own form, in the risk section (agreed).* A GET form at the top of the section
+    (`partials/_benchmark_field.html`, shared with `/risk`) takes `?benchmark=`, `VWCE.DE` by
+    default. Unlike `?risk_window=`, a benchmark asks portfolio for a different backtest, so the
+    form re-sends the rest of the query string as hidden inputs (`api/labs._benchmark_kept`),
+    and the mix, period and window stay as they were. The default mix stays the default: with no
+    `ticker` key, there's none to re-send. The period links, the risk window links, the mix
+    form's hidden `benchmark` and remove's redirect all keep it. *Rejected: the field inside
+    "Edit the mix"*, simpler, but far from the figures it changes and submitted with the
+    mix's Update. The form shows only with a risk section, the only place its figures appear.
+  - *Rows in the grid and columns in the comparison (agreed).* The grid gains a second
+    `<tbody>` of four rows (beta, correlation, tracking error, information ratio), headed by
+    the benchmark and its first date, as on `/risk`. The comparison gains four columns, since
+    portfolio measures every asset against the benchmark too. Its benchmark is named once,
+    in the line above the table, not under each column: "· vs IWDA.AS" under four headers
+    pushed the table past laptop width. Greyed reasons in it got a 9em floor, since eleven
+    figure columns squeezed one to a word per line. An unavailable benchmark reads as on
+    `/risk`: the heading or the line above says why once, and each cell says "Unavailable".
+    *Rejected: the mix grid only*, which leaves the per-asset figures portfolio computes unused.
+  - *The benchmark line is dashed ink, on by default (agreed).* A 1.5px `--text` line,
+    dashed `[6, 4]`, drawn under the mix and over every asset line, and named by its ticker at
+    its last point like an asset's (the same label plugin). Its checkbox comes first, checked,
+    "<ticker> (benchmark)". The tooltip lists it second, after the mix. LB-8's palette rule still
+    holds: there is no colour to spare, gold is 2.2:1 on parchment, and forest and oxblood are
+    the mix's gain and loss, so the dash is what tells the line apart. Ink, not muted, because
+    it is the line the mix is read against. A raised asset line is ink too, but solid. With no
+    line (the benchmark starts after the period, or is unavailable), its box is disabled, "No
+    line", and a note above the chart gives portfolio's `growth_reason`. *Rejected: a dashed
+    muted line*, which recedes with the asset lines. *Rejected: off by default*, which hides
+    the comparison a benchmark exists for.
+  - **Sharp edge, found in review:** a string property of our own on a Chart.js dataset (a
+    `series` key) left a chart frozen mid-animation after a checkbox toggle, while boolean flags
+    like `isMix` don't. The cause inside Chart.js wasn't pinned down. `labs_chart.js` derives each
+    line's series from `isBenchmark` and `label` (`seriesOf`) instead. Don't add string keys to
+    a dataset without re-running `labs-two-lines` in the review.
+  - *No benchmark drawdown line.* portfolio returns no drawdown series for the benchmark, and
+    RK-9's note left that line optional.
+  - The review adds `/labs?benchmark=IWDA.AS&risk_window=3Y` (the relative columns),
+    `?benchmark=IWDA.AS&period=Max` (the line, with and without AAPL's line on) and
+    `?benchmark=NOPE.XX` (unavailable). The fake's VWCE.DE starts after Max's first day, so the
+    default Max chart shows the no-line note.

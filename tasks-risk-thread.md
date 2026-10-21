@@ -125,7 +125,7 @@ checked against the code, docs and dev DB:
 | RK-11 | [portfolio: ex-post risk endpoint](#rk-11-portfolio-ex-post-risk-endpoint) | RK-4, RK-7, RK-10 | done |
 | RK-12 | [web: `/risk` page with the ex-post summary](#rk-12-web-risk-page-with-the-ex-post-summary) | RK-11 | done |
 | RK-13 | [portfolio: benchmark and relative measures](#rk-13-portfolio-benchmark-and-relative-measures) | RK-8, RK-11 | done |
-| RK-14 | [web: benchmark selector, relative measures, benchmark line](#rk-14-web-benchmark-selector-relative-measures-benchmark-line) | RK-9, RK-12, RK-13 | ready |
+| RK-14 | [web: benchmark selector, relative measures, benchmark line](#rk-14-web-benchmark-selector-relative-measures-benchmark-line) | RK-9, RK-12, RK-13 | done |
 | RK-15 | [portfolio: ex-ante covariance and risk decomposition](#rk-15-portfolio-ex-ante-covariance-and-risk-decomposition) | RK-6, RK-7 | done |
 | RK-16 | [portfolio: correlation matrix](#rk-16-portfolio-correlation-matrix) | RK-6 | done |
 | RK-17 | [portfolio: ex-ante endpoint](#rk-17-portfolio-ex-ante-endpoint) | RK-4, RK-5, RK-13, RK-15, RK-16 | ready |
@@ -638,12 +638,34 @@ was split first: the risk and Labs flows are now `docs/risk-flows.md`. Decisions
 
 ### RK-14. web: benchmark selector, relative measures, benchmark line
 
-**Status:** ready
+**Status:** done
 
 - A benchmark field (a datalist of tickers) on `/labs` and `/risk`, kept in the query string.
 - Relative-measure rows.
 - The benchmark line on the Labs growth chart, with **its style agreed** (LB-8's palette
   constraints apply).
+
+**As built:** the client sends `benchmark` on both calls and parses RK-13's `relative`,
+benchmark status and growth line as required keys. `benchmark_param.py` is the field's rule, and
+`partials/_benchmark_field.html` is its form on both pages. web's `labs-ui.md` and
+`ui-architecture.md` hold the reasoning. Decisions:
+- **The line is dashed ink, on by default** (agreed): a 1.5px `--text` line, dashed, under the
+  mix and over the assets, named by its ticker at its last point, with its own checkbox, checked.
+  With no line, the box is disabled and a note gives portfolio's `growth_reason`.
+- **Labs: rows in the grid and columns in the comparison** (agreed). The comparison names the
+  benchmark once above the table, because naming it under four headers pushed the table past
+  laptop width.
+- **Labs: its own form in the risk section** (agreed), re-sending the rest of the query as
+  hidden inputs. Every other link and form keeps `benchmark`.
+- **Only an over-long ticker is caught in web** (over 20 characters, portfolio's limit, which
+  would be a 422). It falls back to `VWCE.DE` with an inline error. An untracked ticker is sent,
+  and portfolio's "benchmark unavailable: not tracked" is shown, said once in the group heading,
+  with each cell reading "Unavailable".
+- **The benchmark and its first date head the relative group** (spec §5.6). On `/risk`, each
+  cell's `title` also ends "· against <ticker>".
+- **No benchmark drawdown line:** portfolio returns no series for one.
+- **Sharp edge:** a string property of our own on a Chart.js dataset froze a toggled chart
+  mid-animation, so `labs_chart.js` derives each line's series instead (`labs-ui.md`).
 
 ### RK-15. portfolio: ex-ante covariance and risk decomposition
 
