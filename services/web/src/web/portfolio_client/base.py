@@ -330,6 +330,87 @@ class Backtest:
     statuses: tuple[BacktestAssetStatus, ...]
 
 
+# portfolio's standard risk windows (spec §4.5), in the risk table's column order.
+RISK_WINDOWS = ("1Y", "3Y", "5Y", "10Y", "Max")
+
+# The figures each ex-post window reports, by portfolio's response name.
+RISK_FIGURES = (
+    "cumulative_return",
+    "cagr",
+    "volatility",
+    "downside_deviation",
+    "sharpe",
+    "sortino",
+    "max_drawdown",
+    "calmar",
+    "var_95",
+    "cvar_95",
+    "var_99",
+    "cvar_99",
+)
+
+
+@dataclass(frozen=True)
+class RiskFigure:
+    """One risk figure with its metadata (spec §9, §10), mirroring portfolio's
+    RiskFigureResponse. A float, not a Decimal: a risk figure is a statistical estimate, not a
+    ledger amount. A fraction; VaR and CVaR are positive losses, a max drawdown is negative.
+    `value` is None exactly when greyed, and `reason` says why (R9)."""
+
+    value: float | None
+    window_start: date  # the figure's own window: a weekly one is shrunk to whole weeks
+    window_end: date
+    frequency: str  # "daily" or "weekly"
+    q: float  # periods per year
+    n_obs: int
+    n_gaps: int
+    flags: tuple[str, ...]
+    reason: str | None
+    standard_error: float | None  # a Sharpe's 1 s.e.; None on every other figure
+
+
+@dataclass(frozen=True)
+class ExPostWindow:
+    """One standard window, ending at ExPostRisk.end_date. Not `covered`: the history starts
+    after the window does, and every figure is greyed. `figures` has every RISK_FIGURES key, in
+    that order. The max drawdown's dates are None when it's greyed; a None recovery_date
+    otherwise means not recovered by the window's end."""
+
+    label: str
+    start: date
+    end: date
+    covered: bool
+    figures: dict[str, RiskFigure]
+    peak_date: date | None
+    trough_date: date | None
+    recovery_date: date | None
+    max_days_under_water: int | None
+
+
+@dataclass(frozen=True)
+class ExcludedHolding:
+    """A held ticker the TWR left out; the rest were renormalised to 100%."""
+
+    ticker: str
+    status: str  # not_tracked, no_history, no_fx_rate or failed
+    reason: str
+
+
+@dataclass(frozen=True)
+class ExPostRisk:
+    """portfolio's ExPostRiskResponse (RK-11), measured on the TWR of invested positions. With
+    nothing to measure, the dates are None and `windows` is empty; otherwise it holds every
+    RISK_WINDOWS entry, in that order. Not `rf_available`: downside deviation, Sharpe and Sortino
+    are greyed."""
+
+    label: str
+    base_date: date | None
+    end_date: date | None
+    rf_available: bool
+    windows: tuple[ExPostWindow, ...]
+    excluded: tuple[ExcludedHolding, ...]
+
+
 class PortfolioClient(Protocol):
     async def list_accounts(self, *, user_id: str) -> list[Account]: ...
 
@@ -410,6 +491,9 @@ class PortfolioClient(Protocol):
     # despite the POST. An asset portfolio can't backtest is a status in the result, not an
     # error; InvalidPortfolioRequest means the mix itself was rejected.
     async def backtest(self, *, assets: list[tuple[str, Decimal]], period: str) -> Backtest: ...
+
+    # This user's ex-post risk figures over the standard windows (RK-11). Read-only.
+    async def ex_post_risk(self, *, user_id: str) -> ExPostRisk: ...
 
     async def list_ticker_mappings(self) -> list[TickerMapping]: ...
 

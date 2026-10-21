@@ -5,6 +5,8 @@ from urllib.parse import quote
 import httpx
 from web.portfolio_client.base import (
     BACKTEST_PERIODS,
+    RISK_FIGURES,
+    RISK_WINDOWS,
     Account,
     AccountDeleteResult,
     AccountWriteResult,
@@ -14,6 +16,9 @@ from web.portfolio_client.base import (
     BacktestPeriodReturn,
     BacktestRow,
     Broker,
+    ExcludedHolding,
+    ExPostRisk,
+    ExPostWindow,
     Holding,
     HoldingAccount,
     Holdings,
@@ -22,6 +27,7 @@ from web.portfolio_client.base import (
     PortfolioSeriesPoint,
     Position,
     Return,
+    RiskFigure,
     TickerLookup,
     TickerMapping,
     TickerMappingWriteResult,
@@ -414,6 +420,75 @@ def _backtest(body: dict) -> Backtest:
         raise PortfolioUnavailable(f"malformed portfolio response: {exc}") from exc
 
 
+def _number(item: dict, key: str) -> float:
+    """A JSON number. A bool is an int in Python, and a string would format as text, not as a
+    figure, so neither passes."""
+    value = item[key]
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(f"{key} is not a number")
+    return float(value)
+
+
+def _opt_number(item: dict, key: str) -> float | None:
+    return None if item[key] is None else _number(item, key)
+
+
+def _risk_figure(item: dict) -> RiskFigure:
+    flags = item["flags"]
+    if not isinstance(flags, list) or not all(isinstance(f, str) for f in flags):
+        raise TypeError("flags is not a list of strings")
+    return RiskFigure(
+        value=_opt_number(item, "value"),
+        window_start=date.fromisoformat(item["window_start"]),
+        window_end=date.fromisoformat(item["window_end"]),
+        frequency=item["frequency"],
+        q=_number(item, "q"),
+        n_obs=_int(item, "n_obs"),
+        n_gaps=_int(item, "n_gaps"),
+        flags=tuple(flags),
+        reason=item["reason"],
+        standard_error=_opt_number(item, "standard_error"),
+    )
+
+
+def _ex_post_window(item: dict) -> ExPostWindow:
+    max_days = item["max_days_under_water"]
+    return ExPostWindow(
+        label=item["label"],
+        start=date.fromisoformat(item["start"]),
+        end=date.fromisoformat(item["end"]),
+        covered=_bool(item, "covered"),
+        figures={name: _risk_figure(item[name]) for name in RISK_FIGURES},
+        peak_date=_opt_date(item["peak_date"]),
+        trough_date=_opt_date(item["trough_date"]),
+        recovery_date=_opt_date(item["recovery_date"]),
+        max_days_under_water=None if max_days is None else _int(item, "max_days_under_water"),
+    )
+
+
+def _ex_post_risk(body: dict) -> ExPostRisk:
+    try:
+        windows = tuple(_ex_post_window(item) for item in body["windows"])
+        labels = tuple(w.label for w in windows)
+        if windows and labels != RISK_WINDOWS:
+            # The table has a column per window, in this order: anything else would put figures
+            # under the wrong heading.
+            raise ValueError(f"risk windows {labels}, expected {RISK_WINDOWS}")
+        return ExPostRisk(
+            label=body["label"],
+            base_date=_opt_date(body["base_date"]),
+            end_date=_opt_date(body["end_date"]),
+            rf_available=_bool(body, "rf_available"),
+            windows=windows,
+            excluded=tuple(
+                ExcludedHolding(ticker=item["ticker"], status=item["status"], reason=item["reason"])
+                for item in body["excluded"]
+            ),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise PortfolioUnavailable(f"malformed portfolio response: {exc}") from exc
+
+
 def _transaction(item: dict) -> Transaction:
     try:
         return Transaction(
@@ -680,6 +755,15 @@ class HttpPortfolioClient:
                 f"unexpected portfolio response {response.status_code}: {_error_detail(response)}"
             )
         return _backtest(_json_body(response))
+
+    async def ex_post_risk(self, *, user_id: str) -> ExPostRisk:
+        response = await self._request("GET", "/risk/ex-post", params={"user_id": user_id})
+        if response.status_code != 200:
+            # Not _raise_for_status: its 404 means AccountNotFound, and this route has no account.
+            raise PortfolioUnavailable(
+                f"unexpected portfolio response {response.status_code}: {_error_detail(response)}"
+            )
+        return _ex_post_risk(_json_body(response))
 
     async def list_ticker_mappings(self) -> list[TickerMapping]:
         response = await self._request("GET", "/ticker-mappings")
