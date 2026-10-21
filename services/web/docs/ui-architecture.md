@@ -500,8 +500,8 @@ described here updates this file in the same change.
   three copies to keep in step. *Known cost:* an anchor renamed in `glossary.html` breaks its
   links silently in a browser. Each page's tests fetch `/glossary` and check every link lands
   on an entry.
-- **Labs (LB-6 to LB-10)** has its own file, [`labs-ui.md`](labs-ui.md): the period table,
-  the mix form and the growth chart.
+- **Labs (LB-6 to LB-10, RK-9)** has its own file, [`labs-ui.md`](labs-ui.md): the period
+  table, the mix form, the growth chart, and the risk panel and drawdown chart.
 - **Display formatting (UI-5) is one fixed convention, applied by Jinja filters from a pure
   module.** `formatting.py` defines `money`, `signed_money`, `qty`, `pct` and `date` (plus UI-6's
   `share`, an unsigned percentage for weights, and `delta_class`), registered on

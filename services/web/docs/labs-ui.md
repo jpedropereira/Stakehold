@@ -1,7 +1,7 @@
 # web Labs UI
 
 The `/labs` page's design decisions: its tables, its mix form and its charts. Split out of
-[`ui-architecture.md`](ui-architecture.md) for size (before RK-9), verbatim apart from this header. It is
+[`ui-architecture.md`](ui-architecture.md) for size before RK-9, verbatim apart from this header; RK-9's entry was added here. It is
 part of the same document, so `.claude/rules/architecture.md` applies to it: a change to anything
 described here updates this file in the same change. The server side of `/labs` (its router, the
 upstream calls) is in [`architecture.md`](architecture.md) and [`endpoints.md`](endpoints.md).
@@ -141,3 +141,66 @@ upstream calls) is in [`architecture.md`](architecture.md) and [`endpoints.md`](
     convention beside `portfolio_chart.js`'s `formatEur`, with no test tying them together.
     It lives in `chart_theme.js` (`StakeholdChartTheme.formatPct`, moved there before RK-9), so
     the growth and drawdown charts share one copy.
+- **The Labs risk panel and drawdown chart (RK-9).** Under the returns table, a "Risk" section
+  shows the backtest's `risk` section (RK-8, `labs_risk_view.py`); under the growth chart, the
+  mix's drawdown over the same period.
+  - *Two tables.* The first is the mix's grid: CAGR, volatility, max drawdown, Sharpe, Sortino
+    and Calmar as rows, 1Y/3Y/5Y/10Y/Max as columns, as RK-9 lists them. Downside deviation,
+    VaR and CVaR are parsed but not shown here; `/risk` (RK-12, RK-18) shows those. The second
+    compares the mix and every asset over one window (agreed): portfolio measures every row on
+    one common window (R10), which exists so assets can be compared side by side. The window
+    is picked by links (`?risk_window=`, 1Y by default) rather than client-side tabs, so the
+    page works without JS, like the period links. *Known cost:* every window is already in the
+    response, but a link reruns the backtest: RK-8 measured 0.60 s for a 12-asset, 17-year
+    synthetic worst case. *Rejected: a `<details>` per asset*, which makes comparing assets mean
+    opening several. *Rejected: the mix only*, which would leave the assets' figures unused.
+  - *Spec §10's metadata is shown, not hovered.* `title` tooltips were rejected for the
+    glossary ("Glossary" in `ui-architecture.md`): they don't show on touch, and screen readers
+    announce them inconsistently. So each window's start is under its column header (and in
+    the stacked label, through the same `data-start` as Max's), each measure's frequency under
+    its name (Sharpe's also says "± 1 s.e."), and a "Returns used" row or column gives the
+    daily and weekly `n_obs` ("252 daily · 52 weekly"). Every figure in a window shares one
+    daily and one weekly series, so the counts are said once per window, not once per figure.
+    The label "buy & hold (drifting)" (R3) is in the section's subtitle, which also says the
+    figures are historical, not a forecast (R15).
+  - *Greyed, never 0 or blank (R9).* A greyed figure shows portfolio's reason in its cell, in
+    muted text that may wrap (a sentence, not a figure). An uncovered window reads "Not enough
+    history" in each cell, as the returns table does, and its reason ("limited by AAPL
+    (history from 2021-11-01)") is said once under the grid, for every window that shares it.
+    The common window's start and the asset that sets it are named above the grid. With no
+    risk-free data, one note says Sharpe and Sortino can't be measured, and why.
+  - *Flags are notes under the figure*, in plain words ("under 3 years", "over 2% of days
+    missing"). `insufficient_history` gets none, since the reason already says it. An unknown
+    flag shows its code and is logged: a code qualifies the figure better than silence.
+  - *Formats (spec §10).* Volatility and drawdown as percentages to one decimal (`pct1`,
+    unsigned unless negative), CAGR to one decimal with its sign (`signed_pct1`), ratios to
+    two places with no "+" (`ratio`): a Sharpe of 0.86 isn't a gain. A Sharpe is "0.86 ± 0.59"
+    with its standard error in muted mono. Only CAGR is gain/loss colored, because it is a
+    return; `delta_class` gained a `pct1` kind so its color follows its one-decimal display.
+    Volatility and the ratios are neutral, since neither is a gain or a loss.
+  - *The drawdown isn't oxblood (agreed).* A drawdown is a distance below the mix's last high,
+    not a realised loss, and every value is 0 or below, so oxblood would make the whole chart,
+    and the max drawdown row, read as alarm, against chapter IV's "no panic on losses". The
+    chart is a 2px `--text` line with a `--text-muted` fill from 0% down to it, and the 0%
+    gridline is drawn in `--text-muted`, as the growth chart's is. The fill's 16% alpha is
+    applied in `labs_drawdown_chart.js` to the resolved token (a canvas normalizes it to hex
+    first), so no new token is added. *Rejected: gold*, for the growth chart's reason (2.2:1 on
+    parchment). *Rejected: an oxblood line*, as above. *Rejected: no fill*, which leaves a
+    shallow drawdown hard to read against the 0% line.
+  - *The drawdown chart follows the growth chart.* It is under the asset boxes, in the same
+    section, so the period links drive both. Its dates are the growth series', and a gap date
+    (R5) is null, drawn as a break (`spanGaps: false`), since RK-8 keeps it null rather than
+    bridged. The y axis tops at 0% (a high). Its `suggestedMin` is −1%, so a mix that never fell
+    below its high reads as a flat line on a small scale; Chart.js's default would have run the
+    axis to −100%. The tick labels take as many decimals as the step needs, so a shallow
+    drawdown doesn't print "0%" four times. It shares `formatPct` with the growth chart through
+    `chart_theme.js` (moved there first), and the `.chart-frame`, so `review_pages.py`'s
+    chart-size check covers it.
+  - *Stacked at phone width* like the returns table (`.labs-table`, `.stack-table`). Each
+    cell's figure, ± and notes sit in one `.risk-value`, so the stacked flex line keeps them
+    together opposite the label instead of spreading them out. The "Returns used" row's top rule
+    is drawn only above the stack breakpoint.
+  - The review adds `/labs?risk_window=3Y` (a gap note), `/labs?risk_window=10Y` (an uncovered
+    comparison), a mix with NEWCO.DE (the fake answers it with no risk-free data) and
+    `/labs?period=Max` for the drawdown. The fake's risk section uses AAPL's late start, so 5Y
+    and 10Y are uncovered on every Labs page.
