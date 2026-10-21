@@ -1208,6 +1208,51 @@ def test_get_ticker_info_calls_ticker_info_and_closes_the_connection(monkeypatch
     ]
 
 
+def test_get_etf_holdings_funds_lists_every_configured_fund(monkeypatch, fake_settings):
+    closed = []
+    funds = [make_fund("a"), make_fund("b", enabled=False)]
+
+    monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(jobs, "load_funds", lambda path: funds)
+    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn(closed))
+    monkeypatch.setattr(
+        jobs, "etf_holdings_funds", lambda conn, funds: {"funds": [f.key for f in funds]}
+    )
+
+    # Disabled funds too: their stored snapshots are still served.
+    assert jobs.get_etf_holdings_funds() == {"funds": ["a", "b"]}
+    assert closed == [True]
+
+
+def test_get_latest_etf_holdings_resolves_with_ingests_tables(monkeypatch, fake_settings):
+    closed = []
+    calls = []
+    funds = [make_fund("a", enabled=False)]
+
+    monkeypatch.setattr(jobs, "load_settings", lambda: fake_settings)
+    monkeypatch.setattr(jobs, "load_funds", lambda path: funds)
+    monkeypatch.setattr(jobs, "get_connection", lambda url: FakeConn(closed))
+    stub_resolution(monkeypatch, suffixes={"NASDAQ": None}, overrides={"BRKB": "BRK-B"})
+    monkeypatch.setattr(
+        jobs,
+        "latest_etf_holdings",
+        lambda conn, funds, fund_key, resolution: calls.append((funds, fund_key, resolution))
+        or {"fund_key": fund_key},
+    )
+
+    assert jobs.get_latest_etf_holdings(fund_key="a") == {"fund_key": "a"}
+    assert closed == [True]
+    assert calls == [
+        (
+            funds,
+            "a",
+            TickerResolution(
+                exchange_suffixes={"NASDAQ": None}, ticker_overrides={"BRKB": "BRK-B"}
+            ),
+        )
+    ]
+
+
 def test_get_ticker_list_calls_ticker_list_and_closes_the_connection(monkeypatch, fake_settings):
     closed = []
 

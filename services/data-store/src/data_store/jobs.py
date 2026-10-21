@@ -42,7 +42,9 @@ from data_store.pipeline import (
     ingest_risk_free_rates,
 )
 from data_store.read_flows import (
+    etf_holdings_funds,
     fx_rate_series,
+    latest_etf_holdings,
     price_series,
     risk_free_series,
     ticker_info,
@@ -399,6 +401,36 @@ def get_ticker_list(*, source: str) -> dict:
     conn = get_connection(settings.database_url)
     try:
         return ticker_list(conn, source)
+    finally:
+        conn.close()
+
+
+def get_etf_holdings_funds() -> dict:
+    """Every fund in etfs.yaml, enabled or not, with its ticker and newest snapshot date, for
+    the read API."""
+    configure_logging()
+    settings = load_settings()
+    funds = load_funds(settings.config_path)
+    conn = get_connection(settings.database_url)
+    try:
+        return etf_holdings_funds(conn, funds)
+    finally:
+        conn.close()
+
+
+def get_latest_etf_holdings(*, fund_key: str) -> dict:
+    """A fund's newest holdings snapshot, for the read API. Picks the fund from every
+    configured one, not through _select_funds, so a disabled fund still serves its stored
+    snapshot. Resolves each line with the same tables ingest uses. Raises
+    `FundNotConfigured` or `NoHoldingsSnapshot` (see `read_flows.py`); the API layer turns
+    both into a 404."""
+    configure_logging()
+    settings = load_settings()
+    funds = load_funds(settings.config_path)
+    resolution = load_ticker_resolution(settings.exchange_suffixes_path)
+    conn = get_connection(settings.database_url)
+    try:
+        return latest_etf_holdings(conn, funds, fund_key, resolution)
     finally:
         conn.close()
 
