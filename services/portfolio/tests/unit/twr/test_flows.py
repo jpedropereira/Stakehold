@@ -151,6 +151,29 @@ def test_reads_each_account_by_its_own_id_and_weights_across_them(monkeypatch):
     assert result.excluded == []
 
 
+def test_each_point_carries_its_day_and_each_included_ticker_its_currency(monkeypatch):
+    # Ex-post risk (RK-11) masks VaR on the days and flags nonsync from the currencies. A (EUR)
+    # and U (USD) are included; N isn't tracked, so it has no currency here.
+    user_id = uuid.uuid4()
+    _fake_repositories(
+        monkeypatch,
+        user_id,
+        rows={1: [_row(1, t, d, "100") for t in ("A", "N", "U") for d in (D1, D2)]},
+    )
+    client = _FakeDataStoreClient(
+        info={"A": EUR, "N": TickerInfo(exists=False, has_returns=False), "U": USD},
+        prices={"A": _prices("0"), "U": _prices("0")},
+        fx={"USD": [FxPoint(D1, Decimal("1.1")), FxPoint(D2, Decimal("1.1"))]},
+    )
+
+    result = flows.compute_portfolio_twr(object(), client, user_id=user_id, today=TODAY)
+
+    assert result.currencies == {"A": "EUR", "U": "USD"}
+    assert [(d.price_date, d.tickers, d.traded) for d in result.days] == [
+        (D2, frozenset({"A", "U"}), True)
+    ]
+
+
 def test_each_ticker_is_fetched_from_its_earliest_row_in_any_account(monkeypatch):
     user_id = uuid.uuid4()
     _fake_repositories(

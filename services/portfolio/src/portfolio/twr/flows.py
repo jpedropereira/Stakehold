@@ -13,7 +13,7 @@ start and the summary.
 """
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from uuid import UUID
 
@@ -23,7 +23,7 @@ from portfolio.eur_returns import fetch
 from portfolio.eur_returns.calculator import NO_FX_SERIES, EurReturns, eur_daily_returns
 from portfolio.positions import repository as positions_repository
 from portfolio.returns import repository as returns_repository
-from portfolio.twr.calculator import TwrPoint, compute_twr
+from portfolio.twr.calculator import TwrDay, TwrPoint, compute_twr
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +49,10 @@ class PortfolioTwr:
     points: list[TwrPoint]
     n_gaps: int
     excluded: list[ExcludedHolding]  # by ticker; their weight went to the rest
+    # For ex-post risk (RK-11), not the TWR route: each point's tickers and whether they all
+    # traded on it, and each included ticker's FX currency.
+    days: tuple[TwrDay, ...] = ()
+    currencies: dict[str, str] = field(default_factory=dict)
 
 
 def compute_portfolio_twr(
@@ -87,6 +91,7 @@ def compute_portfolio_twr(
     )
 
     returns: dict[str, EurReturns] = {}
+    currencies: dict[str, str] = {}
     excluded = []
     for ticker, outcome in fetch.fetch_series(datastore_client, tickers, starts, today).items():
         if isinstance(outcome, fetch.LeftOut):
@@ -112,6 +117,7 @@ def compute_portfolio_twr(
                 "portfolio-twr: %s: included, %d day(s) of EUR returns.", ticker, len(series.dates)
             )
             returns[ticker] = series
+            currencies[ticker] = outcome.info.fx_currency
             continue
         if series.reason == NO_FX_SERIES:
             status, reason = fetch.NO_FX_RATE, f"no FX series for {outcome.info.fx_currency}"
@@ -122,5 +128,10 @@ def compute_portfolio_twr(
 
     series = compute_twr(snapshots, returns, closed=closed)
     return PortfolioTwr(
-        base_date=series.base_date, points=series.points, n_gaps=series.n_gaps, excluded=excluded
+        base_date=series.base_date,
+        points=series.points,
+        n_gaps=series.n_gaps,
+        excluded=excluded,
+        days=series.days,
+        currencies=currencies,
     )

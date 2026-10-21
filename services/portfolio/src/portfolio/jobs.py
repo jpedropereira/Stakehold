@@ -1341,7 +1341,10 @@ def get_portfolio_twr(*, user_id: UUID, settings: Settings | None = None) -> dic
             "nothing on two consecutive dates.",
             len(result.excluded),
         )
-    return {**asdict(result), "n_excluded": len(result.excluded)}
+    payload = asdict(result)
+    # Ex-post risk's inputs, not part of the TWR route's payload.
+    del payload["days"], payload["currencies"]
+    return {**payload, "n_excluded": len(result.excluded)}
 
 
 def get_backtest(
