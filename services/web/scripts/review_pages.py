@@ -122,6 +122,11 @@ PAGES = [
     # RK-12: 1Y, 3Y and Max measured, 5Y and 10Y greyed, flags and their legend, a greyed
     # Sharpe, and a holding left out.
     Page("risk", "/risk", "user"),
+    # RK-14: the benchmark field, IWDA.AS's long history covering every relative figure, a
+    # ticker the fake doesn't track (the group says why once), and an over-long field.
+    Page("risk-benchmark", "/risk?benchmark=IWDA.AS", "user"),
+    Page("risk-benchmark-unavailable", "/risk?benchmark=NOPE.XX", "user"),
+    Page("risk-benchmark-too-long", "/risk?benchmark=ABCDEFGHIJKLMNOPQRSTU", "user"),
     # RK-9: the risk comparison over 3Y (AAPL's volatility has a gap note), over 10Y (not
     # covered, so no table), a mix the fake answers with no risk-free data, and the drawdown
     # chart over Max.
@@ -129,6 +134,18 @@ PAGES = [
     Page("labs-risk-uncovered", "/labs?risk_window=10Y", "user"),
     Page("labs-risk-no-rf", "/labs?ticker=VWCE.DE&weight=60&ticker=NEWCO.DE&weight=40", "user"),
     Page("labs-drawdown-max", "/labs?period=Max", "user"),
+    # RK-14: the benchmark. IWDA.AS covers every window and draws its line over Max; VWCE.DE
+    # (the default) starts after Max's first day, so the chart has no line and says why; a
+    # ticker the fake doesn't track greys the relative figures, said once per group.
+    Page("labs-benchmark", "/labs?benchmark=IWDA.AS&risk_window=3Y", "user"),
+    Page("labs-benchmark-max", "/labs?benchmark=IWDA.AS&period=Max", "user"),
+    Page(
+        "labs-benchmark-and-asset",
+        "/labs?benchmark=IWDA.AS&period=Max",
+        "user",
+        click='.labs-series input[data-series="AAPL"]',
+    ),
+    Page("labs-benchmark-unavailable", "/labs?benchmark=NOPE.XX", "user"),
     Page("glossary", "/glossary", "user"),
     # Followed from a holdings page's "Total return" header: the entry it lands on is marked.
     Page("glossary-total-return", "/glossary#total-return", "user"),
@@ -346,17 +363,20 @@ def _fakes():
     from web.portfolio_client.base import (
         BACKTEST_PERIODS,
         BACKTEST_RISK_WINDOWS,
+        RELATIVE_FIGURE_KEYS,
         RISK_FIGURE_KEYS,
         RISK_WINDOWS,
         Account,
         Backtest,
         BacktestAssetStatus,
+        BacktestBenchmark,
         BacktestGrowth,
         BacktestPeriodReturn,
         BacktestRisk,
         BacktestRow,
         BacktestRowRisk,
         BacktestWindowRisk,
+        BenchmarkStatus,
         Broker,
         DrawdownSeries,
         ExcludedHolding,
@@ -380,7 +400,62 @@ def _fakes():
     )
     from web.portfolio_view import aggregate_portfolio_returns
 
-    def review_risk(assets, period, days, mix_values):
+    # The benchmarks the review data has (RK-13): VWCE.DE's short history greys 10Y, IWDA.AS
+    # covers every window, and any other ticker is unavailable, as portfolio reports one it
+    # doesn't track.
+    benchmark_firsts = {"VWCE.DE": date(2019, 7, 29), "IWDA.AS": date(2009, 9, 25)}
+
+    def review_relative(benchmark, start, weeks):
+        """A window's figures against `benchmark` (RK-13). Beta and correlation need 104
+        weeks, so a 1Y window greys them; the other two need 52."""
+        first = benchmark_firsts.get(benchmark)
+
+        def figure(value, minimum=52, reason=None):
+            if reason is None and weeks < minimum:
+                reason = f"insufficient history (have {weeks}, need {minimum})"
+            return RiskFigure(
+                value=None if reason else value,
+                window_start=start,
+                window_end=today,
+                frequency="weekly",
+                q=52.0,
+                n_obs=0 if first is None or first > start else weeks,
+                n_gaps=0,
+                flags=("insufficient_history",) if reason else (),
+                reason=reason,
+                standard_error=None,
+            )
+
+        reason = None
+        if first is None:
+            reason = "benchmark unavailable: not tracked"
+        elif first > start:
+            reason = f"benchmark history too short (from {first})"
+        scale = 1.0 if benchmark == "VWCE.DE" else 1.04
+        return {
+            "beta": figure(0.94 * scale, 104, reason),
+            "correlation": figure(0.91 / scale, 104, reason),
+            "tracking_error": figure(0.0412 * scale, 52, reason),
+            "information_ratio": figure(-0.18 * scale, 52, reason),
+        }
+
+    def review_benchmark(benchmark, days, mix_values):
+        """The backtest's benchmark (RK-13): its growth line follows the mix's a little lower,
+        with its own wobble, when its history covers the period."""
+        first = benchmark_firsts.get(benchmark)
+        if first is None:
+            reason = "benchmark unavailable: not tracked"
+            return BacktestBenchmark(benchmark, False, "not tracked", None, None, reason)
+        if mix_values is None or first > days[0]:
+            reason = None if mix_values is None else f"benchmark history too short (from {first})"
+            return BacktestBenchmark(benchmark, True, None, first, None, reason)
+        line = tuple(
+            Decimal(str(round(0.92 * float(v) + 0.006 * math.sin(i / 7), 6)))
+            for i, v in enumerate(mix_values)
+        )
+        return BacktestBenchmark(benchmark, True, None, first, line, None)
+
+    def review_risk(assets, period, days, mix_values, benchmark):
         """The backtest's risk section (RK-8) for the review mix. AAPL's history starts on
         2021-11-01, so with it in the mix every window starts no earlier, and 5Y and 10Y aren't
         covered; without it, VWCE.DE limits the windows to 2019-07-29. The figures exercise
@@ -430,6 +505,7 @@ def _fakes():
                     None,
                     None,
                     None,
+                    None,
                 )
             span = (today - start).days / 365.25
             daily, weekly = round(252 * span), int(52 * span)
@@ -460,7 +536,16 @@ def _fakes():
                 calmar=figure(cagr / abs(mdd), "daily", daily, start, flags=short),
             )
             return BacktestWindowRisk(
-                start, today, True, None, figures, date(2026, 2, 2), date(2026, 4, 7), None, 249
+                start,
+                today,
+                True,
+                None,
+                figures,
+                date(2026, 2, 2),
+                date(2026, 4, 7),
+                None,
+                249,
+                review_relative(benchmark, start, weekly),
             )
 
         def row(ticker):
@@ -484,6 +569,7 @@ def _fakes():
                 if no_rf
                 else RiskFreeStatus(True, None, date(1999, 1, 4))
             ),
+            benchmark=review_benchmark(benchmark, days, mix_values),
             mix=row(None),
             assets=tuple(row(t) for t in tickers),
             drawdown=drawdown,
@@ -755,7 +841,7 @@ def _fakes():
                 ),
             )
 
-        async def backtest(self, *, assets, period):
+        async def backtest(self, *, assets, period, benchmark):
             """The review holdings' mix (VWCE.DE and AAPL; NEWCO.DE has no price, so the page
             leaves it out). AAPL's history starts in November 2021: too short for 5Y, so the
             mix's 5Y figure and line are VWCE.DE's alone and name AAPL as left out, and its Max
@@ -875,10 +961,10 @@ def _fakes():
                         "7203.T", "no_fx_rate", "Stakehold has no JPY exchange rates."
                     ),
                 ),
-                risk=review_risk(assets, period, days, mix_values),
+                risk=review_risk(assets, period, days, mix_values, benchmark),
             )
 
-        async def ex_post_risk(self, *, user_id):
+        async def ex_post_risk(self, *, user_id, benchmark):
             """Three and a half years of history: 1Y, 3Y and Max are measured, 5Y and 10Y are
             greyed for starting before it. Every state the table has: a loss and a gain, a
             Sharpe with its standard error, a 1Y Sharpe greyed for too few weeks, VaR flagged
@@ -945,6 +1031,19 @@ def _fakes():
                         None,
                         None,
                         None,
+                        # Greyed like the rest: the portfolio's history doesn't cover it.
+                        {
+                            n: figure(
+                                n,
+                                start,
+                                None,
+                                flags=("insufficient_history",),
+                                reason=reason,
+                                frequency="weekly",
+                                q=52.0,
+                            )
+                            for n in RELATIVE_FIGURE_KEYS
+                        },
                     )
                 years = (today - start).days / 365.25
                 figures = {**dict(zip(measures, values[label])), **tails}
@@ -977,6 +1076,7 @@ def _fakes():
                     date(2024, 8, 5) if label != "1Y" else date(2026, 4, 8),
                     recovered,
                     127 if recovered else 277,
+                    review_relative(benchmark, start, round((today - start).days / 7)),
                 )
 
             return ExPostRisk(
@@ -984,6 +1084,12 @@ def _fakes():
                 base_date=base,
                 end_date=today,
                 rf_available=True,
+                benchmark=BenchmarkStatus(
+                    benchmark,
+                    benchmark in benchmark_firsts,
+                    None if benchmark in benchmark_firsts else "not tracked",
+                    benchmark_firsts.get(benchmark),
+                ),
                 windows=tuple(window(label) for label in RISK_WINDOWS),
                 excluded=(ExcludedHolding("7203.T", "no_fx_rate", "no FX series for JPY"),),
             )

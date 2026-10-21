@@ -12,6 +12,7 @@ from decimal import Decimal
 
 from web.portfolio_client.base import (
     BACKTEST_PERIODS,
+    BacktestBenchmark,
     BacktestGrowth,
     BacktestRow,
     Holding,
@@ -101,10 +102,16 @@ def chart_value(value: Decimal | float) -> float:
     return float(f"{value:.6g}")
 
 
-def build_growth_payload(growth: BacktestGrowth) -> dict:
+def build_growth_payload(
+    growth: BacktestGrowth, benchmark: BacktestBenchmark | None = None
+) -> dict:
     """The growth chart's data island (static/labs_chart.js). Assets are a list, so they keep
     the table's order; a line is None when it doesn't cover the period, and a point is None
-    before a late asset's Max line starts, which Chart.js draws as no line."""
+    before a late asset's Max line starts, which Chart.js draws as no line.
+
+    The benchmark's line (RK-14), when portfolio sent one, is priced like an asset's on the
+    same dates. Without one, `reason` says why (its history starts after the period, or it is
+    unavailable), for the note beside its disabled checkbox. None with no risk section."""
 
     def line(values):
         return None if values is None else [None if v is None else chart_value(v) for v in values]
@@ -118,4 +125,17 @@ def build_growth_payload(growth: BacktestGrowth) -> dict:
         ],
         # The page names these under the chart; the script doesn't read them.
         "left_out": list(growth.left_out),
+        "benchmark": (
+            None
+            if benchmark is None
+            else {
+                "ticker": benchmark.ticker,
+                "values": line(benchmark.growth),
+                "reason": (
+                    None
+                    if benchmark.growth is not None
+                    else benchmark.growth_reason or "not available"
+                ),
+            }
+        ),
     }

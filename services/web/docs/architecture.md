@@ -444,7 +444,15 @@ Every route `web` serves, with what it requires and which upstream calls it make
   is `PortfolioUnavailable`. Beyond typing, every window must carry all twelve figures, none of
   them null (an uncovered ex-post window greys each figure, unlike a backtest window), and the
   windows must be exactly `RISK_WINDOWS` in order, so a figure can't land under the wrong
-  heading. An empty `windows` list is the "nothing to measure" answer, not an error.
+  heading. An empty `windows` list is the "nothing to measure" answer, not an error. RK-14
+  made both calls take a `benchmark` (RK-13's parameter; `DEFAULT_BENCHMARK`, `VWCE.DE`, mirrors
+  portfolio's default) and parse what portfolio measures against it: each window's `relative`
+  figures (`RELATIVE_FIGURE_KEYS`, a dict like `figures`), a `BenchmarkStatus`, and on the
+  backtest a `BacktestBenchmark` that adds the growth line. All are read as required keys, like
+  `risk`. A relative figure is never null, though a backtest window's whole `relative` is when
+  the window isn't covered. The benchmark's growth line must have one value per growth date and
+  no null point (it is null as a whole, with `growth_reason`, never in part), and a growth line
+  with no growth series is a contract break.
 - `rebuild_outcome.py` (UI-7) — pure. Turns the two rebuild statuses into the confirmation
   banner's one sentence; see "Key decisions".
 - `portfolio_view.py` (task 12) — pure, I/O-free reshaping of what `routes.py` fetches for
@@ -475,13 +483,22 @@ Every route `web` serves, with what it requires and which upstream calls it make
   holdings. RK-9 added `?risk_window=`, the window the risk comparison shows. Every window is
   in the one backtest response, so it changes only the rendering, and the backtest's `risk`
   section gets one log line (end date, the common window's start and what limits it, windows
-  covered, and the risk-free status).
+  covered, and the risk-free status). RK-14 added `?benchmark=` (`benchmark_param.py`), sent
+  with the backtest. Unlike the window it reruns a different backtest, so its form re-sends the
+  rest of the query as hidden inputs; the log line adds the benchmark, whether it is available,
+  and whether it has a growth line.
 - `labs_risk_view.py` (RK-9) — pure: how the backtest's `risk` section is shown. The mix's
   grid of measures by window (`build_mix_grid`), the mix and its assets over one window
   (`build_comparison`), and the drawdown chart's island (`build_drawdown_payload`). It sits
   apart from `labs_view.py` because it owns the wording of a statistical estimate (its format,
   its greyed reason, its flags' notes), where `labs_view.py` owns which holdings make the mix.
-  An unknown flag shows its code and is logged, never dropped.
+  An unknown flag shows its code and is logged, never dropped. RK-14 added `RELATIVE_MEASURES`,
+  the four figures against the benchmark, as a group of grid rows and four comparison columns.
+- `benchmark_param.py` (RK-14) — pure: `chosen_benchmark`, what `/labs` and `/risk` send for
+  `?benchmark=`. Its own module because both routers share it and neither imports the other.
+  It catches only what portfolio would reject (over 20 characters, a 422 for the whole
+  backtest). An untracked ticker is still sent, because portfolio answers it with a 200 and a
+  reason, so web keeps no second copy of the tracked list.
 - `labs_mix.py` (LB-7) — pure: the edited mix's query-string contract (`parse_mix`,
   `canonical_query`) and its checks (`check_mix`). It sits apart from `labs_view.py` because it
   owns a different thing: what the user typed and whether it can be sent, where `labs_view.py`
@@ -492,15 +509,18 @@ Every route `web` serves, with what it requires and which upstream calls it make
   `/labs` and `/portfolio` can't disagree about them, and mirrors `portfolio`'s 50-asset cap
   (`MAX_BACKTEST_ASSETS`) so a large portfolio is cut to its largest holdings, not rejected.
   LB-8 added `build_growth_payload`, the growth chart's data island, rounded to six
-  significant digits.
+  significant digits. RK-14 added the benchmark's line to it, or the reason it has none.
 - `api/risk.py` (RK-12) — `GET /risk`, the risk page, on its own router for the same file-size
   reason. The page is a stack of sections, each with its own loader returning its data or the
   notice to show in its place, so one failing section never takes the page down. Today there
   is one, the ex-post summary. The ex-ante, concentration and what-if sections (RK-18, RK-23,
-  RK-20) each add a loader, gathered concurrently, since none needs another's answer.
+  RK-20) each add a loader, gathered concurrently, since none needs another's answer. RK-14
+  added `?benchmark=` and the ticker list for its field, fetched concurrently with the figures
+  and failing on its own, as on `/labs`.
 - `risk_view.py` (RK-12) — pure: `build_ex_post_table`, the ex-post summary table (measures as
   rows, windows as columns) with each figure's greyed reason, its metadata `title` and its flag
-  markers, plus the legend of the flags present. The template only lays it out.
+  markers, plus the legend of the flags present. The template only lays it out. RK-14 added
+  the relative rows, built the same way, and the benchmark they are measured against.
 - `api/tickers.py` (TK-8) — the Tickers pages, on their own router for the same file-size
   reason, rendering through `routes.py`'s helpers so CSRF and cookie handling stay identical.
 - `ticker_status.py` (TK-8/TK-9) — how a tracked ticker's status reads (labels, a holding's

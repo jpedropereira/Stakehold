@@ -46,6 +46,12 @@ ENTRIES = (
     "calmar",
     "var",
     "cvar",
+    # Against a benchmark (RK-14), on /labs and /risk.
+    "benchmark",
+    "beta",
+    "correlation",
+    "tracking-error",
+    "information-ratio",
 )
 
 
@@ -164,3 +170,14 @@ def test_risk_terms_say_historical_never_expected(client):
 
     assert "historical" in html
     assert "expected" not in html.lower()
+
+
+def test_the_relative_terms_say_weekly(client):
+    """Spec §5.6: every figure against the benchmark is measured on weekly returns."""
+    test_client, fake_auth = client[0], client[1]
+    _logged_in(test_client, fake_auth)
+
+    html = test_client.get("/glossary").text
+
+    for anchor in ("beta", "correlation", "tracking-error", "information-ratio"):
+        assert "weekly" in _entry(html, anchor), anchor
