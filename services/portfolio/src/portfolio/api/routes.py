@@ -40,6 +40,8 @@ from portfolio.api.models import (
     BacktestRequest,
     BacktestResponse,
     BrokerResponse,
+    ExAnteRiskRequest,
+    ExAnteRiskResponse,
     ExPostRiskResponse,
     HoldingsResponse,
     PortfolioReturnsResponse,
@@ -517,6 +519,21 @@ def get_ex_post_risk(
     settings: Settings = Depends(get_settings),
 ) -> dict:
     return jobs.get_ex_post_risk(user_id=user_id, benchmark=benchmark, settings=settings)
+
+
+@router.post("/risk/ex-ante", response_model=ExAnteRiskResponse)
+def get_ex_ante_risk(body: ExAnteRiskRequest, settings: Settings = Depends(get_settings)) -> dict:
+    """A POST because the mix is a structured body, as for a backtest: nothing is stored, so it
+    answers 200. The mix holds no user data, so there is no user_id; web builds it from the
+    holdings. An asset data-store can't serve is reported in `statuses`, not as an error."""
+    return jobs.get_ex_ante_risk(
+        assets=[(asset.ticker, asset.weight) for asset in body.assets],
+        window=body.window,
+        benchmark=body.benchmark,
+        currency=body.currency,
+        exclude=body.exclude,
+        settings=settings,
+    )
 
 
 @router.post("/returns/rebuild", response_model=RebuildReturnsResponse)

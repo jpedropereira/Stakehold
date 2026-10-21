@@ -1,10 +1,13 @@
-"""GET /risk/ex-post (RK-11): argument coercion and the response model. jobs.get_ex_post_risk is
-stubbed; it's tested in tests/unit/test_jobs_ex_post_risk.py."""
+"""GET /risk/ex-post (RK-11) and POST /risk/ex-ante (RK-17): argument coercion, request
+validation and the response models. The jobs are stubbed; they're tested in
+tests/unit/test_jobs_ex_post_risk.py and test_jobs_ex_ante_risk.py."""
 
 import uuid
+from decimal import Decimal
 
 import pytest
 from portfolio import jobs
+from portfolio.risk.windows import StandardWindow
 
 
 def _figure(value, frequency="daily", flags=(), reason=None, standard_error=None):
@@ -144,3 +147,142 @@ def test_ex_post_requires_a_user(client):
     response = client.get("/risk/ex-post")
 
     assert response.status_code == 422
+
+
+# --- POST /risk/ex-ante (RK-17) ---
+
+_EX_ANTE = {
+    "label": "ex-ante · constant weights",
+    "currency": "eur",
+    "rf_available": True,
+    "window": {
+        "label": "3Y",
+        "requested_start": "2023-01-09",
+        "start": "2024-01-05",
+        "end": "2026-01-09",
+        "limited_by": ["B"],
+    },
+    "benchmark": {
+        "ticker": "VWCE.DE",
+        "available": True,
+        "reason": None,
+        "first_date": "2019-07-29",
+    },
+    "statuses": [
+        {"ticker": "A", "status": "included", "reason": None},
+        {"ticker": "B", "status": "included", "reason": None},
+        {"ticker": "C", "status": "excluded", "reason": "excluded by request"},
+    ],
+    "sigma_p": _figure(0.14, "weekly"),
+    "diversification_ratio": _figure(1.16, "weekly"),
+    "effective_n": 1.92,
+    "holdings": [
+        {
+            "ticker": "A",
+            "weight": 0.6,
+            "volatility": 0.2,
+            "mcr": 0.19,
+            "cr": 0.12,
+            "pcr": 0.84,
+            "corr_with_portfolio": 0.96,
+        },
+        {
+            "ticker": "B",
+            "weight": 0.4,
+            "volatility": None,
+            "mcr": None,
+            "cr": None,
+            "pcr": None,
+            "corr_with_portfolio": None,
+        },
+    ],
+    "constant_weight": {
+        "peak_date": "2025-03-03",
+        "trough_date": "2025-04-08",
+        "recovery_date": None,
+        "max_days_under_water": 312,
+        **{name: _figure(0.1) for name in _NAMES},
+    },
+    "correlation": {
+        "keys": ["A", "VWCE.DE"],
+        "benchmark_key": "VWCE.DE",
+        "cells": [
+            {"a": "A", "b": "A", "figure": _figure(1.0, "weekly")},
+            {"a": "A", "b": "VWCE.DE", "figure": _figure(0.8, "weekly")},
+            {"a": "VWCE.DE", "b": "VWCE.DE", "figure": _figure(1.0, "weekly")},
+        ],
+    },
+}
+
+
+def _ex_ante_body(**kw):
+    return {
+        "assets": [
+            {"ticker": "A", "weight": "60"},
+            {"ticker": "B", "weight": "40"},
+            {"ticker": "C", "weight": "5"},
+        ],
+        **kw,
+    }
+
+
+def test_ex_ante_parses_the_mix_with_its_defaults_and_returns_the_jobs_own_dict(
+    monkeypatch, client
+):
+    captured = {}
+    monkeypatch.setattr(jobs, "get_ex_ante_risk", lambda **kw: captured.update(kw) or _EX_ANTE)
+
+    response = client.post("/risk/ex-ante", json=_ex_ante_body())
+
+    assert response.status_code == 200
+    assert response.json() == _EX_ANTE
+    assert captured["assets"] == [("A", Decimal("60")), ("B", Decimal("40")), ("C", Decimal("5"))]
+    assert captured["window"] is StandardWindow.Y3
+    assert captured["benchmark"] == "VWCE.DE"
+    assert captured["currency"] == "eur"
+    assert captured["exclude"] == []
+
+
+def test_ex_ante_passes_its_options_through(monkeypatch, client):
+    captured = {}
+    monkeypatch.setattr(jobs, "get_ex_ante_risk", lambda **kw: captured.update(kw) or _EX_ANTE)
+
+    response = client.post(
+        "/risk/ex-ante",
+        json=_ex_ante_body(window="Max", benchmark="VWRL.AS", currency="local", exclude=["C"]),
+    )
+
+    assert response.status_code == 200
+    assert captured["window"] is StandardWindow.MAX
+    assert captured["benchmark"] == "VWRL.AS"
+    assert captured["currency"] == "local"
+    assert captured["exclude"] == ["C"]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"assets": []},
+        {"assets": [{"ticker": "A", "weight": "1"}, {"ticker": "A", "weight": "2"}]},
+        {"assets": [{"ticker": "A", "weight": "0"}]},
+        _ex_ante_body(exclude=["Z"]),
+        _ex_ante_body(exclude=["A", "B", "C"]),
+        _ex_ante_body(window="2Y"),
+        _ex_ante_body(currency="usd"),
+        _ex_ante_body(benchmark=""),
+    ],
+    ids=[
+        "no assets",
+        "duplicate ticker",
+        "zero weight",
+        "exclude not in the mix",
+        "exclude everything",
+        "unknown window",
+        "unknown currency",
+        "empty benchmark",
+    ],
+)
+def test_ex_ante_rejects_an_invalid_request(monkeypatch, client, body):
+    monkeypatch.setattr(jobs, "get_ex_ante_risk", lambda **kw: pytest.fail("job must not run"))
+
+    assert client.post("/risk/ex-ante", json=body).status_code == 422

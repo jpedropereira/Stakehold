@@ -12,6 +12,7 @@ rather than every route but `/health` silently falling back to the environment.
 """
 
 import logging
+from collections.abc import Collection
 from dataclasses import asdict
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -28,6 +29,7 @@ from portfolio.labs.calculator import BacktestResult, Period
 from portfolio.risk import flows as risk_flows
 from portfolio.risk.ex_post import WindowFigures
 from portfolio.risk.types import RiskFigure
+from portfolio.risk.windows import StandardWindow
 from portfolio.run_result import build_run_result
 from portfolio.settings import Settings, SettingsError, load_settings
 from portfolio.ticker_mapping.repository import TickerMappingRow
@@ -1412,20 +1414,28 @@ def get_ex_post_risk(
 def _ex_post_window(window: WindowFigures) -> dict:
     """One window as builtins. The drawdown's DD series stays out: RK-12 shows the summary only
     (agreed for RK-11)."""
-    drawdown = window.drawdown
     return {
         "label": str(window.window.label),
         "start": window.window.start,
         "end": window.window.end,
         "covered": window.covered,
+        **_series_figures(window),
+        "relative": {
+            name: _figure(figure) for name, figure in risk_flows.relative_of(window).items()
+        },
+    }
+
+
+def _series_figures(figures) -> dict:
+    """The 12 §5.1-5.5 figures and the max drawdown's dates, of an ex-post window or ex-ante's
+    constant-weight mix."""
+    drawdown = figures.drawdown
+    return {
         "peak_date": drawdown.peak_date,
         "trough_date": drawdown.trough_date,
         "recovery_date": drawdown.recovery_date,
         "max_days_under_water": drawdown.max_days_under_water,
-        **{name: _figure(figure) for name, figure in risk_flows.figures_of(window).items()},
-        "relative": {
-            name: _figure(figure) for name, figure in risk_flows.relative_of(window).items()
-        },
+        **{name: _figure(figure) for name, figure in risk_flows.figures_of(figures).items()},
     }
 
 
@@ -1434,6 +1444,112 @@ def _figure(figure: RiskFigure) -> dict:
         **asdict(figure),
         "frequency": str(figure.frequency),
         "flags": sorted(str(flag) for flag in figure.flags),
+    }
+
+
+def get_ex_ante_risk(
+    *,
+    assets: list[tuple[str, Decimal]],
+    window: StandardWindow = StandardWindow.Y3,
+    benchmark: str = DEFAULT_BENCHMARK,
+    currency: str = risk_flows.EUR_RETURNS,
+    exclude: Collection[str] = (),
+    settings: Settings | None = None,
+) -> dict:
+    """Ex-ante risk of `assets` (ticker, weight) pairs held at constant weights, over `window`
+    (see risk/flows.compute_ex_ante). Read-only and per request, like a backtest: no user data
+    is read, so there is no database connection and no user_id."""
+    configure_logging()
+    settings = settings or load_settings()
+    datastore_client = _require_datastore_client(settings, command="ex-ante risk")
+    logger.info("get-ex-ante-risk: measuring ex-ante risk of %d asset(s).", len(assets))
+    result = risk_flows.compute_ex_ante(
+        datastore_client,
+        assets,
+        window=window,
+        benchmark=benchmark,
+        currency=currency,
+        exclude=exclude,
+    )
+
+    included = sum(1 for s in result.statuses if s.status == risk_flows.INCLUDED)
+    if result.report is None:
+        logger.warning(
+            "get-ex-ante-risk: done, no asset could be included (%d requested), so there are no "
+            "figures.",
+            len(assets),
+        )
+    else:
+        logger.info(
+            "get-ex-ante-risk: done, %d of %d asset(s) included, window %s, risk-free rate %s, "
+            "benchmark %s.",
+            included,
+            len(assets),
+            window,
+            "available" if result.rf_available else "unavailable",
+            (
+                result.benchmark.ticker
+                if result.benchmark.available
+                else f"{result.benchmark.ticker} unavailable ({result.benchmark.reason})"
+            ),
+        )
+    payload = {
+        "label": result.label,
+        "currency": result.currency,
+        "rf_available": result.rf_available,
+        "benchmark": asdict(result.benchmark),
+        "statuses": [asdict(status) for status in result.statuses],
+    }
+    report = result.report
+    if report is None:
+        return {
+            **payload,
+            **dict.fromkeys(
+                (
+                    "window",
+                    "sigma_p",
+                    "diversification_ratio",
+                    "effective_n",
+                    "holdings",
+                    "constant_weight",
+                    "correlation",
+                )
+            ),
+        }
+    decomposition = report.decomposition
+    return {
+        **payload,
+        "window": {
+            "label": str(report.requested.label),
+            "requested_start": report.requested.start,
+            "start": None if report.window is None else report.window.start,
+            "end": report.requested.end,
+            "limited_by": list(report.limited_by),
+        },
+        "sigma_p": _figure(decomposition.sigma_p),
+        "diversification_ratio": _figure(decomposition.diversification_ratio),
+        "effective_n": decomposition.effective_n,
+        "holdings": [
+            {
+                "ticker": holding.key,
+                "weight": holding.weight,
+                "volatility": holding.volatility,
+                "mcr": holding.mcr,
+                "cr": holding.cr,
+                "pcr": holding.pcr,
+                "corr_with_portfolio": holding.corr_with_portfolio,
+            }
+            for holding in decomposition.holdings
+        ],
+        "constant_weight": _series_figures(report.constant_weight),
+        "correlation": {
+            "keys": list(report.correlation.keys),
+            "benchmark_key": result.benchmark_key,
+            "cells": [
+                {"a": a, "b": b, "figure": _figure(figure)}
+                for a, b, figure in risk_flows.correlation_cells(report)
+            ],
+        },
     }
 
 

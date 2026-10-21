@@ -128,14 +128,14 @@ checked against the code, docs and dev DB:
 | RK-14 | [web: benchmark selector, relative measures, benchmark line](#rk-14-web-benchmark-selector-relative-measures-benchmark-line) | RK-9, RK-12, RK-13 | done |
 | RK-15 | [portfolio: ex-ante covariance and risk decomposition](#rk-15-portfolio-ex-ante-covariance-and-risk-decomposition) | RK-6, RK-7 | done |
 | RK-16 | [portfolio: correlation matrix](#rk-16-portfolio-correlation-matrix) | RK-6 | done |
-| RK-17 | [portfolio: ex-ante endpoint](#rk-17-portfolio-ex-ante-endpoint) | RK-4, RK-5, RK-13, RK-15, RK-16 | ready |
-| RK-18 | [web: ex-ante summary, decomposition and heatmap](#rk-18-web-ex-ante-summary-decomposition-and-heatmap) | RK-12, RK-17 | blocked |
-| RK-19 | [portfolio: candidate what-if](#rk-19-portfolio-candidate-what-if) | RK-17 | blocked |
+| RK-17 | [portfolio: ex-ante endpoint](#rk-17-portfolio-ex-ante-endpoint) | RK-4, RK-5, RK-13, RK-15, RK-16 | done |
+| RK-18 | [web: ex-ante summary, decomposition and heatmap](#rk-18-web-ex-ante-summary-decomposition-and-heatmap) | RK-12, RK-17 | ready |
+| RK-19 | [portfolio: candidate what-if](#rk-19-portfolio-candidate-what-if) | RK-17 | ready |
 | RK-20 | [web: what-if form](#rk-20-web-what-if-form) | RK-18, RK-19 | blocked |
 | RK-21 | [data-store: ETF holdings endpoint](#rk-21-data-store-etf-holdings-endpoint) | RK-1 | done |
 | RK-22 | [portfolio: look-through exposures](#rk-22-portfolio-look-through-exposures) | RK-21 | ready |
 | RK-23 | [web: concentration section](#rk-23-web-concentration-section) | RK-12, RK-22 | blocked |
-| RK-24 | [portfolio: rolling windows](#rk-24-portfolio-rolling-windows) | RK-11, RK-16, RK-17 | blocked |
+| RK-24 | [portfolio: rolling windows](#rk-24-portfolio-rolling-windows) | RK-11, RK-16, RK-17 | ready |
 | RK-25 | [web: rolling charts](#rk-25-web-rolling-charts) | RK-18, RK-24 | blocked |
 | RK-26 | [FX decomposition (portfolio and web)](#rk-26-fx-decomposition-portfolio-and-web) | RK-18 | blocked |
 | RK-27 | [data-store: regimes endpoint](#rk-27-data-store-regimes-endpoint) | RK-1 | ready |
@@ -736,7 +736,7 @@ in a constructed FX fixture.
 
 ### RK-17. portfolio: ex-ante endpoint
 
-**Status:** ready
+**Status:** done
 
 `POST /risk/ex-ante` takes `{assets, window, benchmark, exclude?}`. It returns σ_p, the
 decomposition table, the constant-weight measures, and the correlation matrix over the holdings
@@ -744,9 +744,44 @@ plus the benchmark. It names the holding that limits the window. Per-asset statu
 LB-4 (`no_fx_rate`, `no_history`, …). The € tail figures (§5.5) are left to web, which knows the
 market value.
 
+**As built:** `POST /risk/ex-ante` →
+`{label, currency, rf_available, window, benchmark, statuses, sigma_p, diversification_ratio,
+effective_n, holdings, constant_weight, correlation}`. A new pure `risk/ex_ante_report.py` puts
+the parts on their windows, and `risk/flows.compute_ex_ante` fetches. Two preparatory refactors
+came first. The TWR's fetch-and-word loop is now `eur_returns/eligibility.py`, shared with
+ex-ante and, for its wording, the benchmark. Ex-post's figure code is now
+`ex_post.series_figures`, which measures the constant-weight mix. portfolio's `risk-flows.md`
+has the details. Decisions:
+- **`window` is 1Y/3Y/5Y/10Y/Max, default 3Y** (agreed; §7.1's default). It ends on the
+  holdings' latest common date. Max starts on the oldest holding's first day, so a younger
+  holding shortens it and `limited_by` names it. 1Y never has a decomposition (104 weeks).
+- **One requested window, three uses.** The decomposition runs on its listwise panel (R12). The
+  constant-weight figures run over the panel's (shortened) window, so their weekly volatility is
+  σ_p exactly, which a test pins. The pairwise matrix keeps the requested window, each cell over
+  its own overlap (R13). The response gives both starts: `requested_start` and `start`.
+- **Constant-weight figures: all twelve of ex-post's**, plus the max drawdown's dates, in
+  ex-post's shape (agreed). There are no relative figures.
+- **`currency: eur | local`** (agreed), default EUR. It changes only the matrix. σ_p and the
+  decomposition are always EUR.
+- **`exclude`** lists tickers from the mix. They get status `excluded` ("excluded by request")
+  and aren't fetched, and the rest are renormalised. A ticker not in the mix, or excluding
+  everything, is a 422. The other statuses are the TWR's wording ("no FX series for <CCY>").
+- **The matrix** is the holdings in request order, then the benchmark. A benchmark held as a
+  holding isn't repeated, and `benchmark_key` names its row. An unavailable one has no row.
+  `cells` is the upper triangle with the diagonal.
+- **The risk-free fetch starts two weeks before the oldest holding's first day**, so one call
+  covers whichever window the panel settles on.
+- **Nothing included** is a 200 with only `statuses` and `benchmark`, as in Labs.
+- **Size and time, synthetic worst case** (16.8 years of weekdays, half USD, Max): 12 assets
+  give 25 KB in 0.18 s, and 50 assets give 294 KB in 1.1 s, almost all of it the 1,326 cells.
+  Not yet measured against the dev data-store.
+- **For RK-18:** values are fractions. `holdings` figures are null exactly when
+  `diversification_ratio` is greyed. Mirror `cells` for the heatmap. For RK-19: the request
+  already takes any mix, so a candidate's "after" is the same shape.
+
 ### RK-18. web: ex-ante summary, decomposition and heatmap
 
-**Status:** blocked
+**Status:** ready
 
 - Ex-ante summary, labelled "ex-ante · constant weights" beside the ex-post one (R2).
 - The decomposition table, with weight % beside risk %, and the 10%-weight/25%-risk insight
@@ -758,7 +793,7 @@ market value.
 
 ### RK-19. portfolio: candidate what-if
 
-**Status:** blocked
+**Status:** ready
 
 - Extend the ex-ante endpoint, or add a sibling, with `candidate {ticker, weight}` and
   `funding: pro_rata | replace:<ticker>`. "From cash" is deferred.
@@ -842,7 +877,7 @@ listing-vs-exposure currency view, the top look-through single names, and the sn
 
 ### RK-24. portfolio: rolling windows
 
-**Status:** blocked
+**Status:** ready
 
 - Rolling 1Y volatility and Sharpe, stepped monthly (ex-post and ex-ante).
 - Rolling 52-week correlation, stepped weekly, for a pair or for an asset against the portfolio.

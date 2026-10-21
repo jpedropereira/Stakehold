@@ -10,7 +10,7 @@ tz-aware datetime -- so a malformed request 422s the same way a malformed CLI fl
 
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from portfolio.benchmark.base import DEFAULT_BENCHMARK
@@ -409,11 +409,14 @@ class BacktestRequest(BaseModel):
 
     @model_validator(mode="after")
     def _no_duplicate_tickers(self):
-        tickers = [asset.ticker for asset in self.assets]
-        duplicates = sorted({t for t in tickers if tickers.count(t) > 1})
-        if duplicates:
-            raise ValueError(f"duplicate tickers in the mix: {', '.join(duplicates)}")
+        _check_unique([asset.ticker for asset in self.assets])
         return self
+
+
+def _check_unique(tickers: list[str]) -> None:
+    duplicates = sorted({t for t in tickers if tickers.count(t) > 1})
+    if duplicates:
+        raise ValueError(f"duplicate tickers in the mix: {', '.join(duplicates)}")
 
 
 class PeriodReturnResponse(BaseModel):
@@ -447,7 +450,7 @@ class GrowthSeriesResponse(BaseModel):
 
 class AssetStatusResponse(BaseModel):
     ticker: str
-    # included, not_tracked, no_history, no_fx_rate or failed.
+    # included, not_tracked, no_history, no_fx_rate or failed; ex-ante also has excluded.
     status: str
     reason: str | None  # null when included
 
@@ -567,14 +570,10 @@ class BacktestResponse(BaseModel):
 # Same RiskFigureResponse as Labs' risk table above.
 
 
-class ExPostWindowResponse(BaseModel):
-    """One standard window (1Y, 3Y, 5Y, 10Y, Max), all ending at end_date. covered is false when
-    the history starts after the window does: every figure is then greyed."""
+class SeriesRiskResponse(BaseModel):
+    """One series' §5.1-5.5 figures over one window: an ex-post window's, or ex-ante's
+    constant-weight mix."""
 
-    label: str
-    start: date
-    end: date
-    covered: bool
     cumulative_return: RiskFigureResponse
     cagr: RiskFigureResponse
     volatility: RiskFigureResponse
@@ -593,6 +592,16 @@ class ExPostWindowResponse(BaseModel):
     cvar_95: RiskFigureResponse
     var_99: RiskFigureResponse
     cvar_99: RiskFigureResponse
+
+
+class ExPostWindowResponse(SeriesRiskResponse):
+    """One standard window (1Y, 3Y, 5Y, 10Y, Max), all ending at end_date. covered is false when
+    the history starts after the window does: every figure is then greyed."""
+
+    label: str
+    start: date
+    end: date
+    covered: bool
     # Against the benchmark (RK-13): greyed like the rest when the window isn't covered.
     relative: RelativeRiskResponse
 
@@ -611,3 +620,94 @@ class ExPostRiskResponse(BaseModel):
     n_excluded: int
     # Held tickers left out of the TWR, by ticker; the rest were renormalised to 100%.
     excluded: list[ExcludedHoldingResponse]
+
+
+# --- ex-ante risk (RK-17) ---
+# Same RiskFigureResponse as Labs' and ex-post's. Values are fractions (0.14 is 14%).
+
+# The correlation matrix's returns: EUR (the default, a EUR investor's risk) or each ticker's
+# own currency (spec §7.1's toggle). σ_p and the decomposition are always EUR.
+CorrelationCurrency = Literal["eur", "local"]
+
+
+class ExAnteRiskRequest(BaseModel):
+    # web's default mix is the user's holdings with their weights (labs_view.build_default_mix);
+    # weights are normalised over the holdings that can be measured.
+    assets: list[BacktestAssetRequest] = Field(min_length=1, max_length=MAX_BACKTEST_ASSETS)
+    window: StandardWindow = StandardWindow.Y3  # spec §7.1's default
+    benchmark: BenchmarkTicker = DEFAULT_BENCHMARK
+    currency: CorrelationCurrency = "eur"
+    # Holdings to leave out, typically the one that limits the window (R12); the rest are
+    # renormalised.
+    exclude: list[str] = Field(default_factory=list, max_length=MAX_BACKTEST_ASSETS)
+
+    @model_validator(mode="after")
+    def _a_valid_mix(self):
+        tickers = [asset.ticker for asset in self.assets]
+        _check_unique(tickers)
+        unknown = sorted(set(self.exclude) - set(tickers))
+        if unknown:
+            raise ValueError(f"exclude names tickers not in the mix: {', '.join(unknown)}")
+        if set(tickers) <= set(self.exclude):
+            raise ValueError("exclude leaves nothing in the mix")
+        return self
+
+
+class ExAnteWindowResponse(BaseModel):
+    """The requested standard window ends on the holdings' latest common date. The measured one
+    starts where every holding has weekly returns (R12): later than requested when a holding
+    starts later (`limited_by`), or up to six days earlier, on the Friday its first week starts.
+    `start` is null when the holdings' histories don't overlap."""
+
+    label: StandardWindow
+    requested_start: date
+    start: date | None
+    end: date
+    limited_by: list[str]
+
+
+class ExAnteHoldingResponse(BaseModel):
+    """One holding's row of the decomposition (spec §6.3). Every figure is null exactly when
+    `diversification_ratio` is greyed (under 104 weeks); the weight is always there."""
+
+    ticker: str
+    weight: float  # normalised over the included holdings
+    volatility: float | None
+    mcr: float | None
+    cr: float | None  # the CRs sum to σ_p
+    pcr: float | None  # the PCRs sum to 1, negative for a hedge
+    corr_with_portfolio: float | None
+
+
+class CorrelationCellResponse(BaseModel):
+    a: str
+    b: str
+    figure: RiskFigureResponse  # over the weeks this pair shares inside the window
+
+
+class CorrelationMatrixResponse(BaseModel):
+    """Pairwise, for display only (R13): each cell over its own overlap inside the requested
+    window. `cells` is the upper triangle, diagonal included, row by row in `keys` order."""
+
+    keys: list[str]  # the included holdings in request order, then the benchmark
+    benchmark_key: str | None  # the benchmark's key, when it has a row
+    cells: list[CorrelationCellResponse]
+
+
+class ExAnteRiskResponse(BaseModel):
+    """Ex-ante risk of a mix held at constant weights (RK-17, spec §6.2-6.3, §7.1). Every section
+    but `statuses` and `benchmark` is null exactly when no asset could be included."""
+
+    label: str  # "ex-ante · constant weights"
+    currency: CorrelationCurrency
+    rf_available: bool
+    window: ExAnteWindowResponse | None
+    benchmark: BenchmarkStatusResponse
+    statuses: list[AssetStatusResponse]  # every requested asset, in request order
+    sigma_p: RiskFigureResponse | None  # greyed under 52 weeks
+    diversification_ratio: RiskFigureResponse | None  # greyed under 104 weeks
+    effective_n: float | None  # 1 / Σ w², from the weights alone
+    holdings: list[ExAnteHoldingResponse] | None
+    # "Today's mix" through history over the measured window; its volatility is σ_p.
+    constant_weight: SeriesRiskResponse | None
+    correlation: CorrelationMatrixResponse | None

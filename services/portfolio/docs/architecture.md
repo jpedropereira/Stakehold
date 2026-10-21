@@ -75,7 +75,7 @@ flowchart TD
         HFLOW["holdings/flows.py<br/><i>reads that span a user's accounts (PF-1, PF-5)</i>"]
         LFLOW["labs/flows.py<br/><i>backtest fetches, concurrent (LB-4);<br/>risk-free fetch (RK-8)</i>"]
         TFLOW["twr/flows.py<br/><i>portfolio TWR: rows + data-store fetch (RK-10)</i>"]
-        RFLOW["risk/flows.py<br/><i>ex-post risk: TWR + risk-free fetch (RK-11)</i>"]
+        RFLOW["risk/flows.py<br/><i>ex-post risk: TWR + risk-free fetch (RK-11);<br/>ex-ante risk of a mix (RK-17)</i>"]
         BFLOW["benchmark/flows.py<br/><i>the request's benchmark: fetch + wording (RK-13)</i>"]
     end
 
@@ -89,8 +89,8 @@ flowchart TD
         HOLD["holdings/<br/>aggregator"]
         LABS["labs/<br/>calculator · risk<br/><i>backtests (LB-3); their risk table (RK-8)</i>"]
         TWR["twr/<br/>calculator<br/><i>holdings-based daily TWR (RK-10)</i>"]
-        EURR["eur_returns/<br/>calculator · fetch<br/><i>daily EUR returns, shared with risk (RK-5);<br/>data-store fan-out (RK-10)</i>"]
-        RISK["risk/<br/>types · weekly · quality · history<br/>windows · risk_free · var_mask<br/>measures · drawdown · tail · single_series<br/>covariance · listwise · ex_ante<br/>correlation · pairing · relative · ex_post<br/><i>pure library (RK-6, RK-7, RK-15, RK-16, RK-11, RK-13);<br/>first caller labs/risk (RK-8)</i>"]
+        EURR["eur_returns/<br/>calculator · fetch · eligibility<br/><i>daily EUR returns, shared with risk (RK-5);<br/>data-store fan-out (RK-10);<br/>risk path's wording (RK-17)</i>"]
+        RISK["risk/<br/>types · weekly · quality · history<br/>windows · risk_free · var_mask<br/>measures · drawdown · tail · single_series<br/>covariance · listwise · ex_ante<br/>correlation · pairing · relative · ex_post<br/>ex_ante_report<br/><i>pure library (RK-6, RK-7, RK-15, RK-16, RK-11, RK-13, RK-17);<br/>first caller labs/risk (RK-8)</i>"]
         BENCH["benchmark/<br/>base<br/><i>the benchmark's return series and status (RK-13)</i>"]
     end
 
@@ -126,6 +126,7 @@ flowchart TD
     RFLOW --> TFLOW
     RFLOW --> RISK
     RFLOW --> DSC
+    RFLOW --> EURR
     LFLOW --> BFLOW
     RFLOW --> BFLOW
     BFLOW --> BENCH
@@ -226,7 +227,9 @@ builds the data-store client and calls it, with no connection to open or close.
   when the portfolio TWR needed the same fan-out. `labs/flows.py` keeps what is Labs' own: the
   wording of each status, the log lines, and the mapping of the calculator's ineligible reasons
   back to a status. The shared module neither words nor logs, because the TWR words "no FX
-  series for <CCY>" where Labs says "no FX rate".
+  series for <CCY>" where Labs says "no FX rate". The risk path's wording and per-ticker log
+  lines are `eur_returns/eligibility.py` (RK-17), lifted out of `twr/flows.py` when ex-ante
+  risk needed the same thing; it logs on the caller's logger, so each line stays under its flow.
 - **The risk section adds one sequential call (RK-8).** `get_risk_free_series` runs after the
   price fetch, not beside it, because its range is the span the backtest turned out to have
   (from just before the assets' common start to their common end), which only the prices tell.
@@ -239,7 +242,8 @@ builds the data-store client and calls it, with no connection to open or close.
   library's `ReturnSeries` belongs with Labs. Its rules are in that module's docstring.
 
 **The benchmark has a package of its own, `benchmark/` (RK-13)**, because two flows need the
-same thing: Labs' backtest and ex-post risk both measure against the benchmark a request names
+same thing: Labs' backtest, ex-post risk and ex-ante risk (RK-17, for its correlation
+matrix) all measure against the benchmark a request names
 (`VWCE.DE` by default), and both must fetch it, word its failures and report its first date the
 same way.
 - **`benchmark/flows.py` fetches; `benchmark/base.py` is pure.** The flow goes through
