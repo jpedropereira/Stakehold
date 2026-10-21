@@ -328,3 +328,19 @@ def test_only_the_top_25_names_are_listed_but_all_are_measured():
     assert result.names.concentration.effective_n == Decimal("50")
     # Ties go by name.
     assert result.names.top[0].issuer == "STOCK 00"
+
+
+def test_coverage_is_the_mix_by_how_each_holding_was_resolved(result):
+    assert result.coverage == {
+        "look_through": Decimal("0.5"),
+        "direct_matched": Decimal("0.2"),
+        "direct_unmatched": Decimal("0"),
+        "commodity": Decimal("0.1"),
+        "unmapped": Decimal("0.2"),
+    }
+
+
+def test_an_unmatched_direct_stock_counts_as_unmatched_coverage():
+    result = compute_look_through([HeldAsset("BABA", Decimal("1"), DIRECT, "USD")], {})
+    assert result.coverage["direct_unmatched"] == Decimal("1")
+    assert result.coverage["direct_matched"] == Decimal("0")

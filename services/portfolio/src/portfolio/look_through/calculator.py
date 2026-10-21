@@ -44,6 +44,18 @@ OTHER = "other"
 UNKNOWN = "unknown"
 NO_COUNTRY = "n/a (commodity)"
 TOP_SHARES = (1, 5, 10)
+DIRECT_MATCHED = "direct_matched"
+DIRECT_UNMATCHED = "direct_unmatched"
+COVERAGE = (LOOK_THROUGH, DIRECT_MATCHED, DIRECT_UNMATCHED, COMMODITY, UNMAPPED)
+# Each dimension's name for a reader. The currency one is R16's: a constituent's currency is
+# where it's listed, a proxy for where its revenue comes from.
+DIMENSION_LABELS = {
+    "currency": "listing currency of holdings",
+    "trading_currency": "trading currency of positions",
+    "sector": "sector",
+    "country": "country",
+    "asset_class": "asset class",
+}
 TOP_NAMES = 25
 NOTHING_KNOWN = "no known exposure: every holding is unmapped or unknown"
 # The asset class whose lines are single names. Cash, FX, futures and money-market lines are a
@@ -120,6 +132,8 @@ class Snapshot:
 @dataclass(frozen=True)
 class LookThrough:
     assets: tuple[AssetResult, ...]
+    # The mix's share by how each holding was resolved: every COVERAGE key, summing to 1.
+    coverage: dict[str, Decimal]
     snapshots: tuple[Snapshot, ...]
     currency: Dimension
     trading_currency: Dimension
@@ -233,8 +247,13 @@ def compute_look_through(
 
         results.append(AssetResult(asset.ticker, w, asset.kind, matched_in))
 
+    coverage = dict.fromkeys(COVERAGE, _ZERO)
+    for result in results:
+        coverage[_coverage_key(result)] += result.weight
+
     return LookThrough(
         assets=tuple(results),
+        coverage=coverage,
         snapshots=tuple(
             Snapshot(
                 ticker=ticker,
@@ -252,6 +271,12 @@ def compute_look_through(
         asset_class=asset_class.dimension(),
         names=names.names(),
     )
+
+
+def _coverage_key(result: AssetResult) -> str:
+    if result.kind != DIRECT:
+        return result.kind
+    return DIRECT_UNMATCHED if result.matched_in is None else DIRECT_MATCHED
 
 
 def _add_line(

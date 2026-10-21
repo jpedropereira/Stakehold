@@ -711,3 +711,87 @@ class ExAnteRiskResponse(BaseModel):
     # "Today's mix" through history over the measured window; its volatility is σ_p.
     constant_weight: SeriesRiskResponse | None
     correlation: CorrelationMatrixResponse | None
+
+
+# --- look-through (RK-22) ---
+# Weights are fractions of the mix (0.10 is 10%), as fixed-point strings like the backtest's:
+# they are shares that sum to 1, not statistical estimates.
+
+
+class LookThroughRequest(BaseModel):
+    # web's default mix is the user's holdings with their weights (labs_view.build_default_mix);
+    # weights are normalised over the holdings data-store knows.
+    assets: list[BacktestAssetRequest] = Field(min_length=1, max_length=MAX_BACKTEST_ASSETS)
+
+    @model_validator(mode="after")
+    def _no_duplicate_tickers(self):
+        _check_unique([asset.ticker for asset in self.assets])
+        return self
+
+
+class LookThroughAssetResponse(BaseModel):
+    ticker: str
+    status: str  # included, not_tracked or failed
+    reason: str | None  # null when included
+    # look_through, direct, commodity or unmapped; null when left out.
+    kind: str | None
+    weight: BacktestDecimal | None  # normalised over the included assets
+    matched_in: str | None  # a direct stock: the fund whose line describes it
+    note: str | None  # an unmapped asset: why it isn't looked through
+
+
+class LookThroughSnapshotResponse(BaseModel):
+    ticker: str
+    fund_key: str
+    as_of_date: date  # data-store's scrape date
+    n_lines: int
+    raw_weight_sum: BacktestDecimal  # as stored; the look-through rescales it to 100
+
+
+class LookThroughBucketResponse(BaseModel):
+    label: str
+    weight: BacktestDecimal
+    # known, unknown, unmapped or other. Only known buckets are in the concentration figures.
+    kind: str
+
+
+class LookThroughConcentrationResponse(BaseModel):
+    top_shares: dict[int, BacktestDecimal]  # the 1, 5 and 10 heaviest known buckets' share
+    known_share: BacktestDecimal
+    # Over the known share rescaled to 1. Null, with a reason, when nothing is known.
+    herfindahl: BacktestDecimal | None
+    effective_n: BacktestDecimal | None
+    reason: str | None
+
+
+class LookThroughDimensionResponse(BaseModel):
+    label: str  # what to call it: the currency one is R16's "listing currency of holdings"
+    buckets: list[LookThroughBucketResponse]  # heaviest first
+    concentration: LookThroughConcentrationResponse
+
+
+class LookThroughNameResponse(BaseModel):
+    issuer: str
+    location: str | None
+    weight: BacktestDecimal
+    sources: list[str]  # the held tickers it comes through
+
+
+class LookThroughNamesResponse(BaseModel):
+    top: list[LookThroughNameResponse]  # the 25 heaviest
+    n_names: int
+    concentration: LookThroughConcentrationResponse  # over every name, not only the top
+
+
+class LookThroughExposuresResponse(BaseModel):
+    snapshots: list[LookThroughSnapshotResponse]
+    # look_through, direct_matched, direct_unmatched, commodity, unmapped: sums to 1.
+    coverage: dict[str, BacktestDecimal]
+    # currency, trading_currency, sector, country, asset_class
+    dimensions: dict[str, LookThroughDimensionResponse]
+    names: LookThroughNamesResponse
+
+
+class LookThroughResponse(BaseModel):
+    assets: list[LookThroughAssetResponse]  # every requested asset, in request order
+    exposures: LookThroughExposuresResponse | None  # null exactly when nothing was included
