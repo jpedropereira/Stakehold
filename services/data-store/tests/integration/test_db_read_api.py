@@ -11,6 +11,8 @@ from data_store.fx.repository import get_dates_with_rate, get_rate_series, save_
 from data_store.holdings.repository import get_listing_currencies, save_holdings
 from data_store.market_data.repository import save_raw_market_data
 from data_store.read_flows import fx_rate_series
+from data_store.regimes.loader import RegimeConfig
+from data_store.regimes.repository import save_regimes
 from data_store.returns.repository import (
     get_return_series,
     get_returns_date_range,
@@ -342,6 +344,73 @@ def test_risk_free_endpoint_splices_stored_rows_end_to_end(api_client):
         "points": [
             {"date": "2019-09-30", "rate": "-0.5530", "series": "eonia_adjusted"},
             {"date": "2019-10-01", "rate": "-0.5490", "series": "estr"},
+        ],
+    }
+
+
+@pytest.fixture
+def regimes_api(api_client):
+    """`regimes` has no test-row prefix, so this empties the whole (test-database) table."""
+    conn = _connect()
+    save_regimes(
+        conn,
+        [
+            RegimeConfig(
+                regime_id="ea_rec_2020",
+                dimension="business_cycle",
+                scope="EA",
+                name="Euro area COVID recession",
+                start_date=date(2020, 1, 1),
+                end_date=date(2020, 6, 30),
+                known_from=date(2021, 11, 9),
+                severity="severe",
+                source="CEPR-EABCDC",
+                notes=None,
+            ),
+            RegimeConfig(
+                regime_id="spx_bear_2007",
+                dimension="drawdown",
+                scope="SPX",
+                name="GFC bear market",
+                start_date=date(2007, 10, 9),
+                end_date=date(2009, 3, 9),
+                known_from=None,
+                severity="extreme",
+                source="manual_approx",
+                notes=None,
+            ),
+        ],
+    )
+    conn.close()
+    yield api_client
+    conn = _connect()
+    save_regimes(conn, [])
+    conn.close()
+
+
+def test_regimes_endpoint_needs_the_bearer_token(regimes_api):
+    assert regimes_api.get("/regimes?start=2020-01-01&end=2020-12-31").status_code == 401
+
+
+def test_regimes_endpoint_serves_overlapping_rows_end_to_end(regimes_api):
+    response = regimes_api.get("/regimes?start=2020-06-30&end=2020-12-31", headers=AUTH)
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "total_regimes": 2,
+        "regimes": [
+            {
+                "regime_id": "ea_rec_2020",
+                "dimension": "business_cycle",
+                "scope": "EA",
+                "name": "Euro area COVID recession",
+                "start_date": "2020-01-01",
+                "end_date": "2020-06-30",
+                "known_from": "2021-11-09",
+                "severity": "severe",
+                "source": "CEPR-EABCDC",
+                "notes": None,
+            }
         ],
     }
 

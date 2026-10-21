@@ -1,8 +1,13 @@
 from datetime import date
 
 import pytest
+from data_store.read_flows import regimes_overlapping
 from data_store.regimes.loader import RegimeConfig
-from data_store.regimes.repository import save_regimes
+from data_store.regimes.repository import (
+    count_regimes,
+    get_overlapping_regimes,
+    save_regimes,
+)
 from shared.db.connection import get_connection
 
 pytestmark = pytest.mark.integration
@@ -153,3 +158,91 @@ def test_save_regimes_nullable_fields_roundtrip(postgres_conn, reset_regimes_tab
     assert known_from is None
     assert severity is None
     assert notes is None
+
+
+def _regime(regime_id, start, end):
+    return RegimeConfig(
+        regime_id=regime_id,
+        dimension="drawdown",
+        scope="SPX",
+        name=regime_id,
+        start_date=start,
+        end_date=end,
+        known_from=None,
+        severity=None,
+        source="manual_approx",
+        notes=None,
+    )
+
+
+def test_get_overlapping_regimes_is_inclusive_at_both_ends(postgres_conn, reset_regimes_table):
+    """Range 2020-01-01..2020-12-31: a regime touching either end counts, one a day short
+    doesn't, and an ongoing one (NULL end_date) that started before the range end counts."""
+    save_regimes(
+        postgres_conn,
+        [
+            _regime("ends_on_start", date(2019, 6, 1), date(2020, 1, 1)),
+            _regime("ends_day_before_start", date(2019, 6, 1), date(2019, 12, 31)),
+            _regime("starts_on_end", date(2020, 12, 31), date(2021, 3, 1)),
+            _regime("starts_after_end", date(2021, 1, 1), date(2021, 3, 1)),
+            _regime("ongoing", date(2018, 1, 1), None),
+            _regime("ongoing_after_end", date(2021, 1, 1), None),
+            _regime("inside", date(2020, 3, 1), date(2020, 4, 1)),
+        ],
+    )
+
+    rows = get_overlapping_regimes(postgres_conn, date(2020, 1, 1), date(2020, 12, 31))
+
+    # Ordered by start_date, then regime_id.
+    assert [r[0] for r in rows] == ["ongoing", "ends_on_start", "inside", "starts_on_end"]
+    assert count_regimes(postgres_conn) == 7
+
+
+def test_regimes_overlapping_serves_every_column_and_the_total(postgres_conn, reset_regimes_table):
+    save_regimes(
+        postgres_conn,
+        [
+            RegimeConfig(
+                regime_id="spx_bear_2020",
+                dimension="drawdown",
+                scope="SPX",
+                name="COVID crash",
+                start_date=date(2020, 2, 19),
+                end_date=date(2020, 3, 23),
+                known_from=date(2020, 3, 23),
+                severity="severe",
+                source="manual_approx",
+                notes="about -34%",
+            ),
+            _regime("spx_bear_2007", date(2007, 10, 9), date(2009, 3, 9)),
+        ],
+    )
+
+    result = regimes_overlapping(postgres_conn, date(2020, 1, 1), date(2020, 12, 31))
+
+    assert result == {
+        "total_regimes": 2,
+        "regimes": [
+            {
+                "regime_id": "spx_bear_2020",
+                "dimension": "drawdown",
+                "scope": "SPX",
+                "name": "COVID crash",
+                "start_date": date(2020, 2, 19),
+                "end_date": date(2020, 3, 23),
+                "known_from": date(2020, 3, 23),
+                "severity": "severe",
+                "source": "manual_approx",
+                "notes": "about -34%",
+            }
+        ],
+    }
+
+
+def test_regimes_overlapping_on_an_empty_table_reports_a_zero_total(
+    postgres_conn, reset_regimes_table
+):
+    assert regimes_overlapping(postgres_conn, date(2020, 1, 1), date(2020, 12, 31)) == {
+        "total_regimes": 0,
+        "regimes": [],
+    }

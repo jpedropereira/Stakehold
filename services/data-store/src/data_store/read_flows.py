@@ -4,9 +4,9 @@ A sibling of `pipeline.py`, not an addition to it: `pipeline.py` is already clos
 context-management file-size guidance and is entirely about write flows, while FX cross-rate
 derivation is a read-side decision with no write-flow analogue. Like `pipeline.py`, this module
 never touches SQL directly -- reads go through the domain repositories (`returns`, `fx`,
-`holdings`, `tracked_tickers`, `risk_free`), imported as modules (not `from ... import fn`) so
-a test can monkeypatch the whole repository namespace the way `jobs.py`'s tests already do for
-`pipeline` functions.
+`holdings`, `tracked_tickers`, `risk_free`, `regimes`), imported as modules (not
+`from ... import fn`) so a test can monkeypatch the whole repository namespace the way `jobs.py`'s
+tests already do for `pipeline` functions.
 """
 
 import logging
@@ -16,6 +16,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from data_store.config_loader import CurrenciesConfig, FundConfig, TickerResolution
 from data_store.fx import repository as fx_repository
 from data_store.holdings import repository as holdings_repository
+from data_store.regimes import repository as regimes_repository
 from data_store.returns import repository as returns_repository
 from data_store.risk_free import repository as risk_free_repository
 from data_store.risk_free.splice import EONIA_ADJUSTED, ESTR, splice, spliced_first_date
@@ -263,6 +264,42 @@ def risk_free_series(conn, source: str, start: date, end: date) -> dict:
         )
 
     return {"source": source, "first_date": first_date, "points": points}
+
+
+_REGIME_FIELDS = (
+    "regime_id",
+    "dimension",
+    "scope",
+    "name",
+    "start_date",
+    "end_date",
+    "known_from",
+    "severity",
+    "source",
+    "notes",
+)
+
+
+def regimes_overlapping(conn, start: date, end: date) -> dict:
+    """The regimes overlapping [start, end], with their own dates (unclipped: the caller knows
+    its calendar), plus how many regimes are stored at all, so an empty table -- ingest-regimes
+    never ran, or ran without config/regimes.csv -- reads differently from an empty range."""
+    rows = regimes_repository.get_overlapping_regimes(conn, start, end)
+    total = regimes_repository.count_regimes(conn)
+
+    if total == 0:
+        logger.warning(
+            "regimes: none stored -- has ingest-regimes run with config/regimes.csv present?"
+        )
+    elif not rows:
+        logger.info("regimes: none overlapping %s..%s (of %d stored).", start, end, total)
+    else:
+        logger.info("regimes: %d overlapping %s..%s (of %d stored).", len(rows), start, end, total)
+
+    return {
+        "total_regimes": total,
+        "regimes": [dict(zip(_REGIME_FIELDS, row)) for row in rows],
+    }
 
 
 _CONSTITUENT_FIELDS = (

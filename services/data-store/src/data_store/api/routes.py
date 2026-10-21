@@ -15,6 +15,7 @@ from data_store.api.models import (
     EtfHoldingsFundList,
     FxSeries,
     PriceSeries,
+    RegimeList,
     RiskFreeSeries,
     TickerInfo,
     TickerList,
@@ -93,6 +94,13 @@ def get_risk_free(
     _validate_range(start, end)
     logger.info("risk-free: source=%s %s..%s", source, start, end)
     return jobs.get_risk_free_series(source=source, start=start, end=end)
+
+
+@router.get("/regimes", response_model=RegimeList)
+def get_regimes(start: date = Query(...), end: date = Query(...)) -> dict:
+    _validate_range(start, end)
+    logger.info("regimes: %s..%s", start, end)
+    return jobs.get_regimes(start=start, end=end)
 
 
 @router.get("/etf-holdings", response_model=EtfHoldingsFundList)
