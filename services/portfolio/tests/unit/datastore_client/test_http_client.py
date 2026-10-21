@@ -9,6 +9,8 @@ from decimal import Decimal
 import pytest
 import requests
 from portfolio.datastore_client.base import (
+    EtfConstituent,
+    EtfFund,
     FxPoint,
     PricePoint,
     RiskFreePoint,
@@ -657,3 +659,163 @@ def test_get_price_series_quotes_the_ticker_as_one_path_segment(client, monkeypa
     client.get_price_series("A/../B", date(2026, 1, 1), date(2026, 1, 9))
 
     assert captured["url"] == "http://datastore:8000/prices/A%2F..%2FB"
+
+
+# --- ETF holdings (RK-22) ---------------------------------------------------------------------
+
+_FUND = {
+    "fund_key": "ishares_msci_world",
+    "display_name": "iShares MSCI World UCITS ETF (Acc)",
+    "ticker": "IWDA.AS",
+    "enabled": True,
+    "latest_as_of_date": "2026-08-30",
+}
+
+_CONSTITUENT = {
+    "ticker": "BRKB",
+    "yfinance_ticker": "BRK-B",
+    "name": "BERKSHIRE HATHAWAY INC CLASS B",
+    "sector": "Financials",
+    "asset_class": "Equity",
+    "location": "United States",
+    "exchange": "New York Stock Exchange Inc.",
+    "currency": "USD",
+    "weight_percent": "0.7600",
+}
+
+
+def test_list_etf_funds_parses_every_fund(client, monkeypatch):
+    captured = {}
+
+    def fake_get(url, headers, timeout):
+        captured["url"] = url
+        never_scraped = {**_FUND, "fund_key": "other", "ticker": None, "latest_as_of_date": None}
+        return FakeResponse(200, {"funds": [_FUND, never_scraped]})
+
+    monkeypatch.setattr(requests, "get", fake_get)
+
+    funds = client.list_etf_funds()
+
+    assert captured["url"] == "http://datastore:8000/etf-holdings"
+    assert funds == [
+        EtfFund(
+            fund_key="ishares_msci_world",
+            display_name="iShares MSCI World UCITS ETF (Acc)",
+            ticker="IWDA.AS",
+            enabled=True,
+            latest_as_of_date=date(2026, 8, 30),
+        ),
+        EtfFund(
+            fund_key="other",
+            display_name="iShares MSCI World UCITS ETF (Acc)",
+            ticker=None,
+            enabled=True,
+            latest_as_of_date=None,
+        ),
+    ]
+
+
+def test_list_etf_funds_raises_on_a_fund_missing_a_key(client, monkeypatch):
+    fund = {k: v for k, v in _FUND.items() if k != "ticker"}
+    monkeypatch.setattr(requests, "get", lambda *a, **kw: FakeResponse(200, {"funds": [fund]}))
+
+    with pytest.raises(DataStoreApiError):
+        client.list_etf_funds()
+
+
+def test_list_etf_funds_raises_on_a_server_error(client, monkeypatch):
+    monkeypatch.setattr(requests, "get", lambda *a, **kw: FakeResponse(500))
+
+    with pytest.raises(DataStoreApiError):
+        client.list_etf_funds()
+
+
+def test_get_latest_etf_holdings_parses_the_snapshot(client, monkeypatch):
+    captured = {}
+
+    def fake_get(url, headers, timeout):
+        captured["url"] = url
+        cash = {
+            **_CONSTITUENT,
+            "ticker": None,
+            "yfinance_ticker": None,
+            "asset_class": "Cash",
+            "weight_percent": None,
+        }
+        return FakeResponse(
+            200,
+            {
+                "fund_key": "ishares_msci_world",
+                "ticker": "IWDA.AS",
+                "as_of_date": "2026-08-30",
+                "constituents": [_CONSTITUENT, cash],
+            },
+        )
+
+    monkeypatch.setattr(requests, "get", fake_get)
+
+    holdings = client.get_latest_etf_holdings("ishares_msci_world")
+
+    assert captured["url"] == "http://datastore:8000/etf-holdings/ishares_msci_world/latest"
+    assert holdings.fund_key == "ishares_msci_world"
+    assert holdings.ticker == "IWDA.AS"
+    assert holdings.as_of_date == date(2026, 8, 30)
+    assert holdings.constituents[0] == EtfConstituent(
+        ticker="BRKB",
+        yfinance_ticker="BRK-B",
+        name="BERKSHIRE HATHAWAY INC CLASS B",
+        sector="Financials",
+        asset_class="Equity",
+        location="United States",
+        exchange="New York Stock Exchange Inc.",
+        currency="USD",
+        weight_percent=Decimal("0.7600"),
+    )
+    assert holdings.constituents[1].weight_percent is None
+    assert holdings.constituents[1].ticker is None
+
+
+def test_get_latest_etf_holdings_returns_none_on_a_404(client, monkeypatch):
+    monkeypatch.setattr(requests, "get", lambda *a, **kw: FakeResponse(404))
+
+    assert client.get_latest_etf_holdings("ishares_msci_world") is None
+
+
+def test_get_latest_etf_holdings_raises_on_a_constituent_missing_a_key(client, monkeypatch):
+    constituent = {k: v for k, v in _CONSTITUENT.items() if k != "yfinance_ticker"}
+    body = {
+        "fund_key": "f",
+        "ticker": None,
+        "as_of_date": "2026-08-30",
+        "constituents": [constituent],
+    }
+    monkeypatch.setattr(requests, "get", lambda *a, **kw: FakeResponse(200, body))
+
+    with pytest.raises(DataStoreApiError):
+        client.get_latest_etf_holdings("f")
+
+
+def test_get_latest_etf_holdings_raises_on_an_unparseable_weight(client, monkeypatch):
+    body = {
+        "fund_key": "f",
+        "ticker": None,
+        "as_of_date": "2026-08-30",
+        "constituents": [{**_CONSTITUENT, "weight_percent": "abc"}],
+    }
+    monkeypatch.setattr(requests, "get", lambda *a, **kw: FakeResponse(200, body))
+
+    with pytest.raises(DataStoreApiError):
+        client.get_latest_etf_holdings("f")
+
+
+def test_get_latest_etf_holdings_quotes_the_fund_key(client, monkeypatch):
+    captured = {}
+
+    def fake_get(url, headers, timeout):
+        captured["url"] = url
+        return FakeResponse(404)
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    client.get_latest_etf_holdings("a/b")
+
+    assert captured["url"] == "http://datastore:8000/etf-holdings/a%2Fb/latest"

@@ -46,6 +46,44 @@ class RiskFreeSeries:
 
 
 @dataclass(frozen=True)
+class EtfFund:
+    """One fund in data-store's etfs.yaml -- GET /etf-holdings. `ticker` is the fund's own
+    tradeable ticker (IWDA.AS), the only link from a holding to the fund's snapshots."""
+
+    fund_key: str
+    display_name: str
+    ticker: str | None
+    enabled: bool
+    latest_as_of_date: date | None  # None when the fund has never been scraped
+
+
+@dataclass(frozen=True)
+class EtfConstituent:
+    """One line of a fund's snapshot, as data-store stores it: cash, FX and futures lines
+    included, each with its `asset_class`."""
+
+    ticker: str | None  # iShares' raw symbol
+    # What data-store prices the line as -- the key a directly held stock matches on. None
+    # unless it's an equity line on a mapped exchange.
+    yfinance_ticker: str | None
+    name: str | None
+    sector: str | None
+    asset_class: str | None
+    location: str | None
+    exchange: str | None
+    currency: str | None  # the listing's currency, iShares' spelling
+    weight_percent: Decimal | None  # as stored: a snapshot can sum to a little over 100
+
+
+@dataclass(frozen=True)
+class EtfHoldings:
+    fund_key: str
+    ticker: str | None
+    as_of_date: date  # the scrape date, not iShares' own as-of date
+    constituents: list[EtfConstituent]  # heaviest first
+
+
+@dataclass(frozen=True)
 class TickerInfo:
     exists: bool
     has_returns: bool
@@ -128,6 +166,16 @@ class DataStoreClient(Protocol):
         points is normal (a weekend, a window before 1999): its first_date still says where
         coverage begins.
         """
+        ...
+
+    def list_etf_funds(self) -> list[EtfFund]:
+        """Every fund data-store is configured with, enabled or not, with its ticker and
+        newest snapshot date."""
+        ...
+
+    def get_latest_etf_holdings(self, fund_key: str) -> EtfHoldings | None:
+        """Every line of the fund's newest snapshot. None when data-store has no snapshot for
+        it (or doesn't know the fund) -- a caller reports that fund as not looked through."""
         ...
 
     def list_tickers(self) -> list[str]:
