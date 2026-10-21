@@ -781,7 +781,7 @@ has the details. Decisions:
 
 ### RK-18. web: ex-ante summary, decomposition and heatmap
 
-**Status:** blocked
+**Status:** ready
 
 - Ex-ante summary, labelled "ex-ante · constant weights" beside the ex-post one (R2).
 - The decomposition table, with weight % beside risk %, and the 10%-weight/25%-risk insight
@@ -793,7 +793,7 @@ has the details. Decisions:
 
 ### RK-19. portfolio: candidate what-if
 
-**Status:** blocked
+**Status:** ready
 
 - Extend the ex-ante endpoint, or add a sibling, with `candidate {ticker, weight}` and
   `funding: pro_rata | replace:<ticker>`. "From cash" is deferred.
@@ -877,7 +877,7 @@ listing-vs-exposure currency view, the top look-through single names, and the sn
 
 ### RK-24. portfolio: rolling windows
 
-**Status:** blocked
+**Status:** ready
 
 - Rolling 1Y volatility and Sharpe, stepped monthly (ex-post and ex-ante).
 - Rolling 52-week correlation, stepped weekly, for a pair or for an asset against the portfolio.
