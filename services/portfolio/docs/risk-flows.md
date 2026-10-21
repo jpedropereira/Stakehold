@@ -1,8 +1,8 @@
 # portfolio risk and Labs flows
 
 The "Ex-post risk" and "Labs backtest" sections of [`flows.md`](flows.md), moved here verbatim to
-keep that file under the repo's 64KB limit (RK-13). Later risk flows (the ex-ante endpoint, the
-what-if, rolling windows) belong here too. Their rows in the flow table, and the HTTP API's notes
+keep that file under the repo's 64KB limit (RK-13). Later risk flows belong here too: ex-ante
+risk (RK-17) is, and the what-if and rolling windows will be. Their rows in the flow table, and the HTTP API's notes
 on them, stay in `flows.md`. "Above" and "below" in the sections here refer to this file;
 references to sections that stayed in `flows.md` link to it.
 
@@ -89,6 +89,66 @@ are greyed, then how many of the four relative ones, or greyed and why) and the 
 outcome; the job logs a start line and a summary naming the benchmark and its first date, or why
 it was unavailable. The rules' reasons are
 in `architecture.md`'s `risk/` row.
+
+### Ex-ante risk
+
+The mix held at constant weights through history (RK-17; spec §6.2–6.3, §7.1), labelled
+"ex-ante · constant weights". `POST /risk/ex-ante` takes the mix as Labs' backtest does,
+`{assets: [{ticker, weight}], window, benchmark, currency, exclude}`, because web builds it
+from the holdings with `labs_view.build_default_mix`: the weights are worked out in one place,
+and the what-if (RK-19) can send a changed mix in the same shape. No user data is read.
+`window` is one of 1Y, 3Y, 5Y, 10Y and Max (default 3Y, spec §7.1's), `currency` is `eur`
+(default) or `local`, and `exclude` names tickers from the mix to leave out. A ticker in
+`exclude` but not in the mix, or an `exclude` that leaves nothing, is a 422.
+
+`risk/flows.compute_ex_ante` fetches each asset's whole history through
+`eur_returns/eligibility.py` (the TWR's fetch and wording, lifted out for this), the risk-free
+series from two weeks before the oldest holding's first day, and the benchmark. It normalises
+the weights over the included holdings and hands the daily EUR returns to
+`risk/ex_ante_report.py`. The response is
+
+    {"label", "currency", "rf_available", "benchmark",
+     "window": {"label", "requested_start", "start", "end", "limited_by"},
+     "statuses": [{"ticker", "status", "reason"}, ...],
+     "sigma_p", "diversification_ratio", "effective_n",
+     "holdings": [{"ticker", "weight", "volatility", "mcr", "cr", "pcr",
+                   "corr_with_portfolio"}, ...],
+     "constant_weight": {the twelve ex-post figures and the max drawdown's dates},
+     "correlation": {"keys", "benchmark_key", "cells": [{"a", "b", "figure"}, ...]}}
+
+- **One requested window, three uses.** It ends on the holdings' latest common date, and Max
+  starts on the *oldest* holding's first day. The decomposition runs on its listwise weekly
+  panel (R12), which a younger holding shortens; `limited_by` names that holding, so the UI can
+  offer to exclude it, and `start` is where the panel starts. The constant-weight figures run
+  from `start` to `end`, so their weekly volatility is `sigma_p` exactly (§6.2's check, tested):
+  the page never shows two volatilities for one mix. The correlation matrix keeps the requested
+  window, each pairwise cell over the weeks that pair shares (R13), so a young holding doesn't
+  shorten the other cells.
+- **Minimums** are RK-15's: `sigma_p` greys under 52 weeks, the diversification ratio and every
+  `holdings` figure under 104 (so 1Y never has a decomposition). `effective_n` never greys.
+- **Statuses**, in request order: `included`, `excluded` ("excluded by request", before any
+  fetch), or left out as the TWR words it: `not_tracked`, `no_history`, `no_fx_rate` ("no FX
+  series for <CCY>") or `failed` ("couldn't reach data-store", the exception logged).
+- **The matrix** is the included holdings in request order, then the benchmark. A benchmark
+  that is also a holding isn't repeated, and `benchmark_key` names its row either way. An
+  unavailable one has no row (`benchmark_key: null`), and `benchmark` says why. `cells` is the
+  upper triangle, diagonal included, row by row. With `currency: local` its cells use each
+  ticker's local-currency returns (RK-5's `r_local`). `sigma_p` and the decomposition stay EUR.
+- **The constant-weight figures** follow the ex-post rules: VaR on the days every holding
+  traded, `nonsync_daily` unless the mix is one EUR holding, and no risk-free data greying
+  downside deviation, Sharpe and Sortino. Holdings whose histories don't overlap grey them all,
+  "the holdings' histories don't overlap", and `window.start` is null.
+- **The € tail figures are web's**: it knows the market value, and portfolio returns fractions.
+
+With nothing included (every asset excluded or left out), the response is a 200 with `statuses`
+and `benchmark` ("not fetched: nothing to measure") and every other section null. No risk-free
+or benchmark fetch is made. The flow logs the start (asset count, exclusions, window, benchmark,
+currency), one line per asset, the window (requested and measured, and what limited it), and a
+summary of how many figures and cells are greyed. The job logs a start line and a done line.
+
+**Size and time, synthetic worst case** (every asset on 16.8 years of weekdays, half in USD,
+Max): 12 assets give 25 KB in 0.18 s; 50 assets give 294 KB in 1.1 s, almost all of it the
+1,326 correlation cells.
 
 ### Labs backtest
 
