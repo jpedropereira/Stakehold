@@ -137,6 +137,7 @@ upstream calls) is in [`architecture.md`](architecture.md) and [`endpoints.md`](
     period puts several hundred KB of JSON in the page. Only that period is sent, and 1Y, the
     default, is about a fifth of it. If it matters, thinning long periods to weekly points is
     the next step.
-  - **Known sharp edge:** `labs_chart.js`'s `formatPct` mirrors `formatting.pct`, a third copy
-    of the display convention beside `portfolio_chart.js`'s `formatEur`, with no test tying
-    them together.
+  - **Known sharp edge:** `formatPct` mirrors `formatting.pct`, a third copy of the display
+    convention beside `portfolio_chart.js`'s `formatEur`, with no test tying them together.
+    It lives in `chart_theme.js` (`StakeholdChartTheme.formatPct`, moved there before RK-9), so
+    the growth and drawdown charts share one copy.
