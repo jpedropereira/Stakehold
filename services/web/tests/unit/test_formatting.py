@@ -9,15 +9,20 @@ from web.formatting import (
     money,
     native_money,
     pct,
+    pct1,
     qty,
+    ratio,
     share,
     signed_money,
+    signed_pct1,
 )
 
 MINUS = "−"
 
 
-@pytest.mark.parametrize("fmt", [money, signed_money, qty, pct, share, date_])
+@pytest.mark.parametrize(
+    "fmt", [money, signed_money, qty, pct, share, date_, pct1, signed_pct1, ratio]
+)
 def test_none_renders_em_dash(fmt):
     assert fmt(None) == "—"
 
@@ -32,6 +37,9 @@ def test_filters_registry_names_every_filter():
         "delta_class": delta_class,
         "date": date_,
         "native_money": native_money,
+        "pct1": pct1,
+        "signed_pct1": signed_pct1,
+        "ratio": ratio,
     }
 
 
@@ -153,6 +161,10 @@ def test_share_is_an_unsigned_percentage(value, expected):
         (Decimal("-0.0184"), "pct", "loss"),
         (Decimal("-0.00001"), "pct", ""),  # shown as 0.00%
         (Decimal("0.004"), "pct", "gain"),  # +0.40%, though it would round to €0.00
+        (0.0184, "pct1", "gain"),
+        (-0.0184, "pct1", "loss"),
+        (-0.0004, "pct1", ""),  # shown as 0.0%, though pct would show −0.04%
+        (0.0005, "pct1", "gain"),  # +0.1%, half-up
         (None, "money", ""),
         (None, "pct", ""),
     ],
@@ -217,3 +229,52 @@ def test_native_money_has_a_currency_code_suffix_and_no_plus_sign(value, currenc
 )
 def test_native_money_with_more_places_trims_zeros_past_two(value, expected):
     assert native_money(value, "USD", 4) == expected
+
+
+# --- risk figures (RK-9): one decimal for percentages, two for ratios (spec §10) ------------
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (0.184, "18.4%"),
+        (-0.184, f"{MINUS}18.4%"),  # a drawdown
+        (0.0, "0.0%"),
+        (-0.0004, "0.0%"),  # rounds to zero, so no sign
+        (0.00049999, "0.0%"),
+        (0.0005, "0.1%"),  # half-up
+        (12.5, "1,250.0%"),
+    ],
+)
+def test_pct1_is_an_unsigned_percentage_to_one_decimal(value, expected):
+    assert pct1(value) == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (0.0712, "+7.1%"),
+        (-0.0712, f"{MINUS}7.1%"),
+        (0.0, "0.0%"),
+        (-0.0004, "0.0%"),
+        (0.0005, "+0.1%"),
+    ],
+)
+def test_signed_pct1_carries_its_sign(value, expected):
+    assert signed_pct1(value) == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (0.8649, "0.86"),
+        (-0.124, f"{MINUS}0.12"),
+        (0.005, "0.01"),  # half-up
+        (-0.004, "0.00"),  # rounds to zero, so no sign
+        (12.0, "12.00"),
+        (1234.5, "1,234.50"),
+    ],
+)
+def test_ratio_has_two_places_and_no_plus(value, expected):
+    # A ratio isn't a gain or a loss, so it gets no "+"; a negative one keeps its "−".
+    assert ratio(value) == expected
