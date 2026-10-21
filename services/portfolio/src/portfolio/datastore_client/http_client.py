@@ -2,7 +2,7 @@
 data-store/docs/read-api.md for the endpoint contract this depends on.
 """
 
-from dataclasses import fields
+from dataclasses import fields, replace
 from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 from urllib.parse import quote
@@ -10,6 +10,9 @@ from uuid import UUID
 
 import requests
 from portfolio.datastore_client.base import (
+    EtfConstituent,
+    EtfFund,
+    EtfHoldings,
     FxPoint,
     PricePoint,
     RiskFreePoint,
@@ -203,6 +206,77 @@ class HttpDataStoreClient:
             raise DataStoreApiError(
                 f"data-store returned a malformed response for rates/risk-free: {exc}"
             ) from exc
+
+    def list_etf_funds(self) -> list[EtfFund]:
+        body = self._get_json("/etf-holdings", what="etf-holdings")
+        try:
+            funds = body["funds"]
+            if not isinstance(funds, list):
+                raise TypeError("funds is not a list")
+            parsed = [_parse(EtfFund, fund, what="ETF fund") for fund in funds]
+            return [
+                EtfFund(
+                    fund_key=fund.fund_key,
+                    display_name=fund.display_name,
+                    ticker=fund.ticker,
+                    enabled=fund.enabled,
+                    latest_as_of_date=(
+                        None
+                        if fund.latest_as_of_date is None
+                        else date.fromisoformat(fund.latest_as_of_date)
+                    ),
+                )
+                for fund in parsed
+            ]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise DataStoreApiError(
+                f"data-store returned a malformed response for etf-holdings: {exc}"
+            ) from exc
+
+    def get_latest_etf_holdings(self, fund_key: str) -> EtfHoldings | None:
+        path = f"/etf-holdings/{_path(fund_key)}/latest"
+        # Both of data-store's 404s (a fund outside etfs.yaml, a fund with no snapshot) mean the
+        # same here: there is nothing to look through.
+        body = self._get_json(path, what=f"etf-holdings/{fund_key}/latest", none_on_404=True)
+        if body is None:
+            return None
+        try:
+            constituents = []
+            for line in body["constituents"]:
+                row = _parse(EtfConstituent, line, what="ETF constituent")
+                constituents.append(
+                    replace(row, weight_percent=_optional_decimal(row.weight_percent))
+                )
+            return EtfHoldings(
+                fund_key=body["fund_key"],
+                ticker=body["ticker"],
+                as_of_date=date.fromisoformat(body["as_of_date"]),
+                constituents=constituents,
+            )
+        except (KeyError, TypeError, ValueError, InvalidOperation) as exc:
+            raise DataStoreApiError(
+                f"data-store returned a malformed response for {path}: {exc}"
+            ) from exc
+
+    def _get_json(self, path: str, *, what: str, none_on_404: bool = False):
+        try:
+            response = requests.get(
+                f"{self._base_url}{path}", headers=self._headers, timeout=_REQUEST_TIMEOUT
+            )
+        except requests.RequestException as exc:
+            raise DataStoreApiError(f"request to data-store failed: {exc}") from exc
+        if none_on_404 and response.status_code == 404:
+            return None
+        try:
+            response.raise_for_status()
+        except requests.HTTPError as exc:
+            raise DataStoreApiError(
+                f"data-store returned {response.status_code} for {what}: {exc}"
+            ) from exc
+        try:
+            return response.json()
+        except ValueError as exc:
+            raise DataStoreApiError(f"data-store returned a malformed response for {what}") from exc
 
     def list_tickers(self) -> list[str]:
         try:
