@@ -2,7 +2,7 @@
 
 The one write path both manual entry (pipeline.py) and, later, broker import (task 6) share --
 splitting persistence into broker_import/ would let the two paths drift. See
-docs/architecture.md's module table.
+docs/modules.md's module table.
 """
 
 from collections.abc import Sequence

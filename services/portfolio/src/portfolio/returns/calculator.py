@@ -4,7 +4,7 @@ dividends are cash income no BUY/SELL-only replay ever sees, that pair's own DIV
 
 No I/O, no Postgres, no datastore_client -- pipeline.py fetches everything this needs and hands
 it in as plain data, the same split positions/calculator.replay uses. See
-docs/architecture.md's "returns/" module note: the one thing distinguishing this module from
+docs/modules.md's "returns/" module note: the one thing distinguishing this module from
 positions/calculator.py is the external (datastore_client) dependency, deliberately kept out of
 the pure function itself.
 """

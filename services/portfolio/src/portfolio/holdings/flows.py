@@ -4,7 +4,7 @@ and returns/performance.py's cross-account return series (PF-5).
 Kept out of pipeline.py, which is near the 64KB limit. User isolation stays in
 accounts/repository.py: the accounts are resolved through list_by_user, and every snapshot and
 transaction read is by one of those accounts' own ids, never by user_id directly. See
-docs/architecture.md's "holdings/" note.
+docs/modules.md's "holdings/" note.
 """
 
 from dataclasses import dataclass

@@ -18,6 +18,7 @@ from portfolio.risk.single_series import (
     return_figures,
     tail_figures,
     weekly_figures,
+    weekly_figures_without_rf,
 )
 from portfolio.risk.types import Flag, Frequency, ReturnSeries, RiskFigure, Window
 from portfolio.risk.weekly import to_weekly
@@ -281,6 +282,42 @@ def test_flat_excess_returns_grey_the_ratios_with_a_reason():
     assert figures.sharpe.reason == "no variation in excess returns"
     assert figures.sortino.value is None
     assert figures.sortino.reason == "no returns below the risk-free rate"
+
+
+# --- no risk-free data (RK-4: greyed, never rf = 0) ---
+
+
+def test_without_rf_volatility_stands_and_the_excess_measures_are_greyed():
+    weekly = _weekly(_alternating(60))
+    with_rf = weekly_figures(weekly, _whole(weekly), RATES, FIRST_PUBLISHED)
+
+    figures = weekly_figures_without_rf(weekly, _whole(weekly), "no risk-free rate data")
+
+    assert figures.volatility == with_rf.volatility
+    for figure in (figures.downside_deviation, figures.sharpe, figures.sortino):
+        assert figure.value is None
+        assert figure.reason == "no risk-free rate data"
+        assert figure.standard_error is None
+        assert figure.frequency is Frequency.WEEKLY
+        assert figure.n_obs == 60
+        assert Flag.RF_PARTIAL not in figure.flags
+
+
+def test_without_rf_insufficient_history_is_the_reason_given():
+    weekly = _weekly(_alternating(51))
+
+    figures = weekly_figures_without_rf(weekly, _whole(weekly), "no risk-free rate data")
+
+    for figure in (figures.volatility, figures.downside_deviation, figures.sharpe, figures.sortino):
+        assert figure.value is None
+        assert figure.reason == "insufficient history (have 51, need 52)"
+
+
+def test_without_rf_refuses_a_daily_series():
+    daily = _daily(_alternating(300))
+
+    with pytest.raises(ValueError, match="weekly"):
+        weekly_figures_without_rf(daily, _whole(daily), "no risk-free rate data")
 
 
 def test_weekly_figures_from_to_weekly_line_up_with_its_fridays():
