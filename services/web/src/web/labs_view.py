@@ -94,7 +94,7 @@ def mix_left_out_runs(mix: BacktestRow) -> list[LeftOutRun]:
     return runs
 
 
-def _chart_value(value: Decimal) -> float:
+def chart_value(value: Decimal | float) -> float:
     """A growth fraction to six significant digits, about 30% shorter in JSON than portfolio's
     eight-place strings. Not fewer: the tooltip shows hundredths of a percent, which six digits
     keep exact up to a 10,000% growth."""
@@ -107,7 +107,7 @@ def build_growth_payload(growth: BacktestGrowth) -> dict:
     before a late asset's Max line starts, which Chart.js draws as no line."""
 
     def line(values):
-        return None if values is None else [None if v is None else _chart_value(v) for v in values]
+        return None if values is None else [None if v is None else chart_value(v) for v in values]
 
     return {
         "period": growth.period,

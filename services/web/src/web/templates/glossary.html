@@ -55,14 +55,66 @@
 
     <dt id="buy-and-hold">Buy and hold</dt>
     <dd>The mix is bought at its weights on the period's first day and never rebalanced, so an
-      asset that rises comes to weigh more. Each period starts again from the same weights on
-      its own first day.</dd>
+      asset that rises comes to weigh more: the weights drift. Each period starts again from the
+      same weights on its own first day. The risk figures are labelled “buy &amp; hold
+      (drifting)” for this reason: they measure the mix as it drifted, not one kept at its
+      starting weights.</dd>
 
     <dt id="max-period">Max</dt>
     <dd>Each asset's whole history. For the mix, it starts on the first day the oldest asset
       has a price, and each other asset joins on its own first day, when the mix is split again
       by the weights you set. A shorter period an asset doesn't cover shows “Not enough
       history” for that asset, and the mix leaves it out of that period.</dd>
+
+    <dt id="risk-windows">Risk windows</dt>
+    <dd>Labs measures risk over the last 1, 3, 5 and 10 years, and over Max, all ending on the
+      latest day every asset has a price. Every row, the mix's and each asset's, uses the same
+      window, so the figures can be compared. That window can start no earlier than the
+      youngest asset's first price, and the page names that asset. A window longer than that
+      history shows “Not enough history”. Weekly figures use whole weeks, Friday to Friday,
+      inside the window.</dd>
+
+    <dt id="returns-used">Returns used</dt>
+    <dd>How many daily and weekly returns a window's figures rest on. Fewer returns make a
+      figure less certain. Below a minimum (52 weeks for volatility, Sharpe and Sortino; a year
+      for CAGR, drawdown and Calmar) a figure isn't shown, and its cell says why.</dd>
+
+    <dt id="cagr">CAGR</dt>
+    <dd>The window's historical return as a yearly rate: the return per year that, compounded,
+      gives the window's whole return. In euros, dividends included. Measured on daily returns. It isn't
+      annualised for windows under a year.</dd>
+
+    <dt id="volatility">Volatility</dt>
+    <dd>How much the historical weekly returns varied, scaled to a year: their standard
+      deviation × √52. A higher figure means a bumpier ride. It counts rises and falls
+      alike.</dd>
+
+    <dt id="max-drawdown">Max drawdown</dt>
+    <dd>The largest historical fall from a high to a later low within the window, as a
+      percentage of the high. Measured on daily values. It depends on where the window starts:
+      one that starts mid-fall understates it.</dd>
+
+    <dt id="drawdown">Drawdown</dt>
+    <dd>On each day, how far the mix was below its highest value so far in the period. 0% is a
+      new high. The chart shows the historical path the max drawdown is the deepest point
+      of.</dd>
+
+    <dt id="sharpe">Sharpe ratio</dt>
+    <dd>The historical return above the risk-free rate per unit of volatility, from weekly
+      returns, per year. The risk-free rate is the euro overnight rate: €STR, and before October
+      2019 EONIA, adjusted to match. The ± is one standard error: the true
+      figure lies inside it only about two times in three, and it is a lower bound, since real
+      returns have fatter tails than the estimate assumes. Over three years it is about ± 0.6,
+      so two Sharpe ratios that close can't be told apart.</dd>
+
+    <dt id="sortino">Sortino ratio</dt>
+    <dd>As the Sharpe ratio, but dividing by the downside deviation: only the weeks the
+      historical return fell short of the risk-free rate count as risk.</dd>
+
+    <dt id="calmar">Calmar ratio</dt>
+    <dd>Historical CAGR ÷ the size of the max drawdown, over the same window: how much a year
+      the mix made for each unit of its worst fall. Under three years it is marked “under 3
+      years”, since one bad stretch dominates a short window.</dd>
   </dl>
 </section>
 {% endblock %}
