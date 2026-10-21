@@ -120,6 +120,7 @@ class Column:
 @dataclass(frozen=True)
 class ExPostTable:
     label: str
+    base_date: date  # the TWR's first level: where the measured history starts
     end_date: date
     rf_available: bool
     columns: tuple[Column, ...]
@@ -148,6 +149,7 @@ def build_ex_post_table(risk: ExPostRisk) -> ExPostTable | None:
     )
     return ExPostTable(
         label=risk.label,
+        base_date=risk.base_date,
         end_date=risk.end_date,
         rf_available=risk.rf_available,
         columns=columns,

@@ -6,7 +6,7 @@
    so. Every amount is in euros unless it says otherwise. #}
 <section class="card glossary">
   <h1>Glossary</h1>
-  <p class="entry-subtitle">What each figure on your holdings and in Labs means. Amounts are in
+  <p class="entry-subtitle">What each figure on your holdings, in Labs and on Risk means. Amounts are in
     euros unless a figure says otherwise.</p>
   <dl class="glossary-terms">
     <dt id="units">Units</dt>
@@ -63,6 +63,58 @@
       has a price, and each other asset joins on its own first day, when the mix is split again
       by the weights you set. A shorter period an asset doesn't cover shows “Not enough
       history” for that asset, and the mix leaves it out of that period.</dd>
+
+    {# Risk (RK-12). Every one of these is historical: it describes what happened over the
+       window, not what will happen next (spec R15). #}
+    <dt id="ex-post">Ex-post</dt>
+    <dd>Measured on what you actually held: the daily time-weighted return of your invested
+      holdings, in euros with dividends included. Buying and selling change the next day's
+      weights, not the return. Cash isn't tracked yet, so it plays no part. These are historical
+      figures for each window, which ends on the latest day every holding has a price.</dd>
+
+    <dt id="cumulative-return">Cumulative return</dt>
+    <dd>How much the portfolio grew or shrank over the whole window, compounding each day's
+      return.</dd>
+
+    <dt id="cagr">CAGR</dt>
+    <dd>The compound annual return: the steady yearly return that would have turned the
+      window's start into its end. Over a window shorter than three years a few good or bad
+      months can move it a lot.</dd>
+
+    <dt id="volatility">Volatility</dt>
+    <dd>How much the weekly returns swung around their average, scaled to a year (the standard
+      deviation × √52). Higher means a bumpier ride, in either direction.</dd>
+
+    <dt id="downside-deviation">Downside deviation</dt>
+    <dd>Like volatility, but counting only the weeks that did worse than the risk-free rate
+      (the euro overnight rate, €STR). It measures the bumps that hurt.</dd>
+
+    <dt id="max-drawdown">Max drawdown</dt>
+    <dd>The largest fall from a high point to the low that followed, within the window. The
+      dates show the peak, the trough and when the portfolio got back to the peak, if it has.</dd>
+
+    <dt id="sharpe">Sharpe ratio</dt>
+    <dd>The return above the risk-free rate for each unit of volatility, from weekly returns
+      over the window. Higher means more return for the swings taken. It's an estimate from a
+      limited history: the ± figure is one standard error (1 s.e.), and with three years of data
+      it is often about ±0.6, so two Sharpe ratios that close can't be told apart.</dd>
+
+    <dt id="sortino">Sortino ratio</dt>
+    <dd>Like the Sharpe ratio, but dividing by the downside deviation, so only the bad weeks
+      count as risk.</dd>
+
+    <dt id="calmar">Calmar ratio</dt>
+    <dd>CAGR ÷ the size of the max drawdown: how much yearly return there was for the worst fall
+      endured.</dd>
+
+    <dt id="var">1-day VaR</dt>
+    <dd>Value at risk: a one-day loss the portfolio's daily returns exceeded on only 5% of days
+      (95%) or 1% of days (99%) in the window. It is a historical threshold, not a limit: worse
+      days happened.</dd>
+
+    <dt id="cvar">1-day CVaR</dt>
+    <dd>Conditional value at risk: the average loss on the days beyond the VaR, the worst 5% or
+      1% of days. It says how bad those days were, where VaR only says where they begin.</dd>
   </dl>
 </section>
 {% endblock %}

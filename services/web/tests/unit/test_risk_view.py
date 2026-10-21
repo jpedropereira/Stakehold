@@ -302,6 +302,7 @@ def test_the_table_carries_the_label_end_date_rf_and_exclusions():
     table = build_ex_post_table(_risk(rf_available=False, excluded=excluded))
 
     assert table.label == LABEL
+    assert table.base_date == date(2023, 1, 2)
     assert table.end_date == END
     assert table.rf_available is False
     assert table.excluded == excluded
