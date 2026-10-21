@@ -20,12 +20,14 @@ from uuid import UUID
 
 from portfolio import pipeline
 from portfolio.accounts.repository import Account
+from portfolio.benchmark.base import DEFAULT_BENCHMARK
 from portfolio.datastore_client.http_client import HttpDataStoreClient
 from portfolio.holdings import flows as holdings_flows
 from portfolio.labs import flows as labs_flows
 from portfolio.labs.calculator import BacktestResult, Period
 from portfolio.risk import flows as risk_flows
 from portfolio.risk.ex_post import WindowFigures
+from portfolio.risk.types import RiskFigure
 from portfolio.run_result import build_run_result
 from portfolio.settings import Settings, SettingsError, load_settings
 from portfolio.ticker_mapping.repository import TickerMappingRow
@@ -1349,29 +1351,40 @@ def get_portfolio_twr(*, user_id: UUID, settings: Settings | None = None) -> dic
     return {**payload, "n_excluded": len(result.excluded)}
 
 
-def get_ex_post_risk(*, user_id: UUID, settings: Settings | None = None) -> dict:
+def get_ex_post_risk(
+    *, user_id: UUID, benchmark: str = DEFAULT_BENCHMARK, settings: Settings | None = None
+) -> dict:
     """This user's ex-post risk over the standard windows, measured on the TWR of invested
-    positions (see risk/flows.compute_ex_post). Read-only: never triggers a rebuild."""
+    positions against `benchmark` (see risk/flows.compute_ex_post). Read-only: never triggers a
+    rebuild."""
     configure_logging()
     settings = settings or load_settings()
     datastore_client = _require_datastore_client(settings, command="ex-post risk")
     conn = get_connection(settings.database_url)
     try:
         logger.info("get-ex-post-risk: measuring ex-post risk for user %s.", user_id)
-        result = risk_flows.compute_ex_post(conn, datastore_client, user_id=user_id)
+        result = risk_flows.compute_ex_post(
+            conn, datastore_client, user_id=user_id, benchmark=benchmark
+        )
     finally:
         conn.close()
 
     if result.windows:
         uncovered = sum(1 for window in result.windows if not window.covered)
+        status = result.benchmark
         logger.info(
             "get-ex-post-risk: done, %s to %s: %d window(s) measured, %d greyed for short "
-            "history, risk-free rate %s, %d holding(s) left out.",
+            "history, risk-free rate %s, benchmark %s, %d holding(s) left out.",
             result.base_date,
             result.end_date,
             len(result.windows) - uncovered,
             uncovered,
             "available" if result.rf_available else "unavailable",
+            (
+                f"{status.ticker} (from {status.first_date})"
+                if status.available
+                else f"{status.ticker} unavailable ({status.reason})"
+            ),
             len(result.excluded),
         )
     elif not result.excluded:
@@ -1389,6 +1402,7 @@ def get_ex_post_risk(*, user_id: UUID, settings: Settings | None = None) -> dict
         "base_date": result.base_date,
         "end_date": result.end_date,
         "rf_available": result.rf_available,
+        "benchmark": asdict(result.benchmark),
         "windows": [_ex_post_window(window) for window in result.windows],
         "n_excluded": len(result.excluded),
         "excluded": [asdict(holding) for holding in result.excluded],
@@ -1408,14 +1422,18 @@ def _ex_post_window(window: WindowFigures) -> dict:
         "trough_date": drawdown.trough_date,
         "recovery_date": drawdown.recovery_date,
         "max_days_under_water": drawdown.max_days_under_water,
-        **{
-            name: {
-                **asdict(figure),
-                "frequency": str(figure.frequency),
-                "flags": sorted(str(flag) for flag in figure.flags),
-            }
-            for name, figure in risk_flows.figures_of(window).items()
+        **{name: _figure(figure) for name, figure in risk_flows.figures_of(window).items()},
+        "relative": {
+            name: _figure(figure) for name, figure in risk_flows.relative_of(window).items()
         },
+    }
+
+
+def _figure(figure: RiskFigure) -> dict:
+    return {
+        **asdict(figure),
+        "frequency": str(figure.frequency),
+        "flags": sorted(str(flag) for flag in figure.flags),
     }
 
 
@@ -1423,6 +1441,7 @@ def get_backtest(
     *,
     assets: list[tuple[str, Decimal]],
     period: Period,
+    benchmark: str = DEFAULT_BENCHMARK,
     settings: Settings | None = None,
 ) -> dict:
     """A Labs backtest of `assets` (ticker, weight) pairs: every period's return for the mix and
@@ -1432,8 +1451,10 @@ def get_backtest(
     configure_logging()
     settings = settings or load_settings()
     datastore_client = _require_datastore_client(settings, command="a backtest")
-    logger.info("backtest: %d asset(s), growth series for %s.", len(assets), period)
-    outcome = labs_flows.run_backtest(datastore_client, assets, period)
+    logger.info(
+        "backtest: %d asset(s), growth series for %s, against %s.", len(assets), period, benchmark
+    )
+    outcome = labs_flows.run_backtest(datastore_client, assets, period, benchmark=benchmark)
 
     _log_mix_left_out(outcome.result)
     included = sum(1 for s in outcome.statuses if s.status == labs_flows.INCLUDED)

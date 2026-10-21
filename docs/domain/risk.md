@@ -202,6 +202,10 @@ Standard windows: **1Y, 3Y, 5Y, 10Y, Max**, ending at the latest common date. Ro
 | VaR/CVaR 99% | ≥ 500 daily obs. **Flag `tail_unstable`** below 1,000: CVaR 99% then averages fewer than 10 points. |
 | Correlation, beta, covariance | ≥ 104 overlapping weekly obs (2 years) |
 
+> **Amended (RK-13):** tracking error and the information ratio (§5.6) weren't listed. They take
+> ≥ 52 overlapping weekly obs, like volatility and Sharpe: tracking error is the volatility of
+> the active return and the information ratio its Sharpe.
+
 - **R9.** Below the minimum: show the measure greyed out with "insufficient history (have N,
   need M)", never a number and never a hidden row. **DECISION.**
 - **R10. Comparability.** When ranking or comparing several assets or mixes side by side, the
@@ -293,6 +297,11 @@ On the growth index with `G_0 = 1` prepended:
   - A longer All-World history is possible: track VWRL (same FTSE index, distributing, listed
     ~2012; **CHECK**), or splice VWCE onto IWDA as a benchmark **named as a splice**. Either is
     a choice for RK-13, never a silent default.
+  - **Amended (RK-13):** checked on 2026-10-21. The EUR listing is `VWRL.AS` (Euronext
+    Amsterdam), from 2012-05-22, distributing. data-store's `simple_return` adds each dividend
+    on its ex-date, so its returns are total returns, comparable with the accumulating VWCE. It
+    is offered opt-in: tracking it is a data-store onboarding step, no code, and a request then
+    names it. The default stays `VWCE.DE`. No splice was built.
 - **Beta** = `cov(r_p, r_b) / var(r_b)` on overlapping weekly EUR returns.
 - **Correlation with benchmark** = Pearson's ρ on the same.
 - **Tracking error** = `stdev(r_p − r_b) × √52`.

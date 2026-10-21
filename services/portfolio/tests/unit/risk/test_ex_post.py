@@ -11,8 +11,10 @@ from datetime import date, timedelta
 
 import pytest
 from portfolio.risk.ex_post import ex_post_figures
+from portfolio.risk.relative import BenchmarkReturns, relative_figures
 from portfolio.risk.risk_free import RatePoint
 from portfolio.risk.types import Flag, Frequency, ReturnSeries
+from portfolio.risk.weekly import to_weekly
 from portfolio.risk.windows import years_before
 
 BASE = date(2020, 1, 3)
@@ -39,7 +41,12 @@ def _held(daily, tickers=("A",)):
     return {d: frozenset(tickers) for d in daily.dates}
 
 
-def _figures(daily, *, traded=None, held=None, currencies=None, rates=RATES):
+NO_BENCHMARK = "benchmark unavailable: not tracked"
+
+
+def _figures(
+    daily, *, traded=None, held=None, currencies=None, rates=RATES, benchmark=NO_BENCHMARK
+):
     return ex_post_figures(
         daily,
         traded_days=set(daily.dates) if traded is None else traded,
@@ -47,6 +54,7 @@ def _figures(daily, *, traded=None, held=None, currencies=None, rates=RATES):
         currencies={"A": "EUR"} if currencies is None else currencies,
         rates=rates,
         first_published=None if rates is None else FIRST_PUBLISHED,
+        benchmark=benchmark,
     )
 
 
@@ -194,3 +202,57 @@ def test_a_history_under_a_week_has_greyed_weekly_figures_on_its_max_window():
     assert max_window.covered
     assert max_window.returns.cumulative_return.value is not None
     assert max_window.weekly.volatility.reason == "insufficient history (have 0, need 52)"
+
+
+# --- relative to the benchmark (RK-13) ---
+
+
+def _relative(window):
+    r = window.relative
+    return [r.beta, r.correlation, r.tracking_error, r.information_ratio]
+
+
+def test_a_window_the_benchmark_covers_is_measured_against_it():
+    daily = _daily(800)  # about three years: Max holds over 104 weeks
+    benchmark_daily = _daily(1000, base=BASE - timedelta(days=280))
+    benchmark = BenchmarkReturns(benchmark_daily.base_date, to_weekly(benchmark_daily))
+
+    window = _by_label(_figures(daily, benchmark=benchmark))["Max"]
+
+    assert window.relative == relative_figures(to_weekly(daily), benchmark.weekly, window.window)
+    assert window.relative.beta.value is not None
+
+
+def test_a_window_starting_before_the_benchmark_is_greyed_with_its_first_day():
+    daily = _daily(800)
+    late = _daily(600, base=date(2021, 1, 1))
+    benchmark = BenchmarkReturns(late.base_date, to_weekly(late))
+
+    windows = _by_label(_figures(daily, benchmark=benchmark))
+
+    for figure in _relative(windows["Max"]):
+        assert figure.value is None
+        assert figure.reason == "benchmark history too short (from 2021-01-01)"
+    assert windows["1Y"].relative.beta.reason != "benchmark history too short (from 2021-01-01)"
+
+
+def test_an_unavailable_benchmark_greys_every_relative_figure_with_its_reason():
+    windows = _figures(_daily(800), benchmark="benchmark unavailable: not tracked")
+
+    for window in windows:
+        for figure in _relative(window):
+            assert figure.value is None
+    assert {f.reason for f in _relative(_by_label(windows)["Max"])} == {NO_BENCHMARK}
+    # The rest still stands.
+    assert _by_label(windows)["Max"].weekly.volatility.value is not None
+
+
+def test_a_window_the_portfolio_does_not_cover_greys_relative_figures_like_the_rest():
+    daily = _daily(530)
+    benchmark = BenchmarkReturns(daily.base_date, to_weekly(daily))
+
+    five_years = _by_label(_figures(daily, benchmark=benchmark))["5Y"]
+
+    assert five_years.covered is False
+    for figure in _relative(five_years):
+        assert figure.reason == "insufficient history (portfolio history from 2020-01-03)"

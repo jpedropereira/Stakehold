@@ -46,6 +46,17 @@ The rules, as agreed for RK-8 (tasks-risk-thread.md):
   Sortino with the caller's reason. They are never computed against rf = 0 (RK-4). So does a
   series with no rate on or before the common start, unless that day is before the series began
   (R4): data-store's rates then stopped updating before the window.
+- **Relative to the benchmark (RK-13, §5.6).** Every covered window of every row, the mix's and
+  each asset's, gets beta, correlation, tracking error and information ratio against the
+  request's benchmark, from the row's own weekly series (the mix's re-based at the window's
+  start) and the benchmark's (risk/relative.py). A window the benchmark doesn't cover is greyed,
+  "benchmark history too short (from <date>)", and never measured against another index. An
+  unavailable benchmark greys them with its reason. The benchmark doesn't move the common
+  window: it isn't one of the rows.
+- **The benchmark's growth line** is priced as Labs prices an asset's (`growth_line`: native
+  levels, gaps bridged, FX on or before each date), on the growth series' dates, so it lines up
+  with the mix's. It is None, with a reason, when the benchmark starts after the period does:
+  starting it later on its own base would put it on a different scale from the mix's.
 - **The drawdown chart** is the mix's only, over the requested growth period, on Labs' own growth
   line, so it lines up date for date with the chart above it, including LB-9's members and Max's
   joins. Its points are None on the dates a member's return is NULL, so the line breaks where a
@@ -57,8 +68,10 @@ from collections.abc import Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from datetime import date, timedelta
+from decimal import Decimal
 
 import numpy as np
+from portfolio.benchmark.base import Benchmark, BenchmarkUnavailable, unavailable_reason
 from portfolio.labs.calculator import (
     AssetInput,
     AssetSeries,
@@ -67,6 +80,13 @@ from portfolio.labs.calculator import (
     Period,
     Unavailable,
     build_series,
+    growth_line,
+)
+from portfolio.risk.relative import (
+    BenchmarkReturns,
+    RelativeFigures,
+    benchmark_too_short,
+    relative_to,
 )
 from portfolio.risk.risk_free import RatePoint
 from portfolio.risk.single_series import (
@@ -133,6 +153,17 @@ class WindowRisk:
     cvar_95: RiskFigure | None = None
     var_99: RiskFigure | None = None
     cvar_99: RiskFigure | None = None
+    relative: RelativeFigures | None = None  # None exactly when the window isn't covered
+
+
+@dataclass(frozen=True)
+class BenchmarkStatus:
+    ticker: str
+    available: bool
+    reason: str | None  # why not, when it isn't
+    first_date: date | None  # its first day, when it was fetched
+    growth: list[Decimal] | None  # one value per growth series date, from 0
+    growth_reason: str | None  # why there's no line, when there isn't
 
 
 @dataclass(frozen=True)
@@ -155,6 +186,7 @@ class BacktestRisk:
     common_start: date | None  # None when the histories don't overlap
     limited_by: list[str]  # the asset(s) whose first day is the common start
     risk_free: RiskFreeStatus
+    benchmark: BenchmarkStatus
     mix: RowRisk
     assets: list[RowRisk]  # available assets, in input order
     drawdown: DrawdownSeries | None  # None when the mix has no growth line
@@ -175,9 +207,11 @@ def compute_backtest_risk(
     assets: Sequence[AssetInput],
     risk_free: RiskFree | RiskFreeMissing,
     growth: GrowthSeries | None,
+    benchmark: Benchmark | BenchmarkUnavailable,
 ) -> BacktestRisk | None:
-    """The risk table for the assets compute_backtest was given, and the drawdown of its
-    `growth` series. None when no asset is available, as compute_backtest has no figures then."""
+    """The risk table for the assets compute_backtest was given, measured against
+    `benchmark`, and the drawdown of its `growth` series. None when no asset is available, as
+    compute_backtest has no figures then."""
     series = [s for s in map(build_series, assets) if not isinstance(s, Unavailable)]
     if not series:
         return None
@@ -190,6 +224,10 @@ def compute_backtest_risk(
     limited_by = [s.ticker for s in series if s.dates[0] == common_start]
     overlap = common_start < end
     used = _usable(risk_free, common_start)
+    if isinstance(benchmark, BenchmarkUnavailable):
+        against: BenchmarkReturns | str = unavailable_reason(benchmark)
+    else:
+        against = BenchmarkReturns(benchmark.first_date, benchmark.weekly)
     windows = _windows(end, common_start if overlap else None)
     if overlap:
         uncovered = f"limited by {', '.join(limited_by)} (history from {common_start.isoformat()})"
@@ -203,7 +241,9 @@ def compute_backtest_risk(
             if window is None or window.start < common_start:
                 out[label] = WindowRisk(start=start, end=end, covered=False, reason=uncovered)
             else:
-                out[label] = _measure(*series_for(window), window, used, days, nonsync)
+                daily, weekly = series_for(window)
+                relative = relative_to(weekly, window, against)
+                out[label] = _measure(daily, weekly, window, used, days, nonsync, relative)
         return RowRisk(ticker=ticker, windows=out)
 
     levels = {s.ticker: _EurLevels(s) for s in series}
@@ -240,6 +280,7 @@ def compute_backtest_risk(
             reason=used.reason if isinstance(used, RiskFreeMissing) else None,
             first_date=risk_free.first_published if isinstance(risk_free, RiskFree) else None,
         ),
+        benchmark=_benchmark_status(benchmark, growth),
         mix=mix,
         assets=asset_rows,
         drawdown=_drawdown_series(growth, series),
@@ -283,6 +324,7 @@ def _measure(
     risk_free: RiskFree | RiskFreeMissing,
     trading_days: Sequence[AbstractSet[date]],
     nonsync: bool,
+    relative: RelativeFigures,
 ) -> WindowRisk:
     returns = return_figures(daily, window)
     drawdown = drawdown_figures(daily, window)
@@ -311,7 +353,25 @@ def _measure(
         cvar_95=tail.cvar_95,
         var_99=tail.var_99,
         cvar_99=tail.cvar_99,
+        relative=relative,
     )
+
+
+def _benchmark_status(
+    benchmark: Benchmark | BenchmarkUnavailable, growth: GrowthSeries | None
+) -> BenchmarkStatus:
+    if isinstance(benchmark, BenchmarkUnavailable):
+        reason = unavailable_reason(benchmark)
+        return BenchmarkStatus(benchmark.ticker, False, benchmark.reason, None, None, reason)
+    line, reason = None, None
+    if growth is not None:
+        if benchmark.first_date > growth.dates[0]:
+            reason = benchmark_too_short(benchmark.first_date)
+        else:
+            fetched = benchmark.fetched
+            asset = AssetInput(benchmark.ticker, Decimal("1"), fetched.prices, fetched.fx)
+            line = growth_line(asset, growth.dates)
+    return BenchmarkStatus(benchmark.ticker, True, None, benchmark.first_date, line, reason)
 
 
 class _EurLevels:
