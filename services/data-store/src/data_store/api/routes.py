@@ -11,6 +11,8 @@ from uuid import UUID
 
 from data_store import jobs, ticker_onboarding
 from data_store.api.models import (
+    EtfHoldings,
+    EtfHoldingsFundList,
     FxSeries,
     PriceSeries,
     RiskFreeSeries,
@@ -24,7 +26,12 @@ from data_store.api.models import (
     TrackedTickerUpdate,
 )
 from data_store.api.security import require_internal_secret
-from data_store.read_flows import CurrencyNotTracked, TickerNotFound
+from data_store.read_flows import (
+    CurrencyNotTracked,
+    FundNotConfigured,
+    NoHoldingsSnapshot,
+    TickerNotFound,
+)
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response
 
 logger = logging.getLogger(__name__)
@@ -86,6 +93,26 @@ def get_risk_free(
     _validate_range(start, end)
     logger.info("risk-free: source=%s %s..%s", source, start, end)
     return jobs.get_risk_free_series(source=source, start=start, end=end)
+
+
+@router.get("/etf-holdings", response_model=EtfHoldingsFundList)
+def list_etf_holdings_funds() -> dict:
+    logger.info("etf-holdings: fund list")
+    return jobs.get_etf_holdings_funds()
+
+
+@router.get("/etf-holdings/{fund_key}/latest", response_model=EtfHoldings)
+def get_latest_etf_holdings(
+    # etf_holdings.fund_key is VARCHAR(50).
+    fund_key: str = Path(min_length=1, max_length=50),
+) -> dict:
+    logger.info("etf-holdings: latest snapshot of %s", fund_key)
+    try:
+        return jobs.get_latest_etf_holdings(fund_key=fund_key)
+    except FundNotConfigured:
+        raise HTTPException(404, f"fund not configured: {fund_key}")
+    except NoHoldingsSnapshot:
+        raise HTTPException(404, f"no holdings snapshot stored: {fund_key}")
 
 
 @router.get("/tickers", response_model=TickerList)

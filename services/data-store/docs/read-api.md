@@ -20,6 +20,8 @@ call beyond one quick lookup.
 | `GET /prices/{ticker}` | `market_returns` | Not `raw_market_data` — schema.md calls `market_returns` "the table a portfolio or chart should read"; serving raw OHLCV would push return computation onto every consumer. |
 | `GET /fx/{base}/{quote}` | `fx_rates` | See below — the endpoint derives pairs `fx_rates` never stores directly. |
 | `GET /rates/risk-free` | `risk_free_rates` | The risk measures' `rf_eur` (spec §4.1), spliced from €STR and EONIA on read. See below. |
+| `GET /etf-holdings` | `config/etfs.yaml` + `etf_holdings` | Every configured fund, enabled or not, with its tradeable `ticker` and `latest_as_of_date` (null if never scraped). How a caller gets from a ticker it holds (`IWDA.AS`) to a `fund_key`. See below. |
+| `GET /etf-holdings/{fund_key}/latest` | `etf_holdings` | Every line of the fund's newest snapshot, heaviest first, each with the yfinance ticker ingest prices it as. 404 for a fund not in `etfs.yaml`, and for one with no snapshot. See below. |
 | `GET /tickers` | `raw_market_data` | Every ingested ticker for `source`, sorted and unpaginated (~1.3k tickers, ~10 KB). Built for `portfolio`'s manual-entry picker, which needs the whole set at once. Uses the same "ingested universe" definition as `GET /tickers/{ticker}`'s `exists` (`returns/repository.py`'s `list_tickers` sits next to `ticker_exists`), so a ticker in the list always reports `exists: true`. The query is a recursive-CTE loose index scan over the primary key: Postgres 17 has no skip scan, and a plain `SELECT DISTINCT` would read all ~9M rows to find the ~1.3k tickers. Measured at ~25 ms on the dev database. |
 | `GET /tickers/{ticker}` | `raw_market_data` + `market_returns` + `tracked_tickers` + `etf_holdings` | Existence and whether returns have been computed are reported separately — a ticker can be ingested before `calculate-returns` has run for it. `status` is the ticker's onboarding status when it's tracked, else `null`. `currency` and `fx_currency`: see below. |
 | `GET /tickers/{ticker}/lookup` | `tracked_tickers`, then the provider | What adding a ticker would do. `outcome` is one of: `tracked` (with its `status`), `available`, `unsupported` (an index or a currency pair), `not_found`, or `unavailable` (the provider didn't answer). Always 200, except 422 for a symbol that can't be one. |
@@ -126,6 +128,33 @@ the rate is a string at the column's four places. The rule and its two constants
   **Sharp edge:** a misspelt `source` gets the same answer. A consumer must treat a null
   `first_date` as "no risk-free data", never as "rf = 0 everywhere". RK-4 (the portfolio
   client) has to build that in.
+
+**ETF holdings serve a fund's look-through** (spec §8, built for RK-22). A fund is linked to the
+ticker it trades under by `etfs.yaml`'s optional `ticker`. Nothing else connects
+`ishares_msci_world` to `IWDA.AS`: `isin` is often null, and `tracked_tickers` doesn't know which
+fund a ticker is. So `GET /etf-holdings` lists the funds with their tickers, and a caller looks
+up the one it holds. A duplicate ticker is a config error, so the lookup is never ambiguous.
+
+- **Every line is served, not just the priced equity lines.** Cash, FX, futures and money-market
+  lines are about 0.5% of IWDA, and the caller needs them to put the weight that isn't equity
+  somewhere. Each line keeps its `asset_class`.
+- **`yfinance_ticker` is resolved here, not by the caller.** It's what ingest prices the line
+  as: an equity line with a symbol, resolved with `ticker_resolution.py` and the same suffix and
+  override tables. It is null otherwise, and for an exchange that has no mapping. A caller
+  matching a stock it holds directly (`0700.HK`) to a constituent would otherwise need a second
+  copy of the rules, which `ticker_resolution.py` exists to prevent. `ticker` is the raw symbol
+  (`-` becomes null).
+- **Weights are served as stored, not normalised.** A snapshot sums to a little over 100
+  (100.03 for IWDA on 2026-08-30). Rescaling it, or not, is the consumer's decision.
+- **`as_of_date` is the scrape date**, not iShares' own as-of date ([`schema.md`](schema.md#etf_holdings)'s
+  v1 simplification). It can be a day or two later than the composition it describes.
+- **`currency` is the listing's currency**, iShares' "market currency", verbatim. It's a proxy
+  for currency exposure, not where the revenue comes from. iShares writes `GBP` where yfinance
+  writes `GBp` (above).
+- **Both 404s keep the "a match on nothing is a failure" stance.** A `fund_key` outside
+  `etfs.yaml` is likely a typo. A configured fund with no snapshot has had nothing ingested,
+  and is logged as a warning ("has ingest-holdings run?"). The messages tell the two apart. A
+  disabled fund still serves its last snapshot: disabling stops scraping, not reading.
 
 **Security**: every route but `/health` requires `Authorization: Bearer <INTERNAL_API_SECRET>`,
 compared with `secrets.compare_digest`. This is the same trust model `auth/docs/architecture.md`

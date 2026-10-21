@@ -439,6 +439,8 @@ Or as part of the compose stack (`docker compose up -d api`), reachable at
 | `GET /health` | Liveness, unauthenticated |
 | `GET /prices/{ticker}?start=&end=&source=yfinance` | `market_returns` series: split-adjusted close, future split factor, the four return columns |
 | `GET /fx/{base}/{quote}?start=&end=&source=yfinance` | FX rate series for any pair of enabled currencies — direct, inverse, or triangulated through `config/currencies.yaml`'s `base_currency` as needed |
+| `GET /etf-holdings` | Every fund in `config/etfs.yaml`, with its tradeable `ticker` and newest snapshot date |
+| `GET /etf-holdings/{fund_key}/latest` | Every line of the fund's newest holdings snapshot, with each equity line's resolved yfinance ticker |
 | `GET /tickers?source=yfinance` | Every ingested ticker, sorted and unpaginated |
 | `GET /tickers/{ticker}?source=yfinance` | Existence/validity: whether the ticker is ingested, whether returns have been computed for it, and its onboarding `status` if it's tracked |
 | `GET /tickers/{ticker}/lookup?source=yfinance` | What adding the ticker would do: already `tracked` (with its status), `available`, `unsupported`, `not_found`, or `unavailable` |

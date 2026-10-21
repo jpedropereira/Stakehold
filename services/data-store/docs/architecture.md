@@ -55,7 +55,7 @@ flowchart TD
     subgraph orch["Orchestration"]
         JOBS["jobs.py<br/><i>runnable units: config + connection + one flow</i>"]
         PIPE["pipeline.py<br/><i>the run-level write flows; currency resolution</i>"]
-        READ["read_flows.py<br/><i>read-side composition: FX derivation, ticker info</i>"]
+        READ["read_flows.py<br/><i>read-side composition: FX derivation, ticker info, ETF holdings</i>"]
         ONB["ticker_onboarding.py<br/><i>tracked_tickers: YAML sync, onboarding</i>"]
     end
 
@@ -543,6 +543,8 @@ Three things about this are intentional:
    simply had no trading activity. Refusing to guess is what keeps "no data" meaningful.
 2. **Resolution happens at fetch time, not at scrape time.** `etf_holdings.holding_ticker` stays
    exactly as scraped, so fixing a mapping takes effect on the next pricing run with no re-scrape.
+   The read API resolves on read for the same reason (`GET /tickers/{ticker}`'s currency, and
+   `GET /etf-holdings`' `yfinance_ticker`), with the same function and tables.
 3. **Tracked tickers bypass it entirely.** They're configured in provider-ready form already, so
    putting them through exchange resolution would corrupt them.
 
@@ -621,7 +623,7 @@ Four files, split by whether they're personal or reference data:
 
 | File | Committed? | Why |
 |---|---|---|
-| `config/etfs.yaml` | no — gitignored | Someone's actual holdings |
+| `config/etfs.yaml` | no — gitignored | Someone's actual holdings. A fund's optional `ticker` (e.g. `IWDA.AS`) links it to the ticker it trades under, for `GET /etf-holdings` ([`read-api.md`](read-api.md)) |
 | `config/tracked_tickers.yaml` | no — gitignored | Same, and optional. The platform's default tracked tickers, synced into the `tracked_tickers` table rather than read directly |
 | `config/currencies.yaml` | no — gitignored | Someone's own base/tracked currencies |
 | `config/yfinance_exchange_suffixes.yaml` | **yes** | Generic reference data, useful to everyone |
