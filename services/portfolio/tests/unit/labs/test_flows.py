@@ -24,7 +24,12 @@ from portfolio.errors import DataStoreApiError
 from portfolio.eur_returns.fetch import Fetched
 from portfolio.labs import flows
 from portfolio.labs.calculator import AssetInput, Period, compute_backtest
-from portfolio.labs.risk import BenchmarkStatus, RiskFree, RiskFreeStatus, compute_backtest_risk
+from portfolio.labs.risk import (
+    BenchmarkStatus,
+    RiskFree,
+    RiskFreeStatus,
+    compute_backtest_risk,
+)
 from portfolio.risk.risk_free import RatePoint
 
 TODAY = date(2026, 1, 9)

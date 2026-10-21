@@ -89,9 +89,7 @@ def compute_ex_post(
         benchmark,
     )
     rates, first_published = _risk_free(datastore_client, daily.base_date, daily.last_date)
-    fetched = fetch_benchmark(
-        datastore_client, benchmark, daily.last_date, context="ex-post-risk"
-    )
+    fetched = fetch_benchmark(datastore_client, benchmark, daily.last_date, context="ex-post-risk")
     if isinstance(fetched, BenchmarkUnavailable):
         against: BenchmarkReturns | str = unavailable_reason(fetched)
     else:

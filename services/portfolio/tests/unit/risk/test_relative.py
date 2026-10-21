@@ -194,9 +194,7 @@ def test_the_benchmark_covers_a_window_starting_on_or_after_its_first_day():
 
 
 def test_too_short_names_the_benchmark_s_first_day():
-    assert (
-        benchmark_too_short(date(2019, 7, 29)) == "benchmark history too short (from 2019-07-29)"
-    )
+    assert benchmark_too_short(date(2019, 7, 29)) == "benchmark history too short (from 2019-07-29)"
 
 
 def test_relative_to_measures_a_covered_window_and_greys_the_rest():

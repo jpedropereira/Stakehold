@@ -18,9 +18,10 @@ information ratio, on weekly EUR returns.
   (`measures.sharpe`).
 - **Coverage**: the benchmark covers a window when its first day is on or before the window's
   start (`benchmark_covers`). `relative_to` applies it: a window it doesn't cover is greyed
-  with `benchmark_too_short`'s reason, and **never measured against another index** (§5.6: VWCE and IWDA track different indices, so swapping by window
-  would make each window's beta answer a different question). A benchmark whose data ends
-  before the window does is measured on the overlap, which its figures' windows show.
+  with `benchmark_too_short`'s reason, and **never measured against another index** (§5.6: VWCE
+  and IWDA track different indices, so swapping by window would make each window's beta answer
+  a different question). A benchmark whose data ends before the window does is measured on the
+  overlap, which its figures' windows show.
 """
 
 from dataclasses import dataclass
@@ -60,9 +61,7 @@ def relative_figures(
     pair = paired_weeks(weekly, benchmark, window)
     x, y = pair.x, pair.y
     active = x - y
-    tracking_error = (
-        0.0 if _constant(active) else float(np.std(active, ddof=1) * np.sqrt(WEEKLY_Q))
-    )
+    tracking_error = 0.0 if _constant(active) else float(np.std(active, ddof=1) * np.sqrt(WEEKLY_Q))
 
     def beta():
         if _constant(y):

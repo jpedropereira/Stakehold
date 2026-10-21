@@ -119,9 +119,7 @@ class _FakeDataStoreClient:
         return {
             "E": TickerInfo(exists=True, has_returns=True, currency="EUR", fx_currency="EUR"),
             "U": TickerInfo(exists=True, has_returns=True, currency="USD", fx_currency="USD"),
-            "VWCE.DE": TickerInfo(
-                exists=True, has_returns=True, currency="EUR", fx_currency="EUR"
-            ),
+            "VWCE.DE": TickerInfo(exists=True, has_returns=True, currency="EUR", fx_currency="EUR"),
         }[ticker]
 
     def get_price_series(self, ticker, start, end):
