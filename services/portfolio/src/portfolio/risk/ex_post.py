@@ -36,12 +36,14 @@ from portfolio.risk.single_series import (
     return_figures,
     tail_figures,
     weekly_figures,
+    weekly_figures_without_rf,
 )
 from portfolio.risk.types import Flag, Frequency, ReturnSeries, RiskFigure, Window
 from portfolio.risk.weekly import to_weekly
 from portfolio.risk.windows import covers, standard_windows
 
 _EUR = "EUR"
+NO_RISK_FREE = "no risk-free rate data"  # Labs' wording too (labs/flows.py)
 
 
 @dataclass(frozen=True)
@@ -89,7 +91,11 @@ def _measured(daily, weekly, window, traded_days, held, currencies, rates, first
         window=window,
         covered=True,
         returns=returns,
-        weekly=weekly_figures(weekly, window, rates, first_published),
+        weekly=(
+            weekly_figures_without_rf(weekly, window, NO_RISK_FREE)
+            if rates is None
+            else weekly_figures(weekly, window, rates, first_published)
+        ),
         drawdown=drawdown,
         calmar=calmar_figure(returns.cagr, drawdown.max_drawdown),
         tail=tail_figures(daily, window, [traded_days], nonsync=nonsync),

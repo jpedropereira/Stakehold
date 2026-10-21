@@ -59,6 +59,7 @@ from portfolio.datastore_client.base import FxPoint, PricePoint
 from portfolio.eur_returns.calculator import (
     NO_FX_SERIES,
     NO_HISTORY,
+    EurReturns,
     FxSeries,
     Ineligible,
     eur_daily_returns,
@@ -152,15 +153,18 @@ class BacktestResult:
 
 
 @dataclass(frozen=True)
-class _Series:
-    """One available asset: its native growth index on each of its usable days, and its FX."""
+class AssetSeries:
+    """One available asset: its native growth index on each of its usable days, and its FX.
+    Public for labs/risk.py (RK-8), which measures the same levels Labs prices, so the risk
+    table and the period table describe one mix."""
 
     ticker: str
     weight: Decimal
-    dates: list[date]
-    native: list[Decimal]
+    dates: list[date]  # the anchor, then each later price date
+    native: list[Decimal]  # 1 on the anchor; gaps bridged as flat days
     gap_dates: list[date]
     fx: FxSeries | None  # None for a EUR asset
+    returns: EurReturns  # what the levels were chained from, NULLs kept (risk's stream 1)
 
     @property
     def first(self) -> date:
@@ -193,10 +197,10 @@ def compute_backtest(assets: Sequence[AssetInput], *, growth_period: Period) -> 
     first, so reaching here with one is a caller bug."""
     _validate(assets)
 
-    series: list[_Series] = []
+    series: list[AssetSeries] = []
     unavailable: list[Unavailable] = []
     for asset in assets:
-        built = _build_series(asset)
+        built = build_series(asset)
         if isinstance(built, Unavailable):
             unavailable.append(built)
         else:
@@ -242,7 +246,8 @@ def _validate(assets: Sequence[AssetInput]) -> None:
             raise ValueError(f"{asset.ticker}'s weight must be positive, got {asset.weight}.")
 
 
-def _build_series(asset: AssetInput) -> _Series | Unavailable:
+def build_series(asset: AssetInput) -> AssetSeries | Unavailable:
+    """The asset's levels, or why it can't be backtested."""
     returns = eur_daily_returns(asset.prices, asset.fx)
     if isinstance(returns, Ineligible):
         return Unavailable(asset.ticker, _UNAVAILABLE_REASONS[returns.reason])
@@ -259,10 +264,10 @@ def _build_series(asset: AssetInput) -> _Series | Unavailable:
         else:
             factor = _ONE + r_local
         native.append(native[-1] * factor)
-    return _Series(asset.ticker, asset.weight, dates, native, gap_dates, returns.fx)
+    return AssetSeries(asset.ticker, asset.weight, dates, native, gap_dates, returns.fx, returns)
 
 
-def _period_start(period: Period, end: date, series: list[_Series]) -> date:
+def _period_start(period: Period, end: date, series: list[AssetSeries]) -> date:
     """The mix's start. For Max, that is the earliest first day; each asset's own Max starts on
     its own first day (_asset_start)."""
     if period is Period.MAX:
@@ -270,7 +275,7 @@ def _period_start(period: Period, end: date, series: list[_Series]) -> date:
     return _months_before(end, _MONTHS[period])
 
 
-def _asset_start(period: Period, s: _Series, starts: dict[Period, date]) -> date:
+def _asset_start(period: Period, s: AssetSeries, starts: dict[Period, date]) -> date:
     return s.first if period is Period.MAX else starts[period]
 
 
@@ -282,13 +287,15 @@ def _months_before(day: date, months: int) -> date:
     return date(year, month_index + 1, min(day.day, last_day))
 
 
-def _covers(s: _Series, start: date, end: date) -> bool:
+def _covers(s: AssetSeries, start: date, end: date) -> bool:
     # start > end happens only for an asset whose first day is after the common end, when the
     # assets' histories don't overlap at all.
     return s.first <= start <= end
 
 
-def _members(series: list[_Series], period: Period, start: date, end: date) -> list[_Series]:
+def _members(
+    series: list[AssetSeries], period: Period, start: date, end: date
+) -> list[AssetSeries]:
     """The assets the mix holds over a period: for Max, every asset with a day on or before the
     end (each joins on its first day); otherwise those covering the whole period."""
     if period is Period.MAX:
@@ -296,16 +303,16 @@ def _members(series: list[_Series], period: Period, start: date, end: date) -> l
     return [s for s in series if _covers(s, start, end)]
 
 
-def _left_out(series: list[_Series], members: list[_Series]) -> list[str]:
+def _left_out(series: list[AssetSeries], members: list[AssetSeries]) -> list[str]:
     held = {s.ticker for s in members}
     return [s.ticker for s in series if s.ticker not in held]
 
 
 # One segment of the mix: from its date, the members held at their re-normalized weights.
-_Segment = tuple[date, list[_Series]]
+_Segment = tuple[date, list[AssetSeries]]
 
 
-def _entry_plan(members: list[_Series], period: Period, start: date) -> list[_Segment]:
+def _entry_plan(members: list[AssetSeries], period: Period, start: date) -> list[_Segment]:
     """Buy and hold from `start`, plus, for Max, a rebalance on each later first day."""
     if period is not Period.MAX:
         return [(start, members)]
@@ -336,7 +343,7 @@ class _MixCurve:
         return self._bases[k] * _segment_value(self._plan[k], self._weights, day)
 
 
-def _asset_period(s: _Series, start: date, end: date) -> PeriodReturn:
+def _asset_period(s: AssetSeries, start: date, end: date) -> PeriodReturn:
     if not _covers(s, start, end):
         return PeriodReturn(start=start, end=end, covered=False, return_pct=None, gaps=0)
     return PeriodReturn(
@@ -349,7 +356,7 @@ def _asset_period(s: _Series, start: date, end: date) -> PeriodReturn:
 
 
 def _mix_period(
-    series: list[_Series],
+    series: list[AssetSeries],
     weights: dict[str, Decimal],
     period: Period,
     start: date,
@@ -374,7 +381,7 @@ def _mix_period(
 
 
 def _growth_series(
-    series: list[_Series],
+    series: list[AssetSeries],
     weights: dict[str, Decimal],
     period: Period,
     start: date,

@@ -67,6 +67,40 @@ def get_latest_tickers(conn, fund_key: str) -> list[tuple[str, str | None]]:
         return [(row[0], row[1]) for row in cur.fetchall()]
 
 
+def get_latest_snapshot(conn, fund_key: str) -> tuple[date, list[tuple]] | None:
+    """(as_of_date, rows) for fund_key's most recent snapshot, or None when it has none.
+
+    Every line, unlike get_latest_tickers: cash, FX and futures lines too, so the weights sum to
+    the whole fund. Each row is (holding_ticker, holding_name, sector, asset_class, location,
+    exchange, currency, weight_percent), raw as stored, heaviest first. The tiebreaks after the
+    weight only make the order deterministic."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT as_of_date, holding_ticker, holding_name, sector, asset_class, location,
+                   exchange, currency, weight_percent
+            FROM etf_holdings
+            WHERE fund_key = %s
+              AND as_of_date = (
+                  SELECT MAX(as_of_date) FROM etf_holdings WHERE fund_key = %s
+              )
+            ORDER BY weight_percent DESC NULLS LAST, holding_ticker NULLS LAST, holding_name, id
+            """,
+            (fund_key, fund_key),
+        )
+        rows = cur.fetchall()
+    if not rows:
+        return None
+    return rows[0][0], [tuple(row[1:]) for row in rows]
+
+
+def get_latest_as_of_dates(conn) -> dict[str, date]:
+    """Each stored fund's most recent snapshot date. A fund with no snapshot is absent."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT fund_key, MAX(as_of_date) FROM etf_holdings GROUP BY fund_key")
+        return {fund_key: as_of_date for fund_key, as_of_date in cur.fetchall()}
+
+
 def get_listing_currencies(conn) -> list[tuple[str, str | None, str]]:
     """(holding_ticker, exchange, currency) for every equity listing any snapshot of any fund
     has held, each from the newest snapshot that lists it, newest first.

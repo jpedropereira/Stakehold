@@ -128,6 +128,79 @@ def test_rejects_duplicate_keys(tmp_path):
         load_funds(path)
 
 
+def test_loads_a_funds_tradeable_ticker(tmp_path):
+    path = write_yaml(
+        tmp_path,
+        """
+        funds:
+          - key: ishares_msci_world
+            display_name: "iShares MSCI World UCITS ETF (Acc)"
+            provider: ishares
+            url: "https://example.com/fund"
+            isin: null
+            ticker: IWDA.AS
+            price_source: yfinance
+            enabled: true
+        """,
+    )
+
+    assert load_funds(path)[0].ticker == "IWDA.AS"
+
+
+def test_a_funds_ticker_is_optional(tmp_path):
+    path = write_yaml(
+        tmp_path,
+        """
+        funds:
+          - key: fund_a
+            display_name: "A"
+            provider: ishares
+            url: "https://example.com/a"
+            isin: null
+            price_source: yfinance
+            enabled: true
+          - key: fund_b
+            display_name: "B"
+            provider: ishares
+            url: "https://example.com/b"
+            isin: null
+            ticker: null
+            price_source: yfinance
+            enabled: true
+        """,
+    )
+
+    assert [f.ticker for f in load_funds(path)] == [None, None]
+
+
+def test_rejects_two_funds_claiming_one_ticker(tmp_path):
+    path = write_yaml(
+        tmp_path,
+        """
+        funds:
+          - key: fund_a
+            display_name: "A"
+            provider: ishares
+            url: "https://example.com/a"
+            isin: null
+            ticker: IWDA.AS
+            price_source: yfinance
+            enabled: true
+          - key: fund_b
+            display_name: "B"
+            provider: ishares
+            url: "https://example.com/b"
+            isin: null
+            ticker: IWDA.AS
+            price_source: yfinance
+            enabled: false
+        """,
+    )
+
+    with pytest.raises(ConfigError, match="(?i)duplicate fund ticker: IWDA.AS"):
+        load_funds(path)
+
+
 @pytest.mark.parametrize(
     "missing_field",
     ["key", "display_name", "provider", "url", "price_source", "enabled"],

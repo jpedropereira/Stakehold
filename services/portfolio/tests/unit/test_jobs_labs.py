@@ -9,7 +9,12 @@ from decimal import Decimal
 import pytest
 from portfolio import jobs
 from portfolio.api.models import BacktestResponse
-from portfolio.datastore_client.base import PricePoint, TickerInfo
+from portfolio.datastore_client.base import (
+    PricePoint,
+    RiskFreePoint,
+    RiskFreeSeries,
+    TickerInfo,
+)
 from portfolio.labs.calculator import Period
 from portfolio.settings import SettingsError
 
@@ -55,6 +60,10 @@ class _FakeDataStoreClient:
     def get_fx_rate_series(self, base, quote, start, end):
         raise AssertionError("a EUR-only mix needs no FX")
 
+    def get_risk_free_series(self, start, end):
+        point = RiskFreePoint(date(2024, 12, 31), Decimal("2.9000"), "estr")
+        return RiskFreeSeries(first_date=date(1999, 1, 4), points=[point])
+
 
 _client = _FakeDataStoreClient()
 
@@ -77,6 +86,17 @@ def test_get_backtest_returns_builtins_the_response_model_accepts(fake_client):
         ("X", "not_tracked"),
     ]
     assert set(response.assets[0].periods) == {p.value for p in Period}
+    assert response.risk.common_start == date(2025, 1, 2)
+    assert [row.ticker for row in response.risk.assets] == ["A"]
+    assert response.risk.mix.windows["Max"].covered is True
+
+
+def test_get_backtest_sorts_each_figures_flags(fake_client):
+    result = jobs.get_backtest(assets=[("A", Decimal("1"))], period=Period.MAX)
+
+    flags = result["risk"]["mix"]["windows"]["Max"]["max_drawdown"]["flags"]
+    assert flags == sorted(flags)
+    assert isinstance(flags, list)
 
 
 def test_get_backtest_logs_a_start_line_and_a_summary(fake_client, caplog):
@@ -104,6 +124,7 @@ def test_get_backtest_says_so_when_no_asset_could_be_included(fake_client, caplo
         result = jobs.get_backtest(assets=[("X", Decimal("1"))], period=Period.MAX)
 
     assert result["end_date"] is None
+    assert result["risk"] is None
     assert any("no asset could be included" in r.getMessage() for r in caplog.records)
 
 

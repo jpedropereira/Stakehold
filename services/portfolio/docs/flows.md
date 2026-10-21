@@ -489,7 +489,7 @@ How a mix of assets, bought at its weights and held, would have done over 1M, 3M
 and the response is
 
     {"end_date", "mix": Row | null, "assets": [Row, ...], "growth": Growth | null,
-     "statuses": [{"ticker", "status", "reason"}, ...]}
+     "statuses": [{"ticker", "status", "reason"}, ...], "risk": Risk | null}
 
 where a `Row` is `{ticker, weight, periods: {"1M": {start, end, covered, return_pct, gaps,
 left_out}, ..., "Max": ...}}` and `Growth` is `{period, dates, mix, assets: {ticker: [...]},
@@ -507,6 +507,50 @@ and its rules are in `labs/calculator.py`'s docstring.
   every line still has one value per date.
 - The job logs one line per asset the mix left out, with the periods: "the mix leaves out BRK-B
   for 3M, 6M, 1Y, 2Y, 5Y: not enough history."
+
+**The risk section (RK-8)** is null exactly when no asset is included. Otherwise it is
+
+    {label: "buy & hold (drifting)", end_date, common_start, limited_by: [ticker],
+     risk_free: {available, reason, first_date},
+     mix: {ticker: null, windows: {"1Y": Window, "3Y", "5Y", "10Y", "Max"}},
+     assets: [{ticker, windows}, ...], drawdown: {period, dates, values} | null}
+
+where a `Window` is `{start, end, covered, reason}` plus a figure for each of
+`cumulative_return`, `cagr`, `volatility`, `downside_deviation`, `sharpe`, `sortino`, `calmar`,
+`max_drawdown`, `var_95`, `cvar_95`, `var_99`, `cvar_99`, and the drawdown's `peak_date`,
+`trough_date`, `recovery_date` and `max_days_under_water`. Each figure is `{value, window_start,
+window_end, frequency, q, n_obs, n_gaps, flags, reason, standard_error}` (risk spec §9). Unlike
+the rest of the response, the figures are JSON numbers, not fixed-point strings: they are
+estimates, not ledger amounts. The rules, argued in `labs/risk.py`'s docstring:
+
+- **The windows are the spec's**, not Labs' periods, all ending on `end_date`. A window starting
+  before `common_start`, the youngest asset's first day (`limited_by`), is `covered: false` on
+  **every** row, with "limited by X (history from <date>)" and every figure null. Max always
+  starts on `common_start`. When the histories don't overlap at all, `common_start` is null and
+  every window is uncovered.
+- **Inside a covered window, a figure greys on its own**: `value` null and `reason` set, below its
+  minimum ("insufficient history (have 170, need 200)") or when undefined ("no drawdown in
+  window"). Never 0.
+- **The mix is bought on each window's start and drifts.** A day on which any asset's return is
+  NULL is a gap in its figures (`n_gaps`), while Labs' period table and growth line still bridge
+  it as a flat day.
+- **Volatility, downside deviation, Sharpe and Sortino are weekly** (`frequency: "weekly"`, q =
+  52, their window shrunk to whole Friday-to-Friday weeks). Everything else is daily. VaR counts
+  only days every asset has a price, and carries `nonsync_daily` whenever the row includes a
+  non-EUR asset.
+- **`drawdown`** is the mix's only, one value per `growth.dates` entry, null where an asset's
+  return was NULL. It is null when `growth.mix` is.
+- **The risk-free series** comes from one more call, `get_risk_free_series`, made after the price
+  fetch over the backtest's span (ten days before `common_start` to `end_date`), and skipped when
+  the histories don't overlap. When data-store has no rates stored, the call fails, or no rate is
+  dated on or before `common_start`, `risk_free.available` is false, and downside deviation,
+  Sharpe and Sortino are greyed with its `reason` ("no risk-free rate data", "couldn't reach
+  data-store", "no risk-free rate on or before <date>"). The backtest still answers 200.
+- `labs/flows.py` logs a start line (assets, end, common start, limiting asset), the risk-free
+  outcome (an error with the exception when the call raised, a warning when nothing is stored),
+  one line per mix window ("mix 3Y: not covered, limited by VWCE.DE (history from 2019-07-29)."
+  or "mix 1Y: measured 2025-10-17..2026-10-16, 0 of 12 figure(s) greyed."), one line per asset
+  with how many windows it is measured in, and a summary.
 
 `labs/flows.run_backtest` fetches through `eur_returns/fetch.fetch_series` (shared with the
 portfolio TWR since RK-10), in two concurrent phases, through a pool of 8 threads:
@@ -537,7 +581,7 @@ needs the ticker info first, so the phases can't overlap.
   duplicate ticker, a weight that isn't a positive finite number, a ticker that is empty or
   longer than data-store's 20 characters, or an unknown period.
 - **The cap of 50** sits above any realistic personal portfolio, because web's default mix is the
-  user's whole holdings. It still bounds one request to about 105 data-store calls, and a Max
+  user's whole holdings. It still bounds one request to about 106 data-store calls, and a Max
   growth series to one point per trading day for each of 50 assets.
 
 It is a POST because the mix is a structured body. It changes nothing, so it answers 200. The

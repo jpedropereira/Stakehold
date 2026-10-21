@@ -4,7 +4,7 @@ canonical_ticker, plus the cross-account totals.
 No I/O, no Postgres -- holdings/flows.py reads the rows and hands them in, the same split
 returns/calculator.py and pipeline.py use. Rows are keyed on (account, ticker) until the final
 merge, so the same ticker in two accounts can't collapse into one account's row (the bug UI-11
-documented in web's aggregate_portfolio_returns). See docs/architecture.md's "holdings/" note.
+documented in web's aggregate_portfolio_returns). See docs/modules.md's "holdings/" note.
 """
 
 from collections.abc import Sequence

@@ -61,7 +61,6 @@ from portfolio.risk.windows import slice_series
 _NO_VARIATION = "no variation in excess returns"
 _NO_DOWNSIDE = "no returns below the risk-free rate"
 _NO_DRAWDOWN = "no drawdown in window"
-_NO_RISK_FREE = "no risk-free rate data"
 
 
 @dataclass(frozen=True)
@@ -171,31 +170,16 @@ def drawdown_figures(daily: ReturnSeries, window: Window) -> DrawdownFigures:
 
 
 def weekly_figures(
-    weekly: ReturnSeries,
-    window: Window,
-    rates: Sequence[RatePoint] | None,
-    first_published: date | None,
+    weekly: ReturnSeries, window: Window, rates: Sequence[RatePoint], first_published: date
 ) -> WeeklyFigures:
     """Volatility, downside deviation, Sharpe ± SE and Sortino (§5.2, §5.4) on excess returns
     over the ACT/360 risk-free rate (§4.1). `rf_partial` marks a window starting before the
-    rate series does (R4).
-
-    `rates` and `first_published` are None together when there is no risk-free series (RK-4:
-    none stored, or the caller couldn't fetch it). Volatility doesn't need one and is computed;
-    the three measures on excess returns are greyed, never computed on rf = 0."""
-    _require(weekly, Measure.VOLATILITY)
-    if (rates is None) != (first_published is None):
-        raise ValueError("rates and first_published must be given, or left out, together")
-    whole_weeks = weekly_window(window)
-    if whole_weeks is None:
-        part = _with_quality(ReturnSeries(Frequency.WEEKLY, window.start, (), ()), window, WEEKLY_Q)
-    else:
-        part = _slice(weekly, whole_weeks)
-
+    rate series does (R4)."""
+    part = _weekly_slice(weekly, window)
     r = to_array(part.series)
     x = r
     rf_flags: frozenset[Flag] = frozenset()
-    if part.series.dates and rates is not None:
+    if part.series.dates:
         rf = risk_free_returns(rates, first_published, (part.series.base_date, *part.series.dates))
         x = r - rf.values
         rf_flags = frozenset({Flag.RF_PARTIAL} if rf.partial else ())
@@ -208,14 +192,6 @@ def weekly_figures(
             part.figure(None, _check(Measure.DOWNSIDE_DEVIATION, part), flags=rf_flags),
             part.figure(None, _check(Measure.SHARPE, part), flags=rf_flags),
             part.figure(None, _check(Measure.SORTINO, part), flags=rf_flags),
-        )
-
-    if rates is None:
-        return WeeklyFigures(
-            part.figure(volatility(r, part.q), vol_check),
-            part.figure(None, _check(Measure.DOWNSIDE_DEVIATION, part), reason=_NO_RISK_FREE),
-            part.figure(None, _check(Measure.SHARPE, part), reason=_NO_RISK_FREE),
-            part.figure(None, _check(Measure.SORTINO, part), reason=_NO_RISK_FREE),
         )
 
     ratio = sharpe(x, part.q)
@@ -235,6 +211,24 @@ def weekly_figures(
         sortino=part.figure(
             sortino_value, _check(Measure.SORTINO, part), reason=_NO_DOWNSIDE, flags=rf_flags
         ),
+    )
+
+
+def weekly_figures_without_rf(weekly: ReturnSeries, window: Window, reason: str) -> WeeklyFigures:
+    """`weekly_figures` when there is no risk-free series to subtract (none stored, or the
+    fetch failed): volatility is shown, since it doesn't use rf, and downside deviation, Sharpe
+    and Sortino are greyed with `reason`. Computing them against rf = 0 instead would show a
+    number that means something else (RK-4). Below 52 weeks every figure takes R9's reason."""
+    part = _weekly_slice(weekly, window)
+    vol_check = _check(Measure.VOLATILITY, part)
+    volatility_value = volatility(to_array(part.series), part.q) if vol_check.sufficient else None
+    return WeeklyFigures(
+        volatility=part.figure(volatility_value, vol_check),
+        downside_deviation=part.figure(
+            None, _check(Measure.DOWNSIDE_DEVIATION, part), reason=reason
+        ),
+        sharpe=part.figure(None, _check(Measure.SHARPE, part), reason=reason),
+        sortino=part.figure(None, _check(Measure.SORTINO, part), reason=reason),
     )
 
 
@@ -313,6 +307,14 @@ def _require(series: ReturnSeries, measure: Measure) -> None:
             f"{measure} is computed on a {expected} series (spec §4.3), got a "
             f"{series.frequency} one"
         )
+
+
+def _weekly_slice(weekly: ReturnSeries, window: Window) -> _Slice:
+    _require(weekly, Measure.VOLATILITY)
+    whole_weeks = weekly_window(window)
+    if whole_weeks is None:
+        return _with_quality(ReturnSeries(Frequency.WEEKLY, window.start, (), ()), window, WEEKLY_Q)
+    return _slice(weekly, whole_weeks)
 
 
 def _slice(series: ReturnSeries, window: Window) -> _Slice:

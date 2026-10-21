@@ -119,12 +119,12 @@ checked against the code, docs and dev DB:
 | RK-5 | [portfolio: shared EUR daily returns](#rk-5-portfolio-shared-eur-daily-returns) | — | done |
 | RK-6 | [portfolio: risk library foundations](#rk-6-portfolio-risk-library-foundations) | — | done |
 | RK-7 | [portfolio: single-series measures](#rk-7-portfolio-single-series-measures) | RK-6 | done |
-| RK-8 | [portfolio: Labs risk in the backtest](#rk-8-portfolio-labs-risk-in-the-backtest) | RK-4, RK-5, RK-7 | ready |
-| RK-9 | [web: Labs risk panel and drawdown chart](#rk-9-web-labs-risk-panel-and-drawdown-chart) | RK-8 | blocked |
+| RK-8 | [portfolio: Labs risk in the backtest](#rk-8-portfolio-labs-risk-in-the-backtest) | RK-4, RK-5, RK-7 | done |
+| RK-9 | [web: Labs risk panel and drawdown chart](#rk-9-web-labs-risk-panel-and-drawdown-chart) | RK-8 | ready |
 | RK-10 | [portfolio: daily TWR of invested positions](#rk-10-portfolio-daily-twr-of-invested-positions) | RK-5 | done |
 | RK-11 | [portfolio: ex-post risk endpoint](#rk-11-portfolio-ex-post-risk-endpoint) | RK-4, RK-7, RK-10 | done |
 | RK-12 | [web: `/risk` page with the ex-post summary](#rk-12-web-risk-page-with-the-ex-post-summary) | RK-11 | ready |
-| RK-13 | [portfolio: benchmark and relative measures](#rk-13-portfolio-benchmark-and-relative-measures) | RK-8, RK-11 | blocked |
+| RK-13 | [portfolio: benchmark and relative measures](#rk-13-portfolio-benchmark-and-relative-measures) | RK-8, RK-11 | ready |
 | RK-14 | [web: benchmark selector, relative measures, benchmark line](#rk-14-web-benchmark-selector-relative-measures-benchmark-line) | RK-9, RK-12, RK-13 | blocked |
 | RK-15 | [portfolio: ex-ante covariance and risk decomposition](#rk-15-portfolio-ex-ante-covariance-and-risk-decomposition) | RK-6, RK-7 | done |
 | RK-16 | [portfolio: correlation matrix](#rk-16-portfolio-correlation-matrix) | RK-6 | done |
@@ -132,8 +132,8 @@ checked against the code, docs and dev DB:
 | RK-18 | [web: ex-ante summary, decomposition and heatmap](#rk-18-web-ex-ante-summary-decomposition-and-heatmap) | RK-12, RK-17 | blocked |
 | RK-19 | [portfolio: candidate what-if](#rk-19-portfolio-candidate-what-if) | RK-17 | blocked |
 | RK-20 | [web: what-if form](#rk-20-web-what-if-form) | RK-18, RK-19 | blocked |
-| RK-21 | [data-store: ETF holdings endpoint](#rk-21-data-store-etf-holdings-endpoint) | RK-1 | ready |
-| RK-22 | [portfolio: look-through exposures](#rk-22-portfolio-look-through-exposures) | RK-21 | blocked |
+| RK-21 | [data-store: ETF holdings endpoint](#rk-21-data-store-etf-holdings-endpoint) | RK-1 | done |
+| RK-22 | [portfolio: look-through exposures](#rk-22-portfolio-look-through-exposures) | RK-21 | ready |
 | RK-23 | [web: concentration section](#rk-23-web-concentration-section) | RK-12, RK-22 | blocked |
 | RK-24 | [portfolio: rolling windows](#rk-24-portfolio-rolling-windows) | RK-11, RK-16, RK-17 | blocked |
 | RK-25 | [web: rolling charts](#rk-25-web-rolling-charts) | RK-18, RK-24 | blocked |
@@ -362,7 +362,7 @@ Testing section to `docs/testing.md` first, to stay under 64 KB. Decisions:
 
 ### RK-8. portfolio: Labs risk in the backtest
 
-**Status:** ready
+**Status:** done
 
 Add a `risk` section to `POST /labs/backtest`, for the mix and each asset:
 - §5.1–5.5's measures per window
@@ -389,6 +389,45 @@ figure.
 Tests: hand-computed fixtures. The drifting mix differs from constant weights. A NULL day is
 excluded from the mix's stats but still in its chart. Per-asset rows under R10's common-window
 rule.
+
+**As built:** a `risk` section on `POST /labs/backtest`, computed by a new pure
+`labs/risk.py` (`compute_backtest_risk`) and fetched for by `labs/flows.py`. It is null exactly
+when no asset is included. Decisions:
+- **The spec's windows** (recommended above): 1Y/3Y/5Y/10Y/Max. Labs periods under 1Y never get
+  risk figures.
+- **One common window for every row** (agreed). Max starts on the youngest asset's first day,
+  and `limited_by` names it. A window starting earlier is uncovered on every row, the mix's and
+  each asset's, as "limited by X (history from <date>)", with no figures. So a 10-year-old asset
+  shows no 10Y beside a 2-year-old one, and every covered window holds every asset. The risk
+  path therefore needs neither LB-9's re-weighting nor Max's joins.
+- **The drawdown series is the mix's only** (agreed), over the requested growth period.
+- **The mix drifts from each window's start** (R3), on the union calendar. It is computed from
+  the calculator's own per-asset EUR levels, which `_Series` exposes as the now-public
+  `AssetSeries`, weighted in numpy floats. A test pins its 1Y and 5Y returns to Labs' Decimal
+  ones to 1e-8. Any asset's NULL makes that day a gap (R5), while the levels stay bridged.
+  Asset rows use their own `r_eur` (stream 1).
+- **The drawdown chart follows Labs' bridged growth line**, with None on gap dates. Measuring
+  it on gap-excluded returns, as the MDD figure is, would make it drift off the growth line
+  after each gap, because the other assets still moved that day.
+- **No risk-free data greys, never rf = 0.** `single_series.weekly_figures_without_rf` (new,
+  for RK-11 too) keeps volatility and greys downside deviation, Sharpe and Sortino with a reason:
+  "no risk-free rate data" (none stored), "couldn't reach data-store" (the call raised, logged as
+  an error), or "no risk-free rate on or before <date>" (data-store's rates stopped before the
+  common start, where `risk_free_returns` would otherwise raise). `risk_free.available` says
+  which.
+- **The risk-free call follows the price fetch**, over ten days before the common start to the
+  end, because only the prices give that span. It is skipped when the histories don't overlap.
+- **`nonsync_daily` is set by currency**: on a row that includes a non-EUR asset. `TickerInfo`
+  has no exchange.
+- **Figures are JSON numbers**, not the backtest's fixed-point strings, and each figure's
+  flags are sorted.
+- **Size and time, synthetic worst case** (every asset on 16.8 years of weekdays, half in USD,
+  Max). For 12 assets, the response is 1.1 MB, of which risk is 298 KB, and the compute is
+  0.60 s (0.23 s without risk). For 50 assets, it is 3.8 MB, of which risk is 836 KB, and 2.4 s
+  (1.1 s without risk). About 155 KB of the risk section is the drawdown series. Real mixes are
+  shorter: LB-5 measured 460 KB for the whole 50-asset response. Not yet measured against the
+  dev data-store.
+- portfolio's `architecture.md` was split first: its module table is now `docs/modules.md`.
 
 ### RK-9. web: Labs risk panel and drawdown chart
 
@@ -487,10 +526,11 @@ has `label, start, end, covered`, the twelve figures (each with its window, freq
 - **`nonsync_daily`** is set unless the window held exactly one EUR ticker.
 - **No risk-free data** (agreed), whether none is stored or the fetch fails: downside deviation,
   Sharpe and Sortino are greyed, "no risk-free rate data", and the rest are still measured.
-  `weekly_figures` takes `rates=None` for this. The fetch starts two weeks before the base date,
-  so the first week has a rate to forward-fill from.
+  This uses RK-8's `weekly_figures_without_rf`, Labs' wording too. The fetch starts two weeks
+  before the base date, so the first week has a rate to forward-fill from.
 - **An uncovered window is greyed, not shortened**: "insufficient history (portfolio history
-  from <date>)", `covered: false`.
+  from <date>)" on every figure, `covered: false`. Labs (RK-8) instead greys an uncovered window
+  as a whole, with a window-level `reason` and null figures.
 - **No DD series** in the response (agreed). RK-12 shows the summary only.
 - **For RK-12:** values are fractions, VaR and CVaR positive losses. An empty portfolio is a 200
   with `windows: []`.
@@ -507,7 +547,7 @@ has `label, start, end, covered`, the twelve figures (each with its window, freq
 
 ### RK-13. portfolio: benchmark and relative measures
 
-**Status:** blocked
+**Status:** ready
 
 - Library: weekly beta, correlation, tracking error and information ratio (§5.6).
 - A `benchmark` parameter on the backtest and ex-post endpoints, defaulting to VWCE.DE. One
@@ -649,11 +689,30 @@ the before/after table, the threshold explanation and the survivorship warning.
 
 ### RK-21. data-store: ETF holdings endpoint
 
-**Status:** ready
+**Status:** done
 
 `GET /etf-holdings/{fund_key}/latest` returns the snapshot date and constituents (ticker, name,
 sector, asset class, location, currency, weight %). **CHECK** how a fund_key maps to the
 tradeable ticker (IWDA.AS), and expose that mapping.
+
+**As built:** the CHECK found no mapping. `FundConfig` had no ticker, the deployed `isin` is null,
+and `IWDA.AS` is an unrelated `tracked_tickers` row. Decisions (agreed):
+- **The link is config.** `etfs.yaml` funds gain an optional `ticker`, so there is no schema
+  change. A ticker claimed by two funds is a `ConfigError`. `GET /etf-holdings` lists every
+  configured fund (enabled or not) with `ticker` and `latest_as_of_date`, so RK-22 finds the
+  fund for a holding there.
+- **Every line is served**, including cash, FX, futures and money market (about 0.5% of IWDA),
+  each with its `asset_class`, heaviest first. Weights are as stored, not normalised: IWDA's
+  2026-08-30 snapshot sums to 100.03.
+- **Each line carries `yfinance_ticker`**: what ingest prices it as, resolved with
+  `ticker_resolution.py`. It is null for a line that isn't equity, has no symbol, or is on an
+  unmapped exchange. RK-22 matches a directly held stock to a constituent on it, not on the raw
+  `ticker`.
+- **404 for a `fund_key` outside `etfs.yaml`, and for a configured fund with no snapshot**, with
+  distinct messages. A disabled fund still serves its last snapshot.
+- **For RK-22:** add `ticker: IWDA.AS` to the deployed `etfs.yaml`. `as_of_date` is the scrape
+  date, not iShares' own. `currency` is the listing currency (iShares' `GBP` for London lines).
+  The client method goes on the Protocol, the HTTP client and the fakes, as in RK-4.
 
 ### RK-22. portfolio: look-through exposures
 

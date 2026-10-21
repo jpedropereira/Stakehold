@@ -9,5 +9,7 @@ funds:
     provider: ishares                    # which scraper implementation handles this entry
     url: "https://www.ishares.com/<...>" # the fund's iShares product page
     isin: null                           # optional
+    ticker: null                         # optional: the fund's own tradeable ticker (e.g.
+                                          # IWDA.AS), linking a holding to these snapshots
     price_source: yfinance               # which PriceSource implementation prices its constituents
     enabled: true
