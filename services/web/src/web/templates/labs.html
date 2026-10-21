@@ -258,9 +258,9 @@
       {% endfor %}
     </fieldset>
     <script id="labs-chart-data" type="application/json">{{ growth | tojson }}</script>
-    <script src="/static/vendor/chart.min.js" defer></script>
-    <script src="/static/chart_theme.js" defer></script>
-    <script src="/static/labs_chart.js" defer></script>
+    <script src="{{ asset_url('/static/vendor/chart.min.js') }}" defer></script>
+    <script src="{{ asset_url('/static/chart_theme.js') }}" defer></script>
+    <script src="{{ asset_url('/static/labs_chart.js') }}" defer></script>
     {# The mix's drawdown (RK-9, static/labs_drawdown_chart.js) over the same period, so the
        period links above drive both charts. Ink with a soft fill, not oxblood: a drawdown is
        a distance below a high, not a loss figure. #}
@@ -274,7 +274,7 @@
         <canvas id="labs-drawdown-chart" role="img" aria-label="Drawdown of the mix over {{ period }}"></canvas>
       </div>
       <script id="labs-drawdown-data" type="application/json">{{ drawdown | tojson }}</script>
-      <script src="/static/labs_drawdown_chart.js" defer></script>
+      <script src="{{ asset_url('/static/labs_drawdown_chart.js') }}" defer></script>
       {% endif %}
     </div>
     {% endif %}
@@ -335,5 +335,5 @@
      takes the row off the page. #}
   <template id="labs-row-template">{{ mix_row("new") }}</template>
 </section>
-<script src="/static/labs_form.js" defer></script>
+<script src="{{ asset_url('/static/labs_form.js') }}" defer></script>
 {% endblock %}

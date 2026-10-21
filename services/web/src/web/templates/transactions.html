@@ -60,7 +60,7 @@
   </table>
   </div>
   {% call delete_dialog("delete-transaction-dialog", "/transactions/delete", "Delete this transaction?", csrf_token, ["account", "ref"]) %}<strong>This can't be undone.</strong> Your holdings and returns for this account will be recalculated without it.{% endcall %}
-  <script src="/static/confirm_dialog.js" defer></script>
+  <script src="{{ asset_url('/static/confirm_dialog.js') }}" defer></script>
   {% elif transactions is not none %}
   {% set account_query = "?account=" ~ (account_label | urlencode) %}
   <p class="entry-empty" id="transactions-empty">No transactions yet. <a href="/transactions/new{{ account_query }}">Add one</a> or <a href="/transactions/import{{ account_query }}">import a broker file</a>.</p>

@@ -124,6 +124,20 @@ count as part of this document under `.claude/rules/architecture.md`.
   resolved relative to `settings.py`. The Docker image instead sets `WEB_BRAND_DIR` to a path it
   explicitly `COPY`s the directory to. Either way there is exactly one `brand/tokens.css` on
   disk — CLAUDE.md's "import it once" holds literally, not just by convention.
+- **Asset URLs are versioned by content (`static_assets.py`).** Templates never write a
+  `/static/...` or `/brand/...` URL by hand; they call the `asset_url` Jinja global, which
+  appends `?v=` and the first 12 hex digits of the file's SHA-256 (StaticFiles ignores the
+  query). Why: `StaticFiles` sends no `Cache-Control`, so a browser judges a cached file's
+  freshness on its own, from its `Last-Modified`, and can reuse it for days without asking.
+  With fixed URLs, a browser kept a stale `chart_theme.js` after `formatPct` moved into it, and
+  the new drawdown chart threw and drew nothing. Changing a file now changes its URL, and an
+  unchanged file keeps its URL and its cache. A hash is recomputed only when the file's mtime or
+  size changes, so a page costs a `stat` per asset, and an edited mounted `brand/` file gets a
+  new URL without a restart. An unknown path raises `UnknownAsset` at render instead of
+  shipping a broken link. Rejected: `Cache-Control: no-cache`, which is simpler but costs a
+  revalidation round trip per asset on every page load. Known gap: URLs inside a stylesheet
+  (`tokens.css`'s Google Fonts `@import`) aren't versioned. None of them points at our own
+  files today. A unit test fails if a template links an asset without `asset_url`.
 - **`web` is the only client of `portfolio`/`data-store`/`auth`, for now.** Unchanged from before
   task 10 — still what justifies `auth`'s cookie-based (rather than bearer-token) session model.
 - **`HttpAuthClient` always sends an explicit (possibly empty) `Cookie` header (`auth_client/
@@ -492,6 +506,9 @@ Every route `web` serves, with what it requires and which upstream calls it make
 - `ticker_status.py` (TK-8/TK-9) — how a tracked ticker's status reads (labels, a holding's
   price note) and the degrading status lookup the portfolio page uses. Its own module so
   `api/holdings.py` and `api/tickers.py` share it without importing each other.
+- `static_assets.py` — `make_asset_url`, the content-versioned `/static` and `/brand` URLs
+  behind the `asset_url` Jinja global that `app.py` registers (see "Asset URLs are versioned by
+  content" above). It needs no upstream client.
 - `api/deletion.py` — the deletes: `GET`/`POST /transactions/delete` and
   `GET`/`POST /accounts/delete`, on their own router for the same reason as `api/overview.py`,
   rendering, redirecting and checking CSRF through `routes.py`'s helpers.

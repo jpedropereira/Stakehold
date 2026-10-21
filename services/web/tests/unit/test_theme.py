@@ -237,11 +237,15 @@ def test_toggle_posts_back_to_the_current_page(client):
 def test_both_logos_are_rendered(client):
     response = client.get("/login")
 
-    assert 'class="logo-on-light" src="/brand/logos/logo-stone.svg"' in response.text
-    assert 'class="logo-on-dark" src="/brand/logos/logo-gold.svg"' in response.text
+    assert re.search(
+        r'class="logo-on-light" src="/brand/logos/logo-stone\.svg\?v=\w+"', response.text
+    )
+    assert re.search(
+        r'class="logo-on-dark" src="/brand/logos/logo-gold\.svg\?v=\w+"', response.text
+    )
 
 
 def test_theme_script_is_loaded(client):
     response = client.get("/login")
 
-    assert '<script src="/static/theme.js" defer></script>' in response.text
+    assert re.search(r'<script src="/static/theme\.js\?v=\w+" defer></script>', response.text)

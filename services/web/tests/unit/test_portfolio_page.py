@@ -556,7 +556,7 @@ def test_the_ticker_is_the_toggle_for_its_breakdown(client):
     assert "breakdown-row" in _attr(row_tag, "class")
     assert _attr(row_tag, "hidden") is None
     assert "<details" not in html and not re.search(r"In \d+ accounts?\b", html)
-    assert '<script src="/static/holdings_breakdown.js" defer></script>' in html
+    assert re.search(r'<script src="/static/holdings_breakdown\.js\?v=\w+" defer></script>', html)
 
 
 def test_each_toggle_controls_its_own_breakdown(client):
@@ -789,9 +789,10 @@ def test_chart_data_island_carries_the_series(client):
     ]
     assert '<canvas id="returns-chart"' in card
     # The shared theme helper has to run first: deferred scripts run in document order.
-    assert card.index('<script src="/static/chart_theme.js" defer></script>') < card.index(
-        '<script src="/static/portfolio_chart.js" defer></script>'
-    )
+    scripts = [
+        src.split("?v=")[0] for src in re.findall(r'<script src="([^"]+)" defer></script>', card)
+    ]
+    assert scripts.index("/static/chart_theme.js") < scripts.index("/static/portfolio_chart.js")
 
 
 def test_chart_canvas_sits_alone_in_its_sizing_frame(client):

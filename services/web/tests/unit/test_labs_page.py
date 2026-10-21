@@ -792,7 +792,9 @@ def test_the_canvas_sits_alone_in_its_sizing_frame_and_the_scripts_load_in_order
     assert re.search(
         r'<div class="chart-frame">\s*<canvas id="labs-chart"[^>]*></canvas>\s*</div>', section
     )
-    scripts = re.findall(r'<script src="([^"]+)" defer></script>', section)
+    scripts = [
+        src.split("?v=")[0] for src in re.findall(r'<script src="([^"]+)" defer></script>', section)
+    ]
     assert scripts == [
         "/static/vendor/chart.min.js",
         "/static/chart_theme.js",
@@ -1196,7 +1198,9 @@ def test_the_page_loads_the_add_row_script(client):
     _logged_in(test_client, fake_auth)
     _with_a_backtest(fake_portfolio)
 
-    assert '<script src="/static/labs_form.js" defer></script>' in _page(test_client)
+    assert re.search(
+        r'<script src="/static/labs_form\.js\?v=\w+" defer></script>', _page(test_client)
+    )
 
 
 def test_logs_an_edited_mix_and_its_errors(client, caplog):
