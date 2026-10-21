@@ -1293,8 +1293,11 @@ img.logo-on-dark {
   white-space: nowrap;
 }
 
+/* A floor as well as a ceiling: the comparison's eleven figure columns (RK-14) would otherwise
+   squeeze a reason to a word per line. */
 .labs-risk-table .risk-reason {
   display: inline-block;
+  min-width: 9em;
   max-width: 14em;
   white-space: normal;
 }
@@ -1532,7 +1535,8 @@ img.logo-on-dark {
 
 /* The heading of the figures against the benchmark: a caption across the table, with a rule
    above it that sets the group apart from the measures. */
-.risk-table .risk-group th {
+.risk-table .risk-group th,
+.labs-risk-table .risk-group th {
   padding-top: var(--space-4);
   border-top: 1px solid var(--border);
   font: var(--text-caption);

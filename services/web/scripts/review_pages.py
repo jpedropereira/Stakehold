@@ -134,6 +134,12 @@ PAGES = [
     Page("labs-risk-uncovered", "/labs?risk_window=10Y", "user"),
     Page("labs-risk-no-rf", "/labs?ticker=VWCE.DE&weight=60&ticker=NEWCO.DE&weight=40", "user"),
     Page("labs-drawdown-max", "/labs?period=Max", "user"),
+    # RK-14: the benchmark. IWDA.AS covers every window and draws its line over Max; VWCE.DE
+    # (the default) starts after Max's first day, so the chart has no line and says why; a
+    # ticker the fake doesn't track greys the relative figures, said once per group.
+    Page("labs-benchmark", "/labs?benchmark=IWDA.AS&risk_window=3Y", "user"),
+    Page("labs-benchmark-max", "/labs?benchmark=IWDA.AS&period=Max", "user"),
+    Page("labs-benchmark-unavailable", "/labs?benchmark=NOPE.XX", "user"),
     Page("glossary", "/glossary", "user"),
     # Followed from a holdings page's "Total return" header: the entry it lands on is marked.
     Page("glossary-total-return", "/glossary#total-return", "user"),

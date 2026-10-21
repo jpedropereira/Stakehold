@@ -9,6 +9,10 @@ Spec §10's metadata is shown, not hovered (title tooltips don't show on touch, 
 ui-architecture.md, "Glossary"): each window's dates and the returns it used are on its
 column, each measure's frequency on its label, a greyed figure's reason in its cell (R9) and
 its flags as notes under it.
+
+Under the measures, both tables carry the figures against the benchmark (RK-14, spec §5.6), in
+a group the template heads with the benchmark and its first date. An unavailable benchmark's
+cells say "Unavailable", and the heading says why once, as on /risk.
 """
 
 import logging
@@ -48,6 +52,17 @@ RISK_MEASURES = (
     Measure("sortino", "Sortino", "weekly", "sortino", "ratio"),
     Measure("calmar", "Calmar", "daily", "calmar", "ratio"),
 )
+
+# The figures against the benchmark (RK-14), all weekly (spec §5.6). Neutral: a beta or a
+# correlation is neither a gain nor a loss, and neither is how far the mix strayed.
+RELATIVE_MEASURES = (
+    Measure("beta", "Beta", "weekly", "beta", "ratio"),
+    Measure("correlation", "Correlation", "weekly", "correlation", "ratio"),
+    Measure("tracking_error", "Tracking error", "weekly", "tracking-error", "pct"),
+    Measure("information_ratio", "Information ratio", "weekly", "information-ratio", "ratio"),
+)
+# What a covered window's relative cell says when the benchmark couldn't be used at all.
+_UNAVAILABLE = "Unavailable"
 
 # Each flag portfolio can set (risk/types.py's Flag), as a note under the figure. Not every one
 # reaches RK-9's measures (nonsync_daily and tail_unstable are VaR's), but a figure shown here
@@ -137,6 +152,25 @@ def _cells(window: BacktestWindowRisk) -> tuple[RiskCell, ...] | None:
     return tuple(cells)
 
 
+def _relative_cells(
+    window: BacktestWindowRisk, benchmark_available: bool
+) -> tuple[RiskCell, ...] | None:
+    if not window.covered:
+        return None
+    if window.relative is None:
+        # portfolio sends them on every covered window; a missing set is still not a 0.
+        logger.warning("labs: covered window with no relative figures.")
+        return tuple(RiskCell(None, "", None, "not available", ()) for _ in RELATIVE_MEASURES)
+    cells = []
+    for measure in RELATIVE_MEASURES:
+        cell = figure_cell(window.relative[measure.key], measure)
+        if cell.text is None and not benchmark_available:
+            # Every figure carries "benchmark unavailable: ..."; the heading says it once.
+            cell = RiskCell(None, "", None, _UNAVAILABLE, ())
+        cells.append(cell)
+    return tuple(cells)
+
+
 @dataclass(frozen=True)
 class WindowColumn:
     window: str
@@ -162,6 +196,7 @@ class UncoveredNote:
 class MixGrid:
     columns: tuple[WindowColumn, ...]
     rows: tuple[GridRow, ...]
+    relative_rows: tuple[GridRow, ...]  # against the benchmark, one per RELATIVE_MEASURES
     uncovered: tuple[UncoveredNote, ...]
 
 
@@ -179,6 +214,11 @@ def build_mix_grid(risk: BacktestRisk) -> MixGrid:
         GridRow(measure, tuple(None if c is None else c[i] for c in cells))
         for i, measure in enumerate(RISK_MEASURES)
     )
+    relative = [_relative_cells(window, risk.benchmark.available) for window in windows]
+    relative_rows = tuple(
+        GridRow(measure, tuple(None if c is None else c[i] for c in relative))
+        for i, measure in enumerate(RELATIVE_MEASURES)
+    )
     uncovered: list[UncoveredNote] = []
     for name, window in zip(BACKTEST_RISK_WINDOWS, windows):
         if window.covered:
@@ -189,7 +229,7 @@ def build_mix_grid(risk: BacktestRisk) -> MixGrid:
             uncovered.append(UncoveredNote((name,), reason))
         else:
             uncovered[uncovered.index(same)] = UncoveredNote(same.windows + (name,), reason)
-    return MixGrid(columns, rows, tuple(uncovered))
+    return MixGrid(columns, rows, relative_rows, tuple(uncovered))
 
 
 @dataclass(frozen=True)
@@ -197,6 +237,7 @@ class ComparisonRow:
     ticker: str | None  # None for the mix
     cells: tuple[RiskCell, ...]  # one per measure
     returns_used: str | None
+    relative_cells: tuple[RiskCell, ...]  # one per RELATIVE_MEASURES
 
 
 @dataclass(frozen=True)
@@ -220,12 +261,14 @@ def build_comparison(risk: BacktestRisk, window: str) -> Comparison:
     for row in (risk.mix, *risk.assets):
         figures = row.windows[window]
         cells = _cells(figures)
-        if cells is None:
+        relative = _relative_cells(figures, risk.benchmark.available)
+        if cells is None or relative is None:
             # The common window covers every row or none; if it ever doesn't, say so in place.
             logger.warning("labs: %s doesn't cover %s, though the mix does.", row.ticker, window)
             reason = figures.reason or "not enough history"
             cells = tuple(RiskCell(None, "", None, reason, ()) for _ in RISK_MEASURES)
-        rows.append(ComparisonRow(row.ticker, cells, _returns_used(figures)))
+            relative = tuple(RiskCell(None, "", None, reason, ()) for _ in RELATIVE_MEASURES)
+        rows.append(ComparisonRow(row.ticker, cells, _returns_used(figures), relative))
     return Comparison(window, mix.start, mix.end, True, None, tuple(rows))
 
 
