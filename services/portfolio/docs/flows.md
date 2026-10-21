@@ -1,9 +1,10 @@
 # portfolio flows and interfaces
 
 Companion to [`architecture.md`](architecture.md), split out of it to keep both files under the
-repo's 64KB limit. That file owns the layering, the module boundaries and the cross-cutting
-decisions; this one owns what runs: every flow and its entry points, the HTTP API, and what
-portfolio needs from data-store's read API. "Above" and "below" in the sections here refer to
+repo's 64KB limit. That file owns the layering and the module boundaries, and
+[`cross-cutting-decisions.md`](cross-cutting-decisions.md) the service-wide decisions; this one
+owns what runs: every flow and its entry points, the HTTP API, and what portfolio needs from
+data-store's read API. "Above" and "below" in the sections here refer to
 this file; references to sections that stayed in `architecture.md` name it.
 
 ## The flows
@@ -229,10 +230,11 @@ make the run `partial`. A run when nothing changed rewrites the same rows.
 data-store and never the reverse, and Airflow isn't even on `stakehold-net`. A DAG step would
 need Airflow on that network, portfolio's inbound secret in data-store's config, and data-store
 knowing portfolio exists — a new dependency in the wrong direction, to save at most one polling
-interval of lag on daily closes. *Rejected: compute returns on read* — see the cross-cutting
-decision on materialization. *Known cost:* every run rebuilds every user's returns in full,
-including users whose holdings have no new prices. Fine at this scale; the place to start if it
-isn't is skipping users whose latest snapshot is already at data-store's latest price date.
+interval of lag on daily closes. *Rejected: compute returns on read* — see the
+[cross-cutting decision](cross-cutting-decisions.md) on materialization. *Known cost:* every run
+rebuilds every user's returns in full, including users whose holdings have no new prices. Fine at
+this scale; the place to start if it isn't is skipping users whose latest snapshot is already at
+data-store's latest price date.
 
 **A ticker that has just finished loading gets its own, faster sweep.** A user who adds a ticker
 can record the holding while data-store is still loading it (see "Manual entry stores a
