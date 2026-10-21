@@ -6,7 +6,7 @@
    so. Every amount is in euros unless it says otherwise. #}
 <section class="card glossary">
   <h1>Glossary</h1>
-  <p class="entry-subtitle">What each figure on your holdings and in Labs means. Amounts are in
+  <p class="entry-subtitle">What each figure on your holdings, in Labs and on Risk means. Amounts are in
     euros unless a figure says otherwise.</p>
   <dl class="glossary-terms">
     <dt id="units">Units</dt>
@@ -113,8 +113,33 @@
 
     <dt id="calmar">Calmar ratio</dt>
     <dd>Historical CAGR ÷ the size of the max drawdown, over the same window: how much a year
-      the mix made for each unit of its worst fall. Under three years it is marked “under 3
+      the mix or portfolio made for each unit of its worst fall. Under three years it is marked “under 3
       years”, since one bad stretch dominates a short window.</dd>
+
+    {# Risk (RK-12), for /risk. Like the entries above, each is historical: it describes what
+       happened over the window, not what will happen next (spec R15). #}
+    <dt id="ex-post">Ex-post</dt>
+    <dd>Measured on what you actually held: the daily time-weighted return of your invested
+      holdings, in euros with dividends included. Buying and selling change the next day's
+      weights, not the return. Cash isn't tracked yet, so it plays no part. These are historical
+      figures for each window, which ends on the latest day every holding has a price.</dd>
+
+    <dt id="cumulative-return">Cumulative return</dt>
+    <dd>How much the portfolio grew or shrank over the whole window, compounding each day's
+      return.</dd>
+
+    <dt id="downside-deviation">Downside deviation</dt>
+    <dd>Like volatility, but counting only the weeks that did worse than the risk-free rate
+      (the euro overnight rate, €STR). It measures the bumps that hurt.</dd>
+
+    <dt id="var">1-day VaR</dt>
+    <dd>Value at risk: a one-day loss the portfolio's daily returns exceeded on only 5% of days
+      (95%) or 1% of days (99%) in the window. It is a historical threshold, not a limit: worse
+      days happened.</dd>
+
+    <dt id="cvar">1-day CVaR</dt>
+    <dd>Conditional value at risk: the average loss on the days beyond the VaR, the worst 5% or
+      1% of days. It says how bad those days were, where VaR only says where they begin.</dd>
   </dl>
 </section>
 {% endblock %}

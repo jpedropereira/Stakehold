@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% from "partials/_banner.html" import banner %}
+{% from "partials/_term.html" import term %}
+{% block title %}Risk — Stakehold{% endblock %}
+{# One figure, formatted by its row's kind (risk_view._ROWS): only a return is coloured as a gain
+   or a loss, to 1 decimal like the Labs risk panel's CAGR (RK-9). #}
+{% macro figure(value, kind) -%}
+{%- if kind == "return" -%}{% set cls = value | delta_class("pct1") %}<span class="mono{% if cls %} {{ cls }}{% endif %}">{{ value | signed_pct1 }}</span>
+{%- elif kind == "ratio" -%}<span class="mono">{{ value | ratio }}</span>
+{%- else -%}<span class="mono">{{ value | pct1 }}</span>
+{%- endif -%}
+{%- endmacro %}
+{% block content %}
+<section class="card card-wide">
+  <h1>Risk</h1>
+  <p class="glossary-link"><a href="/glossary">What these figures mean</a></p>
+
+  {# Each section loads on its own (api/risk.py): a failure shows its notice here, not an
+     error page. #}
+  <section class="risk-section" aria-labelledby="risk-ex-post-title">
+    <h2 id="risk-ex-post-title">Ex-post · invested assets</h2>
+    <p class="entry-subtitle">How your invested holdings have actually behaved: historical
+      figures ({{ term("ex-post", "ex-post") }}), measured on the daily time-weighted return of
+      what you held, in euros with dividends included. Cash isn't tracked, so it isn't part of
+      them.</p>
+    {% if ex_post_error %}
+    {% call banner("error") %}<strong>Couldn't load the ex-post figures.</strong> {{ ex_post_error }}{% endcall %}
+    {% elif ex_post is none %}
+    <p class="entry-empty">Nothing to measure yet — risk figures start once your holdings have
+      prices. <a href="/accounts">Add transactions to an account</a>.</p>
+    {% else %}
+    {% if not ex_post.rf_available %}
+    {% call banner("warning") %}<strong>No risk-free rate.</strong> Without it, downside deviation, Sharpe and Sortino can't be measured, so they're greyed.{% endcall %}
+    {% endif %}
+    <p class="as-of">Measured from <span class="mono">{{ ex_post.base_date | date }}</span> to <span class="mono">{{ ex_post.end_date | date }}</span>. Hover a figure for its window and number of returns.</p>
+    {# Measures down, windows across. Stacks at phone width like the Labs table (web.css,
+       .stack-table), each figure labelled with its window; between that and the width its six
+       columns fit, it scrolls in its own focusable box. #}
+    <div class="table-scroll" tabindex="0" role="region" aria-label="Ex-post risk figures">
+    <table class="positions-table holdings-table risk-table stack-table" role="table">
+      <thead role="rowgroup">
+        <tr role="row">
+          <th role="columnheader" scope="col">Measure</th>
+          {% for column in ex_post.columns %}
+          <th class="num" role="columnheader" scope="col">{{ column.label }}<span class="period-start"><span class="mono">{{ column.start | date }}</span> to <span class="mono">{{ column.end | date }}</span></span>{% if not column.covered %}<span class="period-start">{{ column.reason }}</span>{% endif %}</th>
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody role="rowgroup">
+        {% for row in ex_post.rows %}
+        <tr role="row">
+          <th role="rowheader" scope="row">{{ term(row.label, row.anchor) }}<span class="period-start">{{ row.frequency }}{% if row.key == "sharpe" %} · ± 1 s.e.{% endif %}</span></th>
+          {% for cell in row.cells %}
+          {% set column = ex_post.columns[loop.index0] %}
+          <td class="num" role="cell" data-label="{{ column.label }}" title="{{ cell.title }}">
+            {#- One span for the figure, its s.e. and its markers, so a stacked row's flex layout
+                keeps them together instead of spreading them across the line. -#}
+            <span class="risk-value">
+            {%- if cell.value is not none -%}
+            {{ figure(cell.value, row.kind) }}
+            {%- if cell.standard_error is not none %} <span class="risk-se">± <span class="mono">{{ cell.standard_error | ratio }}</span></span>{% endif -%}
+            {%- elif column.covered -%}
+            <span class="risk-greyed">{{ cell.reason }}</span>
+            {%- else -%}
+            <span class="risk-greyed">Not covered</span>
+            {%- endif -%}
+            {%- if cell.markers %}<sup class="risk-flag">{{ cell.markers | join(", ") }}</sup>{% endif -%}
+            </span>
+            {%- if cell.drawdown %}<span class="risk-dd">peak <span class="mono">{{ cell.drawdown.peak | date }}</span>, trough <span class="mono">{{ cell.drawdown.trough | date }}</span>, {% if cell.drawdown.recovery %}recovered <span class="mono">{{ cell.drawdown.recovery | date }}</span>{% else %}not recovered{% endif %}</span>{% endif -%}
+          </td>
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    {% if ex_post.legend %}
+    <ol class="risk-legend">
+      {% for note in ex_post.legend %}
+      <li><sup class="risk-flag">{{ note.marker }}</sup> {{ note.text }}</li>
+      {% endfor %}
+    </ol>
+    {% endif %}
+    {% if ex_post.excluded %}
+    <h3>Left out</h3>
+    <ul class="labs-unavailable">
+      {% for holding in ex_post.excluded %}
+      <li><span class="mono">{{ holding.ticker }}</span> — {{ holding.reason }}</li>
+      {% endfor %}
+    </ul>
+    <p class="labs-note">The other holdings' weights were scaled to 100%.</p>
+    {% endif %}
+    {% endif %}
+  </section>
+</section>
+{% endblock %}

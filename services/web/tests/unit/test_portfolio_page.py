@@ -273,7 +273,7 @@ def test_nav_has_a_portfolio_link_marked_current(client):
 
     nav = re.search(r'<nav class="site-nav".*?</nav>', html, re.S).group(0)
     labels = re.findall(r">(\w+)</a>", nav)
-    assert labels[:4] == ["Overview", "Portfolio", "Labs", "Accounts"]
+    assert labels[:5] == ["Overview", "Portfolio", "Labs", "Risk", "Accounts"]
     assert '<a href="/portfolio" aria-current="page">Portfolio</a>' in nav
 
 

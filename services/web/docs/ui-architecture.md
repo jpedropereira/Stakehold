@@ -387,7 +387,7 @@ described here updates this file in the same change.
     alone on the page. The first run (the list loaded and empty) is still the narrow welcome
     card alone, with no chart.
 - **App shell (UI-4): the current page is marked on the server, and the account pages share one
-  header.** Each route passes `nav_active` (`overview` / `portfolio` / `accounts` / `tickers` / `admin`) and, on the four
+  header.** Each route passes `nav_active` (`overview` / `portfolio` / `labs` / `risk` / `accounts` / `tickers` / `admin`) and, on the four
   account-scoped pages, `account_nav_active` (`holdings` / `transactions` / `add` / `import`). The templates turn these into `aria-current="page"`, and `web.css` styles
   that attribute rather than a class. The mark a screen reader announces and the one a sighted
   visitor sees therefore come from one source and can't disagree, and no script works out "where
@@ -488,7 +488,7 @@ described here updates this file in the same change.
 - **Glossary: one page, linked from each figure's label.** The holdings tables show two
   percentages side by side (unrealized return and total return; a third, growth, has since been
   removed), and nothing on the page said how they differ. `/glossary` defines every figure the holdings pages and the overview
-  show, and (LB-6) the Labs terms, one `<dt id>` per term. Each column header and tile label on `/`, `/portfolio` and
+  show, and (LB-6) the Labs terms and (RK-12) the risk measures, one `<dt id>` per term. Each column header and tile label on `/`, `/portfolio` and
   `/accounts/holdings` links to its entry through the `term` macro
   (`partials/_term.html`). The link inherits the label's colour with a dotted underline, so a
   row of headers doesn't turn into a row of accent links. At phone width a stacked table hides
@@ -524,4 +524,43 @@ described here updates this file in the same change.
   UI-8 added `native_money(value, currency, places=2)` for a transaction's own figures, which
   aren't EUR: the currency code follows the number (`−1,503.50 USD`), and the sign is `money`'s
   (`−` only) because it's a cash-flow direction, not a delta. Prices use `places=4` and trim
-  zeros past the second decimal (`112.34 USD`, `0.1235 USD`).
+  zeros past the second decimal (`112.34 USD`, `0.1235 USD`). RK-9 added the risk figures'
+  `pct1`, `signed_pct1` and `ratio` (spec §10; see [`labs-ui.md`](labs-ui.md)). `/risk` (RK-12)
+  uses the same three, so a measure reads the same on both pages.
+- **Risk page (RK-12): one table per section, measures down and windows across.** `/risk`'s
+  first section is the ex-post summary: twelve measures × five windows (1Y, 3Y, 5Y, 10Y, Max).
+  Measures are the rows, because there are more of them than windows and their labels are long.
+  At phone width, then, each measure stacks into a block of five labelled figures (`.stack-table`),
+  as a Labs row does. Between that and the width all six columns fit, it scrolls in its own
+  `.table-scroll` box. Each section has its own loader in `api/risk.py`, so a failure shows a notice in
+  its section and the rest of the page still renders.
+  - **Every figure's metadata (spec §10).** The window is in its column header, with its
+    dates, and the frequency (daily or weekly) is under each measure's label. The label
+    "ex-post · invested assets" is the section's heading. The exact figures (the window a
+    weekly figure was shrunk to, n_obs and gaps) are in the cell's `title`. *Known cost:* a
+    `title` doesn't show on touch screens, which is why the glossary rejected it. Here it
+    only adds detail that the visible headers already summarise. *Rejected:* a button per
+    figure that opens its metadata (60 buttons), and an n_obs line under each header (VaR's
+    masked day count differs from the daily one, so it would need its own note).
+  - **Colour only on returns, and Labs' formats.** Cumulative return and CAGR are signed, to 1
+    decimal and coloured by sign (`signed_pct1`, `delta_class(..., "pct1")`), as the Labs risk
+    panel shows CAGR. Volatility, downside deviation, max drawdown and VaR/CVaR are `pct1` and
+    the ratios `ratio`, all in ink, because forest and oxblood mean a gain or a loss and these
+    are neither. A max drawdown's `−` is its sign, not a loss colour, as in RK-9.
+  - **Greyed, never blank (R9).** A figure without a value shows its reason in the caption
+    tone. In a window the history doesn't cover, the header says why once, and each cell says
+    "Not covered" rather than repeating the sentence twelve times. The "Measured from … to …"
+    line above the table gives the history's start, which a phone, with no headers, still
+    shows.
+  - **Flags: numbered markers and a legend.** Each flag present gets a number, in a fixed order
+    (`risk_view.FLAG_NOTES`), and the legend under the table explains only those present, in a
+    sentence each. `insufficient_history` gets no marker, because the greyed cell already says
+    it. A flag web doesn't know yet is shown as "Flagged: <name>" and logged, never dropped.
+    *Known difference:* the Labs risk panel (RK-9) words flags as short notes under each figure
+    (`labs_risk_view._FLAG_NOTES`), so the two pages keep separate wordings. Each design was
+    agreed for its own table; sharing one wording is a possible follow-up.
+  - **A figure, its s.e. and its markers are one `.risk-value` span.** A stacked row lays out
+    its cell with flex. Loose, the marker and the "± s.e." were separate flex items, pushed to
+    the far edge away from the figure.
+  - **Copy says "historical" (R15).** The section's subtitle, and every risk glossary entry,
+    describe what happened over the window, never what to expect.

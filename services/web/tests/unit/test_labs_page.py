@@ -246,7 +246,13 @@ def test_nav_has_a_labs_link_marked_current(client):
 
     nav = re.search(r'<nav class="site-nav".*?</nav>', _page(test_client), re.S).group(0)
 
-    assert re.findall(r">(\w+)</a>", nav)[:4] == ["Overview", "Portfolio", "Labs", "Accounts"]
+    assert re.findall(r">(\w+)</a>", nav)[:5] == [
+        "Overview",
+        "Portfolio",
+        "Labs",
+        "Risk",
+        "Accounts",
+    ]
     assert '<a href="/labs" aria-current="page">Labs</a>' in nav
 
 

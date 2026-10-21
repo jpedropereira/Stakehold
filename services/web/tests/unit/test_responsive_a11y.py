@@ -23,13 +23,14 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 from web import settings as settings_module
-from web.api import deletion, holdings, overview, portfolio, routes, tickers
+from web.api import deletion, holdings, overview, portfolio, risk, routes, tickers
 from web.api.app import create_app
 from web.api.deps import get_auth_client, get_portfolio_client
 from web.auth_client.base import AuthResult, AuthUser
 from web.auth_client.errors import SessionInvalid
 from web.portfolio_client.base import (
     Account,
+    ExPostRisk,
     Holding,
     HoldingAccount,
     Holdings,
@@ -106,6 +107,16 @@ class FakePortfolioClient:
 
     async def list_all_unmapped_instruments(self):
         return self.unmapped
+
+    async def ex_post_risk(self, *, user_id):
+        return ExPostRisk(
+            label="ex-post · invested assets",
+            base_date=None,
+            end_date=None,
+            rf_available=False,
+            windows=(),
+            excluded=(),
+        )
 
     async def list_tickers(self):
         return ["VWCE.DE"]
@@ -490,6 +501,7 @@ def test_wide_table_pages_take_the_full_content_width(client, path, is_admin):
         "/transactions/new?account=main",
         "/transactions/import?account=main",
         "/tickers",
+        "/risk",
     ],
 )
 def test_no_page_sets_a_width_of_its_own(client, path):
@@ -626,6 +638,7 @@ def test_review_script_covers_every_page():
             tickers.router,
             holdings.router,
             portfolio.router,
+            risk.router,
         )
         for route in router.routes
         if "GET" in route.methods

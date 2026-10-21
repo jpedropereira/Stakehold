@@ -123,9 +123,9 @@ checked against the code, docs and dev DB:
 | RK-9 | [web: Labs risk panel and drawdown chart](#rk-9-web-labs-risk-panel-and-drawdown-chart) | RK-8 | done |
 | RK-10 | [portfolio: daily TWR of invested positions](#rk-10-portfolio-daily-twr-of-invested-positions) | RK-5 | done |
 | RK-11 | [portfolio: ex-post risk endpoint](#rk-11-portfolio-ex-post-risk-endpoint) | RK-4, RK-7, RK-10 | done |
-| RK-12 | [web: `/risk` page with the ex-post summary](#rk-12-web-risk-page-with-the-ex-post-summary) | RK-11 | ready |
+| RK-12 | [web: `/risk` page with the ex-post summary](#rk-12-web-risk-page-with-the-ex-post-summary) | RK-11 | done |
 | RK-13 | [portfolio: benchmark and relative measures](#rk-13-portfolio-benchmark-and-relative-measures) | RK-8, RK-11 | done |
-| RK-14 | [web: benchmark selector, relative measures, benchmark line](#rk-14-web-benchmark-selector-relative-measures-benchmark-line) | RK-9, RK-12, RK-13 | blocked |
+| RK-14 | [web: benchmark selector, relative measures, benchmark line](#rk-14-web-benchmark-selector-relative-measures-benchmark-line) | RK-9, RK-12, RK-13 | ready |
 | RK-15 | [portfolio: ex-ante covariance and risk decomposition](#rk-15-portfolio-ex-ante-covariance-and-risk-decomposition) | RK-6, RK-7 | done |
 | RK-16 | [portfolio: correlation matrix](#rk-16-portfolio-correlation-matrix) | RK-6 | done |
 | RK-17 | [portfolio: ex-ante endpoint](#rk-17-portfolio-ex-ante-endpoint) | RK-4, RK-5, RK-13, RK-15, RK-16 | ready |
@@ -558,13 +558,34 @@ has `label, start, end, covered`, the twelve figures (each with its window, freq
 
 ### RK-12. web: `/risk` page with the ex-post summary
 
-**Status:** ready
+**Status:** done
 
 - A new router `web/api/risk.py`, a "Risk" nav link, `templates/risk.html`, and a view builder.
 - First section: the ex-post summary, with every figure's window, `n_obs` and label on hover
   (§10).
 - Failures are isolated per section, as `/labs` does.
 - If `ui-architecture.md` would cross 64 KB, split it first.
+
+**As built:** `GET /risk` (`api/risk.py`), with a loader per section, and so far one section.
+The client gained `ex_post_risk`, reusing RK-9's `RiskFigure`, `RISK_FIGURE_KEYS` and figure
+parser, and `risk_view.py` builds the table with RK-9's `pct1`, `signed_pct1` and `ratio`.
+`ui-architecture.md` wasn't split: RK-9 moved Labs to `labs-ui.md`, leaving it at 49.7 KB.
+Decisions (agreed):
+- **Measures down, windows across.** Each column header shows its window's dates and each row
+  its frequency. A cell's `title` carries its own window, n_obs, gaps and the label. On touch
+  screens the title doesn't show, a known cost.
+- **Only cumulative return and CAGR are coloured** as gains or losses, signed to 1 decimal as
+  RK-9 shows CAGR. Every other figure, max drawdown included, is ink.
+- **Flags are numbered markers**, in `risk_view.FLAG_NOTES`' fixed order, with a legend of only
+  those present. `insufficient_history` gets none, because the greyed cell already says it.
+  RK-9 words flags as short notes under each figure instead, so the two pages keep separate
+  wordings.
+- **Glossary entries** for the measures RK-9 didn't define: `ex-post`, cumulative return,
+  downside deviation, VaR and CVaR. The rest are RK-9's.
+- **An uncovered window says why once**, in its header, and each of its cells says "Not
+  covered". A covered window's greyed figure shows its own reason.
+- **No risk-free rate** is a warning banner, since the banner has no "info" kind.
+- **Against the dev data**, `GET /risk/ex-post` took 0.46 s for a 2021–2026 portfolio.
 
 ### RK-13. portfolio: benchmark and relative measures
 
@@ -617,7 +638,7 @@ was split first: the risk and Labs flows are now `docs/risk-flows.md`. Decisions
 
 ### RK-14. web: benchmark selector, relative measures, benchmark line
 
-**Status:** blocked
+**Status:** ready
 
 - A benchmark field (a datalist of tickers) on `/labs` and `/risk`, kept in the query string.
 - Relative-measure rows.
@@ -768,7 +789,7 @@ and `IWDA.AS` is an unrelated `tracked_tickers` row. Decisions (agreed):
 
 ### RK-22. portfolio: look-through exposures
 
-**Status:** blocked
+**Status:** ready
 
 §8 by currency, sector, country and asset class:
 - a direct stock looked up in the latest snapshot, otherwise "unknown"

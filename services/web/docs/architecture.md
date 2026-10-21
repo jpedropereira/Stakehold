@@ -423,7 +423,14 @@ Every route `web` serves, with what it requires and which upstream calls it make
   `left_out` (LB-10), since reading a missing one as "nothing left out" would pass the mix's
   figure off as every asset's. A value can be null: a Max line before its
   asset's first day (LB-9). The shared 10 s timeout fits: the flow took
-  about 2.2 s for 50 assets over Max against the dev data.
+  about 2.2 s for 50 assets over Max against the dev data. RK-12 added `ex_post_risk`
+  (`GET /risk/ex-post`) and its `ExPostRisk`/`ExPostWindow`/`ExcludedHolding`, reusing RK-9's
+  `RiskFigure`, `RISK_FIGURE_KEYS` and figure parser; `RISK_WINDOWS` names the standard windows
+  both tables use (`BACKTEST_RISK_WINDOWS` is the same tuple). As for `backtest`, every non-200
+  is `PortfolioUnavailable`. Beyond typing, every window must carry all twelve figures, none of
+  them null (an uncovered ex-post window greys each figure, unlike a backtest window), and the
+  windows must be exactly `RISK_WINDOWS` in order, so a figure can't land under the wrong
+  heading. An empty `windows` list is the "nothing to measure" answer, not an error.
 - `rebuild_outcome.py` (UI-7) — pure. Turns the two rebuild statuses into the confirmation
   banner's one sentence; see "Key decisions".
 - `portfolio_view.py` (task 12) — pure, I/O-free reshaping of what `routes.py` fetches for
@@ -472,6 +479,14 @@ Every route `web` serves, with what it requires and which upstream calls it make
   (`MAX_BACKTEST_ASSETS`) so a large portfolio is cut to its largest holdings, not rejected.
   LB-8 added `build_growth_payload`, the growth chart's data island, rounded to six
   significant digits.
+- `api/risk.py` (RK-12) — `GET /risk`, the risk page, on its own router for the same file-size
+  reason. The page is a stack of sections, each with its own loader returning its data or the
+  notice to show in its place, so one failing section never takes the page down. Today there
+  is one, the ex-post summary. The ex-ante, concentration and what-if sections (RK-18, RK-23,
+  RK-20) each add a loader, gathered concurrently, since none needs another's answer.
+- `risk_view.py` (RK-12) — pure: `build_ex_post_table`, the ex-post summary table (measures as
+  rows, windows as columns) with each figure's greyed reason, its metadata `title` and its flag
+  markers, plus the legend of the flags present. The template only lays it out.
 - `api/tickers.py` (TK-8) — the Tickers pages, on their own router for the same file-size
   reason, rendering through `routes.py`'s helpers so CSRF and cookie handling stay identical.
 - `ticker_status.py` (TK-8/TK-9) — how a tracked ticker's status reads (labels, a holding's
@@ -557,7 +572,8 @@ one-time network creation. See `docs/smoke-test.md` for the full bring-up sequen
   Ticker onboarding (TK-8) goes through `portfolio` too: its `/instruments/tickers/{t}/lookup`
   and `/instruments/tracked-tickers` routes pass straight through to `data-store`. So do Labs
   backtests (LB-5): `POST /labs/backtest` reads price and FX history from `data-store` on
-  `portfolio`'s side, so `web` still never calls `data-store`.
+  `portfolio`'s side, so `web` still never calls `data-store`. The same holds for the risk page
+  (RK-12): `GET /risk/ex-post` fetches prices, FX and the risk-free rate on `portfolio`'s side.
 - **`data-store`** — turns out not to be needed directly. This line previously anticipated task 12
   calling `data-store` for market-data reads; in practice `portfolio`'s own `/positions`/`/returns`
   already return EUR-converted figures (computed against `data-store` on `portfolio`'s side, at

@@ -20,8 +20,8 @@ from web.settings import Settings
 
 SESSION_COOKIE = "stakehold_session=tok; Path=/; HttpOnly; SameSite=lax"
 
-# Every term the glossary defines, by anchor. The holdings pages' and /labs' links point at
-# these.
+# Every term the glossary defines, by anchor. The holdings pages', /labs' and /risk's links
+# point at these.
 ENTRIES = (
     "units",
     "avg-cost",
@@ -35,6 +35,17 @@ ENTRIES = (
     "backtest",
     "buy-and-hold",
     "max-period",
+    "ex-post",
+    "cumulative-return",
+    "cagr",
+    "volatility",
+    "downside-deviation",
+    "max-drawdown",
+    "sharpe",
+    "sortino",
+    "calmar",
+    "var",
+    "cvar",
 )
 
 
@@ -142,3 +153,14 @@ def test_total_return_says_it_includes_dividends(client):
 
     assert "dividends" in _entry(html, "total-return").lower()
     assert "growth" not in html.lower()
+
+
+def test_risk_terms_say_historical_never_expected(client):
+    """R15: a risk figure describes what happened, not what will."""
+    test_client, fake_auth = client[0], client[1]
+    _logged_in(test_client, fake_auth)
+
+    html = test_client.get("/glossary").text
+
+    assert "historical" in html
+    assert "expected" not in html.lower()
