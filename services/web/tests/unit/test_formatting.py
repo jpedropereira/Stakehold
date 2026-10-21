@@ -9,7 +9,9 @@ from web.formatting import (
     money,
     native_money,
     pct,
+    pct1,
     qty,
+    ratio,
     share,
     signed_money,
 )
@@ -17,7 +19,7 @@ from web.formatting import (
 MINUS = "−"
 
 
-@pytest.mark.parametrize("fmt", [money, signed_money, qty, pct, share, date_])
+@pytest.mark.parametrize("fmt", [money, signed_money, qty, pct, share, date_, pct1, ratio])
 def test_none_renders_em_dash(fmt):
     assert fmt(None) == "—"
 
@@ -32,6 +34,8 @@ def test_filters_registry_names_every_filter():
         "delta_class": delta_class,
         "date": date_,
         "native_money": native_money,
+        "pct1": pct1,
+        "ratio": ratio,
     }
 
 
@@ -217,3 +221,39 @@ def test_native_money_has_a_currency_code_suffix_and_no_plus_sign(value, currenc
 )
 def test_native_money_with_more_places_trims_zeros_past_two(value, expected):
     assert native_money(value, "USD", 4) == expected
+
+
+# --- risk figures (RK-12): spec §10's precision -----------------------------------
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (0.1534, "15.3%"),
+        (0.15349, "15.3%"),
+        (0.15350, "15.4%"),
+        (0.0, "0.0%"),
+        (-0.2345, f"{MINUS}23.5%"),
+        # Rounds to zero, so no sign: a drawdown of nothing isn't negative.
+        (-0.0004, "0.0%"),
+        (12.5, "1,250.0%"),
+        (Decimal("0.021"), "2.1%"),
+    ],
+)
+def test_pct1_is_a_one_decimal_percentage_with_a_minus_only(value, expected):
+    assert pct1(value) == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (0.8412, "0.84"),
+        (0.845, "0.85"),
+        (-0.1234, f"{MINUS}0.12"),
+        (-0.004, "0.00"),
+        (0, "0.00"),
+        (1234.5, "1,234.50"),
+    ],
+)
+def test_ratio_is_two_decimals_with_a_minus_only(value, expected):
+    assert ratio(value) == expected

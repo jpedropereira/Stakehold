@@ -93,6 +93,29 @@ def share(value: Decimal | int | float | None) -> str:
     return f"{MINUS if sign == MINUS else ''}{magnitude}%"
 
 
+def _unsigned_unless_negative(value: Decimal, places: int) -> str:
+    """Rounded half-up to `places`, grouped, with a `−` only: for a figure whose sign isn't a
+    gain or a loss. A value that rounds to zero carries no sign."""
+    rounded = value.quantize(Decimal(1).scaleb(-places), rounding=ROUND_HALF_UP)
+    text = f"{abs(rounded):,.{places}f}"
+    return f"{MINUS}{text}" if rounded < 0 else text
+
+
+def pct1(value: Decimal | int | float | None) -> str:
+    """A risk figure's fraction as a percentage to 1 decimal (spec §10): `0.1534` → `15.3%`,
+    a max drawdown `-0.2345` → `−23.5%`. No `+`: a volatility or a drawdown isn't a gain."""
+    if value is None:
+        return MISSING
+    return f"{_unsigned_unless_negative(_to_decimal(value) * 100, 1)}%"
+
+
+def ratio(value: Decimal | int | float | None) -> str:
+    """A risk-adjusted ratio to 2 decimals (spec §10): `0.8412` → `0.84`, with a `−` only."""
+    if value is None:
+        return MISSING
+    return _unsigned_unless_negative(_to_decimal(value), 2)
+
+
 def delta_class(value: Decimal | int | float | None, kind: str = "money") -> str:
     """The CSS class for a delta: `gain`, `loss`, or `""` when it displays as zero (or `—`).
 
@@ -127,4 +150,6 @@ FILTERS: dict[str, Callable[..., str]] = {
     "delta_class": delta_class,
     "date": date_,
     "native_money": native_money,
+    "pct1": pct1,
+    "ratio": ratio,
 }
