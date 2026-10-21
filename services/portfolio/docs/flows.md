@@ -36,8 +36,8 @@ this file; references to sections that stayed in `architecture.md` name it.
 | Holdings across accounts | — (CLI has none) | `GET /holdings?user_id=` | on demand (web's `/portfolio` page, PF-4) | `accounts` by `user_id`, then each account's latest `position_snapshots` and `return_snapshots` rows | — (computed on read, see "Holdings across accounts") |
 | Portfolio return series | — (CLI has none) | `GET /returns/portfolio?user_id=[&start=&end=]` | on demand (web's `/portfolio` chart, PF-6) | `accounts` by `user_id`, then each account's full `return_snapshots` history | — (computed on read, see "Portfolio return series") |
 | Portfolio TWR | — (CLI has none) | `GET /returns/portfolio/twr?user_id=` | on demand (ex-post risk, RK-11) | `accounts` by `user_id`, then each account's full `return_snapshots` and latest `position_snapshots`; `data-store`'s `GET /tickers/{t}`, `GET /prices/{t}` and `GET /fx/EUR/{c}` per held ticker | — |
-| Ex-post risk | — (CLI has none) | `GET /risk/ex-post?user_id=` | on demand (web's `/risk` page, RK-12) | as for the portfolio TWR, plus `data-store`'s `GET /rates/risk-free` | — |
-| Labs backtest | — (CLI has none) | `POST /labs/backtest` | on demand (web's `/labs` page, LB-6) | `data-store`'s `GET /tickers/{t}`, `GET /prices/{t}` and `GET /fx/EUR/{c}` per asset; no portfolio table | — (read-only: nothing is stored) |
+| Ex-post risk | — (CLI has none) | `GET /risk/ex-post?user_id=&benchmark=` | on demand (web's `/risk` page, RK-12) | as for the portfolio TWR, plus `data-store`'s `GET /rates/risk-free`, and the benchmark's `GET /tickers/{t}`, `GET /prices/{t}` and, outside EUR, `GET /fx/EUR/{c}` (RK-13) | — |
+| Labs backtest | — (CLI has none) | `POST /labs/backtest` | on demand (web's `/labs` page, LB-6) | `data-store`'s `GET /tickers/{t}`, `GET /prices/{t}` and `GET /fx/EUR/{c}` per asset and for the benchmark (RK-13); no portfolio table | — (read-only: nothing is stored) |
 
 **No separate `brokers` table** ever materialized — `schema.md` settled on `broker` as a plain
 string on `accounts`, so `account add` writes only to `accounts`, never a second table.

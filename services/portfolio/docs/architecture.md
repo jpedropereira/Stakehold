@@ -76,6 +76,7 @@ flowchart TD
         LFLOW["labs/flows.py<br/><i>backtest fetches, concurrent (LB-4);<br/>risk-free fetch (RK-8)</i>"]
         TFLOW["twr/flows.py<br/><i>portfolio TWR: rows + data-store fetch (RK-10)</i>"]
         RFLOW["risk/flows.py<br/><i>ex-post risk: TWR + risk-free fetch (RK-11)</i>"]
+        BFLOW["benchmark/flows.py<br/><i>the request's benchmark: fetch + wording (RK-13)</i>"]
     end
 
     subgraph domain["Domain modules"]
@@ -89,7 +90,8 @@ flowchart TD
         LABS["labs/<br/>calculator · risk<br/><i>backtests (LB-3); their risk table (RK-8)</i>"]
         TWR["twr/<br/>calculator<br/><i>holdings-based daily TWR (RK-10)</i>"]
         EURR["eur_returns/<br/>calculator · fetch<br/><i>daily EUR returns, shared with risk (RK-5);<br/>data-store fan-out (RK-10)</i>"]
-        RISK["risk/<br/>types · weekly · quality · history<br/>windows · risk_free · var_mask<br/>measures · drawdown · tail · single_series<br/>covariance · listwise · ex_ante<br/>correlation · ex_post<br/><i>pure library (RK-6, RK-7, RK-15, RK-16, RK-11);<br/>first caller labs/risk (RK-8)</i>"]
+        RISK["risk/<br/>types · weekly · quality · history<br/>windows · risk_free · var_mask<br/>measures · drawdown · tail · single_series<br/>covariance · listwise · ex_ante<br/>correlation · pairing · relative · ex_post<br/><i>pure library (RK-6, RK-7, RK-15, RK-16, RK-11, RK-13);<br/>first caller labs/risk (RK-8)</i>"]
+        BENCH["benchmark/<br/>base<br/><i>the benchmark's return series and status (RK-13)</i>"]
     end
 
     subgraph found["Foundation"]
@@ -124,6 +126,14 @@ flowchart TD
     RFLOW --> TFLOW
     RFLOW --> RISK
     RFLOW --> DSC
+    LFLOW --> BFLOW
+    RFLOW --> BFLOW
+    BFLOW --> BENCH
+    BFLOW --> EURR
+    BFLOW --> DSC
+    BENCH --> EURR
+    BENCH --> RISK
+    LABS --> BENCH
     HFLOW --> ACC
     HFLOW --> POS
     HFLOW --> RET
@@ -227,6 +237,26 @@ builds the data-store client and calls it, with no connection to open or close.
 - **The risk table's arithmetic is `labs/risk.py`**, pure, beside the calculator, rather than in
   `risk/`. `risk/` imports nothing from portfolio, so the code that turns Labs' series into the
   library's `ReturnSeries` belongs with Labs. Its rules are in that module's docstring.
+
+**The benchmark has a package of its own, `benchmark/` (RK-13)**, because two flows need the
+same thing: Labs' backtest and ex-post risk both measure against the benchmark a request names
+(`VWCE.DE` by default), and both must fetch it, word its failures and report its first date the
+same way.
+- **`benchmark/flows.py` fetches; `benchmark/base.py` is pure.** The flow goes through
+  `eur_returns/fetch.py` for the one ticker, over its whole history so the first date it reports
+  is the benchmark's own, and logs the outcome. `base.py` holds the types and turns what was
+  fetched into the daily and weekly EUR returns (spec stream 1). `labs/risk.py`, which is pure,
+  imports only `base.py`. *Rejected: putting it in `risk/flows.py`*, which Labs would then import
+  for a fetch, against the layering; and in `eur_returns/`, which neither words nor logs.
+- **`risk/` still imports nothing from portfolio.** The flows hand the library a
+  `relative.BenchmarkReturns` (first date and weekly returns), or the reason there is none.
+- **The benchmark is a fetch that fails alone, like the risk-free rate.** An unknown, empty or
+  unreachable benchmark greys the relative figures with its reason and is logged; the backtest
+  and the ex-post response still answer 200. It is fetched even when it is also in a Labs mix:
+  two more data-store calls, and one code path.
+- **It is never saved and never swapped.** It is a request parameter: saving a choice needs a
+  settings schema, deferred. A window it doesn't cover is greyed with its first day rather than
+  measured against another index (spec §5.6).
 
 **Built as of task 5** — `add_account`, `list_accounts`, `add_manual_transaction`. `pipeline.py`
 (not a per-flow `service.py`) is where the `with transaction(conn):` boundary lives, the role

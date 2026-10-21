@@ -8,6 +8,41 @@ references to sections that stayed in `flows.md` link to it.
 
 ## The flows
 
+### Relative to a benchmark
+
+Both flows below measure against one benchmark (RK-13, spec §5.6), named per request and
+`VWCE.DE` by default: `?benchmark=` on `GET /risk/ex-post`, `"benchmark"` in the backtest's
+body. It is a ticker of 1 to 20 characters; anything else is a 422. It isn't saved.
+
+`benchmark/flows.fetch_benchmark` fetches its ticker info, its whole price history and, outside
+EUR, its FX series, through `eur_returns/fetch.py`, and turns them into its daily EUR total
+returns and their W-FRI weeks. Each covered window then gets a `relative` object:
+
+    {"beta", "correlation", "tracking_error", "information_ratio"}
+
+each a figure in the usual shape, all `frequency: "weekly"` on the weeks both the series and the
+benchmark have a return for inside the window (shrunk to whole weeks). A NULL week on either
+side is a gap.
+
+- **Minimums.** Beta and correlation need 104 weeks (spec §4.5). Tracking error and the
+  information ratio need 52, like volatility and Sharpe: they are the active return's volatility
+  and Sharpe (agreed for RK-13). So a 1Y window, about 51 or 52 whole weeks, never has a beta.
+- **A window the benchmark doesn't cover**, one starting before its first day, has all four
+  greyed, "benchmark history too short (from 2019-07-29)". Nothing is measured against another
+  index in its place. To compare over 10Y, name `IWDA.AS` (from 2009) or `VWRL.AS` (FTSE
+  All-World like VWCE, from 2012).
+- **Undefined is greyed**: "no variation in benchmark returns" (beta, correlation), "no
+  variation in returns" (correlation), "no tracking difference" (the information ratio, when
+  tracking error is exactly 0, which is then shown).
+- **An unavailable benchmark** is reported, not fatal. Its status is one of "not tracked", "no
+  history yet", "no FX series for <CCY>" or "couldn't reach data-store" (the exception is
+  logged, not returned), and every relative figure is greyed with "benchmark unavailable:
+  <reason>". Every other figure is measured as before, and the response is still a 200.
+- The response names the benchmark: `{"ticker", "available", "reason", "first_date"}`, where
+  `first_date` is the date its first return is measured from.
+- `benchmark/flows.py` logs one line: the returns it fetched and their span, a warning with the
+  reason, or an error with the exception.
+
 ### Ex-post risk
 
 The §5.1–5.5 risk figures on the portfolio TWR (RK-11; spec §6.1; see [`flows.md`](flows.md)'s
@@ -15,13 +50,15 @@ The §5.1–5.5 risk figures on the portfolio TWR (RK-11; spec §6.1; see [`flow
 invested positions only.
 `risk/flows.compute_ex_post` runs `twr/flows.compute_portfolio_twr` (same reads, fetches and
 exclusions), fetches data-store's risk-free series from two weeks before the TWR's base date to
-its last date, converts both to floats, and hands them to `risk/ex_post.py`. The response is
+its last date and the benchmark up to that date, converts them to floats, and hands them to
+`risk/ex_post.py`. The response is
 
-    {"label", "base_date", "end_date", "rf_available",
+    {"label", "base_date", "end_date", "rf_available", "benchmark",
      "windows": [{"label", "start", "end", "covered",
                   "cumulative_return", "cagr", "volatility", "downside_deviation", "sharpe",
                   "sortino", "max_drawdown", "peak_date", "trough_date", "recovery_date",
-                  "max_days_under_water", "calmar", "var_95", "cvar_95", "var_99", "cvar_99"},
+                  "max_days_under_water", "calmar", "var_95", "cvar_95", "var_99", "cvar_99",
+                  "relative"},
                  ...],
      "n_excluded", "excluded": [{"ticker", "status", "reason"}, ...]}
 
@@ -39,12 +76,18 @@ standard_error}`, the metadata spec §9 and §10 ask every number to carry.
 - **VaR and CVaR** keep only the dates on which every ticker held the day before traded, and
   carry `nonsync_daily` unless the window held exactly one EUR ticker.
 - **`excluded`** is the TWR's, with the same statuses and wording.
+- **`relative`** is the weekly TWR against the benchmark ("Relative to a benchmark" above). It
+  is always there: in a window the portfolio doesn't cover, its figures are greyed with the same
+  reason as the rest.
 
 With no TWR returns (no accounts, no rows, or every holding left out) the response has no
-windows, not a 404, and no risk-free fetch is made. A failed risk-free fetch isn't a 502: it
-greys the three figures that need the rate, and the exception is logged. The flow logs the start,
-one line per window (measured with its daily obs and how many figures are greyed, or greyed and
-why) and the risk-free outcome; the job logs a start line and a summary. The rules' reasons are
+windows, not a 404, and no risk-free or benchmark fetch is made: `benchmark` is
+`available: false`, "not fetched: nothing to measure". A failed risk-free fetch isn't a 502: it
+greys the three figures that need the rate, and the exception is logged. The flow logs the start
+(naming the benchmark), one line per window (measured with its daily obs and how many figures
+are greyed, then how many of the four relative ones, or greyed and why) and the risk-free
+outcome; the job logs a start line and a summary naming the benchmark and its first date, or why
+it was unavailable. The rules' reasons are
 in `architecture.md`'s `risk/` row.
 
 ### Labs backtest
@@ -52,7 +95,8 @@ in `architecture.md`'s `risk/` row.
 How a mix of assets, bought at its weights and held, would have done over 1M, 3M, 6M, 1Y, 2Y,
 5Y and Max, in EUR (LB-4). The request is
 
-    {"assets": [{"ticker", "weight"}, ...], "period": "1M" | ... | "Max"}
+    {"assets": [{"ticker", "weight"}, ...], "period": "1M" | ... | "Max",
+     "benchmark": "VWCE.DE"}
 
 and the response is
 
@@ -80,13 +124,14 @@ and its rules are in `labs/calculator.py`'s docstring.
 
     {label: "buy & hold (drifting)", end_date, common_start, limited_by: [ticker],
      risk_free: {available, reason, first_date},
+     benchmark: {ticker, available, reason, first_date, growth, growth_reason},
      mix: {ticker: null, windows: {"1Y": Window, "3Y", "5Y", "10Y", "Max"}},
      assets: [{ticker, windows}, ...], drawdown: {period, dates, values} | null}
 
 where a `Window` is `{start, end, covered, reason}` plus a figure for each of
 `cumulative_return`, `cagr`, `volatility`, `downside_deviation`, `sharpe`, `sortino`, `calmar`,
 `max_drawdown`, `var_95`, `cvar_95`, `var_99`, `cvar_99`, and the drawdown's `peak_date`,
-`trough_date`, `recovery_date` and `max_days_under_water`. Each figure is `{value, window_start,
+`trough_date`, `recovery_date` and `max_days_under_water`, and `relative` (RK-13). Each figure is `{value, window_start,
 window_end, frequency, q, n_obs, n_gaps, flags, reason, standard_error}` (risk spec §9). Unlike
 the rest of the response, the figures are JSON numbers, not fixed-point strings: they are
 estimates, not ledger amounts. The rules, argued in `labs/risk.py`'s docstring:
@@ -106,6 +151,14 @@ estimates, not ledger amounts. The rules, argued in `labs/risk.py`'s docstring:
   52, their window shrunk to whole Friday-to-Friday weeks). Everything else is daily. VaR counts
   only days every asset has a price, and carries `nonsync_daily` whenever the row includes a
   non-EUR asset.
+- **`relative`** is each row against the benchmark ("Relative to a benchmark" above): the mix's
+  weekly series re-based at the window's start, or the asset's own. It is null exactly when the
+  window isn't covered. The benchmark doesn't move `common_start`: it isn't a row.
+- **`benchmark.growth`** is the benchmark's line for the growth chart: one fixed-point value per
+  `growth.dates` entry, from 0, priced as an asset's line is (gaps bridged as flat days, FX on
+  or before each date). It is null, with `growth_reason`, when the benchmark is unavailable or
+  starts after `growth.dates[0]` ("benchmark history too short (from <date>)"): started later
+  on its own base it would be on a different scale from the mix's.
 - **`drawdown`** is the mix's only, one value per `growth.dates` entry, null where an asset's
   return was NULL. It is null when `growth.mix` is.
 - **The risk-free series** comes from one more call, `get_risk_free_series`, made after the price
@@ -117,8 +170,9 @@ estimates, not ledger amounts. The rules, argued in `labs/risk.py`'s docstring:
 - `labs/flows.py` logs a start line (assets, end, common start, limiting asset), the risk-free
   outcome (an error with the exception when the call raised, a warning when nothing is stored),
   one line per mix window ("mix 3Y: not covered, limited by VWCE.DE (history from 2019-07-29)."
-  or "mix 1Y: measured 2025-10-17..2026-10-16, 0 of 12 figure(s) greyed."), one line per asset
-  with how many windows it is measured in, and a summary.
+  or "mix 1Y: measured 2025-10-17..2026-10-16, 2 of 16 figure(s) greyed.", the relative four
+  included), one line per asset with how many windows it is measured in, and a summary naming
+  the benchmark, or why it was unavailable. The job's start line names it too.
 
 `labs/flows.run_backtest` fetches through `eur_returns/fetch.fetch_series` (shared with the
 portfolio TWR since RK-10), in two concurrent phases, through a pool of 8 threads:
