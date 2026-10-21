@@ -64,7 +64,8 @@ calls [`portfolio`](../../portfolio/docs/architecture.md), `data-store`, and
 
 Presentation decisions (theme, chart, display formatting, the app shell, form scripts, and
 feedback and error states) are in [`ui-architecture.md`](ui-architecture.md), split out of
-this file for size. It counts as part of this document under `.claude/rules/architecture.md`.
+this file for size, and `/labs`'s in [`labs-ui.md`](labs-ui.md), split out of that one. Both
+count as part of this document under `.claude/rules/architecture.md`.
 
 - **Server-rendered, not an SPA; `auth`'s session cookie is proxied, not reissued.** `auth` sets
   `Set-Cookie` itself (`auth/api/cookies.py`); `web`'s `AuthResult` (`auth_client/base.py`)
