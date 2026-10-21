@@ -322,7 +322,9 @@ async def labs(
             "growth": (
                 None
                 if backtest is None or backtest.growth is None
-                else build_growth_payload(backtest.growth)
+                else build_growth_payload(
+                    backtest.growth, None if backtest.risk is None else backtest.risk.benchmark
+                )
             ),
             "left_out_runs": (
                 [] if backtest is None or backtest.mix is None else mix_left_out_runs(backtest.mix)

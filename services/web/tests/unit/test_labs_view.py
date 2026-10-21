@@ -1,7 +1,7 @@
 """labs_view.build_default_mix (LB-6): the mix /labs backtests when the visitor hasn't edited
 one -- the current holdings, weighted by market value as /portfolio weighs them. LB-8:
-build_growth_payload, the growth chart's data island. LB-10: mix_left_out_runs, the periods the
-mix's figures leave assets out of."""
+build_growth_payload, the growth chart's data island (with RK-14's benchmark line). LB-10:
+mix_left_out_runs, the periods the mix's figures leave assets out of."""
 
 from datetime import date
 from decimal import Decimal
@@ -15,6 +15,7 @@ from web.labs_view import (
 )
 from web.portfolio_client.base import (
     BACKTEST_PERIODS,
+    BacktestBenchmark,
     BacktestGrowth,
     BacktestPeriodReturn,
     BacktestRow,
@@ -124,6 +125,7 @@ def test_growth_payload_keeps_the_assets_order_and_their_missing_lines():
         "mix": [0.0, 0.5],
         "assets": [{"ticker": "B", "values": [0.0, 1.0]}, {"ticker": "A", "values": None}],
         "left_out": [],
+        "benchmark": None,
     }
 
 
@@ -213,3 +215,42 @@ def test_a_period_leaving_nothing_out_splits_runs_of_the_same_assets():
         LeftOutRun(first="1M", last="1M", tickers=("A",)),
         LeftOutRun(first="6M", last="6M", tickers=("A",)),
     ]
+
+
+def _benchmark(growth=None, reason=None, **changes):
+    fields = dict(
+        ticker="IWDA.AS",
+        available=True,
+        reason=None,
+        first_date=date(2009, 9, 25),
+        growth=growth,
+        growth_reason=reason,
+    )
+    fields.update(changes)
+    return BacktestBenchmark(**fields)
+
+
+def test_growth_payload_carries_the_benchmark_line_rounded():
+    growth = _growth(mix=(Decimal("0"), Decimal("0.5")), assets={})
+    benchmark = _benchmark(growth=(Decimal("0E-8"), Decimal("0.123456789")))
+
+    payload = build_growth_payload(growth, benchmark)
+
+    assert payload["benchmark"] == {"ticker": "IWDA.AS", "values": [0.0, 0.123457], "reason": None}
+
+
+def test_growth_payload_says_why_there_is_no_benchmark_line():
+    growth = _growth(mix=(Decimal("0"), Decimal("0.5")), assets={})
+    reason = "benchmark history too short (from 2019-07-29)"
+
+    payload = build_growth_payload(growth, _benchmark(reason=reason, ticker="VWCE.DE"))
+
+    assert payload["benchmark"] == {"ticker": "VWCE.DE", "values": None, "reason": reason}
+
+
+def test_growth_payload_with_no_line_and_no_reason_still_gives_one():
+    growth = _growth(mix=(Decimal("0"), Decimal("0.5")), assets={})
+
+    payload = build_growth_payload(growth, _benchmark())
+
+    assert payload["benchmark"]["reason"] == "not available"

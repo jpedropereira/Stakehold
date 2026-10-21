@@ -10,6 +10,7 @@ import html as html_lib
 import json
 import logging
 import re
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 
@@ -821,3 +822,50 @@ def test_an_unavailable_benchmark_says_why_once(client):
     assert _group_heading(_grid(html)) == "Against NOPE.XX: unavailable, not tracked"
     assert reason not in _section(html)
     assert "Unavailable" in _cells(_grid_row(html, "Beta"))[1]
+
+
+def _series_box(html):
+    return re.search(r'<fieldset class="labs-series".*?</fieldset>', html, re.S).group(0)
+
+
+def _growth_island(html):
+    match = re.search(r'<script id="labs-chart-data" type="application/json">(.*?)</script>', html)
+    return json.loads(match.group(1))
+
+
+def test_the_benchmark_line_is_on_by_default_with_its_own_box(client):
+    test_client, fake_portfolio = client
+    line = (Decimal("0"), Decimal("0.004"), Decimal("-0.01"))
+    _with_risk(fake_portfolio, _risk(benchmark=replace(BENCHMARK, growth=line, growth_reason=None)))
+
+    html = _page(test_client)
+
+    box = re.search(
+        r'<label[^>]*>\s*<input[^>]*data-series="__benchmark"[^>]*>.*?</label>',
+        _series_box(html),
+        re.S,
+    ).group(0)
+    assert "checked" in box and "disabled" not in box
+    assert "VWCE.DE" in box and "benchmark" in box
+    assert _growth_island(html)["benchmark"] == {
+        "ticker": "VWCE.DE",
+        "values": [0.0, 0.004, -0.01],
+        "reason": None,
+    }
+    assert "the dashed line is the benchmark" in _series_box(html)
+
+
+def test_no_benchmark_line_disables_its_box_and_says_why(client):
+    test_client, fake_portfolio = client
+    reason = "benchmark history too short (from 2019-07-29)"
+    _with_risk(fake_portfolio, _risk(benchmark=replace(BENCHMARK, growth_reason=reason)))
+
+    html = _page(test_client)
+
+    box = re.search(
+        r'<label[^>]*>\s*<input[^>]*data-series="__benchmark"[^>]*>.*?</label>',
+        _series_box(html),
+        re.S,
+    ).group(0)
+    assert "disabled" in box and "checked" not in box
+    assert "No benchmark line: benchmark history too short (from 2019-07-29)." in _text(html)

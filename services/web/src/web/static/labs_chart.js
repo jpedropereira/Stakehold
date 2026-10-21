@@ -3,9 +3,10 @@ document.addEventListener("DOMContentLoaded", () => {
   const dataEl = document.getElementById("labs-chart-data");
   if (!canvas || !dataEl) return;
 
-  // labs_view.build_growth_payload: {period, dates, mix, assets: [{ticker, values}], left_out},
-  // each line cumulative growth as a fraction (0 on the first date), or null when it doesn't
-  // cover the period. A late asset's Max line has null points before its first day.
+  // labs_view.build_growth_payload: {period, dates, mix, assets: [{ticker, values}], left_out,
+  // benchmark: {ticker, values, reason} or null}, each line cumulative growth as a fraction (0 on
+  // the first date), or null when it doesn't cover the period. A late asset's Max line has null
+  // points before its first day.
   const growth = JSON.parse(dataEl.textContent);
 
   // Theme colors, the percentage format and the redraw on a theme change: static/chart_theme.js.
@@ -22,13 +23,33 @@ document.addEventListener("DOMContentLoaded", () => {
   // segments are gain/loss colored, as /portfolio's total return is (a growth is a gain or a
   // loss); the assets are thin and muted. Gold isn't used: it is the one accent, for controls,
   // and as a line on parchment it falls under the 3:1 a chart's marks need.
+  // The benchmark (RK-14) is a dashed ink line, on by default: the line the mix is read
+  // against. The dash, not a color, sets it apart, for the reason above. A line's series is what
+  // its checkbox names (an asset's ticker, or "__benchmark"), so a benchmark that is also in the
+  // mix stays a line of its own. Derived, not stored on the dataset: a string property of our
+  // own on a dataset left a toggled chart frozen mid-animation, where boolean flags don't.
+  const BENCHMARK = "__benchmark";
+  const seriesOf = (dataset) => (dataset.isBenchmark ? BENCHMARK : dataset.label);
   const datasets = [];
   if (growth.mix) {
     datasets.push({ label: "Mix", data: growth.mix, borderWidth: 2.5, isMix: true });
   }
-  for (const asset of growth.assets) {
-    if (asset.values) datasets.push({ label: asset.ticker, data: asset.values, borderWidth: 1.25 });
+  if (growth.benchmark && growth.benchmark.values) {
+    datasets.push({
+      label: growth.benchmark.ticker,
+      data: growth.benchmark.values,
+      borderWidth: 1.5,
+      borderDash: [6, 4],
+      isBenchmark: true,
+    });
   }
+  for (const asset of growth.assets) {
+    if (asset.values) {
+      datasets.push({ label: asset.ticker, data: asset.values, borderWidth: 1.25 });
+    }
+  }
+
+  const rank = (dataset) => (dataset.isMix ? 0 : dataset.isBenchmark ? 1 : 2);
 
   const mixSegment = (ctx) =>
     ctx.p0.parsed.y >= 0 && ctx.p1.parsed.y >= 0 ? colors.gain : colors.loss;
@@ -130,11 +151,15 @@ document.addEventListener("DOMContentLoaded", () => {
           // the mix's changes along its length. Names carry it, the mix first.
           displayColors: false,
           // Only shown lines are listed (index mode skips hidden datasets and null points).
-          itemSort: (a, b) =>
-            Number(Boolean(b.dataset.isMix)) - Number(Boolean(a.dataset.isMix)) ||
-            a.datasetIndex - b.datasetIndex,
+          // The mix first, then the benchmark, then the assets.
+          itemSort: (a, b) => rank(a.dataset) - rank(b.dataset) || a.datasetIndex - b.datasetIndex,
           callbacks: {
-            label: (ctx) => `${ctx.dataset.label}: ${formatPct(ctx.parsed.y, 2)}`,
+            label: (ctx) => {
+              const name = ctx.dataset.isBenchmark
+                ? `${ctx.dataset.label} (benchmark)`
+                : ctx.dataset.label;
+              return `${name}: ${formatPct(ctx.parsed.y, 2)}`;
+            },
           },
         },
       },
@@ -147,10 +172,11 @@ document.addEventListener("DOMContentLoaded", () => {
         const near = chart
           .getElementsAtEventForMode(event, "index", { intersect: false }, false)
           .filter(({ datasetIndex, element }) => {
-            return !chart.data.datasets[datasetIndex].isMix && Number.isFinite(element.y);
+            const dataset = chart.data.datasets[datasetIndex];
+            return !dataset.isMix && !dataset.isBenchmark && Number.isFinite(element.y);
           })
           .map(({ datasetIndex, element }) => ({
-            series: chart.data.datasets[datasetIndex].label,
+            series: seriesOf(chart.data.datasets[datasetIndex]),
             distance: Math.abs(element.y - event.y),
           }))
           .sort((a, b) => a.distance - b.distance)[0];
@@ -189,8 +215,14 @@ document.addEventListener("DOMContentLoaded", () => {
         dataset.segment = { borderColor: mixSegment };
         continue;
       }
-      const isHighlighted = dataset.label === highlighted;
-      dataset.hidden = !shown.has(dataset.label);
+      dataset.hidden = !shown.has(seriesOf(dataset));
+      if (dataset.isBenchmark) {
+        // Below the mix, above every asset line, a raised one included.
+        dataset.borderColor = colors.text;
+        dataset.order = -1.5;
+        continue;
+      }
+      const isHighlighted = seriesOf(dataset) === highlighted;
       dataset.borderColor = isHighlighted ? colors.text : colors.muted;
       dataset.borderWidth = isHighlighted ? 2 : 1.25;
       // A raised asset line draws above the other assets, still below the mix.

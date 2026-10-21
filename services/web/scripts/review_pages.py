@@ -139,6 +139,12 @@ PAGES = [
     # ticker the fake doesn't track greys the relative figures, said once per group.
     Page("labs-benchmark", "/labs?benchmark=IWDA.AS&risk_window=3Y", "user"),
     Page("labs-benchmark-max", "/labs?benchmark=IWDA.AS&period=Max", "user"),
+    Page(
+        "labs-benchmark-and-asset",
+        "/labs?benchmark=IWDA.AS&period=Max",
+        "user",
+        click='.labs-series input[data-series="AAPL"]',
+    ),
     Page("labs-benchmark-unavailable", "/labs?benchmark=NOPE.XX", "user"),
     Page("glossary", "/glossary", "user"),
     # Followed from a holdings page's "Total return" header: the entry it lands on is marked.

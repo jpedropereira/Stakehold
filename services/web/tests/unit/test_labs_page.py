@@ -781,6 +781,8 @@ def test_the_data_island_carries_every_series_for_the_period(client):
             {"ticker": "VWRL.AS", "values": None},
         ],
         "left_out": ["VWRL.AS"],
+        # This backtest has no risk section, so no benchmark (RK-14).
+        "benchmark": None,
     }
 
 
