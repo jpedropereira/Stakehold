@@ -7,14 +7,15 @@ below is still described conceptually rather than as DDL. This document covers t
 boundaries between modules, and the decisions that would otherwise look arbitrary — mirroring the
 shape of [`data-store`'s own architecture doc](../../data-store/docs/architecture.md).
 
-Six companions hold the rest, split out to keep each file under the repo's 64KB limit:
+Seven companions hold the rest, split out to keep each file under the repo's 64KB limit:
 [`flows.md`](flows.md) (every flow and its entry points, the HTTP API, and what portfolio reads
-from data-store), [`modules.md`](modules.md) (each domain module's shape and why),
+from data-store), [`risk-flows.md`](risk-flows.md) (the risk and Labs flows, in detail),
+[`modules.md`](modules.md) (each domain module's shape and why),
 [`broker-import.md`](broker-import.md) (the broker-parser plugin surfaces),
 [`deployment.md`](deployment.md) (containers and databases), [`testing.md`](testing.md)
 (what each test tier covers), and [`cross-cutting-decisions.md`](cross-cutting-decisions.md)
 (the service-wide rules and their rejected alternatives).
-A structural change may need any of the seven updated.
+A structural change may need any of the eight updated.
 
 ## What the service is responsible for
 
