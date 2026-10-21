@@ -129,7 +129,7 @@ checked against the code, docs and dev DB:
 | RK-15 | [portfolio: ex-ante covariance and risk decomposition](#rk-15-portfolio-ex-ante-covariance-and-risk-decomposition) | RK-6, RK-7 | done |
 | RK-16 | [portfolio: correlation matrix](#rk-16-portfolio-correlation-matrix) | RK-6 | done |
 | RK-17 | [portfolio: ex-ante endpoint](#rk-17-portfolio-ex-ante-endpoint) | RK-4, RK-5, RK-13, RK-15, RK-16 | done |
-| RK-18 | [web: ex-ante summary, decomposition and heatmap](#rk-18-web-ex-ante-summary-decomposition-and-heatmap) | RK-12, RK-17 | ready |
+| RK-18 | [web: ex-ante summary, decomposition and heatmap](#rk-18-web-ex-ante-summary-decomposition-and-heatmap) | RK-12, RK-17 | done |
 | RK-19 | [portfolio: candidate what-if](#rk-19-portfolio-candidate-what-if) | RK-17 | ready |
 | RK-20 | [web: what-if form](#rk-20-web-what-if-form) | RK-18, RK-19 | blocked |
 | RK-21 | [data-store: ETF holdings endpoint](#rk-21-data-store-etf-holdings-endpoint) | RK-1 | done |
@@ -137,7 +137,7 @@ checked against the code, docs and dev DB:
 | RK-23 | [web: concentration section](#rk-23-web-concentration-section) | RK-12, RK-22 | blocked |
 | RK-24 | [portfolio: rolling windows](#rk-24-portfolio-rolling-windows) | RK-11, RK-16, RK-17 | ready |
 | RK-25 | [web: rolling charts](#rk-25-web-rolling-charts) | RK-18, RK-24 | blocked |
-| RK-26 | [FX decomposition (portfolio and web)](#rk-26-fx-decomposition-portfolio-and-web) | RK-18 | blocked |
+| RK-26 | [FX decomposition (portfolio and web)](#rk-26-fx-decomposition-portfolio-and-web) | RK-18 | ready |
 | RK-27 | [data-store: regimes endpoint](#rk-27-data-store-regimes-endpoint) | RK-1 | ready |
 | RK-28 | [Regime view (portfolio and web)](#rk-28-regime-view-portfolio-and-web) | RK-14, RK-27 | blocked |
 | RK-29 | [Candidate ranking mode](#rk-29-candidate-ranking-mode) | RK-20 | blocked |
@@ -781,7 +781,7 @@ has the details. Decisions:
 
 ### RK-18. web: ex-ante summary, decomposition and heatmap
 
-**Status:** ready
+**Status:** done
 
 - Ex-ante summary, labelled "ex-ante · constant weights" beside the ex-post one (R2).
 - The decomposition table, with weight % beside risk %, and the 10%-weight/25%-risk insight
@@ -790,6 +790,28 @@ has the details. Decisions:
 - The correlation heatmap. **Agree its colour scale against the brand charter before building.**
   Forest and oxblood are off-limits for correlation.
 - A control to exclude the holding that limits the window.
+
+**As built:** a second `/risk` section, built by a new pure `risk_ex_ante_view.py` and loaded by
+`api/risk.py` from `GET /holdings` (`labs_view.build_default_mix`) then `POST /risk/ex-ante`.
+The client gained `ex_ante_risk`. `risk_view.py`'s cell, title and legend helpers became public
+first, so both sections' figures read alike. web's `ui-architecture.md` holds the reasoning.
+Decisions (agreed):
+- **The heatmap is an ink ramp on ρ from 0 to 1**: tints of `--text` at 10/20/30/80%, ρ below
+  0.2 (negative included) unfilled, the sign in the printed number. AA allows ink text up to a
+  33% tint and flipped text from 69%, so only the darkest step (ρ ≥ 0.8) flips. No gold,
+  forest or oxblood.
+- **The insight note** names each holding whose share of risk is ≥ 1.5× its weight and ≥ 5
+  points above it, and any hedge. Every row shows weight, share of risk and their ratio.
+- **The € VaR** applies the constant-weight 95% and 99% figures to the market value of the
+  holdings portfolio included, not the whole portfolio's.
+- **Controls:** window links (`?ex_ante_window=`, 3Y by default) and `?exclude=` links per
+  limiting holding, with "include again" links. **No EUR/local toggle**: the matrix is EUR.
+- **σ_p is the summary's volatility row**, since it equals the constant-weight weekly
+  volatility; the diversification ratio is under it and the effective N under the table.
+- A stale or all-covering `?exclude=` is dropped in web and logged, never sent as a 422.
+- `review_pages.py`'s contrast check now parses `color(srgb …)`, which Chromium reports for
+  `color-mix()`. The script is at 61.7 KB: the next task adding review pages should split it
+  first.
 
 ### RK-19. portfolio: candidate what-if
 
@@ -891,7 +913,7 @@ Charts for RK-24, on `/risk`.
 
 ### RK-26. FX decomposition (portfolio and web)
 
-**Status:** blocked
+**Status:** ready
 
 §6.4 for each non-EUR holding, on weekly returns: local volatility, FX volatility,
 corr(r_local, r_fx), and EUR volatility. It reuses RK-5's `r_local` and `r_fx`.

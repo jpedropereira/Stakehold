@@ -577,3 +577,45 @@ described here updates this file in the same change.
     covered". Each cell's `title` ends "· against <ticker>". *Rejected: a separate table*, which
     would repeat the five window headers for four rows. *Rejected: checking the ticker against
     the list in web*, a second copy of portfolio's rule that could drift from it.
+  - **Ex-ante · constant weights (RK-18).** The second section: today's mix (the holdings at
+    their market-value weights, `labs_view.build_default_mix`) held through one window, labelled
+    apart from the ex-post figures (R2). `risk_ex_ante_view.py` builds it. Decisions (agreed):
+    - *One column, the measured window.* The window links (`?ex_ante_window=`, 3Y by default,
+      spec §7.1) rerun the page, as Labs' `?risk_window=` does, so it works without JS. The
+      summary reuses the ex-post table's macro and cells. Its volatility row is σ_p, which equals
+      the constant-weight weekly volatility exactly (spec §6.2), so the page shows one
+      volatility for one mix; the diversification ratio sits under it, and the effective number
+      of holdings is a line under the table (a plain number, with no window to report).
+    - *The limiting holding (R12).* The "Measured from" line says which holding shortened the
+      window and from when, with an "Exclude <ticker>" link per `limited_by`; an excluded
+      holding gets an "Include … again" link. Both are `?exclude=` links built from the current
+      query, and the benchmark form re-sends them as hidden inputs.
+    - *Weight beside share of risk (spec §6.3).* The decomposition shows weight, share of risk
+      (PCR), their ratio, volatility, contribution and correlation with the mix. A note above it
+      names each holding whose share of risk is at least 1.5× its weight **and** 5 points above
+      it ("TSLA is 10.0% of the money and 25.0% of the risk"), with a gold rule beside it, the
+      accent's "look here", never oxblood. The 5 points keep small holdings out of it: a 1%
+      holding at 2% of the risk is 2× but immaterial. A hedge (negative share) gets its own
+      note. Under 104 weeks every figure is null; the table says why once and keeps the
+      weights. *Rejected:* naming only the largest gap (hides a second one), and no note.
+    - *The € figure (spec §5.5)* is the constant-weight 1-day VaR 95% and 99% ("1 in 20", "1 in
+      100") on the market value of the holdings portfolio included, not the whole portfolio's:
+      a holding left out isn't in the mix the percentage describes. *Rejected: the overview's
+      total*, which would apply one mix's percentage to another.
+    - *The heatmap is an ink ramp on ρ from 0 to 1.* Four tints of `--text` over the card
+      (10/20/30/80%), the darkest with the card colour as text. ρ below 0.2, negative included,
+      is unfilled, so dark always means "moved together"; the printed number carries the sign.
+      *Rejected:* a ramp on |ρ|, which shades a hedge like a duplicate, and gold for positive
+      with ink for negative, which spends the accent on decoration (and forest and oxblood are
+      for gains and losses only). AA decides the steps: ink text holds 4.5:1 on a tint of at
+      most 33% and flipped text needs at least 69%, in both themes, so there are three light
+      steps and one dark one (ρ ≥ 0.8), not a smooth ramp. `test_brand_contrast.py` reads the
+      percentages from `web.css`. Classes, not inline styles, because the CSP has no
+      `'unsafe-inline'` for styles. Each square's `title` has its own pair window and n_obs
+      (R13: pairwise, for display only); a greyed one reads "n/a". The benchmark is a row,
+      marked as such, once even when it is also a holding.
+    - *EUR only.* The request always sends `currency: eur`; spec §7.1's local-currency toggle
+      wasn't built (agreed), since the EUR matrix is a euro investor's risk.
+    - *Review tooling.* Chromium reports a `color-mix()` background as `color(srgb …)`, which
+      `review_pages.py`'s contrast check didn't parse, so it measured the darkest squares
+      against the card. It parses that form now.

@@ -512,15 +512,25 @@ Every route `web` serves, with what it requires and which upstream calls it make
   significant digits. RK-14 added the benchmark's line to it, or the reason it has none.
 - `api/risk.py` (RK-12) — `GET /risk`, the risk page, on its own router for the same file-size
   reason. The page is a stack of sections, each with its own loader returning its data or the
-  notice to show in its place, so one failing section never takes the page down. Today there
-  is one, the ex-post summary. The ex-ante, concentration and what-if sections (RK-18, RK-23,
-  RK-20) each add a loader, gathered concurrently, since none needs another's answer. RK-14
-  added `?benchmark=` and the ticker list for its field, fetched concurrently with the figures
-  and failing on its own, as on `/labs`.
+  notice to show in its place, so one failing section never takes the page down. Two so far,
+  the ex-post summary and (RK-18) the ex-ante section, gathered concurrently since neither
+  needs the other's answer. The ex-ante loader makes two calls in order, as `/labs`'s default
+  mix does: `GET /holdings` (`labs_view.build_default_mix`, so the weights are worked out in one
+  place), then `POST /risk/ex-ante`. A stale or all-covering `?exclude=` is dropped in web and
+  logged, so an old link never becomes portfolio's 422. The concentration and what-if sections
+  (RK-23, RK-20) each add a loader. RK-14 added `?benchmark=` and the ticker list for its
+  field, fetched concurrently with the figures and failing on its own, as on `/labs`.
 - `risk_view.py` (RK-12) — pure: `build_ex_post_table`, the ex-post summary table (measures as
   rows, windows as columns) with each figure's greyed reason, its metadata `title` and its flag
   markers, plus the legend of the flags present. The template only lays it out. RK-14 added
-  the relative rows, built the same way, and the benchmark they are measured against.
+  the relative rows, built the same way, and the benchmark they are measured against. RK-18
+  made its cell, title and legend helpers public (`figure_cell`, `figure_title`, `legend_for`,
+  `SUMMARY_ROWS`) for the ex-ante section, rather than keeping a second copy.
+- `risk_ex_ante_view.py` (RK-18) — pure: `build_ex_ante_section`, the ex-ante section (the
+  constant-weight summary, the decomposition and its insight note, the € tail figures, the
+  heatmap's squares and buckets, and the window, exclude and include links). Its own module
+  because it has four parts of its own; it reuses `risk_view`'s cells so the two sections'
+  figures read alike. See "Risk page" in [`ui-architecture.md`](ui-architecture.md).
 - `api/tickers.py` (TK-8) — the Tickers pages, on their own router for the same file-size
   reason, rendering through `routes.py`'s helpers so CSRF and cookie handling stay identical.
 - `ticker_status.py` (TK-8/TK-9) — how a tracked ticker's status reads (labels, a holding's
