@@ -9,7 +9,7 @@ from datetime import date
 import httpx
 import pytest
 from web.portfolio_client.base import (
-    RISK_FIGURES,
+    RISK_FIGURE_KEYS,
     RISK_WINDOWS,
     ExcludedHolding,
     ExPostRisk,
@@ -57,7 +57,7 @@ def _window(label, start="2025-10-16", **changes):
         "start": start,
         "end": END,
         "covered": True,
-        **{name: _figure() for name in RISK_FIGURES},
+        **{name: _figure() for name in RISK_FIGURE_KEYS},
         "peak_date": "2026-02-02",
         "trough_date": "2026-04-07",
         "recovery_date": None,
@@ -157,7 +157,7 @@ async def test_ex_post_risk_parses_a_full_response():
     assert first.figures["var_99"].value is None
     assert first.figures["var_99"].reason == "too few days"
     assert first.figures["var_99"].flags == ("insufficient_history", "tail_unstable")
-    assert list(first.figures) == list(RISK_FIGURES)
+    assert list(first.figures) == list(RISK_FIGURE_KEYS)
 
 
 async def test_ex_post_risk_reads_an_integer_value_as_a_number():
@@ -197,7 +197,7 @@ async def test_ex_post_risk_keeps_an_uncovered_windows_greyed_figures():
                 flags=["insufficient_history"],
                 reason="insufficient history (portfolio history from 2023-01-02)",
             )
-            for name in RISK_FIGURES
+            for name in RISK_FIGURE_KEYS
         },
         peak_date=None,
         trough_date=None,

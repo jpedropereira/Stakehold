@@ -8,18 +8,9 @@ document.addEventListener("DOMContentLoaded", () => {
   // cover the period. A late asset's Max line has null points before its first day.
   const growth = JSON.parse(dataEl.textContent);
 
-  // Mirrors web/formatting.py's pct: a signed percentage, a true minus sign, and no sign on a
-  // value that displays as zero. Keep the two in step (as portfolio_chart.js's formatEur).
-  const MINUS = "−";
-  const formatPct = (fraction, digits) => {
-    const magnitude = Math.abs(fraction * 100).toFixed(digits);
-    const isZero = Number(magnitude) === 0;
-    const sign = isZero ? "" : fraction < 0 ? MINUS : "+";
-    return `${sign}${magnitude}%`;
-  };
-
-  // Theme colors and the redraw on a theme change: static/chart_theme.js.
+  // Theme colors, the percentage format and the redraw on a theme change: static/chart_theme.js.
   const theme = window.StakeholdChartTheme;
+  const formatPct = theme.formatPct;
   let colors = theme.readColors();
 
   const toggles = document.querySelector(".labs-series");

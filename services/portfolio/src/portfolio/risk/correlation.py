@@ -18,8 +18,9 @@
   or its `r_local`; which one, and the label saying so, belong to the caller.
 
 Inputs are weekly series (`weekly.to_weekly`), keyed by ticker in display order. Every weekly
-series sits on the same Friday grid, so aligning two is a date intersection. The window is shrunk
-to whole weeks first (`weekly.weekly_window`), as the weekly single-series measures are.
+series sits on the same Friday grid, so aligning two is a date intersection. The window becomes
+the whole weeks ending inside it first (`weekly.weekly_window`), as for the weekly single-series
+measures.
 """
 
 from collections.abc import Mapping

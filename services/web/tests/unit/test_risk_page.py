@@ -18,7 +18,7 @@ from web.api.deps import get_auth_client, get_portfolio_client
 from web.auth_client.base import AuthResult, AuthUser
 from web.auth_client.errors import SessionInvalid
 from web.portfolio_client.base import (
-    RISK_FIGURES,
+    RISK_FIGURE_KEYS,
     RISK_WINDOWS,
     ExcludedHolding,
     ExPostRisk,
@@ -134,9 +134,9 @@ def _greyed(name, start, reason, flags=("insufficient_history",)) -> RiskFigure:
 def _window(label, *, covered=True, **figures) -> ExPostWindow:
     start = _STARTS[label]
     if covered:
-        all_figures = {name: _figure(name, start) for name in RISK_FIGURES}
+        all_figures = {name: _figure(name, start) for name in RISK_FIGURE_KEYS}
     else:
-        all_figures = {name: _greyed(name, start, UNCOVERED) for name in RISK_FIGURES}
+        all_figures = {name: _greyed(name, start, UNCOVERED) for name in RISK_FIGURE_KEYS}
     all_figures.update(figures)
     return ExPostWindow(
         label=label,
@@ -275,15 +275,15 @@ def test_a_row_per_measure_with_its_frequency(client):
 
 
 def test_figures_are_formatted_by_kind(client):
-    """Spec §10: volatility, drawdown and VaR to 1 decimal, ratios to 2. Returns as Labs shows
-    them."""
+    """Spec §10: volatility, drawdown and VaR to 1 decimal, ratios to 2. Returns to 1 decimal
+    with their sign, as the Labs risk panel shows CAGR (RK-9)."""
     test_client, fake_auth, _ = client
     _logged_in(test_client, fake_auth)
 
     html = _page(test_client)
 
-    assert "+12.34%" in _cells(_row(html, "Cumulative return"))[0]
-    assert "−4.56%" in _cells(_row(html, "CAGR"))[0]
+    assert ">+12.3%<" in _cells(_row(html, "Cumulative return"))[0]
+    assert ">−4.6%<" in _cells(_row(html, "CAGR"))[0]
     assert ">15.3%<" in _cells(_row(html, "Volatility"))[0]
     assert ">−23.5%<" in _cells(_row(html, "Max drawdown"))[0]
     assert ">0.84<" in _cells(_row(html, "Sharpe"))[0]

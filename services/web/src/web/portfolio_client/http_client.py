@@ -5,7 +5,8 @@ from urllib.parse import quote
 import httpx
 from web.portfolio_client.base import (
     BACKTEST_PERIODS,
-    RISK_FIGURES,
+    BACKTEST_RISK_WINDOWS,
+    RISK_FIGURE_KEYS,
     RISK_WINDOWS,
     Account,
     AccountDeleteResult,
@@ -14,8 +15,12 @@ from web.portfolio_client.base import (
     BacktestAssetStatus,
     BacktestGrowth,
     BacktestPeriodReturn,
+    BacktestRisk,
     BacktestRow,
+    BacktestRowRisk,
+    BacktestWindowRisk,
     Broker,
+    DrawdownSeries,
     ExcludedHolding,
     ExPostRisk,
     ExPostWindow,
@@ -28,6 +33,7 @@ from web.portfolio_client.base import (
     Position,
     Return,
     RiskFigure,
+    RiskFreeStatus,
     TickerLookup,
     TickerMapping,
     TickerMappingWriteResult,
@@ -401,9 +407,94 @@ def _backtest_growth(item: dict) -> BacktestGrowth:
     )
 
 
+def _float(value, key: str) -> float:
+    """A JSON number. A bool is an int to Python, and a string would format as a figure, so
+    both are refused rather than shown as 1.00 or passed through."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(f"{key} is not a number")
+    return float(value)
+
+
+def _opt_float(value, key: str) -> float | None:
+    return None if value is None else _float(value, key)
+
+
+def _risk_figure(item: dict | None) -> RiskFigure | None:
+    if item is None:
+        return None
+    return RiskFigure(
+        value=_opt_float(item["value"], "value"),
+        window_start=date.fromisoformat(item["window_start"]),
+        window_end=date.fromisoformat(item["window_end"]),
+        frequency=item["frequency"],
+        q=_float(item["q"], "q"),
+        n_obs=_int(item, "n_obs"),
+        n_gaps=_int(item, "n_gaps"),
+        flags=_tickers(item, "flags"),
+        reason=item["reason"],
+        standard_error=_opt_float(item["standard_error"], "standard_error"),
+    )
+
+
+def _window_risk(item: dict) -> BacktestWindowRisk:
+    days = item["max_days_under_water"]
+    return BacktestWindowRisk(
+        start=_opt_date(item["start"]),
+        end=date.fromisoformat(item["end"]),
+        covered=_bool(item, "covered"),
+        reason=item["reason"],
+        figures={key: _risk_figure(item[key]) for key in RISK_FIGURE_KEYS},
+        peak_date=_opt_date(item["peak_date"]),
+        trough_date=_opt_date(item["trough_date"]),
+        recovery_date=_opt_date(item["recovery_date"]),
+        max_days_under_water=None if days is None else _int(item, "max_days_under_water"),
+    )
+
+
+def _row_risk(item: dict) -> BacktestRowRisk:
+    windows = item["windows"]
+    missing = [w for w in BACKTEST_RISK_WINDOWS if w not in windows]
+    if missing:
+        # The risk table has a column per window, as the period table has one per period.
+        raise ValueError(f"risk row missing window(s) {', '.join(missing)}")
+    return BacktestRowRisk(
+        ticker=item["ticker"],
+        windows={w: _window_risk(windows[w]) for w in BACKTEST_RISK_WINDOWS},
+    )
+
+
+def _drawdown(item: dict) -> DrawdownSeries:
+    dates = tuple(date.fromisoformat(d) for d in item["dates"])
+    values = tuple(_opt_float(v, "drawdown value") for v in item["values"])
+    if len(values) != len(dates):
+        # One value per date, or the chart would draw each point against the wrong day.
+        raise ValueError(f"drawdown has {len(values)} values for {len(dates)} dates")
+    return DrawdownSeries(period=item["period"], dates=dates, values=values)
+
+
+def _backtest_risk(item: dict) -> BacktestRisk:
+    risk_free, drawdown = item["risk_free"], item["drawdown"]
+    return BacktestRisk(
+        label=item["label"],
+        end_date=date.fromisoformat(item["end_date"]),
+        common_start=_opt_date(item["common_start"]),
+        limited_by=_tickers(item, "limited_by"),
+        risk_free=RiskFreeStatus(
+            available=_bool(risk_free, "available"),
+            reason=risk_free["reason"],
+            first_date=_opt_date(risk_free["first_date"]),
+        ),
+        mix=_row_risk(item["mix"]),
+        assets=tuple(_row_risk(row) for row in item["assets"]),
+        drawdown=None if drawdown is None else _drawdown(drawdown),
+    )
+
+
 def _backtest(body: dict) -> Backtest:
     try:
-        mix, growth = body["mix"], body["growth"]
+        # `risk` is read as required: portfolio always sends it (null with no asset included),
+        # so a missing key is a contract break, not a backtest with no risk figures.
+        mix, growth, risk = body["mix"], body["growth"], body["risk"]
         return Backtest(
             end_date=_opt_date(body["end_date"]),
             mix=None if mix is None else _backtest_row(mix),
@@ -415,40 +506,19 @@ def _backtest(body: dict) -> Backtest:
                 )
                 for item in body["statuses"]
             ),
+            risk=None if risk is None else _backtest_risk(risk),
         )
     except (KeyError, TypeError, ValueError, InvalidOperation) as exc:
         raise PortfolioUnavailable(f"malformed portfolio response: {exc}") from exc
 
 
-def _number(item: dict, key: str) -> float:
-    """A JSON number. A bool is an int in Python, and a string would format as text, not as a
-    figure, so neither passes."""
-    value = item[key]
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise TypeError(f"{key} is not a number")
-    return float(value)
-
-
-def _opt_number(item: dict, key: str) -> float | None:
-    return None if item[key] is None else _number(item, key)
-
-
-def _risk_figure(item: dict) -> RiskFigure:
-    flags = item["flags"]
-    if not isinstance(flags, list) or not all(isinstance(f, str) for f in flags):
-        raise TypeError("flags is not a list of strings")
-    return RiskFigure(
-        value=_opt_number(item, "value"),
-        window_start=date.fromisoformat(item["window_start"]),
-        window_end=date.fromisoformat(item["window_end"]),
-        frequency=item["frequency"],
-        q=_number(item, "q"),
-        n_obs=_int(item, "n_obs"),
-        n_gaps=_int(item, "n_gaps"),
-        flags=tuple(flags),
-        reason=item["reason"],
-        standard_error=_opt_number(item, "standard_error"),
-    )
+def _ex_post_figure(item: dict, name: str) -> RiskFigure:
+    """Unlike a backtest window's, an ex-post figure is never null: an uncovered window greys
+    each figure with its reason instead (RK-11)."""
+    figure = _risk_figure(item[name])
+    if figure is None:
+        raise TypeError(f"{name} is null")
+    return figure
 
 
 def _ex_post_window(item: dict) -> ExPostWindow:
@@ -458,7 +528,7 @@ def _ex_post_window(item: dict) -> ExPostWindow:
         start=date.fromisoformat(item["start"]),
         end=date.fromisoformat(item["end"]),
         covered=_bool(item, "covered"),
-        figures={name: _risk_figure(item[name]) for name in RISK_FIGURES},
+        figures={name: _ex_post_figure(item, name) for name in RISK_FIGURE_KEYS},
         peak_date=_opt_date(item["peak_date"]),
         trough_date=_opt_date(item["trough_date"]),
         recovery_date=_opt_date(item["recovery_date"]),

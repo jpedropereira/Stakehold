@@ -64,7 +64,8 @@ calls [`portfolio`](../../portfolio/docs/architecture.md), `data-store`, and
 
 Presentation decisions (theme, chart, display formatting, the app shell, form scripts, and
 feedback and error states) are in [`ui-architecture.md`](ui-architecture.md), split out of
-this file for size. It counts as part of this document under `.claude/rules/architecture.md`.
+this file for size, and `/labs`'s in [`labs-ui.md`](labs-ui.md), split out of that one. Both
+count as part of this document under `.claude/rules/architecture.md`.
 
 - **Server-rendered, not an SPA; `auth`'s session cookie is proxied, not reissued.** `auth` sets
   `Set-Cookie` itself (`auth/api/cookies.py`); `web`'s `AuthResult` (`auth_client/base.py`)
@@ -423,13 +424,12 @@ Every route `web` serves, with what it requires and which upstream calls it make
   figure off as every asset's. A value can be null: a Max line before its
   asset's first day (LB-9). The shared 10 s timeout fits: the flow took
   about 2.2 s for 50 assets over Max against the dev data. RK-12 added `ex_post_risk`
-  (`GET /risk/ex-post`) and its `ExPostRisk`/`ExPostWindow`/`RiskFigure`/`ExcludedHolding`, plus
-  `RISK_WINDOWS` (the column order) and `RISK_FIGURES` (the twelve figures each window reports).
-  `RiskFigure` holds floats, not `Decimal`s: portfolio serves risk figures as JSON numbers, since
-  they are statistical estimates, not ledger amounts. RK-9 reuses it for Labs' risk section. As for
-  `backtest`, every non-200 is `PortfolioUnavailable`. The checks beyond typing: a number must be
-  a JSON number (a bool or a string is malformed), every window must carry all twelve figures, and
-  the windows must be exactly `RISK_WINDOWS` in order, so a figure can't land under the wrong
+  (`GET /risk/ex-post`) and its `ExPostRisk`/`ExPostWindow`/`ExcludedHolding`, reusing RK-9's
+  `RiskFigure`, `RISK_FIGURE_KEYS` and figure parser; `RISK_WINDOWS` names the standard windows
+  both tables use (`BACKTEST_RISK_WINDOWS` is the same tuple). As for `backtest`, every non-200
+  is `PortfolioUnavailable`. Beyond typing, every window must carry all twelve figures, none of
+  them null (an uncovered ex-post window greys each figure, unlike a backtest window), and the
+  windows must be exactly `RISK_WINDOWS` in order, so a figure can't land under the wrong
   heading. An empty `windows` list is the "nothing to measure" answer, not an error.
 - `rebuild_outcome.py` (UI-7) — pure. Turns the two rebuild statuses into the confirmation
   banner's one sentence; see "Key decisions".
@@ -442,8 +442,8 @@ Every route `web` serves, with what it requires and which upstream calls it make
   `build_portfolio_chart_payload`, for `GET /portfolio`. No FastAPI/httpx dependency, tested in isolation, mirroring how `portfolio`'s own
   `returns/calculator.py` is a pure function.
 - `formatting.py` (UI-5) — pure display formatters (`money`, `signed_money`, `qty`, `pct`,
-  `date`, UI-6's `share` and `delta_class`, UI-8's `native_money`, and RK-12's `pct1` and
-  `ratio`) plus the `FILTERS` mapping `app.py` registers as Jinja filters; see [`ui-architecture.md`](ui-architecture.md).
+  `date`, UI-6's `share` and `delta_class`, UI-8's `native_money`, and RK-9's `pct1`,
+  `signed_pct1` and `ratio` for risk figures, spec §10's one decimal and two) plus the `FILTERS` mapping `app.py` registers as Jinja filters; see [`ui-architecture.md`](ui-architecture.md).
 - `api/overview.py` (UI-11) — `GET /`, on its own router (like `api/theme.py`) because
   `routes.py` is near the 64KB file limit. It renders through `routes._render`, so the
   `_finish` header merge stays in one place.
@@ -458,7 +458,16 @@ Every route `web` serves, with what it requires and which upstream calls it make
   same file-size reason as `api/overview.py`. Fetches holdings, then the backtest for the
   `?period=` the chart shows (LB-8), each failing on its own. LB-7 added the edited mix: the
   ticker list is fetched alongside the holdings, or alone for an edited mix, which needs no
-  holdings.
+  holdings. RK-9 added `?risk_window=`, the window the risk comparison shows. Every window is
+  in the one backtest response, so it changes only the rendering, and the backtest's `risk`
+  section gets one log line (end date, the common window's start and what limits it, windows
+  covered, and the risk-free status).
+- `labs_risk_view.py` (RK-9) — pure: how the backtest's `risk` section is shown. The mix's
+  grid of measures by window (`build_mix_grid`), the mix and its assets over one window
+  (`build_comparison`), and the drawdown chart's island (`build_drawdown_payload`). It sits
+  apart from `labs_view.py` because it owns the wording of a statistical estimate (its format,
+  its greyed reason, its flags' notes), where `labs_view.py` owns which holdings make the mix.
+  An unknown flag shows its code and is logged, never dropped.
 - `labs_mix.py` (LB-7) — pure: the edited mix's query-string contract (`parse_mix`,
   `canonical_query`) and its checks (`check_mix`). It sits apart from `labs_view.py` because it
   owns a different thing: what the user typed and whether it can be sent, where `labs_view.py`
@@ -513,7 +522,8 @@ Every route `web` serves, with what it requires and which upstream calls it make
   `account_not_found.html`, their shared 404; and `error.html`, every other error page) and
   `web.css` plus vendored `htmx.min.js`. Same-origin scripts: `htmx-error-swap.js` (also the
   generic failure banner, UI-12), `chart_theme.js` (LB-8, the theme colors and redraw both charts share), `portfolio_chart.js`,
-  `labs_chart.js` (LB-8, the Labs growth chart), `theme.js` (UI-3, applies a theme
+  `labs_chart.js` (LB-8, the Labs growth chart), `labs_drawdown_chart.js` (RK-9, the mix's
+  drawdown under it; both take `formatPct` from `chart_theme.js`), `theme.js` (UI-3, applies a theme
   switch in place), `transaction_form.js` (UI-9, shows the manual-entry fields the chosen type
   and currency need), `password_toggle.js` (UI-12), `confirm_dialog.js` (opens a delete's
   confirmation as a dialog in place of its page), and `holdings_breakdown.js` (shows and hides a

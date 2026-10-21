@@ -13,19 +13,21 @@ from decimal import ROUND_HALF_UP, Decimal
 MISSING = "—"
 MINUS = "−"
 
-_CENTS = Decimal("0.01")
-
 
 def _to_decimal(value: Decimal | int | float) -> Decimal:
     # str() first, so a float like 12.3 becomes Decimal("12.3"), not its binary expansion.
     return value if isinstance(value, Decimal) else Decimal(str(value))
 
 
-def _two_places(value: Decimal) -> tuple[str, str]:
-    """Round half-up to 2 places; return (sign, grouped magnitude). Sign is "", "+" or "−"."""
-    rounded = value.quantize(_CENTS, rounding=ROUND_HALF_UP)
+def _places(value: Decimal, places: int) -> tuple[str, str]:
+    """Round half-up to `places`; return (sign, grouped magnitude). Sign is "", "+" or "−"."""
+    rounded = value.quantize(Decimal(1).scaleb(-places), rounding=ROUND_HALF_UP)
     sign = "" if rounded.is_zero() else "+" if rounded > 0 else MINUS
-    return sign, f"{abs(rounded):,.2f}"
+    return sign, f"{abs(rounded):,.{places}f}"
+
+
+def _two_places(value: Decimal) -> tuple[str, str]:
+    return _places(value, 2)
 
 
 def money(value: Decimal | int | float | None) -> str:
@@ -93,42 +95,54 @@ def share(value: Decimal | int | float | None) -> str:
     return f"{MINUS if sign == MINUS else ''}{magnitude}%"
 
 
-def _unsigned_unless_negative(value: Decimal, places: int) -> str:
-    """Rounded half-up to `places`, grouped, with a `−` only: for a figure whose sign isn't a
-    gain or a loss. A value that rounds to zero carries no sign."""
-    rounded = value.quantize(Decimal(1).scaleb(-places), rounding=ROUND_HALF_UP)
-    text = f"{abs(rounded):,.{places}f}"
-    return f"{MINUS}{text}" if rounded < 0 else text
+# Risk figures (RK-9) follow spec §10: percentages to one decimal, ratios to two. They are
+# statistical estimates, so a tenth of a percent is already more precision than they carry.
 
 
 def pct1(value: Decimal | int | float | None) -> str:
-    """A risk figure's fraction as a percentage to 1 decimal (spec §10): `0.1534` → `15.3%`,
-    a max drawdown `-0.2345` → `−23.5%`. No `+`: a volatility or a drawdown isn't a gain."""
+    """A fraction as a percentage to one decimal, unsigned unless negative: `0.184` → `18.4%`,
+    `-0.184` → `−18.4%`. For a volatility (never negative) and a drawdown (never positive),
+    where a `+` would read as a gain."""
     if value is None:
         return MISSING
-    return f"{_unsigned_unless_negative(_to_decimal(value) * 100, 1)}%"
+    sign, magnitude = _places(_to_decimal(value) * 100, 1)
+    return f"{MINUS if sign == MINUS else ''}{magnitude}%"
+
+
+def signed_pct1(value: Decimal | int | float | None) -> str:
+    """As `pct1`, with an explicit `+` or `−`: for a CAGR, which is a return."""
+    if value is None:
+        return MISSING
+    sign, magnitude = _places(_to_decimal(value) * 100, 1)
+    return f"{sign}{magnitude}%"
 
 
 def ratio(value: Decimal | int | float | None) -> str:
-    """A risk-adjusted ratio to 2 decimals (spec §10): `0.8412` → `0.84`, with a `−` only."""
+    """A ratio to two places, unsigned unless negative: `0.8649` → `0.86`. A Sharpe of 0.86
+    isn't a gain, so it gets no `+`."""
     if value is None:
         return MISSING
-    return _unsigned_unless_negative(_to_decimal(value), 2)
+    sign, magnitude = _places(_to_decimal(value), 2)
+    return f"{MINUS if sign == MINUS else ''}{magnitude}"
+
+
+# The display each delta kind is colored to match: (scale, places).
+_DELTA_KINDS = {"money": (1, 2), "pct": (100, 2), "pct1": (100, 1)}
 
 
 def delta_class(value: Decimal | int | float | None, kind: str = "money") -> str:
     """The CSS class for a delta: `gain`, `loss`, or `""` when it displays as zero (or `—`).
 
-    Decided from the sign *after* the display rounding of `signed_money` (`kind="money"`) or
-    `pct` (`kind="pct"`), so a figure's color never disagrees with its printed sign: `-0.004`
-    prints as `€0.00` and is neither a gain nor a loss.
+    Decided from the sign *after* the display rounding of `signed_money` (`kind="money"`),
+    `pct` (`kind="pct"`) or `signed_pct1` (`kind="pct1"`), so a figure's color never disagrees
+    with its printed sign: `-0.004` prints as `€0.00` and is neither a gain nor a loss.
     """
-    if kind not in ("money", "pct"):
+    if kind not in _DELTA_KINDS:
         raise ValueError(f"unknown delta kind {kind!r}")
     if value is None:
         return ""
-    number = _to_decimal(value)
-    sign, _ = _two_places(number * 100 if kind == "pct" else number)
+    scale, places = _DELTA_KINDS[kind]
+    sign, _ = _places(_to_decimal(value) * scale, places)
     return {"+": "gain", MINUS: "loss"}.get(sign, "")
 
 
@@ -151,5 +165,6 @@ FILTERS: dict[str, Callable[..., str]] = {
     "date": date_,
     "native_money": native_money,
     "pct1": pct1,
+    "signed_pct1": signed_pct1,
     "ratio": ratio,
 }

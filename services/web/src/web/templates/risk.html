@@ -1,12 +1,11 @@
 {% extends "base.html" %}
 {% from "partials/_banner.html" import banner %}
-{% from "partials/_delta.html" import delta %}
 {% from "partials/_term.html" import term %}
 {% block title %}Risk — Stakehold{% endblock %}
 {# One figure, formatted by its row's kind (risk_view._ROWS): only a return is coloured as a gain
-   or a loss. #}
+   or a loss, to 1 decimal like the Labs risk panel's CAGR (RK-9). #}
 {% macro figure(value, kind) -%}
-{%- if kind == "return" -%}{{ delta(value, "pct") }}
+{%- if kind == "return" -%}{% set cls = value | delta_class("pct1") %}<span class="mono{% if cls %} {{ cls }}{% endif %}">{{ value | signed_pct1 }}</span>
 {%- elif kind == "ratio" -%}<span class="mono">{{ value | ratio }}</span>
 {%- else -%}<span class="mono">{{ value | pct1 }}</span>
 {%- endif -%}

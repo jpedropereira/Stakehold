@@ -9,7 +9,8 @@ lays it out. Spec §10's rules land here:
   cover, the column says why once, so its twelve cells don't repeat it;
 - each flag a figure carries is a numbered marker, explained once in a legend under the table.
 
-The values stay floats: the template formats them (`pct`, `pct1`, `ratio`) by the row's kind.
+The values stay floats: the template formats them (`signed_pct1`, `pct1`, `ratio`) by the row's
+kind.
 """
 
 import logging
@@ -26,9 +27,9 @@ from web.portfolio_client.base import (
 logger = logging.getLogger(__name__)
 
 # (response name, label, glossary anchor, kind). The kind picks the format: "return" is a signed
-# percentage coloured as a gain or a loss, "pct1" a percentage to 1 decimal and "ratio" 2
-# decimals (spec §10), both in plain ink: a volatility, a drawdown or a VaR isn't a gain or a
-# loss.
+# percentage to 1 decimal coloured as a gain or a loss, "pct1" a percentage to 1 decimal and
+# "ratio" 2 decimals (spec §10), both in plain ink: a volatility, a drawdown or a VaR isn't a
+# gain or a loss.
 _ROWS = (
     ("cumulative_return", "Cumulative return", "cumulative-return", "return"),
     ("cagr", "CAGR", "cagr", "return"),

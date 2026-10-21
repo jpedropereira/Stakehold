@@ -7,7 +7,7 @@ from datetime import date
 
 import pytest
 from web.portfolio_client.base import (
-    RISK_FIGURES,
+    RISK_FIGURE_KEYS,
     RISK_WINDOWS,
     ExcludedHolding,
     ExPostRisk,
@@ -47,14 +47,14 @@ def _figure(value=0.1, *, start=date(2025, 10, 16), name="cagr", **changes) -> R
 
 def _window(label, covered=True, **figures) -> ExPostWindow:
     start = _STARTS[label]
-    all_figures = {name: _figure(start=start, name=name) for name in RISK_FIGURES}
+    all_figures = {name: _figure(start=start, name=name) for name in RISK_FIGURE_KEYS}
     if not covered:
         reason = "insufficient history (portfolio history from 2023-01-02)"
         all_figures = {
             name: _figure(
                 None, start=start, name=name, flags=("insufficient_history",), reason=reason
             )
-            for name in RISK_FIGURES
+            for name in RISK_FIGURE_KEYS
         }
     all_figures.update(figures)
     return ExPostWindow(
@@ -107,7 +107,7 @@ def test_rows_are_the_measures_in_reading_order():
         "var_99",
         "cvar_99",
     ]
-    assert sorted(row.key for row in table.rows) == sorted(RISK_FIGURES)
+    assert sorted(row.key for row in table.rows) == sorted(RISK_FIGURE_KEYS)
 
 
 def test_columns_are_the_windows_with_their_dates():

@@ -464,8 +464,8 @@ standard_error}`, the metadata spec §9 and §10 ask every number to carry.
   starts at `base_date`. A window that starts before `base_date` has `covered: false`, and every
   figure in it is greyed with "insufficient history (portfolio history from <date>)".
 - **Frequencies** follow spec §4.3: cumulative return, CAGR, drawdown and VaR are daily;
-  volatility, downside deviation, Sharpe and Sortino are weekly, on whole Friday-to-Friday weeks,
-  so their window is the daily one shrunk to Fridays.
+  volatility, downside deviation, Sharpe and Sortino are weekly, on the whole Friday-to-Friday
+  weeks ending inside the daily window, so a 1Y figure has 52 weeks.
 - **A greyed figure** has `value: null` and a `reason`: below its §4.5 minimum, an undefined
   ratio, an uncovered window, or "no risk-free rate data" when `rf_available` is false.
 - **VaR and CVaR** keep only the dates on which every ticker held the day before traded, and
@@ -535,7 +535,7 @@ estimates, not ledger amounts. The rules, argued in `labs/risk.py`'s docstring:
   NULL is a gap in its figures (`n_gaps`), while Labs' period table and growth line still bridge
   it as a flat day.
 - **Volatility, downside deviation, Sharpe and Sortino are weekly** (`frequency: "weekly"`, q =
-  52, their window shrunk to whole Friday-to-Friday weeks). Everything else is daily. VaR counts
+  52, on the whole Friday-to-Friday weeks ending inside the window). Everything else is daily. VaR counts
   only days every asset has a price, and carries `nonsync_daily` whenever the row includes a
   non-EUR asset.
 - **`drawdown`** is the mix's only, one value per `growth.dates` entry, null where an asset's

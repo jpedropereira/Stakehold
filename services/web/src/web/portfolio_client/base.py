@@ -318,31 +318,21 @@ class BacktestAssetStatus:
     reason: str | None  # None when included
 
 
-@dataclass(frozen=True)
-class Backtest:
-    """portfolio's BacktestResponse (LB-4). With no asset included, end_date, mix and growth
-    are None and assets is empty; statuses still lists every requested asset, in order."""
-
-    end_date: date | None
-    mix: BacktestRow | None
-    assets: tuple[BacktestRow, ...]
-    growth: BacktestGrowth | None
-    statuses: tuple[BacktestAssetStatus, ...]
-
-
-# portfolio's standard risk windows (spec §4.5), in the risk table's column order.
+# portfolio's standard risk windows (StandardWindow, spec §4.5), in a risk table's column order.
 RISK_WINDOWS = ("1Y", "3Y", "5Y", "10Y", "Max")
+# The backtest's risk table (RK-8) and the ex-post summary (RK-11) both use them.
+BACKTEST_RISK_WINDOWS = RISK_WINDOWS
 
-# The figures each ex-post window reports, by portfolio's response name.
-RISK_FIGURES = (
+# The figures each risk window carries, as portfolio names them.
+RISK_FIGURE_KEYS = (
     "cumulative_return",
     "cagr",
     "volatility",
     "downside_deviation",
     "sharpe",
     "sortino",
-    "max_drawdown",
     "calmar",
+    "max_drawdown",
     "var_95",
     "cvar_95",
     "var_99",
@@ -352,27 +342,97 @@ RISK_FIGURES = (
 
 @dataclass(frozen=True)
 class RiskFigure:
-    """One risk figure with its metadata (spec §9, §10), mirroring portfolio's
-    RiskFigureResponse. A float, not a Decimal: a risk figure is a statistical estimate, not a
-    ledger amount. A fraction; VaR and CVaR are positive losses, a max drawdown is negative.
-    `value` is None exactly when greyed, and `reason` says why (R9)."""
+    """One risk figure (RK-8), mirroring portfolio's RiskFigureResponse. A statistical estimate,
+    so a float, not a Decimal. A fraction, like the backtest's returns; VaR and CVaR are positive
+    losses. `value` is None exactly when the figure is greyed, and `reason` then says why (R9)."""
 
     value: float | None
-    window_start: date  # the figure's own window: a weekly one is shrunk to whole weeks
+    window_start: date  # the figure's own window: a weekly one is the whole weeks ending in it
     window_end: date
     frequency: str  # "daily" or "weekly"
     q: float  # periods per year
     n_obs: int
     n_gaps: int
-    flags: tuple[str, ...]
+    flags: tuple[str, ...]  # sorted
     reason: str | None
     standard_error: float | None  # a Sharpe's 1 s.e.; None on every other figure
 
 
 @dataclass(frozen=True)
+class BacktestWindowRisk:
+    """One standard window of one row. Not covered: `reason` says why and every figure is None.
+    `start` is None only for Max when the assets' histories don't overlap. `figures` has every
+    key in RISK_FIGURE_KEYS."""
+
+    start: date | None
+    end: date
+    covered: bool
+    reason: str | None
+    figures: dict[str, RiskFigure | None]
+    peak_date: date | None
+    trough_date: date | None
+    recovery_date: date | None  # None when not recovered, or the drawdown is greyed
+    max_days_under_water: int | None
+
+
+@dataclass(frozen=True)
+class BacktestRowRisk:
+    """The mix (ticker None) or one included asset. `windows` has every key in
+    BACKTEST_RISK_WINDOWS, in that order."""
+
+    ticker: str | None
+    windows: dict[str, BacktestWindowRisk]
+
+
+@dataclass(frozen=True)
+class RiskFreeStatus:
+    available: bool
+    reason: str | None  # why not, when it isn't: downside deviation, Sharpe, Sortino greyed
+    first_date: date | None
+
+
+@dataclass(frozen=True)
+class DrawdownSeries:
+    """The mix's drawdown over the growth period: one value per date (the growth series' own),
+    each 0 or below, None where a member's return was NULL."""
+
+    period: str
+    dates: tuple[date, ...]
+    values: tuple[float | None, ...]
+
+
+@dataclass(frozen=True)
+class BacktestRisk:
+    """portfolio's BacktestRiskResponse (RK-8). Every row is measured on one common window:
+    `common_start` is the youngest asset's first day, and `limited_by` names it (R10)."""
+
+    label: str  # "buy & hold (drifting)" (R3)
+    end_date: date
+    common_start: date | None  # None when the assets' histories don't overlap
+    limited_by: tuple[str, ...]
+    risk_free: RiskFreeStatus
+    mix: BacktestRowRisk
+    assets: tuple[BacktestRowRisk, ...]  # included assets, in request order
+    drawdown: DrawdownSeries | None
+
+
+@dataclass(frozen=True)
+class Backtest:
+    """portfolio's BacktestResponse (LB-4). With no asset included, end_date, mix, growth and
+    risk are None and assets is empty; statuses still lists every requested asset, in order."""
+
+    end_date: date | None
+    mix: BacktestRow | None
+    assets: tuple[BacktestRow, ...]
+    growth: BacktestGrowth | None
+    statuses: tuple[BacktestAssetStatus, ...]
+    risk: BacktestRisk | None = None
+
+
+@dataclass(frozen=True)
 class ExPostWindow:
     """One standard window, ending at ExPostRisk.end_date. Not `covered`: the history starts
-    after the window does, and every figure is greyed. `figures` has every RISK_FIGURES key, in
+    after the window does, and every figure is greyed. `figures` has every RISK_FIGURE_KEYS key, in
     that order. The max drawdown's dates are None when it's greyed; a None recovery_date
     otherwise means not recovered by the window's end."""
 
