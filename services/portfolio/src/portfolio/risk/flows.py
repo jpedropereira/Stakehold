@@ -1,6 +1,6 @@
-"""The I/O around the risk library (RK-11: ex-post). The only module in risk/ that does I/O or
-logs, or imports from the rest of portfolio; everything else in the package stays pure, so the
-spec's golden tests run against the library alone.
+"""The I/O around the risk library: ex-post (RK-11) and ex-ante (RK-17). The only module in
+risk/ that does I/O or logs, or imports from the rest of portfolio; everything else in the
+package stays pure, so the spec's golden tests run against the library alone.
 
 Ex-post risk (spec §6.1) is measured on the user's daily TWR of invested positions, from
 twr/flows.py, which reads the accounts, fetches every held ticker's series and names each one it
@@ -18,26 +18,50 @@ them to risk/ex_post.py.
   one greys the relative figures with its reason; everything else is still measured.
 - **Nothing to measure is said so.** With no TWR returns (no rows yet, or every holding left
   out), there are no windows, no risk-free fetch and no benchmark fetch.
+
+Ex-ante risk (spec §6.2-6.3, §7.1) is measured on a mix the caller passes, as Labs' backtest
+is: web builds it from the holdings (`labs_view.build_default_mix`), so the weights are worked
+out in one place. No user data is read and nothing is stored.
+
+- **Every requested asset gets a status**, in input order: included, excluded (by the request's
+  `exclude`, before any fetch), or left out with eur_returns/eligibility.py's reason. The weights
+  are normalised over the included holdings.
+- **The holdings are fetched over their whole history**, as Labs' are, so Max can reach the
+  oldest one's first day.
+- **The risk-free fetch starts two weeks before the oldest holding's first day**, as ex-post's
+  does before its base date: one call covers whichever window the report settles on.
+- **The correlation matrix** is the holdings plus the benchmark, in EUR or, on request, each
+  ticker's local-currency returns (§7.1's toggle). σ_p and the decomposition are always EUR. A
+  benchmark that is also a holding isn't repeated; an unavailable one is left out of the matrix,
+  and the response says why.
 """
 
 import logging
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
+from decimal import Decimal
 from uuid import UUID
 
 from portfolio.benchmark.base import (
     DEFAULT_BENCHMARK,
+    Benchmark,
     BenchmarkStatus,
     BenchmarkUnavailable,
     status_of,
     unavailable_reason,
 )
-from portfolio.benchmark.flows import fetch_benchmark
+from portfolio.benchmark.flows import EPOCH, fetch_benchmark
 from portfolio.datastore_client.base import DataStoreClient
-from portfolio.risk.ex_post import WindowFigures, ex_post_figures
+from portfolio.eur_returns.calculator import EurReturns, eur_daily_returns
+from portfolio.eur_returns.eligibility import fetch_eur_returns
+from portfolio.risk.ex_ante_report import LABEL as EX_ANTE_LABEL
+from portfolio.risk.ex_ante_report import ExAnteReport, ex_ante_report
+from portfolio.risk.ex_post import SeriesFigures, WindowFigures, ex_post_figures
 from portfolio.risk.relative import BenchmarkReturns
 from portfolio.risk.risk_free import RatePoint
 from portfolio.risk.types import Frequency, ReturnSeries, RiskFigure
+from portfolio.risk.windows import StandardWindow
 from portfolio.twr import flows as twr_flows
 from portfolio.twr.flows import ExcludedHolding
 
@@ -45,6 +69,13 @@ logger = logging.getLogger(__name__)
 
 LABEL = "ex-post · invested assets"
 _RF_LOOKBACK = timedelta(days=14)
+
+INCLUDED = "included"
+EXCLUDED = "excluded"
+EXCLUDED_REASON = "excluded by request"
+EUR_RETURNS = "eur"
+LOCAL_RETURNS = "local"
+_NOTHING_TO_MEASURE = "not fetched: nothing to measure"
 
 
 @dataclass(frozen=True)
@@ -71,7 +102,7 @@ def compute_ex_post(
     twr = twr_flows.compute_portfolio_twr(conn, datastore_client, user_id=user_id, today=today)
     if not twr.points:
         logger.info("ex-post-risk: no TWR returns to measure, so no windows.")
-        not_fetched = BenchmarkStatus(benchmark, False, "not fetched: nothing to measure", None)
+        not_fetched = BenchmarkStatus(benchmark, False, _NOTHING_TO_MEASURE, None)
         return ExPostRisk(LABEL, None, None, False, not_fetched, (), twr.excluded)
 
     daily = ReturnSeries(
@@ -88,7 +119,9 @@ def compute_ex_post(
         len(twr.currencies),
         benchmark,
     )
-    rates, first_published = _risk_free(datastore_client, daily.base_date, daily.last_date)
+    rates, first_published = _risk_free(
+        datastore_client, daily.base_date, daily.last_date, context="ex-post-risk"
+    )
     fetched = fetch_benchmark(datastore_client, benchmark, daily.last_date, context="ex-post-risk")
     if isinstance(fetched, BenchmarkUnavailable):
         against: BenchmarkReturns | str = unavailable_reason(fetched)
@@ -116,6 +149,177 @@ def compute_ex_post(
     )
 
 
+@dataclass(frozen=True)
+class AssetStatus:
+    ticker: str
+    status: str  # included, excluded, not_tracked, no_history, no_fx_rate or failed
+    reason: str | None  # None when included
+
+
+@dataclass(frozen=True)
+class ExAnteRisk:
+    label: str
+    currency: str  # the correlation matrix's returns: eur or local
+    rf_available: bool
+    benchmark: BenchmarkStatus
+    benchmark_key: str | None  # the benchmark's row in the matrix; None when it has none
+    statuses: list[AssetStatus]  # every requested asset, in input order
+    weights: dict[str, float]  # the included holdings', normalised
+    report: ExAnteReport | None  # None exactly when no holding is included
+
+
+def compute_ex_ante(
+    datastore_client: DataStoreClient,
+    mix: Sequence[tuple[str, Decimal]],
+    *,
+    window: StandardWindow = StandardWindow.Y3,
+    benchmark: str = DEFAULT_BENCHMARK,
+    currency: str = EUR_RETURNS,
+    exclude: Collection[str] = (),
+    today: date | None = None,
+) -> ExAnteRisk:
+    """Ex-ante risk of `mix` (ticker, weight) pairs over `window`, without the tickers in
+    `exclude`, with the correlation matrix in `currency` against `benchmark`. The mix is assumed
+    valid (non-empty, unique tickers, positive weights, `exclude` a strict subset): the API
+    checks that first."""
+    today = today or date.today()
+    excluded = set(exclude)
+    logger.info(
+        "ex-ante-risk: %d asset(s), %d excluded by request, window %s, against %s, correlation "
+        "in %s.",
+        len(mix),
+        len(excluded),
+        window,
+        benchmark,
+        currency,
+    )
+    for ticker, _ in mix:
+        if ticker in excluded:
+            logger.info("ex-ante-risk: %s: %s.", ticker, EXCLUDED_REASON)
+    eligible = fetch_eur_returns(
+        datastore_client,
+        [ticker for ticker, _ in mix if ticker not in excluded],
+        EPOCH,
+        today,
+        logger=logger,
+        context="ex-ante-risk",
+    )
+    left_out = {holding.ticker: holding for holding in eligible.excluded}
+    statuses = []
+    for ticker, _ in mix:
+        if ticker in excluded:
+            statuses.append(AssetStatus(ticker, EXCLUDED, EXCLUDED_REASON))
+        elif ticker in left_out:
+            statuses.append(AssetStatus(ticker, left_out[ticker].status, left_out[ticker].reason))
+        else:
+            statuses.append(AssetStatus(ticker, INCLUDED, None))
+
+    if not eligible.returns:
+        logger.info("ex-ante-risk: no holding could be included, so nothing to measure.")
+        not_fetched = BenchmarkStatus(benchmark, False, _NOTHING_TO_MEASURE, None)
+        return ExAnteRisk(
+            EX_ANTE_LABEL, currency, False, not_fetched, None, statuses, {}, None
+        )
+
+    included = [(ticker, weight) for ticker, weight in mix if ticker in eligible.returns]
+    total = sum(weight for _, weight in included)
+    weights = {ticker: float(weight / total) for ticker, weight in included}
+    daily = {ticker: _series(eligible.returns[ticker], local=False) for ticker, _ in included}
+
+    oldest = min(series.base_date for series in daily.values())
+    end = min(series.last_date for series in daily.values())
+    rates, first_published = _risk_free(datastore_client, oldest, end, context="ex-ante-risk")
+    fetched = fetch_benchmark(datastore_client, benchmark, today, context="ex-ante-risk")
+
+    local = currency == LOCAL_RETURNS
+    correlation_daily = (
+        {ticker: _series(eligible.returns[ticker], local=True) for ticker, _ in included}
+        if local
+        else dict(daily)
+    )
+    if not isinstance(fetched, BenchmarkUnavailable) and benchmark not in correlation_daily:
+        correlation_daily[benchmark] = _benchmark_series(fetched, local=local)
+
+    report = ex_ante_report(
+        daily,
+        weights,
+        window,
+        currencies=eligible.currencies,
+        rates=rates,
+        first_published=first_published,
+        correlation_daily=correlation_daily,
+    )
+    _log_ex_ante(report, len(included), len(left_out))
+    return ExAnteRisk(
+        label=EX_ANTE_LABEL,
+        currency=currency,
+        rf_available=rates is not None,
+        benchmark=status_of(fetched),
+        benchmark_key=benchmark if benchmark in correlation_daily else None,
+        statuses=statuses,
+        weights=weights,
+        report=report,
+    )
+
+
+def correlation_cells(report: ExAnteReport) -> list[tuple[str, str, RiskFigure]]:
+    """The matrix's upper triangle, diagonal included, row by row: the response sends each pair
+    once."""
+    keys = report.correlation.keys
+    return [(a, b, report.correlation.cell(a, b)) for i, a in enumerate(keys) for b in keys[i:]]
+
+
+def _series(returns: EurReturns, *, local: bool) -> ReturnSeries:
+    values = returns.r_local if local else returns.r_eur
+    return ReturnSeries(
+        Frequency.DAILY,
+        returns.anchor,
+        tuple(returns.dates),
+        tuple(None if r is None else float(r) for r in values),
+    )
+
+
+def _benchmark_series(benchmark: Benchmark, *, local: bool) -> ReturnSeries:
+    if not local:
+        return benchmark.daily
+    # build_benchmark already converted these once, so they're eligible.
+    returns = eur_daily_returns(benchmark.fetched.prices, benchmark.fetched.fx)
+    return _series(returns, local=True)
+
+
+def _log_ex_ante(report: ExAnteReport, n_included: int, n_left_out: int) -> None:
+    requested = report.requested
+    span = f"{requested.label}: requested {requested.start}..{requested.end}"
+    if report.window is None:
+        logger.info(
+            "ex-ante-risk: window %s, but the holdings' histories don't overlap, so the "
+            "constant-weight figures are greyed.",
+            span,
+        )
+    else:
+        logger.info(
+            "ex-ante-risk: window %s, measured %s..%s%s.",
+            span,
+            report.window.start,
+            report.window.end,
+            f", limited by {', '.join(report.limited_by)}" if report.limited_by else "",
+        )
+    figures = figures_of(report.constant_weight).values()
+    cells = correlation_cells(report)
+    sigma_p = report.decomposition.sigma_p
+    logger.info(
+        "ex-ante-risk: done, %d holding(s) included, %d left out; sigma_p %s; %d of %d "
+        "constant-weight figure(s) greyed; %d of %d correlation cell(s) greyed.",
+        n_included,
+        n_left_out,
+        "measured" if sigma_p.value is not None else f"greyed ({sigma_p.reason})",
+        sum(1 for figure in figures if figure.value is None),
+        len(figures),
+        sum(1 for _, _, figure in cells if figure.value is None),
+        len(cells),
+    )
+
+
 def relative_of(window: WindowFigures) -> dict[str, RiskFigure]:
     """A window's figures against the benchmark, by their response name."""
     relative = window.relative
@@ -127,8 +331,9 @@ def relative_of(window: WindowFigures) -> dict[str, RiskFigure]:
     }
 
 
-def figures_of(window: WindowFigures) -> dict[str, RiskFigure]:
-    """Every figure a window reports, by its response name."""
+def figures_of(window: WindowFigures | SeriesFigures) -> dict[str, RiskFigure]:
+    """Every §5.1-5.5 figure a window (or ex-ante's constant-weight mix) reports, by its response
+    name."""
     return {
         "cumulative_return": window.returns.cumulative_return,
         "cagr": window.returns.cagr,
@@ -146,22 +351,24 @@ def figures_of(window: WindowFigures) -> dict[str, RiskFigure]:
 
 
 def _risk_free(
-    datastore_client: DataStoreClient, start: date, end: date
+    datastore_client: DataStoreClient, start: date, end: date, *, context: str
 ) -> tuple[list[RatePoint] | None, date | None]:
     try:
         series = datastore_client.get_risk_free_series(start - _RF_LOOKBACK, end)
     except Exception as exc:
         logger.error(
-            "ex-post-risk: couldn't fetch the risk-free series, so downside deviation, Sharpe and "
+            "%s: couldn't fetch the risk-free series, so downside deviation, Sharpe and "
             "Sortino are greyed: %s",
+            context,
             exc,
             exc_info=exc,
         )
         return None, None
     if series is None:
         logger.warning(
-            "ex-post-risk: data-store has no risk-free data stored; downside deviation, Sharpe "
-            "and Sortino are greyed."
+            "%s: data-store has no risk-free data stored; downside deviation, Sharpe "
+            "and Sortino are greyed.",
+            context,
         )
         return None, None
     rates = [RatePoint(point.date, float(point.rate)) for point in series.points]
