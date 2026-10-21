@@ -31,7 +31,7 @@ def to_weekly(daily: ReturnSeries, as_of: date | None = None) -> ReturnSeries:
         raise ValueError(f"to_weekly needs a daily series, got {daily.frequency}")
 
     first_friday = _friday_on_or_after(daily.base_date)
-    last_friday = _friday_on_or_before(as_of or daily.last_date)
+    last_friday = friday_on_or_before(as_of or daily.last_date)
 
     weeks: dict[date, list[float | None]] = {}
     for day, value in zip(daily.dates, daily.values):
@@ -64,9 +64,9 @@ def weekly_window(window: Window, available_from: date | None = None) -> Window 
 
     Without the end's snap a window ending on a weekday other than Friday would end after the
     weekly series does. None when no week ends inside it."""
-    before, after = _friday_on_or_before(window.start), _friday_on_or_after(window.start)
+    before, after = friday_on_or_before(window.start), _friday_on_or_after(window.start)
     start = after if available_from is not None and before < available_from <= after else before
-    end = _friday_on_or_before(window.end)
+    end = friday_on_or_before(window.end)
     return Window(window.label, start, end) if start < end else None
 
 
@@ -80,5 +80,5 @@ def _friday_on_or_after(day: date) -> date:
     return day + timedelta(days=(_FRIDAY - day.weekday()) % 7)
 
 
-def _friday_on_or_before(day: date) -> date:
+def friday_on_or_before(day: date) -> date:
     return day - timedelta(days=(day.weekday() - _FRIDAY) % 7)
