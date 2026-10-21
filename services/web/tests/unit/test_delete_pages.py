@@ -411,7 +411,7 @@ def test_log_carries_one_dialog_that_posts_the_delete(client):
     assert "This can't be undone." in form
     assert re.search(r'<button type="submit" class="btn btn-secondary">Delete permanently', form)
     assert re.search(r'<button type="submit" formmethod="dialog"[^>]*>Cancel</button>', form)
-    assert '<script src="/static/confirm_dialog.js" defer></script>' in html
+    assert re.search(r'<script src="/static/confirm_dialog\.js\?v=\w+" defer></script>', html)
 
 
 def test_empty_log_has_no_dialog(client):

@@ -399,9 +399,10 @@ def test_chart_data_island_carries_the_series(client):
         r'<div class="chart-frame">\s*<canvas id="returns-chart"[^>]*></canvas>\s*</div>', returns
     )
     # The shared theme helper has to run first: deferred scripts run in document order.
-    assert returns.index('<script src="/static/chart_theme.js" defer></script>') < returns.index(
-        '<script src="/static/portfolio_chart.js" defer></script>'
-    )
+    scripts = [
+        src.split("?v=")[0] for src in re.findall(r'<script src="([^"]+)" defer></script>', returns)
+    ]
+    assert scripts.index("/static/chart_theme.js") < scripts.index("/static/portfolio_chart.js")
 
 
 def test_chart_offers_every_view_and_range(client):

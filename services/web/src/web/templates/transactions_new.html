@@ -111,5 +111,5 @@ data-types="{{ field_types[name] | join(' ') }}"
     <span class="htmx-indicator busy" role="status">Saving…</span>
   </form>
 </section>
-<script src="/static/transaction_form.js" defer></script>
+<script src="{{ asset_url('/static/transaction_form.js') }}" defer></script>
 {% endblock %}

@@ -5,15 +5,15 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Stakehold{% endblock %}</title>
-  <link rel="icon" href="/brand/logos/app-icon.svg">
-  <link rel="stylesheet" href="/brand/tokens.css">
-  <link rel="stylesheet" href="/static/web.css">
+  <link rel="icon" href="{{ asset_url('/brand/logos/app-icon.svg') }}">
+  <link rel="stylesheet" href="{{ asset_url('/brand/tokens.css') }}">
+  <link rel="stylesheet" href="{{ asset_url('/static/web.css') }}">
   {# htmx otherwise injects an inline <style> for its indicators, which the strict CSP blocks;
      web.css carries those rules instead. Read by htmx itself, so no inline script. #}
   <meta name="htmx-config" content='{"includeIndicatorStyles": false}'>
-  <script src="/static/vendor/htmx.min.js" defer></script>
-  <script src="/static/htmx-error-swap.js" defer></script>
-  <script src="/static/theme.js" defer></script>
+  <script src="{{ asset_url('/static/vendor/htmx.min.js') }}" defer></script>
+  <script src="{{ asset_url('/static/htmx-error-swap.js') }}" defer></script>
+  <script src="{{ asset_url('/static/theme.js') }}" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>

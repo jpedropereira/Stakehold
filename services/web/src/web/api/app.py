@@ -27,6 +27,7 @@ from web.auth_client.http_client import HttpAuthClient
 from web.formatting import FILTERS
 from web.portfolio_client.http_client import HttpPortfolioClient
 from web.settings import Settings, load_settings
+from web.static_assets import make_asset_url
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,9 @@ def _lifespan(settings: Settings):
                 directory=_TEMPLATES_DIR, context_processors=[theme_context]
             )
             app.state.templates.env.filters.update(FILTERS)
+            app.state.templates.env.globals["asset_url"] = make_asset_url(
+                {"/static": _STATIC_DIR, "/brand": settings.brand_dir}
+            )
             logger.info(
                 "web api: started, auth_api_url=%s, portfolio_api_url=%s.",
                 settings.auth_api_url,

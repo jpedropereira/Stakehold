@@ -405,8 +405,12 @@ def test_auth_pages_show_the_mark_in_the_card_not_the_header(client, path):
     assert "logo-stone.svg" not in _HEADER.search(html).group(1)
     mark = _AUTH_MARK.search(html)
     assert mark, "no mark in the card"
-    assert 'class="logo-on-light" src="/brand/logos/logo-stone.svg"' in mark.group(1)
-    assert 'class="logo-on-dark" src="/brand/logos/logo-gold.svg"' in mark.group(1)
+    assert re.search(
+        r'class="logo-on-light" src="/brand/logos/logo-stone\.svg\?v=\w+"', mark.group(1)
+    )
+    assert re.search(
+        r'class="logo-on-dark" src="/brand/logos/logo-gold\.svg\?v=\w+"', mark.group(1)
+    )
 
 
 def test_other_pages_keep_the_header_mark(client, fakes):
@@ -433,7 +437,7 @@ def test_password_toggle_ships_hidden_for_its_script_to_reveal(client, path):
         '<button type="button" class="btn btn-ghost password-toggle" aria-controls="password" '
         'aria-pressed="false" hidden>Show</button>'
     ) in html
-    assert '<script src="/static/password_toggle.js" defer></script>' in html
+    assert re.search(r'<script src="/static/password_toggle\.js\?v=\w+" defer></script>', html)
 
 
 def test_password_toggle_script_is_only_on_the_auth_pages(client, fakes):

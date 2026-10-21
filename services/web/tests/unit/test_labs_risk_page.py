@@ -557,7 +557,7 @@ def test_the_drawdown_chart_sits_under_the_growth_chart_with_its_island(client):
         "dates": ["2025-10-09", "2025-10-10", "2025-10-13"],
         "values": [0.0, None, -0.0421],
     }
-    assert '<script src="/static/labs_drawdown_chart.js" defer></script>' in html
+    assert re.search(r'<script src="/static/labs_drawdown_chart\.js\?v=\w+" defer></script>', html)
 
 
 def test_no_drawdown_series_says_so(client):

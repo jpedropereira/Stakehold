@@ -33,7 +33,7 @@
     {% endfor %}
   </ul>
   {% call delete_dialog("delete-account-dialog", "/accounts/delete", "Delete this account?", csrf_token, ["account"], summary_mono=false) %}<strong>This can't be undone.</strong> Its holdings and returns are deleted with it.{% endcall %}
-  <script src="/static/confirm_dialog.js" defer></script>
+  <script src="{{ asset_url('/static/confirm_dialog.js') }}" defer></script>
   {% elif first_run %}
   <p class="entry-subtitle">No accounts yet. To get started:</p>
   <ol class="first-run-steps">
