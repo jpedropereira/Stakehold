@@ -1,0 +1,28 @@
+{% from "partials/_term.html" import term %}
+{# The benchmark field (RK-14) on /labs and /risk: a GET form, so the choice is the URL and
+   nothing is stored. `kept` is the rest of the page's query, as (name, value) pairs re-sent as
+   hidden inputs, so applying a benchmark changes nothing else (Labs' mix, period and window).
+   `error` comes from benchmark_param.chosen_benchmark; the field then shows the default it fell
+   back to. Suggestions are the tracked tickers; with no list, the field still takes any ticker. #}
+{% macro benchmark_form(action, prefix, benchmark, error, tickers, tickers_notice, kept=(), anchor="") -%}
+<form method="get" action="{{ action }}{{ anchor }}" class="benchmark-form" id="{{ prefix }}-benchmark-form">
+  {% for name, value in kept %}
+  <input type="hidden" name="{{ name }}" value="{{ value }}">
+  {% endfor %}
+  <div class="benchmark-row">
+    <div class="field">
+      <label for="{{ prefix }}-benchmark">Benchmark</label>
+      <input type="text" id="{{ prefix }}-benchmark" name="benchmark" value="{{ benchmark }}" list="{{ prefix }}-benchmark-options" autocomplete="off" spellcheck="false" class="mono"{% if error %} aria-invalid="true" aria-describedby="{{ prefix }}-benchmark-error"{% endif %}>
+    </div>
+    <button type="submit" class="btn btn-secondary">Compare</button>
+  </div>
+  <datalist id="{{ prefix }}-benchmark-options">
+    {% for ticker in tickers %}
+    <option value="{{ ticker }}">
+    {% endfor %}
+  </datalist>
+  {% if error %}<p class="form-row-error" id="{{ prefix }}-benchmark-error"><strong>Benchmark:</strong> {{ error }}</p>{% endif %}
+  <p class="field-hint">The {{ term("benchmark", "benchmark") }} the figures under “Against” are measured against: the same one for every window, never swapped for another. Not saved.</p>
+  {% if tickers_notice %}<p class="field-hint">{{ tickers_notice }}</p>{% endif %}
+</form>
+{%- endmacro %}

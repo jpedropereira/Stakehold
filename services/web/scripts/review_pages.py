@@ -122,6 +122,11 @@ PAGES = [
     # RK-12: 1Y, 3Y and Max measured, 5Y and 10Y greyed, flags and their legend, a greyed
     # Sharpe, and a holding left out.
     Page("risk", "/risk", "user"),
+    # RK-14: the benchmark field, IWDA.AS's long history covering every relative figure, a
+    # ticker the fake doesn't track (the group says why once), and an over-long field.
+    Page("risk-benchmark", "/risk?benchmark=IWDA.AS", "user"),
+    Page("risk-benchmark-unavailable", "/risk?benchmark=NOPE.XX", "user"),
+    Page("risk-benchmark-too-long", "/risk?benchmark=ABCDEFGHIJKLMNOPQRSTU", "user"),
     # RK-9: the risk comparison over 3Y (AAPL's volatility has a gap note), over 10Y (not
     # covered, so no table), a mix the fake answers with no risk-free data, and the drawdown
     # chart over Max.

@@ -324,3 +324,136 @@ def test_nothing_to_measure_is_none():
     empty = _risk((), base_date=None, end_date=None, rf_available=False)
 
     assert build_ex_post_table(empty) is None
+
+
+# --- against the benchmark (RK-14) -------------------------------------------------------------
+
+
+def _relative_row(table, key):
+    return next(row for row in table.relative_rows if row.key == key)
+
+
+def test_the_relative_rows_follow_the_measures_in_their_own_group():
+    table = build_ex_post_table(_risk())
+
+    assert [row.key for row in table.relative_rows] == list(RELATIVE_FIGURE_KEYS)
+    assert [row.label for row in table.relative_rows] == [
+        "Beta",
+        "Correlation",
+        "Tracking error",
+        "Information ratio",
+    ]
+    assert [row.anchor for row in table.relative_rows] == [
+        "beta",
+        "correlation",
+        "tracking-error",
+        "information-ratio",
+    ]
+    # Not mixed into the measures above them.
+    assert not {row.key for row in table.rows} & set(RELATIVE_FIGURE_KEYS)
+
+
+@pytest.mark.parametrize(
+    ("key", "kind"),
+    [
+        ("beta", "ratio"),
+        ("correlation", "ratio"),
+        ("tracking_error", "pct1"),
+        ("information_ratio", "ratio"),
+    ],
+)
+def test_each_relative_row_is_neutral_ink(key, kind):
+    # Spec §10: ratios to 2 decimals, a tracking error to 1 like a volatility. None is a gain.
+    row = _relative_row(build_ex_post_table(_risk()), key)
+
+    assert row.kind == kind
+    assert row.frequency == "weekly"
+
+
+def test_the_table_names_its_benchmark():
+    table = build_ex_post_table(_risk())
+
+    assert table.benchmark == BENCHMARK
+
+
+def test_a_relative_cell_names_the_benchmark_in_its_title():
+    cell = _relative_row(build_ex_post_table(_risk()), "beta").cells[0]
+
+    assert cell.value == 0.1
+    assert cell.title == (
+        "1Y: 2025-10-16 to 2026-10-16 · weekly · 52 obs · 0 gaps · "
+        "ex-post · invested assets · against VWCE.DE"
+    )
+
+
+def test_a_benchmark_too_short_for_a_window_shows_its_reason():
+    reason = "benchmark history too short (from 2019-07-29)"
+    greyed = {
+        name: _figure(None, start=_STARTS["Max"], name=name, reason=reason)
+        for name in RELATIVE_FIGURE_KEYS
+    }
+    windows = tuple(
+        _window(w, covered=w not in ("5Y", "10Y"), relative=greyed if w == "Max" else None)
+        for w in RISK_WINDOWS
+    )
+
+    cell = _relative_row(build_ex_post_table(_risk(windows)), "beta").cells[4]
+
+    assert cell.value is None
+    assert cell.reason == reason
+
+
+def test_an_unavailable_benchmark_greys_its_cells_and_says_why_once():
+    unavailable = BenchmarkStatus(
+        ticker="NOPE.XX", available=False, reason="not tracked", first_date=None
+    )
+    reason = "benchmark unavailable: not tracked"
+    windows = tuple(
+        _window(
+            w,
+            covered=w not in ("5Y", "10Y"),
+            relative=(
+                {
+                    name: _figure(None, start=_STARTS[w], name=name, reason=reason)
+                    for name in RELATIVE_FIGURE_KEYS
+                }
+                if w not in ("5Y", "10Y")
+                else None
+            ),
+        )
+        for w in RISK_WINDOWS
+    )
+
+    table = build_ex_post_table(_risk(windows, benchmark=unavailable))
+
+    assert table.benchmark == unavailable
+    one_y = _relative_row(table, "beta").cells[0]
+    assert one_y.value is None
+    # The group's heading says why; each cell just says it isn't there.
+    assert one_y.reason == "Unavailable"
+
+
+def test_an_uncovered_windows_relative_cells_dont_repeat_its_reason():
+    cell = _relative_row(build_ex_post_table(_risk()), "beta").cells[3]
+
+    assert cell.value is None
+    assert cell.reason is None
+    assert cell.markers == ()
+
+
+def test_flags_on_relative_figures_join_the_legend():
+    windows = tuple(
+        _window(
+            w,
+            covered=w not in ("5Y", "10Y"),
+            relative=(
+                {"beta": _figure(0.9, name="beta", flags=("data_gaps",))} if w == "1Y" else None
+            ),
+        )
+        for w in RISK_WINDOWS
+    )
+
+    table = build_ex_post_table(_risk(windows))
+
+    assert [note.flag for note in table.legend] == ["data_gaps"]
+    assert _relative_row(table, "beta").cells[0].markers == ("1",)

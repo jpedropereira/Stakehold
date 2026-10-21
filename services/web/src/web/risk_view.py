@@ -9,15 +9,21 @@ lays it out. Spec §10's rules land here:
   cover, the column says why once, so its twelve cells don't repeat it;
 - each flag a figure carries is a numbered marker, explained once in a legend under the table.
 
+Under the measures, a group of figures against the benchmark (RK-14, spec §5.6), which names
+the benchmark and its first date in its heading. When portfolio couldn't measure against it
+at all (not tracked, no FX series, data-store down), the heading says why once and each of its
+cells says "Unavailable", as an uncovered window's say "Not covered".
+
 The values stay floats: the template formats them (`signed_pct1`, `pct1`, `ratio`) by the row's
 kind.
 """
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 
 from web.portfolio_client.base import (
+    BenchmarkStatus,
     ExcludedHolding,
     ExPostRisk,
     ExPostWindow,
@@ -44,6 +50,16 @@ _ROWS = (
     ("var_99", "1-day VaR 99%", "var", "pct1"),
     ("cvar_99", "1-day CVaR 99%", "cvar", "pct1"),
 )
+
+# The figures against the benchmark, in the same shape. All weekly; none is a gain or a loss.
+_RELATIVE_ROWS = (
+    ("beta", "Beta", "beta", "ratio"),
+    ("correlation", "Correlation", "correlation", "ratio"),
+    ("tracking_error", "Tracking error", "tracking-error", "pct1"),
+    ("information_ratio", "Information ratio", "information-ratio", "ratio"),
+)
+# What a covered window's relative cell says when the benchmark couldn't be used at all.
+_UNAVAILABLE = "Unavailable"
 
 # What each flag means, in the legend's order. insufficient_history has no note: the figure is
 # greyed and its cell already says why.
@@ -126,6 +142,8 @@ class ExPostTable:
     rf_available: bool
     columns: tuple[Column, ...]
     rows: tuple[Row, ...]
+    benchmark: BenchmarkStatus
+    relative_rows: tuple[Row, ...]  # against `benchmark`, one per RELATIVE_FIGURE_KEYS
     legend: tuple[FlagNote, ...]
     excluded: tuple[ExcludedHolding, ...]
 
@@ -148,6 +166,21 @@ def build_ex_post_table(risk: ExPostRisk) -> ExPostTable | None:
         )
         for key, label, anchor, kind in _ROWS
     )
+    against = f"{risk.label} · against {risk.benchmark.ticker}"
+    relative_rows = tuple(
+        Row(
+            key=key,
+            label=label,
+            anchor=anchor,
+            frequency=risk.windows[0].relative[key].frequency,
+            kind=kind,
+            cells=tuple(
+                _relative_cell(window, key, against, markers, risk.benchmark.available)
+                for window in risk.windows
+            ),
+        )
+        for key, label, anchor, kind in _RELATIVE_ROWS
+    )
     return ExPostTable(
         label=risk.label,
         base_date=risk.base_date,
@@ -155,6 +188,8 @@ def build_ex_post_table(risk: ExPostRisk) -> ExPostTable | None:
         rf_available=risk.rf_available,
         columns=columns,
         rows=rows,
+        benchmark=risk.benchmark,
+        relative_rows=relative_rows,
         legend=legend,
         excluded=risk.excluded,
     )
@@ -165,7 +200,7 @@ def _legend(windows: tuple[ExPostWindow, ...]) -> tuple[FlagNote, ...]:
         flag
         for window in windows
         if window.covered
-        for figure in window.figures.values()
+        for figure in (*window.figures.values(), *window.relative.values())
         for flag in figure.flags
         if flag not in _NO_MARKER
     }
@@ -191,6 +226,26 @@ def _cell(window: ExPostWindow, key: str, label: str, markers: dict[str, str]) -
     drawdown = None
     if key == "max_drawdown" and figure.value is not None and window.peak_date is not None:
         drawdown = DrawdownDates(window.peak_date, window.trough_date, window.recovery_date)
+    return _figure_cell(window, figure, label, markers, drawdown=drawdown)
+
+
+def _relative_cell(
+    window: ExPostWindow, key: str, label: str, markers: dict[str, str], available: bool
+) -> Cell:
+    cell = _figure_cell(window, window.relative[key], label, markers)
+    if not available and window.covered and cell.value is None:
+        # Every figure carries the same "benchmark unavailable: ..."; the heading says it once.
+        return replace(cell, reason=_UNAVAILABLE)
+    return cell
+
+
+def _figure_cell(
+    window: ExPostWindow,
+    figure: RiskFigure,
+    label: str,
+    markers: dict[str, str],
+    drawdown: DrawdownDates | None = None,
+) -> Cell:
     return Cell(
         value=figure.value,
         reason=figure.reason if window.covered else None,

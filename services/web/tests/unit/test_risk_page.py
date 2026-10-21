@@ -81,6 +81,13 @@ class FakePortfolioClient:
         self.ex_post: ExPostRisk = _risk()
         self.ex_post_error: Exception | None = None
         self.calls: list[tuple] = []
+        self.tickers = ["IWDA.AS", "VWCE.DE"]
+        self.tickers_error: Exception | None = None
+
+    async def list_tickers(self):
+        if self.tickers_error:
+            raise self.tickers_error
+        return self.tickers
 
     async def ex_post_risk(self, *, user_id, benchmark):
         self.calls.append(("ex_post_risk", user_id, benchmark))
@@ -571,3 +578,142 @@ def test_every_glossary_link_lands_on_an_entry(client):
 
     assert anchors
     assert {a for a in anchors if f'<dt id="{a}"' not in glossary} == set()
+
+
+# --- the benchmark (RK-14) ---------------------------------------------------------------------
+
+
+def _relative_group(html):
+    """The summary table's second body: the figures against the benchmark."""
+    return re.findall(r"<tbody.*?</tbody>", _table(html), re.S)[1]
+
+
+def _benchmark_form(html):
+    return re.search(r'<form[^>]*id="risk-benchmark-form".*?</form>', html, re.S).group(0)
+
+
+def test_the_benchmark_is_asked_for_and_kept_in_the_field(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+
+    response = test_client.get("/risk?benchmark=IWDA.AS")
+
+    assert response.status_code == 200
+    assert fake_portfolio.calls == [("ex_post_risk", "u1", "IWDA.AS")]
+    form = _benchmark_form(response.text)
+    assert 'method="get"' in form and 'action="/risk"' in form
+    assert 'name="benchmark"' in form and 'value="IWDA.AS"' in form
+
+
+def test_no_benchmark_shows_the_default_in_the_field(client):
+    test_client, fake_auth, _ = client
+    _logged_in(test_client, fake_auth)
+
+    assert 'value="VWCE.DE"' in _benchmark_form(_page(test_client))
+
+
+def test_the_field_suggests_the_tracked_tickers(client):
+    test_client, fake_auth, _ = client
+    _logged_in(test_client, fake_auth)
+
+    form = _benchmark_form(_page(test_client))
+
+    assert 'list="risk-benchmark-options"' in form
+    datalist = re.search(r'<datalist id="risk-benchmark-options">(.*?)</datalist>', form, re.S)[1]
+    assert re.findall(r'<option value="([^"]+)">', datalist) == ["IWDA.AS", "VWCE.DE"]
+
+
+def test_a_failed_ticker_list_still_shows_the_field_and_the_figures(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.tickers_error = PortfolioUnavailable("down")
+
+    html = _page(test_client)
+
+    form = _benchmark_form(html)
+    assert 'name="benchmark"' in form
+    assert "<option" not in form
+    assert "couldn&#39;t be loaded" in form or "couldn't be loaded" in form
+    assert ">+12.3%<" in html
+
+
+def test_an_over_long_benchmark_says_so_and_shows_the_default(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+
+    html = test_client.get("/risk?benchmark=" + "A" * 21).text
+
+    assert fake_portfolio.calls == [("ex_post_risk", "u1", "VWCE.DE")]
+    form = _benchmark_form(html)
+    assert "at most 20 characters" in form
+    assert 'aria-invalid="true"' in form
+
+
+def test_the_relative_group_names_the_benchmark_and_its_first_date(client):
+    test_client, fake_auth, _ = client
+    _logged_in(test_client, fake_auth)
+
+    group = _relative_group(_page(test_client))
+
+    heading = re.sub(r"<[^>]+>", "", re.search(r"<th[^>]*colspan.*?</th>", group, re.S).group(0))
+    assert " ".join(heading.split()) == "Against VWCE.DE, history from 2019-07-29"
+    assert '<span class="mono">VWCE.DE</span>' in group
+
+
+def test_the_relative_rows_are_formatted_in_ink(client):
+    test_client, fake_auth, _ = client
+    _logged_in(test_client, fake_auth)
+
+    group = _relative_group(_page(test_client))
+
+    for label, text in (
+        ("Beta", ">0.93<"),
+        ("Correlation", ">0.88<"),
+        ("Tracking error", ">4.3%<"),
+        ("Information ratio", ">−0.22<"),
+    ):
+        row = next(r for r in re.findall(r"<tr role=\"row\".*?</tr>", group, re.S) if label in r)
+        assert "weekly" in row
+        assert text in _cells(row)[0], label
+    # A beta or a correlation isn't a gain or a loss.
+    assert 'class="mono gain' not in group and 'class="mono loss' not in group
+
+
+def test_an_unavailable_benchmark_says_why_once(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    reason = "benchmark unavailable: not tracked"
+    greyed = {name: _greyed(name, _STARTS["1Y"], reason, flags=()) for name in RELATIVE_FIGURE_KEYS}
+    fake_portfolio.ex_post = _risk(
+        one_y=_window("1Y", relative=greyed),
+        benchmark=BenchmarkStatus("NOPE.XX", False, "not tracked", None),
+    )
+
+    group = _relative_group(test_client.get("/risk?benchmark=NOPE.XX").text)
+
+    heading = re.sub(r"<[^>]+>", "", re.search(r"<th[^>]*colspan.*?</th>", group, re.S).group(0))
+    assert " ".join(heading.split()) == "Against NOPE.XX: unavailable, not tracked"
+    assert group.count(reason) == 0
+    assert "Unavailable" in group
+
+
+def test_the_relative_figures_link_to_the_glossary(client):
+    test_client, fake_auth, _ = client
+    _logged_in(test_client, fake_auth)
+
+    anchors = {anchor for anchor, _ in _glossary_links(_page(test_client))}
+
+    assert {"benchmark", "beta", "correlation", "tracking-error", "information-ratio"} <= anchors
+
+
+def test_logs_the_benchmark(client, caplog):
+    test_client, fake_auth, _ = client
+    _logged_in(test_client, fake_auth)
+
+    with caplog.at_level(logging.INFO, logger="web.api.risk"):
+        _page(test_client)
+
+    messages = _messages(caplog)
+    assert any(
+        "against VWCE.DE (available)" in m and "8 of 20 relative" in m for m in messages
+    ), messages

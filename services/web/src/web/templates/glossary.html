@@ -140,6 +140,34 @@
     <dt id="cvar">1-day CVaR</dt>
     <dd>Conditional value at risk: the average loss on the days beyond the VaR, the worst 5% or
       1% of days. It says how bad those days were, where VaR only says where they begin.</dd>
+
+    {# Against a benchmark (RK-14), on /labs and /risk. Historical, like the rest (R15). #}
+    <dt id="benchmark">Benchmark</dt>
+    <dd>The index fund the figures under “Against” compare with: VWCE.DE, a world index fund in
+      euros, unless you pick another. The same one is used for every window. A window that
+      starts before its history is greyed, never measured against a different index, since two
+      indices answer different questions: pick one with a longer history, such as IWDA.AS, to
+      compare over ten years.</dd>
+
+    <dt id="beta">Beta</dt>
+    <dd>How much the historical weekly return moved for each 1% move in the benchmark's. 1 moved
+      with it, above 1 moved more, below 1 moved less. Measured on weekly returns in euros, so
+      it needs two years of overlap with the benchmark.</dd>
+
+    <dt id="correlation">Correlation</dt>
+    <dd>How closely the historical weekly returns rose and fell together with the benchmark's,
+      from −1 (always opposite) to 1 (always together). It says nothing about how far each
+      moved; beta does.</dd>
+
+    <dt id="tracking-error">Tracking error</dt>
+    <dd>How far the historical weekly returns strayed from the benchmark's, scaled to a year:
+      the standard deviation of the weekly differences × √52. Near 0 means it moved like the
+      benchmark.</dd>
+
+    <dt id="information-ratio">Information ratio</dt>
+    <dd>The historical return above the benchmark's, per year, divided by the tracking error,
+      from weekly returns: how much was gained or lost relative to the benchmark for each unit
+      of straying from it.</dd>
   </dl>
 </section>
 {% endblock %}
