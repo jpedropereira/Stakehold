@@ -4,6 +4,7 @@ which malformed shapes become PortfolioUnavailable. The JSON is written out in t
 portfolio's BacktestRiskResponse serves: figures are JSON numbers, not the backtest's
 fixed-point strings, and fractions (0.10 is 10%)."""
 
+import json
 from datetime import date
 from decimal import Decimal
 
@@ -12,7 +13,9 @@ import pytest
 from web.portfolio_client.base import (
     BACKTEST_PERIODS,
     BACKTEST_RISK_WINDOWS,
+    RELATIVE_FIGURE_KEYS,
     RISK_FIGURE_KEYS,
+    BacktestBenchmark,
     BacktestRisk,
     BacktestRowRisk,
     BacktestWindowRisk,
@@ -63,6 +66,9 @@ def _window(**changes):
         "trough_date": "2026-04-07",
         "recovery_date": None,
         "max_days_under_water": 249,
+        "relative": {
+            key: _figure(frequency="weekly", q=52.0, n_obs=52) for key in RELATIVE_FIGURE_KEYS
+        },
         **changes,
     }
 
@@ -78,6 +84,7 @@ def _uncovered(reason):
         "trough_date": None,
         "recovery_date": None,
         "max_days_under_water": None,
+        "relative": None,
     }
 
 
@@ -87,6 +94,18 @@ def _row_risk(ticker, **windows):
     return {"ticker": ticker, "windows": all_windows}
 
 
+def _benchmark(**changes):
+    return {
+        "ticker": "VWCE.DE",
+        "available": True,
+        "reason": None,
+        "first_date": COMMON_START,
+        "growth": ["0E-8", "0.00500000", "0.01000000"],
+        "growth_reason": None,
+        **changes,
+    }
+
+
 def _risk(**changes):
     return {
         "label": "buy & hold (drifting)",
@@ -94,6 +113,7 @@ def _risk(**changes):
         "common_start": COMMON_START,
         "limited_by": ["VWCE.DE"],
         "risk_free": {"available": True, "reason": None, "first_date": "1999-01-04"},
+        "benchmark": _benchmark(),
         "mix": _row_risk(None),
         "assets": [_row_risk("VWCE.DE")],
         "drawdown": {
@@ -125,14 +145,22 @@ def _body(risk):
         "end_date": END,
         "mix": _row(None, "1"),
         "assets": [_row("VWCE.DE", "1")],
-        "growth": None,
+        "growth": {
+            "period": "1M",
+            "dates": ["2026-09-09", "2026-09-10", END],
+            "mix": ["0E-8", "0.00400000", "0.01000000"],
+            "assets": {"VWCE.DE": ["0E-8", "0.00400000", "0.01000000"]},
+            "left_out": [],
+        },
         "statuses": [{"ticker": "VWCE.DE", "status": "included", "reason": None}],
         "risk": risk,
     }
 
 
 async def _backtest(risk):
-    return await _client(_body(risk)).backtest(assets=[("VWCE.DE", Decimal("1"))], period="1M")
+    return await _client(_body(risk)).backtest(
+        assets=[("VWCE.DE", Decimal("1"))], period="1M", benchmark="VWCE.DE"
+    )
 
 
 def _expected_figure(value=0.1, **changes):
@@ -163,6 +191,10 @@ def _expected_window():
         trough_date=date(2026, 4, 7),
         recovery_date=None,
         max_days_under_water=249,
+        relative={
+            key: _expected_figure(frequency="weekly", q=52.0, n_obs=52)
+            for key in RELATIVE_FIGURE_KEYS
+        },
     )
 
 
@@ -176,6 +208,14 @@ async def test_parses_a_full_risk_section():
         common_start=date(2019, 7, 29),
         limited_by=("VWCE.DE",),
         risk_free=RiskFreeStatus(available=True, reason=None, first_date=date(1999, 1, 4)),
+        benchmark=BacktestBenchmark(
+            ticker="VWCE.DE",
+            available=True,
+            reason=None,
+            first_date=date(2019, 7, 29),
+            growth=(Decimal("0E-8"), Decimal("0.005"), Decimal("0.01")),
+            growth_reason=None,
+        ),
         mix=BacktestRowRisk(ticker=None, windows=windows),
         assets=(BacktestRowRisk(ticker="VWCE.DE", windows=windows),),
         drawdown=DrawdownSeries(
@@ -251,6 +291,7 @@ async def test_an_uncovered_window_has_its_reason_and_no_figures():
     assert window.start is None
     assert set(window.figures) == set(RISK_FIGURE_KEYS)
     assert all(figure is None for figure in window.figures.values())
+    assert window.relative is None
 
 
 async def test_no_risk_free_data_and_no_drawdown_parse():
@@ -263,6 +304,59 @@ async def test_no_risk_free_data_and_no_drawdown_parse():
     )
     assert result.risk.drawdown is None
     assert result.risk.common_start is None
+
+
+async def test_the_benchmark_is_sent_in_the_body():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json=_body(_risk()))
+
+    transport = httpx.MockTransport(handler)
+    http_client = httpx.AsyncClient(base_url="http://portfolio.internal", transport=transport)
+    client = HttpPortfolioClient(http_client, INTERNAL_SECRET)
+
+    await client.backtest(assets=[("VWCE.DE", Decimal("1"))], period="1M", benchmark="IWDA.AS")
+
+    assert captured["body"]["benchmark"] == "IWDA.AS"
+
+
+async def test_a_relative_figure_greyed_for_a_short_benchmark_keeps_its_reason():
+    reason = "benchmark history too short (from 2019-07-29)"
+    relative = {
+        key: _figure(None, frequency="weekly", q=52.0, n_obs=0, reason=reason)
+        for key in RELATIVE_FIGURE_KEYS
+    }
+
+    result = await _backtest(_risk(mix=_row_risk(None, **{"10Y": _window(relative=relative)})))
+
+    beta = result.risk.mix.windows["10Y"].relative["beta"]
+    assert beta.value is None
+    assert beta.reason == reason
+    assert tuple(result.risk.mix.windows["10Y"].relative) == RELATIVE_FIGURE_KEYS
+
+
+async def test_an_unavailable_benchmark_has_its_reason_and_no_line():
+    benchmark = _benchmark(
+        ticker="NOPE.XX",
+        available=False,
+        reason="not tracked",
+        first_date=None,
+        growth=None,
+        growth_reason="benchmark unavailable: not tracked",
+    )
+
+    result = await _backtest(_risk(benchmark=benchmark))
+
+    assert result.risk.benchmark == BacktestBenchmark(
+        ticker="NOPE.XX",
+        available=False,
+        reason="not tracked",
+        first_date=None,
+        growth=None,
+        growth_reason="benchmark unavailable: not tracked",
+    )
 
 
 def _without(mapping, key):
@@ -301,10 +395,33 @@ def _without(mapping, key):
             id="drawdown-length",
         ),
         pytest.param(_body(_risk(limited_by="VWCE.DE")), id="limited-by-not-a-list"),
+        pytest.param(_body(_without(_risk(), "benchmark")), id="no-benchmark-key"),
+        pytest.param(
+            _body(_risk(mix=_row_risk(None, **{"1Y": _without(_window(), "relative")}))),
+            id="no-relative-key",
+        ),
+        pytest.param(
+            _body(
+                _risk(
+                    mix=_row_risk(
+                        None,
+                        **{"1Y": _window(relative=_without(_window()["relative"], "beta"))},
+                    )
+                )
+            ),
+            id="missing-relative-figure",
+        ),
+        pytest.param(
+            _body(_risk(benchmark=_benchmark(growth=["0E-8", "0.01"]))),
+            id="benchmark-growth-length",
+        ),
+        pytest.param(
+            _body(_risk(benchmark=_benchmark(available="yes"))), id="benchmark-available-not-bool"
+        ),
     ],
 )
 async def test_a_malformed_risk_section_is_unavailable(body):
     client = _client(body)
 
     with pytest.raises(PortfolioUnavailable, match="malformed portfolio response"):
-        await client.backtest(assets=[("VWCE.DE", Decimal("1"))], period="1M")
+        await client.backtest(assets=[("VWCE.DE", Decimal("1"))], period="1M", benchmark="VWCE.DE")

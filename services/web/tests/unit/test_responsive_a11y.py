@@ -30,6 +30,7 @@ from web.auth_client.base import AuthResult, AuthUser
 from web.auth_client.errors import SessionInvalid
 from web.portfolio_client.base import (
     Account,
+    BenchmarkStatus,
     ExPostRisk,
     Holding,
     HoldingAccount,
@@ -108,12 +109,18 @@ class FakePortfolioClient:
     async def list_all_unmapped_instruments(self):
         return self.unmapped
 
-    async def ex_post_risk(self, *, user_id):
+    async def ex_post_risk(self, *, user_id, benchmark):
         return ExPostRisk(
             label="ex-post · invested assets",
             base_date=None,
             end_date=None,
             rf_available=False,
+            benchmark=BenchmarkStatus(
+                ticker=benchmark,
+                available=False,
+                reason="not fetched: nothing to measure",
+                first_date=None,
+            ),
             windows=(),
             excluded=(),
         )

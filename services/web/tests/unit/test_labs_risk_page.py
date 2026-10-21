@@ -10,6 +10,7 @@ import html as html_lib
 import json
 import logging
 import re
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 
@@ -23,9 +24,11 @@ from web.auth_client.errors import SessionInvalid
 from web.portfolio_client.base import (
     BACKTEST_PERIODS,
     BACKTEST_RISK_WINDOWS,
+    RELATIVE_FIGURE_KEYS,
     RISK_FIGURE_KEYS,
     Backtest,
     BacktestAssetStatus,
+    BacktestBenchmark,
     BacktestGrowth,
     BacktestPeriodReturn,
     BacktestRisk,
@@ -43,6 +46,14 @@ from web.settings import Settings
 SESSION_COOKIE = "stakehold_session=tok; Path=/; HttpOnly; SameSite=lax"
 MINUS = "−"
 END = date(2026, 10, 9)
+BENCHMARK = BacktestBenchmark(
+    ticker="VWCE.DE",
+    available=True,
+    reason=None,
+    first_date=date(2019, 7, 29),
+    growth=None,
+    growth_reason="history starts after the growth period",
+)
 COMMON_START = date(2021, 11, 1)
 LIMITED = "limited by AAPL (history from 2021-11-01)"
 
@@ -62,6 +73,7 @@ class FakePortfolioClient:
         self.holdings = Holdings(holdings=(), totals=None)
         self.backtest_result: Backtest | None = None
         self.backtest_calls: list[tuple] = []
+        self.benchmarks: list[str] = []
 
     async def list_tickers(self):
         return ["IWDA.AS", "AAPL"]
@@ -69,8 +81,9 @@ class FakePortfolioClient:
     async def list_holdings(self, *, user_id):
         return self.holdings
 
-    async def backtest(self, *, assets, period):
+    async def backtest(self, *, assets, period, benchmark):
         self.backtest_calls.append((tuple(assets), period))
+        self.benchmarks.append(benchmark)
         return self.backtest_result
 
 
@@ -150,7 +163,7 @@ def _figure(value, *, frequency="daily", n_obs=252, flags=(), reason=None, se=No
     )
 
 
-def _covered(start=date(2025, 10, 9), **figures):
+def _covered(start=date(2025, 10, 9), relative=None, **figures):
     weekly = {"frequency": "weekly", "n_obs": 52}
     all_figures = {key: _figure(0.01) for key in RISK_FIGURE_KEYS}
     all_figures.update(
@@ -172,6 +185,11 @@ def _covered(start=date(2025, 10, 9), **figures):
         trough_date=None,
         recovery_date=None,
         max_days_under_water=None,
+        relative=(
+            {key: _figure(0.5, **weekly) for key in RELATIVE_FIGURE_KEYS}
+            if relative is None
+            else relative
+        ),
     )
 
 
@@ -186,6 +204,7 @@ def _uncovered(reason=LIMITED):
         trough_date=None,
         recovery_date=None,
         max_days_under_water=None,
+        relative=None,
     )
 
 
@@ -204,7 +223,7 @@ def _risk_row(ticker, **windows):
 _DD_DATES = (date(2025, 10, 9), date(2025, 10, 10), date(2025, 10, 13))
 
 
-def _risk(*, mix=None, assets=None, risk_free=None, drawdown="default"):
+def _risk(*, mix=None, assets=None, risk_free=None, drawdown="default", benchmark=None):
     return BacktestRisk(
         label="buy & hold (drifting)",
         end_date=END,
@@ -212,6 +231,7 @@ def _risk(*, mix=None, assets=None, risk_free=None, drawdown="default"):
         limited_by=("AAPL",),
         risk_free=risk_free
         or RiskFreeStatus(available=True, reason=None, first_date=date(1999, 1, 4)),
+        benchmark=benchmark or BENCHMARK,
         mix=mix or _risk_row(None),
         assets=(
             tuple(assets)
@@ -557,7 +577,7 @@ def test_the_drawdown_chart_sits_under_the_growth_chart_with_its_island(client):
         "dates": ["2025-10-09", "2025-10-10", "2025-10-13"],
         "values": [0.0, None, -0.0421],
     }
-    assert '<script src="/static/labs_drawdown_chart.js" defer></script>' in html
+    assert re.search(r'<script src="/static/labs_drawdown_chart\.js\?v=\w+" defer></script>', html)
 
 
 def test_no_drawdown_series_says_so(client):
@@ -614,7 +634,8 @@ def test_the_risk_figures_are_logged(client, caplog):
 
     assert (
         "labs: risk to 2026-10-09, windows from 2021-11-01 (limited by AAPL), "
-        "3 of 5 covered, risk-free rate available." in caplog.text
+        "3 of 5 covered, risk-free rate available, against VWCE.DE (available, "
+        "no growth line: history starts after the growth period)." in caplog.text
     )
 
 
@@ -626,4 +647,225 @@ def test_missing_risk_free_rate_is_logged_with_its_reason(client, caplog):
     with caplog.at_level(logging.INFO, logger="web.api.labs"):
         _page(test_client)
 
-    assert "no risk-free rate (no risk-free rate data)." in caplog.text
+    assert "no risk-free rate (no risk-free rate data), against" in caplog.text
+
+
+# --- the benchmark (RK-14) -------------------------------------------------------------------
+
+UNAVAILABLE = BacktestBenchmark(
+    ticker="NOPE.XX",
+    available=False,
+    reason="not tracked",
+    first_date=None,
+    growth=None,
+    growth_reason="benchmark unavailable: not tracked",
+)
+
+
+def _benchmark_form(html):
+    match = re.search(r'<form[^>]*id="labs-benchmark-form".*?</form>', _section(html), re.S)
+    assert match, "no benchmark form in the risk section"
+    return match.group(0)
+
+
+def _hidden(form):
+    return re.findall(r'<input type="hidden" name="([^"]+)" value="([^"]*)">', form)
+
+
+def test_the_default_benchmark_is_asked_for(client):
+    test_client, fake_portfolio = client
+    _with_risk(fake_portfolio)
+
+    form = _benchmark_form(_page(test_client))
+
+    assert fake_portfolio.benchmarks == ["VWCE.DE"]
+    assert 'name="benchmark"' in form and 'value="VWCE.DE"' in form
+
+
+def test_benchmark_is_sent_and_kept_in_the_field(client):
+    test_client, fake_portfolio = client
+    _with_risk(fake_portfolio)
+
+    form = _benchmark_form(_page(test_client, "?benchmark=IWDA.AS"))
+
+    assert fake_portfolio.benchmarks == ["IWDA.AS"]
+    assert 'value="IWDA.AS"' in form
+    assert 'action="/labs#labs-risk"' in form
+
+
+def test_the_benchmark_form_keeps_the_rest_of_the_query(client):
+    test_client, fake_portfolio = client
+    _with_risk(fake_portfolio)
+
+    form = _benchmark_form(
+        _page(test_client, "?ticker=AAPL&weight=100&period=5Y&risk_window=3Y&benchmark=IWDA.AS")
+    )
+
+    # Everything but the benchmark itself, which the field sends.
+    assert _hidden(form) == [
+        ("ticker", "AAPL"),
+        ("weight", "100"),
+        ("period", "5Y"),
+        ("risk_window", "3Y"),
+    ]
+
+
+def test_the_benchmark_form_keeps_the_default_mix_default(client):
+    # No ticker key: applying a benchmark mustn't turn the default mix into an edited one.
+    test_client, fake_portfolio = client
+    _with_risk(fake_portfolio)
+
+    assert _hidden(_benchmark_form(_page(test_client))) == []
+
+
+def test_the_benchmark_field_suggests_the_tracked_tickers(client):
+    test_client, fake_portfolio = client
+    _with_risk(fake_portfolio)
+
+    form = _benchmark_form(_page(test_client))
+
+    datalist = re.search(r'<datalist id="labs-benchmark-options">(.*?)</datalist>', form, re.S)[1]
+    assert re.findall(r'<option value="([^"]+)">', datalist) == ["IWDA.AS", "AAPL"]
+
+
+def test_an_over_long_benchmark_says_so_and_sends_the_default(client):
+    test_client, fake_portfolio = client
+    _with_risk(fake_portfolio)
+
+    form = _benchmark_form(_page(test_client, "?benchmark=" + "A" * 21))
+
+    assert fake_portfolio.benchmarks == ["VWCE.DE"]
+    assert "at most 20 characters" in form
+
+
+def test_period_and_window_links_keep_the_benchmark(client):
+    test_client, fake_portfolio = client
+    _with_risk(fake_portfolio)
+
+    html = _page(test_client, "?benchmark=IWDA.AS")
+
+    assert "benchmark=IWDA.AS" in _links(html, "labs-periods")[0][1]
+    assert "benchmark=IWDA.AS" in _links(html, "labs-risk-windows")[0][1]
+
+
+def test_the_mix_form_keeps_the_benchmark(client):
+    test_client, fake_portfolio = client
+    _with_risk(fake_portfolio)
+
+    html = _page(test_client, "?benchmark=IWDA.AS")
+
+    assert '<input type="hidden" name="benchmark" value="IWDA.AS">' in html
+
+
+def test_remove_keeps_the_benchmark(client):
+    test_client, _ = client
+
+    response = test_client.get(
+        "/labs?ticker=AAPL&weight=50&ticker=IWDA.AS&weight=50&benchmark=IWDA.AS&remove=0",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"].endswith("&benchmark=IWDA.AS")
+
+
+def _group_heading(table):
+    return _text(re.search(r"<th[^>]*colspan.*?</th>", table, re.S).group(0))
+
+
+def test_the_grid_has_the_relative_group_named_by_its_benchmark(client):
+    test_client, fake_portfolio = client
+    _with_risk(fake_portfolio)
+
+    html = _page(test_client)
+
+    assert _group_heading(_grid(html)) == "Against VWCE.DE, history from 2019-07-29"
+    beta = _grid_row(html, "Beta")
+    assert "weekly" in beta
+    # The first cell is the measure's own label.
+    assert ">0.50<" in _cells(beta)[1]
+    assert ">50.0%<" in _cells(_grid_row(html, "Tracking error"))[1]
+
+
+def test_the_comparison_has_a_column_per_relative_measure(client):
+    test_client, fake_portfolio = client
+    _with_risk(fake_portfolio)
+
+    comparison = _comparison(_page(test_client))
+
+    head = re.search(r"<thead.*?</thead>", comparison, re.S).group(0)
+    for label in ("Beta", "Correlation", "Tracking error", "Information ratio"):
+        assert f">{label}</a>" in head
+    # Named once above the table, not under each of its four columns.
+    assert "Beta to information ratio are against" in _text(_section(_page(test_client)))
+    first_row = re.findall(r"<tbody.*?</tbody>", comparison, re.S)[0]
+    # Asset, six measures, four relative, returns used.
+    assert len(_cells(re.findall(r"<tr role=\"row\".*?</tr>", first_row, re.S)[0])) == 12
+
+
+def test_an_unavailable_benchmark_says_why_once(client):
+    test_client, fake_portfolio = client
+    reason = "benchmark unavailable: not tracked"
+    greyed = {key: _figure(None, frequency="weekly", reason=reason) for key in RELATIVE_FIGURE_KEYS}
+    rows = {w: _covered(relative=greyed) for w in ("1Y", "3Y")}
+    _with_risk(
+        fake_portfolio,
+        _risk(
+            mix=_risk_row(None, **rows),
+            assets=(_risk_row("IWDA.AS", **rows), _risk_row("AAPL", **rows)),
+            benchmark=UNAVAILABLE,
+        ),
+    )
+
+    html = _page(test_client, "?benchmark=NOPE.XX")
+
+    assert _group_heading(_grid(html)) == "Against NOPE.XX: unavailable, not tracked"
+    assert reason not in _section(html)
+    assert "Unavailable" in _cells(_grid_row(html, "Beta"))[1]
+
+
+def _series_box(html):
+    return re.search(r'<fieldset class="labs-series".*?</fieldset>', html, re.S).group(0)
+
+
+def _growth_island(html):
+    match = re.search(r'<script id="labs-chart-data" type="application/json">(.*?)</script>', html)
+    return json.loads(match.group(1))
+
+
+def test_the_benchmark_line_is_on_by_default_with_its_own_box(client):
+    test_client, fake_portfolio = client
+    line = (Decimal("0"), Decimal("0.004"), Decimal("-0.01"))
+    _with_risk(fake_portfolio, _risk(benchmark=replace(BENCHMARK, growth=line, growth_reason=None)))
+
+    html = _page(test_client)
+
+    box = re.search(
+        r'<label[^>]*>\s*<input[^>]*data-series="__benchmark"[^>]*>.*?</label>',
+        _series_box(html),
+        re.S,
+    ).group(0)
+    assert "checked" in box and "disabled" not in box
+    assert "VWCE.DE" in box and "benchmark" in box
+    assert _growth_island(html)["benchmark"] == {
+        "ticker": "VWCE.DE",
+        "values": [0.0, 0.004, -0.01],
+        "reason": None,
+    }
+    assert "the dashed line is the benchmark" in _series_box(html)
+
+
+def test_no_benchmark_line_disables_its_box_and_says_why(client):
+    test_client, fake_portfolio = client
+    reason = "benchmark history too short (from 2019-07-29)"
+    _with_risk(fake_portfolio, _risk(benchmark=replace(BENCHMARK, growth_reason=reason)))
+
+    html = _page(test_client)
+
+    box = re.search(
+        r'<label[^>]*>\s*<input[^>]*data-series="__benchmark"[^>]*>.*?</label>',
+        _series_box(html),
+        re.S,
+    ).group(0)
+    assert "disabled" in box and "checked" not in box
+    assert "No benchmark line: benchmark history too short (from 2019-07-29)." in _text(html)

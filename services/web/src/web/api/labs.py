@@ -21,6 +21,11 @@ anything that isn't a window). Every window is in the one response, so a window 
 only what is shown; it still reruns the page, as the period links do, so the page works without
 JS. labs_risk_view.py words the figures.
 
+`?benchmark=` (RK-14) is what the relative figures and the growth chart's benchmark line measure
+against, VWCE.DE by default (benchmark_param.py has the rule). Its form, in the risk section,
+re-sends the rest of the query as hidden inputs, so it changes nothing else; every other link
+and form on the page keeps it, as they keep the period and the risk window.
+
 On its own router, like portfolio.py, because routes.py is close to the repo's 64KB file limit;
 it renders through routes.py's _render, so a cookie set earlier in the request still reaches
 the response.
@@ -36,6 +41,7 @@ from web.api.csrf import ensure_csrf_cookie
 from web.api.deps import get_portfolio_client, get_settings, get_templates, require_user
 from web.api.routes import _load_tickers, _redirect, _render
 from web.auth_client.base import AuthUser
+from web.benchmark_param import chosen_benchmark
 from web.labs_mix import (
     CheckedMix,
     MixRow,
@@ -45,6 +51,7 @@ from web.labs_mix import (
     parse_mix,
 )
 from web.labs_risk_view import (
+    RELATIVE_MEASURES,
     RISK_MEASURES,
     build_comparison,
     build_drawdown_payload,
@@ -122,6 +129,12 @@ def _risk_window_links(request: Request) -> dict[str, str]:
     }
 
 
+def _benchmark_kept(request: Request) -> list[tuple[str, str]]:
+    """The query the benchmark form re-sends as hidden inputs: everything but `benchmark`, which
+    its field sends. Not `remove`, which the route answers with a redirect before rendering."""
+    return [(k, v) for k, v in request.query_params.multi_items() if k != "benchmark"]
+
+
 def _log_risk(risk: BacktestRisk) -> None:
     covered = sum(1 for w in risk.mix.windows.values() if w.covered)
     start = (
@@ -134,13 +147,22 @@ def _log_risk(risk: BacktestRisk) -> None:
         if risk.risk_free.available
         else f"no risk-free rate ({risk.risk_free.reason})"
     )
+    bench = risk.benchmark
+    line = (
+        "growth line"
+        if bench.growth is not None
+        else f"no growth line: {bench.growth_reason or 'not available'}"
+    )
     logger.info(
-        "labs: risk to %s, %s, %d of %d covered, %s.",
+        "labs: risk to %s, %s, %d of %d covered, %s, against %s (%s, %s).",
         risk.end_date,
         start,
         covered,
         len(BACKTEST_RISK_WINDOWS),
         rf,
+        bench.ticker,
+        "available" if bench.available else f"unavailable: {bench.reason}",
+        line,
     )
 
 
@@ -151,11 +173,16 @@ def _period_links(request: Request) -> dict[str, str]:
 
 
 async def _run_backtest(
-    portfolio_client: PortfolioClient, assets: tuple[tuple[str, Decimal], ...], period: str
+    portfolio_client: PortfolioClient,
+    assets: tuple[tuple[str, Decimal], ...],
+    period: str,
+    benchmark: str,
 ) -> tuple[Backtest | None, str | None]:
     """The backtest and None, or None and the message to show in its place."""
     try:
-        result = await portfolio_client.backtest(assets=list(assets), period=period)
+        result = await portfolio_client.backtest(
+            assets=list(assets), period=period, benchmark=benchmark
+        )
     except InvalidPortfolioRequest as exc:
         # portfolio rejected the mix; its message is written to be shown.
         logger.warning("labs: portfolio rejected the mix: %s", exc)
@@ -194,6 +221,7 @@ async def labs(
     portfolio_client: PortfolioClient = Depends(get_portfolio_client),
     period: str | None = None,
     risk_window: str | None = None,
+    benchmark: str | None = None,
 ):
     form = parse_mix(request.query_params.multi_items())
     if form is not None and form.remove is not None:
@@ -205,6 +233,8 @@ async def labs(
             query += "&" + urlencode([("period", period)])
         if risk_window is not None:
             query += "&" + urlencode([("risk_window", risk_window)])
+        if benchmark is not None:
+            query += "&" + urlencode([("benchmark", benchmark)])
         return _redirect(request, response, f"/labs?{query}")
 
     # The header's logout and theme forms need the token, as on every other page.
@@ -212,6 +242,9 @@ async def labs(
 
     period = _chosen_period(period)
     risk_window = _chosen_risk_window(risk_window)
+    benchmark, benchmark_error = chosen_benchmark(benchmark)
+    if benchmark_error:
+        logger.info("labs: benchmark field over the length limit, measuring against %s.", benchmark)
     mix: DefaultMix | None = None
     holdings_error = None
     checked: CheckedMix | None = None
@@ -257,7 +290,7 @@ async def labs(
 
     backtest, backtest_error = None, None
     if to_send:
-        backtest, backtest_error = await _run_backtest(portfolio_client, to_send, period)
+        backtest, backtest_error = await _run_backtest(portfolio_client, to_send, period, benchmark)
     risk = None if backtest is None else backtest.risk
     if risk is not None:
         _log_risk(risk)
@@ -289,7 +322,9 @@ async def labs(
             "growth": (
                 None
                 if backtest is None or backtest.growth is None
-                else build_growth_payload(backtest.growth)
+                else build_growth_payload(
+                    backtest.growth, None if backtest.risk is None else backtest.risk.benchmark
+                )
             ),
             "left_out_runs": (
                 [] if backtest is None or backtest.mix is None else mix_left_out_runs(backtest.mix)
@@ -299,6 +334,10 @@ async def labs(
             "risk_comparison": None if risk is None else build_comparison(risk, risk_window),
             "risk_window": risk_window,
             "risk_measures": RISK_MEASURES,
+            "relative_measures": RELATIVE_MEASURES,
+            "benchmark": benchmark,
+            "benchmark_error": benchmark_error,
+            "benchmark_kept": _benchmark_kept(request),
             "risk_window_links": _risk_window_links(request),
             "drawdown": (
                 None

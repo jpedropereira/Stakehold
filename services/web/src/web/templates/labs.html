@@ -2,6 +2,7 @@
 {% from "partials/_banner.html" import banner %}
 {% from "partials/_delta.html" import delta %}
 {% from "partials/_term.html" import term %}
+{% from "partials/_benchmark_field.html" import benchmark_form %}
 {% block title %}Labs — Stakehold{% endblock %}
 {# The holdings the default mix left out, one line per reason (labs_view.DefaultMix). Shown
    whatever the backtest did, since it says what the figures don't cover. #}
@@ -45,6 +46,11 @@
    its ± is. #}
 {% macro measure_label(measure) -%}
 {{ term(measure.label, measure.anchor) }}<span class="risk-frequency">{{ measure.frequency }}{% if measure.kind == "sharpe" %} · ± 1 s.e.{% endif %}</span>
+{%- endmacro %}
+{# The heading of the figures against the benchmark (RK-14): its ticker and first date, or why
+   it couldn't be used at all, said once for every cell under it. #}
+{% macro against_heading(bench) -%}
+Against <span class="mono">{{ bench.ticker }}</span>{% if not bench.available %}: unavailable, {{ bench.reason }}{% elif bench.first_date %}, history from <span class="mono">{{ bench.first_date | date }}</span>{% endif %}
 {%- endmacro %}
 {% macro mix_row(i, row=none) -%}
 <div class="labs-row">
@@ -153,6 +159,8 @@
     {% if not risk.risk_free.available %}
     <p class="labs-note">Sharpe and Sortino can't be measured: {{ risk.risk_free.reason }}.</p>
     {% endif %}
+    {# Back at the risk section, since the page reloads; the rest of the query rides along. #}
+    {{ benchmark_form("/labs", "labs", benchmark, benchmark_error, tickers, tickers_notice, kept=benchmark_kept, anchor="#labs-risk") }}
     <div class="table-scroll" tabindex="0" role="region" aria-label="Risk of the mix by window">
     <table class="positions-table holdings-table labs-table labs-risk-table stack-table" role="table">
       <thead role="rowgroup">
@@ -180,6 +188,20 @@
           {% endfor %}
         </tr>
       </tbody>
+      <tbody role="rowgroup">
+        <tr role="row" class="risk-group">
+          <th role="columnheader" scope="colgroup" colspan="{{ risk_grid.columns | length + 1 }}">{{ against_heading(risk.benchmark) }}</th>
+        </tr>
+        {% for row in risk_grid.relative_rows %}
+        <tr role="row">
+          <td role="cell">{{ measure_label(row.measure) }}</td>
+          {% for cell in row.cells %}
+          {% set column = risk_grid.columns[loop.index0] %}
+          <td class="num" role="cell" data-label="{{ column.window }}"{% if column.covered %} data-start="{{ column.start | date }}"{% endif %}>{{ risk_cell(cell) }}</td>
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
     </table>
     </div>
     {% for note in risk_grid.uncovered %}
@@ -195,13 +217,18 @@
       {% endfor %}
     </nav>
     {% if risk_comparison.covered %}
-    <p class="as-of">Over {{ risk_comparison.window }}, from <span class="mono">{{ risk_comparison.start | date }}</span> to <span class="mono">{{ risk_comparison.end | date }}</span>.</p>
+    {# The benchmark is named once here, not under each of its four columns, which would widen
+       a table that already scrolls. #}
+    <p class="as-of">Over {{ risk_comparison.window }}, from <span class="mono">{{ risk_comparison.start | date }}</span> to <span class="mono">{{ risk_comparison.end | date }}</span>. {% if risk.benchmark.available %}Beta to information ratio are against <span class="mono">{{ risk.benchmark.ticker }}</span>.{% else %}Beta to information ratio can't be measured against <span class="mono">{{ risk.benchmark.ticker }}</span>: {{ risk.benchmark.reason }}.{% endif %}</p>
     <div class="table-scroll" tabindex="0" role="region" aria-label="Risk of the mix and its assets over {{ risk_comparison.window }}">
     <table class="positions-table holdings-table labs-table labs-risk-table stack-table" role="table">
       <thead role="rowgroup">
         <tr role="row">
           <th role="columnheader">Asset</th>
           {% for measure in risk_measures %}
+          <th class="num" role="columnheader">{{ measure_label(measure) }}</th>
+          {% endfor %}
+          {% for measure in relative_measures %}
           <th class="num" role="columnheader">{{ measure_label(measure) }}</th>
           {% endfor %}
           <th class="num" role="columnheader">{{ term("Returns used", "returns-used") }}</th>
@@ -213,6 +240,9 @@
           <td role="cell">{% if row.ticker is none %}Mix{% else %}<span class="mono">{{ row.ticker }}</span>{% endif %}</td>
           {% for cell in row.cells %}
           <td class="num" role="cell" data-label="{{ risk_measures[loop.index0].label }}">{{ risk_cell(cell) }}</td>
+          {% endfor %}
+          {% for cell in row.relative_cells %}
+          <td class="num" role="cell" data-label="{{ relative_measures[loop.index0].label }}">{{ risk_cell(cell) }}</td>
           {% endfor %}
           <td class="num" role="cell" data-label="Returns used"><span class="risk-value">{% if row.returns_used %}<span class="mono">{{ row.returns_used }}</span>{% else %}<span class="entry-empty">Not enough history</span>{% endif %}</span></td>
         </tr>
@@ -243,12 +273,23 @@
     {% if growth.left_out %}
     <p class="chart-note">{{ mix_leaves_out(period, period, growth.left_out) }}</p>
     {% endif %}
+    {% if growth.benchmark and growth.benchmark["values"] is none %}
+    <p class="chart-note">No benchmark line: {{ growth.benchmark.reason }}.</p>
+    {% endif %}
     <div class="chart-frame">
       <canvas id="labs-chart" role="img" aria-label="Cumulative growth over {{ period }}"></canvas>
     </div>
     <fieldset class="labs-series" hidden>
       <legend>Assets on the chart</legend>
-      <p class="chart-note">The heavier line is the mix.</p>
+      <p class="chart-note">The heavier line is the mix{% if growth.benchmark and growth.benchmark["values"] is not none %}; the dashed line is the benchmark{% endif %}.</p>
+      {# The benchmark first, and on: the line the mix is read against (RK-14). #}
+      {% if growth.benchmark %}
+      {% if growth.benchmark["values"] is none %}
+      <label><input type="checkbox" data-series="__benchmark" disabled> <span class="mono">{{ growth.benchmark.ticker }}</span> (benchmark) <span class="entry-empty">No line</span></label>
+      {% else %}
+      <label><input type="checkbox" data-series="__benchmark" checked> <span class="mono">{{ growth.benchmark.ticker }}</span> (benchmark)</label>
+      {% endif %}
+      {% endif %}
       {% for asset in growth.assets %}
       {% if asset["values"] is none %}
       <label><input type="checkbox" data-series="{{ asset.ticker }}" disabled> <span class="mono">{{ asset.ticker }}</span> <span class="entry-empty">Not enough history</span></label>
@@ -258,9 +299,9 @@
       {% endfor %}
     </fieldset>
     <script id="labs-chart-data" type="application/json">{{ growth | tojson }}</script>
-    <script src="/static/vendor/chart.min.js" defer></script>
-    <script src="/static/chart_theme.js" defer></script>
-    <script src="/static/labs_chart.js" defer></script>
+    <script src="{{ asset_url('/static/vendor/chart.min.js') }}" defer></script>
+    <script src="{{ asset_url('/static/chart_theme.js') }}" defer></script>
+    <script src="{{ asset_url('/static/labs_chart.js') }}" defer></script>
     {# The mix's drawdown (RK-9, static/labs_drawdown_chart.js) over the same period, so the
        period links above drive both charts. Ink with a soft fill, not oxblood: a drawdown is
        a distance below a high, not a loss figure. #}
@@ -274,7 +315,7 @@
         <canvas id="labs-drawdown-chart" role="img" aria-label="Drawdown of the mix over {{ period }}"></canvas>
       </div>
       <script id="labs-drawdown-data" type="application/json">{{ drawdown | tojson }}</script>
-      <script src="/static/labs_drawdown_chart.js" defer></script>
+      <script src="{{ asset_url('/static/labs_drawdown_chart.js') }}" defer></script>
       {% endif %}
     </div>
     {% endif %}
@@ -318,9 +359,11 @@
     {% if checked and checked.rows %}
     <p class="labs-total">Total <span class="mono">{{ checked.total | share }}</span>{% if checked.total != 1 %} — weights are scaled to 100%, and the table shows the weights used.{% endif %}</p>
     {% endif %}
-    {# The chart's period and the risk comparison's window stay chosen across an update. #}
+    {# The chart's period, the risk comparison's window and the benchmark stay chosen across an
+       update. #}
     <input type="hidden" name="period" value="{{ period }}">
     <input type="hidden" name="risk_window" value="{{ risk_window }}">
+    <input type="hidden" name="benchmark" value="{{ benchmark }}">
     {% for row in shown %}
     <input type="hidden" name="last_ticker" value="{{ row.ticker }}">
     <input type="hidden" name="last_weight" value="{{ row.weight }}">
@@ -335,5 +378,5 @@
      takes the row off the page. #}
   <template id="labs-row-template">{{ mix_row("new") }}</template>
 </section>
-<script src="/static/labs_form.js" defer></script>
+<script src="{{ asset_url('/static/labs_form.js') }}" defer></script>
 {% endblock %}

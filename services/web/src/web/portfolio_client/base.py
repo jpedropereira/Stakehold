@@ -339,6 +339,13 @@ RISK_FIGURE_KEYS = (
     "cvar_99",
 )
 
+# portfolio's default benchmark (RK-13, spec §5.6), sent when the page names none.
+DEFAULT_BENCHMARK = "VWCE.DE"
+
+# The figures each window measures against the benchmark (RK-13, spec §5.6), all weekly, as
+# portfolio names them in its RelativeRiskResponse.
+RELATIVE_FIGURE_KEYS = ("beta", "correlation", "tracking_error", "information_ratio")
+
 
 @dataclass(frozen=True)
 class RiskFigure:
@@ -373,6 +380,9 @@ class BacktestWindowRisk:
     trough_date: date | None
     recovery_date: date | None  # None when not recovered, or the drawdown is greyed
     max_days_under_water: int | None
+    # Against the benchmark (RK-13): every RELATIVE_FIGURE_KEYS key, in that order. None exactly
+    # when the window isn't covered, like the other figures.
+    relative: dict[str, RiskFigure] | None
 
 
 @dataclass(frozen=True)
@@ -389,6 +399,27 @@ class RiskFreeStatus:
     available: bool
     reason: str | None  # why not, when it isn't: downside deviation, Sharpe, Sortino greyed
     first_date: date | None
+
+
+@dataclass(frozen=True)
+class BenchmarkStatus:
+    """What the relative figures measure against (RK-13). Not `available`: `reason` says why
+    ("not tracked", "couldn't reach data-store", ...) and every relative figure is greyed."""
+
+    ticker: str
+    available: bool
+    reason: str | None
+    first_date: date | None  # its first day, which a window it doesn't cover names
+
+
+@dataclass(frozen=True)
+class BacktestBenchmark(BenchmarkStatus):
+    """The backtest's benchmark, with its growth line: one value per BacktestGrowth.dates entry,
+    from 0, priced as an asset's line is. None, with `growth_reason`, when it is unavailable or
+    starts after the growth period."""
+
+    growth: tuple[Decimal, ...] | None
+    growth_reason: str | None
 
 
 @dataclass(frozen=True)
@@ -411,6 +442,7 @@ class BacktestRisk:
     common_start: date | None  # None when the assets' histories don't overlap
     limited_by: tuple[str, ...]
     risk_free: RiskFreeStatus
+    benchmark: BacktestBenchmark
     mix: BacktestRowRisk
     assets: tuple[BacktestRowRisk, ...]  # included assets, in request order
     drawdown: DrawdownSeries | None
@@ -445,6 +477,9 @@ class ExPostWindow:
     trough_date: date | None
     recovery_date: date | None
     max_days_under_water: int | None
+    # Against the benchmark (RK-13): every RELATIVE_FIGURE_KEYS key, in that order. Never None:
+    # an uncovered window greys them like its other figures.
+    relative: dict[str, RiskFigure]
 
 
 @dataclass(frozen=True)
@@ -467,6 +502,7 @@ class ExPostRisk:
     base_date: date | None
     end_date: date | None
     rf_available: bool
+    benchmark: BenchmarkStatus  # not fetched when there's nothing to measure: not available
     windows: tuple[ExPostWindow, ...]
     excluded: tuple[ExcludedHolding, ...]
 
@@ -549,11 +585,15 @@ class PortfolioClient(Protocol):
 
     # A Labs backtest of (ticker, weight) pairs; weights are normalized by portfolio. Read-only
     # despite the POST. An asset portfolio can't backtest is a status in the result, not an
-    # error; InvalidPortfolioRequest means the mix itself was rejected.
-    async def backtest(self, *, assets: list[tuple[str, Decimal]], period: str) -> Backtest: ...
+    # error; InvalidPortfolioRequest means the mix itself was rejected. An unavailable
+    # `benchmark` isn't an error either: the result's risk.benchmark says why.
+    async def backtest(
+        self, *, assets: list[tuple[str, Decimal]], period: str, benchmark: str
+    ) -> Backtest: ...
 
-    # This user's ex-post risk figures over the standard windows (RK-11). Read-only.
-    async def ex_post_risk(self, *, user_id: str) -> ExPostRisk: ...
+    # This user's ex-post risk figures over the standard windows (RK-11), and against
+    # `benchmark` (RK-13). Read-only.
+    async def ex_post_risk(self, *, user_id: str, benchmark: str) -> ExPostRisk: ...
 
     async def list_ticker_mappings(self) -> list[TickerMapping]: ...
 

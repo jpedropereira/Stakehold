@@ -245,7 +245,9 @@ def test_fields_are_grouped_into_the_four_fieldsets(client):
 def test_form_loads_its_script_from_static(client):
     response = client.get("/transactions/new", params={"account": "main"})
 
-    assert '<script src="/static/transaction_form.js" defer></script>' in response.text
+    assert re.search(
+        r'<script src="/static/transaction_form\.js\?v=\w+" defer></script>', response.text
+    )
 
 
 # --- the type -> fields mapping (confirmed against portfolio's validate()/_manual_amount) ----

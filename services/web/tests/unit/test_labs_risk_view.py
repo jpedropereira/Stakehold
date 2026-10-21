@@ -4,10 +4,12 @@ measures by window, the mix-and-assets comparison over one window, and the drawd
 data island."""
 
 import logging
+from dataclasses import replace
 from datetime import date
 
 import pytest
 from web.labs_risk_view import (
+    RELATIVE_MEASURES,
     RISK_MEASURES,
     RiskCell,
     build_comparison,
@@ -18,7 +20,9 @@ from web.labs_risk_view import (
 )
 from web.portfolio_client.base import (
     BACKTEST_RISK_WINDOWS,
+    RELATIVE_FIGURE_KEYS,
     RISK_FIGURE_KEYS,
+    BacktestBenchmark,
     BacktestRisk,
     BacktestRowRisk,
     BacktestWindowRisk,
@@ -29,6 +33,14 @@ from web.portfolio_client.base import (
 
 MINUS = "−"
 END = date(2026, 10, 9)
+BENCHMARK = BacktestBenchmark(
+    ticker="VWCE.DE",
+    available=True,
+    reason=None,
+    first_date=date(2019, 7, 29),
+    growth=None,
+    growth_reason="history starts after the growth period",
+)
 START = date(2025, 10, 9)
 
 
@@ -47,7 +59,7 @@ def _figure(value, *, frequency="daily", n_obs=252, flags=(), reason=None, se=No
     )
 
 
-def _covered(**figures):
+def _covered(relative=None, **figures):
     defaults = {
         "cumulative_return": _figure(0.12),
         "cagr": _figure(0.0712, flags=("short_window",)),
@@ -63,6 +75,8 @@ def _covered(**figures):
         "cvar_99": _figure(0.04),
     }
     defaults.update(figures)
+    if relative is None:
+        relative = {key: _figure(0.5, frequency="weekly", n_obs=52) for key in RELATIVE_FIGURE_KEYS}
     assert set(defaults) == set(RISK_FIGURE_KEYS)
     return BacktestWindowRisk(
         start=START,
@@ -74,6 +88,7 @@ def _covered(**figures):
         trough_date=date(2026, 4, 7),
         recovery_date=None,
         max_days_under_water=249,
+        relative=relative,
     )
 
 
@@ -88,6 +103,7 @@ def _uncovered(reason="limited by AAPL (history from 2021-11-01)"):
         trough_date=None,
         recovery_date=None,
         max_days_under_water=None,
+        relative=None,
     )
 
 
@@ -97,13 +113,14 @@ def _row(ticker, **windows):
     return BacktestRowRisk(ticker=ticker, windows=all_windows)
 
 
-def _risk(mix=None, assets=None, drawdown=None):
+def _risk(mix=None, assets=None, drawdown=None, benchmark=None):
     return BacktestRisk(
         label="buy & hold (drifting)",
         end_date=END,
         common_start=date(2021, 11, 1),
         limited_by=("AAPL",),
         risk_free=RiskFreeStatus(available=True, reason=None, first_date=date(1999, 1, 4)),
+        benchmark=benchmark or BENCHMARK,
         mix=mix or _row(None),
         assets=tuple(assets) if assets is not None else (_row("VWCE.DE"), _row("AAPL")),
         drawdown=drawdown,
@@ -340,3 +357,90 @@ def test_the_drawdown_payload_keeps_its_gaps():
         # breaks there.
         "values": [0.0, None, -0.123457],
     }
+
+
+# --- against the benchmark (RK-14) ----------------------------------------------------------
+
+UNAVAILABLE = BacktestBenchmark(
+    ticker="NOPE.XX",
+    available=False,
+    reason="not tracked",
+    first_date=None,
+    growth=None,
+    growth_reason="benchmark unavailable: not tracked",
+)
+
+
+def _relative(value=0.5, reason=None):
+    return {
+        key: _figure(value, frequency="weekly", n_obs=52, reason=reason)
+        for key in RELATIVE_FIGURE_KEYS
+    }
+
+
+def test_the_four_relative_measures_in_order_all_weekly():
+    assert [(m.key, m.label, m.frequency, m.anchor, m.kind) for m in RELATIVE_MEASURES] == [
+        ("beta", "Beta", "weekly", "beta", "ratio"),
+        ("correlation", "Correlation", "weekly", "correlation", "ratio"),
+        ("tracking_error", "Tracking error", "weekly", "tracking-error", "pct"),
+        ("information_ratio", "Information ratio", "weekly", "information-ratio", "ratio"),
+    ]
+
+
+def test_the_mix_grid_has_a_relative_row_per_measure():
+    grid = build_mix_grid(_risk())
+
+    assert [r.measure.key for r in grid.relative_rows] == list(RELATIVE_FIGURE_KEYS)
+    beta = grid.relative_rows[0].cells[0]
+    assert (beta.text, beta.css_class) == ("0.50", "")
+    tracking_error = grid.relative_rows[2].cells[0]
+    assert tracking_error.text == "50.0%"
+
+
+def test_an_uncovered_windows_relative_cells_are_none_like_the_rest():
+    mix = _row(None, **{"10Y": _uncovered()})
+
+    grid = build_mix_grid(_risk(mix=mix))
+
+    ten = BACKTEST_RISK_WINDOWS.index("10Y")
+    assert all(row.cells[ten] is None for row in grid.relative_rows)
+
+
+def test_a_benchmark_too_short_for_a_window_shows_its_reason():
+    reason = "benchmark history too short (from 2019-07-29)"
+    mix = _row(None, **{"Max": _covered(relative=_relative(None, reason))})
+
+    grid = build_mix_grid(_risk(mix=mix))
+
+    cell = grid.relative_rows[0].cells[BACKTEST_RISK_WINDOWS.index("Max")]
+    assert (cell.text, cell.reason) == (None, reason)
+
+
+def test_an_unavailable_benchmark_says_unavailable_in_each_cell():
+    # The heading says why once, as /risk does.
+    reason = "benchmark unavailable: not tracked"
+    mix = _row(None, **{w: _covered(relative=_relative(None, reason)) for w in ("1Y", "3Y")})
+
+    grid = build_mix_grid(_risk(mix=mix, benchmark=UNAVAILABLE))
+
+    assert grid.relative_rows[0].cells[0].reason == "Unavailable"
+
+
+def test_a_covered_window_with_no_relative_figures_is_still_not_blank(caplog):
+    # portfolio sends them on every covered window; if it ever doesn't, say so in place.
+    mix = _row(None, **{"1Y": replace(_covered(), relative=None)})
+
+    with caplog.at_level(logging.WARNING, logger="web.labs_risk_view"):
+        grid = build_mix_grid(_risk(mix=mix))
+
+    assert grid.relative_rows[0].cells[0].reason == "not available"
+    assert "relative" in caplog.text
+
+
+def test_each_comparison_row_has_its_relative_cells():
+    asset = _row("AAPL", **{"1Y": _covered(relative=_relative(1.2))})
+
+    comparison = build_comparison(_risk(assets=[asset]), "1Y")
+
+    assert [len(row.relative_cells) for row in comparison.rows] == [4, 4]
+    assert comparison.rows[1].relative_cells[0].text == "1.20"

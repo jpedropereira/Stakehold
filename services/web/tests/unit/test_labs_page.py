@@ -62,6 +62,7 @@ class FakePortfolioClient:
         # Holdings and backtest calls, in order. The ticker list is counted apart, since it is
         # fetched alongside the holdings and its place among them isn't fixed.
         self.calls: list[tuple] = []
+        self.benchmarks: list[str] = []
 
     async def list_tickers(self):
         self.tickers_calls += 1
@@ -75,8 +76,9 @@ class FakePortfolioClient:
             raise self.list_holdings_error
         return self.holdings
 
-    async def backtest(self, *, assets, period):
+    async def backtest(self, *, assets, period, benchmark):
         self.calls.append(("backtest", tuple(assets), period))
+        self.benchmarks.append(benchmark)
         if self.backtest_error:
             raise self.backtest_error
         return self.backtest_result
@@ -779,6 +781,8 @@ def test_the_data_island_carries_every_series_for_the_period(client):
             {"ticker": "VWRL.AS", "values": None},
         ],
         "left_out": ["VWRL.AS"],
+        # This backtest has no risk section, so no benchmark (RK-14).
+        "benchmark": None,
     }
 
 
@@ -792,7 +796,9 @@ def test_the_canvas_sits_alone_in_its_sizing_frame_and_the_scripts_load_in_order
     assert re.search(
         r'<div class="chart-frame">\s*<canvas id="labs-chart"[^>]*></canvas>\s*</div>', section
     )
-    scripts = re.findall(r'<script src="([^"]+)" defer></script>', section)
+    scripts = [
+        src.split("?v=")[0] for src in re.findall(r'<script src="([^"]+)" defer></script>', section)
+    ]
     assert scripts == [
         "/static/vendor/chart.min.js",
         "/static/chart_theme.js",
@@ -1196,7 +1202,9 @@ def test_the_page_loads_the_add_row_script(client):
     _logged_in(test_client, fake_auth)
     _with_a_backtest(fake_portfolio)
 
-    assert '<script src="/static/labs_form.js" defer></script>' in _page(test_client)
+    assert re.search(
+        r'<script src="/static/labs_form\.js\?v=\w+" defer></script>', _page(test_client)
+    )
 
 
 def test_logs_an_edited_mix_and_its_errors(client, caplog):
