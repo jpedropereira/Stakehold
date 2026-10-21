@@ -12,6 +12,8 @@ import requests
 from portfolio.datastore_client.base import (
     FxPoint,
     PricePoint,
+    RiskFreePoint,
+    RiskFreeSeries,
     TickerInfo,
     TickerLookup,
     TrackedTicker,
@@ -158,6 +160,48 @@ class HttpDataStoreClient:
         except (KeyError, TypeError, ValueError, InvalidOperation) as exc:
             raise DataStoreApiError(
                 f"data-store returned a malformed fx-rate point for {base}/{quote}: {exc}"
+            ) from exc
+
+    def get_risk_free_series(self, start: date, end: date) -> RiskFreeSeries | None:
+        # source is left to data-store's default (ecb), as the other reads leave theirs.
+        try:
+            response = requests.get(
+                f"{self._base_url}/rates/risk-free",
+                params={"start": start.isoformat(), "end": end.isoformat()},
+                headers=self._headers,
+                timeout=_REQUEST_TIMEOUT,
+            )
+        except requests.RequestException as exc:
+            raise DataStoreApiError(f"request to data-store failed: {exc}") from exc
+
+        # No 404 special-case: "nothing stored" is a 200 with first_date null, handled below.
+        try:
+            response.raise_for_status()
+        except requests.HTTPError as exc:
+            raise DataStoreApiError(
+                f"data-store returned {response.status_code} for rates/risk-free: {exc}"
+            ) from exc
+
+        try:
+            body = response.json()
+            first_date = body["first_date"]
+            points = [
+                RiskFreePoint(
+                    date=date.fromisoformat(point["date"]),
+                    rate=Decimal(point["rate"]),
+                    series=point["series"],
+                )
+                for point in body["points"]
+            ]
+            if first_date is None:
+                # data-store's "nothing stored" -- None here, so no caller can take it for rf = 0.
+                if points:
+                    raise ValueError("points without a first_date")
+                return None
+            return RiskFreeSeries(first_date=date.fromisoformat(first_date), points=points)
+        except (KeyError, TypeError, ValueError, InvalidOperation) as exc:
+            raise DataStoreApiError(
+                f"data-store returned a malformed response for rates/risk-free: {exc}"
             ) from exc
 
     def list_tickers(self) -> list[str]:

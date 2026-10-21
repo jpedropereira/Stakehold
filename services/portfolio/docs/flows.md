@@ -652,14 +652,23 @@ portfolio's sides:
    `calculate-returns` run for it) blocks only that `(account, ticker)` pair — loudly, in the run's
    `blocked` list — rather than failing at the price-series fetch that follows it.
 
-All three require `Authorization: Bearer <INTERNAL_API_SECRET>` — the same shared-secret model
+**The risk-free series** (**RK-4**, tasks-risk-thread.md) is a fourth read, for the risk
+measures rather than `returns/`: `GET /rates/risk-free`, data-store's €STR/EONIA splice (RK-3;
+its `read-api.md` owns the contract). `DataStoreClient.get_risk_free_series(start, end)` returns
+the published points (`RiskFreePoint`: date, `Decimal` rate in annualised %, the series it came
+from) with the series-wide `first_date` R4 needs. It returns `None` when data-store has nothing
+stored (its `first_date: null`), so a caller has to report "no risk-free data" rather than
+compute with rf = 0. It doesn't forward-fill: `risk/risk_free.py` does, after the caller converts
+the points to its float `RatePoint`. Its `source` defaults to `ecb` on data-store's side.
+
+All four require `Authorization: Bearer <INTERNAL_API_SECRET>` — the same shared-secret model
 `auth/docs/architecture.md` describes — and `source` is a query parameter defaulting to
-`yfinance` on every endpoint, since `source` is part of the primary key on data-store's side;
-`http_client.py` relies on that default rather than passing `source` explicitly, matching
-`get_fx_rate`'s existing convention.
+`yfinance` on the first three (`ecb` on the risk-free one), since `source` is part of the primary
+key on data-store's side; `http_client.py` relies on those defaults rather than passing `source`
+explicitly, matching `get_fx_rate`'s existing convention.
 
 `datastore_client/base.py` defines the `DataStoreClient` Protocol portfolio's domain code depends
-on; `http_client.py` is the implementation that calls the now-built API, all five methods.
+on; `http_client.py` is the implementation that calls the now-built API, every method.
 Because the rest of the domain (`positions/`, `transactions/`, `broker_import/`,
 `ticker_mapping/`, `returns/`) depends only on the Protocol, not the HTTP implementation, a local
 stub/fixture-backed implementation of `DataStoreClient` remains enough to build and test
