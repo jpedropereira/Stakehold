@@ -123,7 +123,7 @@ checked against the code, docs and dev DB:
 | RK-9 | [web: Labs risk panel and drawdown chart](#rk-9-web-labs-risk-panel-and-drawdown-chart) | RK-8 | ready |
 | RK-10 | [portfolio: daily TWR of invested positions](#rk-10-portfolio-daily-twr-of-invested-positions) | RK-5 | done |
 | RK-11 | [portfolio: ex-post risk endpoint](#rk-11-portfolio-ex-post-risk-endpoint) | RK-4, RK-7, RK-10 | done |
-| RK-12 | [web: `/risk` page with the ex-post summary](#rk-12-web-risk-page-with-the-ex-post-summary) | RK-11 | ready |
+| RK-12 | [web: `/risk` page with the ex-post summary](#rk-12-web-risk-page-with-the-ex-post-summary) | RK-11 | done |
 | RK-13 | [portfolio: benchmark and relative measures](#rk-13-portfolio-benchmark-and-relative-measures) | RK-8, RK-11 | ready |
 | RK-14 | [web: benchmark selector, relative measures, benchmark line](#rk-14-web-benchmark-selector-relative-measures-benchmark-line) | RK-9, RK-12, RK-13 | blocked |
 | RK-15 | [portfolio: ex-ante covariance and risk decomposition](#rk-15-portfolio-ex-ante-covariance-and-risk-decomposition) | RK-6, RK-7 | done |
@@ -431,7 +431,7 @@ when no asset is included. Decisions:
 
 ### RK-9. web: Labs risk panel and drawdown chart
 
-**Status:** blocked
+**Status:** ready
 
 - The client parses `risk`.
 - A risk table: CAGR, volatility, MDD, Sharpe ± SE (labelled "1 s.e."), Sortino and Calmar per
@@ -537,13 +537,33 @@ has `label, start, end, covered`, the twelve figures (each with its window, freq
 
 ### RK-12. web: `/risk` page with the ex-post summary
 
-**Status:** ready
+**Status:** done
 
 - A new router `web/api/risk.py`, a "Risk" nav link, `templates/risk.html`, and a view builder.
 - First section: the ex-post summary, with every figure's window, `n_obs` and label on hover
   (§10).
 - Failures are isolated per section, as `/labs` does.
 - If `ui-architecture.md` would cross 64 KB, split it first.
+
+**As built:** `GET /risk` (`api/risk.py`), with a loader per section, and so far one section.
+The client gained `ex_post_risk` and the float `RiskFigure`, which RK-9 reuses. `risk_view.py`
+builds the table, and the formatting filters gained `pct1` and `ratio`. `ui-architecture.md` is
+60.3 KB after this task's entry, so it wasn't split. RK-14, RK-18 and RK-23 should expect to
+split it. Decisions (agreed):
+- **Measures down, windows across.** Each column header shows its window's dates and each row
+  its frequency. A cell's `title` carries its own window, n_obs, gaps and the label. On touch
+  screens the title doesn't show, a known cost.
+- **Only cumulative return and CAGR are coloured** as gains or losses. Every other figure,
+  max drawdown included, is ink.
+- **Flags are numbered markers**, in `risk_view.FLAG_NOTES`' fixed order, with a legend of only
+  those present. `insufficient_history` gets none, because the greyed cell already says it.
+- **Glossary entries for every ex-post measure**, plus `ex-post`. RK-9 links to them.
+- **An uncovered window says why once**, in its header, and each of its cells says "Not
+  covered". A covered window's greyed figure shows its own reason.
+- **No risk-free rate** is a warning banner, since the banner has no "info" kind.
+- **Against the dev data**, `GET /risk/ex-post` took 0.46 s for a 2021–2026 portfolio. Its 1Y
+  volatility, downside deviation, Sharpe and Sortino were greyed: "have 51, need 52". RK-7
+  shrinks weekly windows to whole weeks, so a one-year window can hold only 51.
 
 ### RK-13. portfolio: benchmark and relative measures
 
@@ -716,7 +736,7 @@ and `IWDA.AS` is an unrelated `tracked_tickers` row. Decisions (agreed):
 
 ### RK-22. portfolio: look-through exposures
 
-**Status:** blocked
+**Status:** ready
 
 §8 by currency, sector, country and asset class:
 - a direct stock looked up in the latest snapshot, otherwise "unknown"
