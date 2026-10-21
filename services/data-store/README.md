@@ -19,6 +19,10 @@ cp services/data-store/config/etfs.yaml.example services/data-store/config/etfs.
 then edit it to list the fund(s) you want to track — see the comments in
 `etfs.yaml.example` for the shape of each entry.
 
+A fund's optional `ticker` is its own tradeable ticker (e.g. `IWDA.AS` for
+`ishares_msci_world`). It's how portfolio finds the holdings of a fund someone holds, through
+`GET /etf-holdings`, so set it for every fund that's held. Two funds can't share one.
+
 **Disclaimer**: data scraped from iShares product pages is subject to iShares' own terms and
 conditions. This project provides the tooling only — it is the user's responsibility to review
 and comply with those terms (including any restrictions on scraping, redistribution, or
