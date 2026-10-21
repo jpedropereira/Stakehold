@@ -1362,10 +1362,22 @@ img.logo-on-dark {
   font-size: 13px;
 }
 
-/* Each row's measure reads as a label, not as a column caption; its frequency sits under it. */
+/* Each row's measure reads as a label, not as a column caption; its frequency sits under it.
+   On one line: a wrapped "Cumulative / return" made every row two lines taller. */
 .risk-table tbody th {
   font: var(--text-body);
   color: var(--text);
+  white-space: nowrap;
+}
+
+/* A date never breaks at its hyphens, in a header either. */
+.risk-table thead .mono {
+  white-space: nowrap;
+}
+
+/* A figure with its s.e. and markers: one unit, never broken apart. */
+.risk-value {
+  white-space: nowrap;
 }
 
 /* A greyed figure's reason, and an uncovered window's in its header, wrap: they are sentences,

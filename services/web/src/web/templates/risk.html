@@ -54,6 +54,9 @@
           {% for cell in row.cells %}
           {% set column = ex_post.columns[loop.index0] %}
           <td class="num" role="cell" data-label="{{ column.label }}" title="{{ cell.title }}">
+            {#- One span for the figure, its s.e. and its markers, so a stacked row's flex layout
+                keeps them together instead of spreading them across the line. -#}
+            <span class="risk-value">
             {%- if cell.value is not none -%}
             {{ figure(cell.value, row.kind) }}
             {%- if cell.standard_error is not none %} <span class="risk-se">± <span class="mono">{{ cell.standard_error | ratio }}</span></span>{% endif -%}
@@ -63,6 +66,7 @@
             <span class="risk-greyed">Not covered</span>
             {%- endif -%}
             {%- if cell.markers %}<sup class="risk-flag">{{ cell.markers | join(", ") }}</sup>{% endif -%}
+            </span>
             {%- if cell.drawdown %}<span class="risk-dd">peak <span class="mono">{{ cell.drawdown.peak | date }}</span>, trough <span class="mono">{{ cell.drawdown.trough | date }}</span>, {% if cell.drawdown.recovery %}recovered <span class="mono">{{ cell.drawdown.recovery | date }}</span>{% else %}not recovered{% endif %}</span>{% endif -%}
           </td>
           {% endfor %}

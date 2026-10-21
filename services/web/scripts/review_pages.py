@@ -119,6 +119,9 @@ PAGES = [
             '.labs-series input[data-series="AAPL"]',
         ),
     ),
+    # RK-12: 1Y, 3Y and Max measured, 5Y and 10Y greyed, flags and their legend, a greyed
+    # Sharpe, and a holding left out.
+    Page("risk", "/risk", "user"),
     Page("glossary", "/glossary", "user"),
     # Followed from a holdings page's "Total return" header: the entry it lands on is marked.
     Page("glossary-total-return", "/glossary#total-return", "user"),
@@ -335,6 +338,8 @@ def _fakes():
     from web.auth_client.errors import SessionInvalid
     from web.portfolio_client.base import (
         BACKTEST_PERIODS,
+        RISK_FIGURES,
+        RISK_WINDOWS,
         Account,
         Backtest,
         BacktestAssetStatus,
@@ -342,6 +347,9 @@ def _fakes():
         BacktestPeriodReturn,
         BacktestRow,
         Broker,
+        ExcludedHolding,
+        ExPostRisk,
+        ExPostWindow,
         Holding,
         HoldingAccount,
         Holdings,
@@ -350,6 +358,7 @@ def _fakes():
         PortfolioSeriesPoint,
         Position,
         Return,
+        RiskFigure,
         TickerLookup,
         TickerMapping,
         TrackedTicker,
@@ -743,6 +752,116 @@ def _fakes():
                         "7203.T", "no_fx_rate", "Stakehold has no JPY exchange rates."
                     ),
                 ),
+            )
+
+        async def ex_post_risk(self, *, user_id):
+            """Three and a half years of history: 1Y, 3Y and Max are measured, 5Y and 10Y are
+            greyed for starting before it. Every state the table has: a loss and a gain, a
+            Sharpe with its standard error, a 1Y Sharpe greyed for too few weeks, VaR flagged
+            for mixing markets and the 99% tail flagged as unstable, a recovered and an
+            unrecovered drawdown, and a holding left out for having no FX series."""
+            base = date(2023, 4, 3)
+            weekly = {"volatility", "downside_deviation", "sharpe", "sortino"}
+            measures = (
+                "cumulative_return",
+                "cagr",
+                "volatility",
+                "downside_deviation",
+                "max_drawdown",
+                "sharpe",
+                "sortino",
+                "calmar",
+            )
+            values = {
+                "1Y": (-0.0412, -0.0412, 0.1534, 0.1121, -0.1873, -0.52, -0.68, -0.22),
+                "3Y": (0.2215, 0.0690, 0.1402, 0.0987, -0.1873, 0.31, 0.44, 0.37),
+                "Max": (0.3120, 0.0812, 0.1388, 0.0954, -0.1873, 0.42, 0.61, 0.43),
+            }
+            tails = {"var_95": 0.0189, "cvar_95": 0.0271, "var_99": 0.0342, "cvar_99": 0.0418}
+            starts = {
+                "1Y": date(2025, 10, 9),
+                "3Y": date(2023, 10, 9),
+                "5Y": date(2021, 10, 9),
+                "10Y": date(2016, 10, 9),
+                "Max": base,
+            }
+
+            def figure(name, start, value, **changes):
+                fields = dict(
+                    value=value,
+                    window_start=start,
+                    window_end=today,
+                    frequency="weekly" if name in weekly else "daily",
+                    q=52.0 if name in weekly else 251.6,
+                    n_obs=round((today - start).days / (7 if name in weekly else 1.45)),
+                    n_gaps=0,
+                    flags=(),
+                    reason=None,
+                    standard_error=None,
+                )
+                fields.update(changes)
+                return RiskFigure(**fields)
+
+            def window(label):
+                start = starts[label]
+                if label not in values:
+                    reason = f"insufficient history (portfolio history from {base})"
+                    return ExPostWindow(
+                        label,
+                        start,
+                        today,
+                        False,
+                        {
+                            n: figure(
+                                n, start, None, flags=("insufficient_history",), reason=reason
+                            )
+                            for n in RISK_FIGURES
+                        },
+                        None,
+                        None,
+                        None,
+                        None,
+                    )
+                years = (today - start).days / 365.25
+                figures = {**dict(zip(measures, values[label])), **tails}
+                result = {}
+                for name, value in figures.items():
+                    flags = ["short_window"] if name in ("cagr", "calmar") and years < 3 else []
+                    if name.startswith(("var", "cvar")):
+                        flags.append("nonsync_daily")
+                    if name.endswith("_99") and years < 4:
+                        flags.append("tail_unstable")
+                    se = round(0.95 / math.sqrt(years), 2) if name == "sharpe" else None
+                    result[name] = figure(name, start, value, flags=tuple(flags), standard_error=se)
+                if label == "1Y":
+                    result["sharpe"] = figure(
+                        "sharpe",
+                        date(2025, 10, 10),
+                        None,
+                        n_obs=50,
+                        flags=("insufficient_history",),
+                        reason="insufficient history (have 50, need 52)",
+                    )
+                recovered = None if label == "1Y" else date(2024, 11, 20)
+                return ExPostWindow(
+                    label,
+                    start,
+                    today,
+                    True,
+                    result,
+                    date(2024, 7, 16) if label != "1Y" else date(2026, 1, 5),
+                    date(2024, 8, 5) if label != "1Y" else date(2026, 4, 8),
+                    recovered,
+                    127 if recovered else 277,
+                )
+
+            return ExPostRisk(
+                label="ex-post · invested assets",
+                base_date=base,
+                end_date=today,
+                rf_available=True,
+                windows=tuple(window(label) for label in RISK_WINDOWS),
+                excluded=(ExcludedHolding("7203.T", "no_fx_rate", "no FX series for JPY"),),
             )
 
         async def list_unmapped_instruments(self, *, user_id):
