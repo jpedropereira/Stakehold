@@ -24,6 +24,8 @@ from portfolio.datastore_client.http_client import HttpDataStoreClient
 from portfolio.holdings import flows as holdings_flows
 from portfolio.labs import flows as labs_flows
 from portfolio.labs.calculator import BacktestResult, Period
+from portfolio.risk import flows as risk_flows
+from portfolio.risk.ex_post import WindowFigures
 from portfolio.run_result import build_run_result
 from portfolio.settings import Settings, SettingsError, load_settings
 from portfolio.ticker_mapping.repository import TickerMappingRow
@@ -1341,7 +1343,80 @@ def get_portfolio_twr(*, user_id: UUID, settings: Settings | None = None) -> dic
             "nothing on two consecutive dates.",
             len(result.excluded),
         )
-    return {**asdict(result), "n_excluded": len(result.excluded)}
+    payload = asdict(result)
+    # Ex-post risk's inputs, not part of the TWR route's payload.
+    del payload["days"], payload["currencies"]
+    return {**payload, "n_excluded": len(result.excluded)}
+
+
+def get_ex_post_risk(*, user_id: UUID, settings: Settings | None = None) -> dict:
+    """This user's ex-post risk over the standard windows, measured on the TWR of invested
+    positions (see risk/flows.compute_ex_post). Read-only: never triggers a rebuild."""
+    configure_logging()
+    settings = settings or load_settings()
+    datastore_client = _require_datastore_client(settings, command="ex-post risk")
+    conn = get_connection(settings.database_url)
+    try:
+        logger.info("get-ex-post-risk: measuring ex-post risk for user %s.", user_id)
+        result = risk_flows.compute_ex_post(conn, datastore_client, user_id=user_id)
+    finally:
+        conn.close()
+
+    if result.windows:
+        uncovered = sum(1 for window in result.windows if not window.covered)
+        logger.info(
+            "get-ex-post-risk: done, %s to %s: %d window(s) measured, %d greyed for short "
+            "history, risk-free rate %s, %d holding(s) left out.",
+            result.base_date,
+            result.end_date,
+            len(result.windows) - uncovered,
+            uncovered,
+            "available" if result.rf_available else "unavailable",
+            len(result.excluded),
+        )
+    elif not result.excluded:
+        logger.info(
+            "get-ex-post-risk: done, no TWR returns in any account yet, so nothing to measure."
+        )
+    else:
+        logger.warning(
+            "get-ex-post-risk: done, nothing to measure: %d holding(s) left out, and the rest "
+            "gave no TWR returns.",
+            len(result.excluded),
+        )
+    return {
+        "label": result.label,
+        "base_date": result.base_date,
+        "end_date": result.end_date,
+        "rf_available": result.rf_available,
+        "windows": [_ex_post_window(window) for window in result.windows],
+        "n_excluded": len(result.excluded),
+        "excluded": [asdict(holding) for holding in result.excluded],
+    }
+
+
+def _ex_post_window(window: WindowFigures) -> dict:
+    """One window as builtins. The drawdown's DD series stays out: RK-12 shows the summary only
+    (agreed for RK-11)."""
+    drawdown = window.drawdown
+    return {
+        "label": str(window.window.label),
+        "start": window.window.start,
+        "end": window.window.end,
+        "covered": window.covered,
+        "peak_date": drawdown.peak_date,
+        "trough_date": drawdown.trough_date,
+        "recovery_date": drawdown.recovery_date,
+        "max_days_under_water": drawdown.max_days_under_water,
+        **{
+            name: {
+                **asdict(figure),
+                "frequency": str(figure.frequency),
+                "flags": sorted(str(flag) for flag in figure.flags),
+            }
+            for name, figure in risk_flows.figures_of(window).items()
+        },
+    }
 
 
 def get_backtest(

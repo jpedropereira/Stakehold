@@ -529,3 +529,49 @@ class BacktestResponse(BaseModel):
     growth: GrowthSeriesResponse | None
     statuses: list[AssetStatusResponse]  # every requested asset, in request order
     risk: BacktestRiskResponse | None = None  # null exactly when no asset could be included
+
+
+# --- ex-post risk (RK-11) ---
+# Same RiskFigureResponse as Labs' risk table above.
+
+
+class ExPostWindowResponse(BaseModel):
+    """One standard window (1Y, 3Y, 5Y, 10Y, Max), all ending at end_date. covered is false when
+    the history starts after the window does: every figure is then greyed."""
+
+    label: str
+    start: date
+    end: date
+    covered: bool
+    cumulative_return: RiskFigureResponse
+    cagr: RiskFigureResponse
+    volatility: RiskFigureResponse
+    downside_deviation: RiskFigureResponse
+    sharpe: RiskFigureResponse
+    sortino: RiskFigureResponse
+    max_drawdown: RiskFigureResponse
+    # The max drawdown's dates, null when it's greyed; recovery_date null also means "not
+    # recovered" by the window's end.
+    peak_date: date | None
+    trough_date: date | None
+    recovery_date: date | None
+    max_days_under_water: int | None
+    calmar: RiskFigureResponse
+    var_95: RiskFigureResponse
+    cvar_95: RiskFigureResponse
+    var_99: RiskFigureResponse
+    cvar_99: RiskFigureResponse
+
+
+class ExPostRiskResponse(BaseModel):
+    """Ex-post risk (RK-11), measured on the TWR of invested positions."""
+
+    label: str  # "ex-post · invested assets"
+    base_date: date | None  # null, with no windows, when there's nothing to measure
+    end_date: date | None
+    # false: downside deviation, Sharpe and Sortino are greyed, "no risk-free rate data".
+    rf_available: bool
+    windows: list[ExPostWindowResponse]
+    n_excluded: int
+    # Held tickers left out of the TWR, by ticker; the rest were renormalised to 100%.
+    excluded: list[ExcludedHoldingResponse]

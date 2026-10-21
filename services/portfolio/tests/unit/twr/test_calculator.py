@@ -333,3 +333,98 @@ def test_an_open_pair_without_a_row_on_a_date_carries_forward():
     series = compute_twr(snapshots, returns, closed=set())
 
     assert _returns(series) == [(D2, _q("0.01")), (D3, _q("0.05"))]
+
+
+# --- days: the tickers behind each point, and whether they all traded on it (RK-11) ---
+#
+# Ex-post VaR keeps only the days on which every included asset's exchange traded (R7, §5.5).
+# The holdings change over time, so that's judged per point: the tickers weighted at the previous
+# date, each with a return row dated on the point itself.
+
+
+def _days(series):
+    return [(d.price_date, d.tickers, d.traded) for d in series.days]
+
+
+def test_each_point_names_the_tickers_weighted_at_the_previous_date():
+    # B is bought on D2 (no D1 row), so D2's point is A's alone and D3's is A's and B's.
+    snapshots = [
+        _row(D1, "1000"),
+        _row(D2, "1000"),
+        _row(D3, "1000"),
+        _row(D2, "500", ticker="B"),
+        _row(D3, "500", ticker="B"),
+    ]
+    returns = {"A": _eur(D1, (D2, "0"), (D3, "0")), "B": _eur(D1, (D2, "0"), (D3, "0"))}
+
+    series = compute_twr(snapshots, returns, closed=set())
+
+    assert _days(series) == [
+        (D2, frozenset({"A"}), True),
+        (D3, frozenset({"A", "B"}), True),
+    ]
+
+
+def test_a_day_on_which_a_held_ticker_has_no_row_did_not_trade():
+    # The closed-exchange fixture: U has no price row on D2, so D2 is a carry-forward 0% for U
+    # and fails the mask. D3 has a row for both.
+    prices = [
+        PricePoint(D1, Decimal("100"), None),
+        PricePoint(D3, Decimal("102"), Decimal("0.02")),
+    ]
+    fx = [FxPoint(D1, Decimal("1.10")), FxPoint(D2, Decimal("1.00")), FxPoint(D3, Decimal("1.00"))]
+    snapshots = [
+        _row(D1, "500"),
+        _row(D2, "520"),
+        _row(D3, "520"),
+        _row(D1, "500", ticker="U"),
+        _row(D3, "561", ticker="U"),
+    ]
+    returns = {"A": _eur(D1, (D2, "0.04"), (D3, "0")), "U": eur_daily_returns(prices, fx)}
+
+    series = compute_twr(snapshots, returns, closed=set())
+
+    assert _days(series) == [
+        (D2, frozenset({"A", "U"}), False),
+        (D3, frozenset({"A", "U"}), True),
+    ]
+
+
+def test_returns_compounded_into_one_point_did_not_trade_on_it():
+    # A's D2 and D3 returns both land on D3, so D3's return isn't one day's move.
+    snapshots = [_row(D1, "1000"), _row(D3, "1210")]
+    returns = {"A": _eur(D1, (D2, "0.10"), (D3, "0.10"))}
+
+    series = compute_twr(snapshots, returns, closed=set())
+
+    assert _days(series) == [(D3, frozenset({"A"}), False)]
+
+
+def test_a_ticker_not_held_at_the_previous_date_does_not_affect_trading():
+    # B was sold on D2, and has no price row on D3. Only A is weighted at D2, so D3 traded.
+    snapshots = [
+        _row(D1, "500"),
+        _row(D2, "500"),
+        _row(D3, "505"),
+        _row(D1, "500", ticker="B"),
+        _row(D2, "0", ticker="B", quantity="0"),
+    ]
+    returns = {"A": _eur(D1, (D2, "0"), (D3, "0.01")), "B": _eur(D1, (D2, "0"))}
+
+    series = compute_twr(snapshots, returns, closed={(1, "B")})
+
+    assert _days(series) == [
+        (D2, frozenset({"A", "B"}), True),
+        (D3, frozenset({"A"}), True),
+    ]
+
+
+def test_a_gap_day_still_traded():
+    # A NULL return is a lost move on a day the exchange traded (R5): the measure drops it, not
+    # the mask.
+    snapshots = [_row(D1, "1000"), _row(D2, "1000"), _row(D3, "1010")]
+    returns = {"A": _eur(D1, (D2, None), (D3, "0.01"))}
+
+    series = compute_twr(snapshots, returns, closed=set())
+
+    assert _days(series) == [(D2, frozenset({"A"}), True), (D3, frozenset({"A"}), True)]

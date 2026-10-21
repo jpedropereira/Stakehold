@@ -25,6 +25,10 @@ Holdings-based, as agreed on 2026-10-20: r_t = sum_i w_(i,t-1) x r_eur,i,t.
   holdings at its previous date.
 - **Exclusions.** A ticker with no entry in `returns` (no FX series, untracked, a failed fetch)
   is dropped, and the rest are renormalised to 100%. The caller names it.
+- **Days (RK-11).** Each point has a `TwrDay` naming the tickers weighted at t-1 and whether
+  every one of them traded on t: exactly one return in (t-1, t], dated t. Ex-post VaR keeps only
+  those days (R7, §5.5); a carry-forward 0% or a return compounded over several days fails it.
+  A NULL still traded: the exchange was open, the move was lost, and the measure drops it (R5).
 
 What the holdings-based form gives up: dividends count gross of withholding tax, fees and the
 gap between trade price and close are ignored, a position's first day counts from the next
@@ -36,7 +40,7 @@ No I/O. Decimal, like eur_returns/: the risk library converts to floats at its o
 """
 
 from collections.abc import Collection, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 
@@ -57,10 +61,20 @@ class TwrPoint:
 
 
 @dataclass(frozen=True)
+class TwrDay:
+    price_date: date
+    tickers: frozenset[str]  # weighted at the previous date
+    traded: bool  # every one of them has its own return dated price_date
+
+
+@dataclass(frozen=True)
 class TwrSeries:
     base_date: date | None  # the first date with holdings: growth's level 1; None when empty
     points: list[TwrPoint]
     n_gaps: int
+    # One per point, in step. Left out of ==: it describes the points rather than being part of
+    # the series, so a series compares on its returns alone.
+    days: tuple[TwrDay, ...] = field(default=(), compare=False)
 
 
 class _Returns:
@@ -71,20 +85,26 @@ class _Returns:
         self._values = series.r_eur
         self._index = 0
 
-    def over(self, previous: date, current: date) -> Decimal | None:
+    def over(self, previous: date, current: date) -> tuple[Decimal | None, bool]:
         """Every return dated in (previous, current] compounded, 0 when there's none, and None
-        when any of them is a gap. Calls must move forward in time."""
+        when any of them is a gap; and whether that was exactly one return, dated `current`.
+        Calls must move forward in time."""
         while self._index < len(self._dates) and self._dates[self._index] <= previous:
             self._index += 1
         growth = _ONE
+        count = 0
+        last = None
         while self._index < len(self._dates) and self._dates[self._index] <= current:
             value = self._values[self._index]
+            last = self._dates[self._index]
+            count += 1
             self._index += 1
             if value is None:
                 growth = None
             elif growth is not None:
                 growth *= _ONE + value
-        return None if growth is None else growth - _ONE
+        traded = count == 1 and last == current
+        return (None if growth is None else growth - _ONE), traded
 
 
 def compute_twr(
@@ -106,6 +126,7 @@ def compute_twr(
     growth = _ONE
     n_gaps = 0
     points: list[TwrPoint] = []
+    days: list[TwrDay] = []
     previous_date = None
     previous_values: dict[str, Decimal] = {}
 
@@ -114,12 +135,15 @@ def compute_twr(
             total = sum(previous_values.values(), _ZERO)
             if total != _ZERO:
                 twr_return = _ZERO
+                traded = True
+                # Every reader is advanced, even after a gap, so `traded` sees every ticker.
                 for ticker, value in previous_values.items():
-                    ticker_return = readers[ticker].over(previous_date, current_date)
+                    ticker_return, ticker_traded = readers[ticker].over(previous_date, current_date)
+                    traded = traded and ticker_traded
                     if ticker_return is None:
                         twr_return = None
-                        break
-                    twr_return += value / total * ticker_return
+                    elif twr_return is not None:
+                        twr_return += value / total * ticker_return
                 if twr_return is None:
                     n_gaps += 1
                 else:
@@ -131,6 +155,7 @@ def compute_twr(
                         _round(growth),
                     )
                 )
+                days.append(TwrDay(current_date, frozenset(previous_values), traded))
 
         values: dict[str, Decimal] = {}
         for key, row in rows.items():
@@ -143,7 +168,7 @@ def compute_twr(
             base_date = current_date
         previous_date, previous_values = current_date, values
 
-    return TwrSeries(base_date=base_date, points=points, n_gaps=n_gaps)
+    return TwrSeries(base_date=base_date, points=points, n_gaps=n_gaps, days=tuple(days))
 
 
 def _round(value: Decimal) -> Decimal:

@@ -1,8 +1,9 @@
 """The risk library's shared types. The rules are in docs/domain/risk.md (the spec), cited by
 section and rule number.
 
-The library is pure: no I/O, no datastore_client calls, no logging. Callers fetch the data,
-convert it to EUR (RK-5) and hand it in as plain floats. Risk figures are statistical estimates,
+The library is pure: no I/O, no datastore_client calls, no logging. Callers (flows.py, the one
+module here that isn't library) fetch the data, convert it to EUR (RK-5) and hand it in as
+plain floats. Risk figures are statistical estimates,
 not ledger amounts, so they are floats, and numpy does the arithmetic. Money stays in Decimal
 everywhere else in portfolio.
 

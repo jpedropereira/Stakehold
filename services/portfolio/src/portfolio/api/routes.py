@@ -40,6 +40,7 @@ from portfolio.api.models import (
     BacktestRequest,
     BacktestResponse,
     BrokerResponse,
+    ExPostRiskResponse,
     HoldingsResponse,
     PortfolioReturnsResponse,
     PortfolioTwrResponse,
@@ -506,6 +507,14 @@ def get_portfolio_twr(
     settings: Settings = Depends(get_settings),
 ) -> dict:
     return jobs.get_portfolio_twr(user_id=user_id, settings=settings)
+
+
+@router.get("/risk/ex-post", response_model=ExPostRiskResponse)
+def get_ex_post_risk(
+    user_id: UUID = Query(...),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    return jobs.get_ex_post_risk(user_id=user_id, settings=settings)
 
 
 @router.post("/returns/rebuild", response_model=RebuildReturnsResponse)
