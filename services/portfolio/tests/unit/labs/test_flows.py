@@ -1,8 +1,10 @@
 """labs/flows.py: fetches each asset's ticker info, prices and FX from data-store, isolates a
-failure to the asset it belongs to, and hands the rest to labs/calculator.py.
+failure to the asset it belongs to, and hands the rest to labs/calculator.py. Then it fetches
+the risk-free series and hands it, with the same inputs, to labs/risk.py (RK-8).
 
-The calculator's own arithmetic is tested in test_calculator.py, so these tests compare against
-compute_backtest run directly on the same inputs rather than re-deriving figures by hand.
+The calculator's own arithmetic is tested in test_calculator.py and the risk table's in
+test_risk.py, so these tests compare against compute_backtest and compute_backtest_risk run
+directly on the same inputs rather than re-deriving figures by hand.
 """
 
 import logging
@@ -10,10 +12,18 @@ import threading
 from datetime import date
 from decimal import Decimal
 
-from portfolio.datastore_client.base import FxPoint, PricePoint, TickerInfo
+from portfolio.datastore_client.base import (
+    FxPoint,
+    PricePoint,
+    RiskFreePoint,
+    RiskFreeSeries,
+    TickerInfo,
+)
 from portfolio.errors import DataStoreApiError
 from portfolio.labs import flows
 from portfolio.labs.calculator import AssetInput, Period, compute_backtest
+from portfolio.labs.risk import RiskFree, RiskFreeStatus, compute_backtest_risk
+from portfolio.risk.risk_free import RatePoint
 
 TODAY = date(2026, 1, 9)
 
@@ -29,6 +39,14 @@ def _prices(*returns):
     ]
 
 
+RISK_FREE = RiskFreeSeries(
+    first_date=date(1999, 1, 4),
+    points=[
+        RiskFreePoint(date(2025, 12, 31), Decimal("1.9250"), "estr"),
+        RiskFreePoint(date(2026, 1, 5), Decimal("1.9310"), "estr"),
+    ],
+)
+
 USD_FX = [
     FxPoint(date(2026, 1, 5), Decimal("1.10")),
     FxPoint(date(2026, 1, 7), Decimal("1.00")),
@@ -39,10 +57,11 @@ class _FakeDataStoreClient:
     """Canned answers per ticker (or per currency, for FX). An Exception instance as the answer is
     raised instead. Calls are recorded; the flow calls from worker threads, hence the lock."""
 
-    def __init__(self, *, info=None, prices=None, fx=None):
+    def __init__(self, *, info=None, prices=None, fx=None, risk_free=RISK_FREE):
         self._info = info or {}
         self._prices = prices or {}
         self._fx = fx or {}
+        self._risk_free = risk_free
         self._lock = threading.Lock()
         self.calls = []
 
@@ -61,6 +80,9 @@ class _FakeDataStoreClient:
 
     def get_fx_rate_series(self, base, quote, start, end):
         return self._answer(("fx", base, quote, start, end), self._fx[quote])
+
+    def get_risk_free_series(self, start, end):
+        return self._answer(("risk_free", start, end), self._risk_free)
 
 
 def _run(client, mix, period=Period.MAX):
@@ -240,3 +262,110 @@ def test_each_asset_logs_its_outcome_and_a_failure_logs_its_exception(caplog):
     failed = next(r for m, r in messages.items() if "F: failed" in m)
     assert failed.levelno == logging.ERROR
     assert failed.exc_info is not None
+
+
+# --- the risk section (RK-8) ---
+
+
+def _two_assets(**kwargs):
+    return _FakeDataStoreClient(
+        info={"B": USD, "A": EUR},
+        prices={"B": _prices("0.01", "0.02", "0"), "A": _prices("0.05", "-0.02", "0.01")},
+        fx={"USD": USD_FX},
+        **kwargs,
+    )
+
+
+_INPUTS = [
+    AssetInput("B", Decimal("60"), _prices("0.01", "0.02", "0"), USD_FX),
+    AssetInput("A", Decimal("40"), _prices("0.05", "-0.02", "0.01"), None),
+]
+
+
+def test_the_risk_section_is_labs_risk_on_the_same_inputs_and_the_fetched_rates():
+    outcome = _run(_two_assets(), [("B", "60"), ("A", "40")])
+
+    rates = RiskFree(
+        rates=[RatePoint(date(2025, 12, 31), 1.925), RatePoint(date(2026, 1, 5), 1.931)],
+        first_published=date(1999, 1, 4),
+    )
+    growth = compute_backtest(_INPUTS, growth_period=Period.MAX).growth
+    assert outcome.risk == compute_backtest_risk(_INPUTS, rates, growth)
+    assert outcome.risk.risk_free == RiskFreeStatus(True, None, date(1999, 1, 4))
+
+
+def test_the_risk_free_series_is_fetched_once_from_before_the_common_start_to_the_end():
+    client = _two_assets()
+
+    _run(client, [("B", "60"), ("A", "40")])
+
+    # Both start 2026-01-05 and end 2026-01-08; the fetch starts ten days early.
+    assert [c for c in client.calls if c[0] == "risk_free"] == [
+        ("risk_free", date(2025, 12, 26), date(2026, 1, 8))
+    ]
+
+
+def test_no_risk_free_data_stored_greys_the_rf_figures_and_warns(caplog):
+    with caplog.at_level(logging.INFO, logger="portfolio.labs.flows"):
+        outcome = _run(_two_assets(risk_free=None), [("B", "60"), ("A", "40")])
+
+    assert outcome.result.mix is not None
+    assert outcome.risk.risk_free == RiskFreeStatus(False, "no risk-free rate data", None)
+    warning = next(r for r in caplog.records if "risk-free" in r.getMessage())
+    assert warning.levelno == logging.WARNING
+
+
+def test_a_failed_risk_free_call_greys_the_rf_figures_and_logs_its_exception(caplog):
+    client = _two_assets(risk_free=DataStoreApiError("boom"))
+
+    with caplog.at_level(logging.INFO, logger="portfolio.labs.flows"):
+        outcome = _run(client, [("B", "60"), ("A", "40")])
+
+    assert outcome.result.mix is not None
+    assert outcome.risk.risk_free == RiskFreeStatus(False, "couldn't reach data-store", None)
+    error = next(r for r in caplog.records if "risk-free" in r.getMessage())
+    assert error.levelno == logging.ERROR
+    assert error.exc_info is not None
+
+
+def test_with_no_asset_included_there_is_no_risk_and_no_risk_free_fetch():
+    client = _FakeDataStoreClient(info={"X": TickerInfo(exists=False, has_returns=False)})
+
+    outcome = _run(client, [("X", "1")])
+
+    assert outcome.risk is None
+    assert not [c for c in client.calls if c[0] == "risk_free"]
+
+
+def test_histories_that_do_not_overlap_need_no_risk_free_fetch(caplog):
+    late = [PricePoint(date(2026, 2, 2), Decimal("100"), None)] + [
+        PricePoint(date(2026, 2, 3), Decimal("100"), Decimal("0.01"))
+    ]
+    client = _FakeDataStoreClient(
+        info={"A": EUR, "L": EUR}, prices={"A": _prices("0.01"), "L": late}
+    )
+
+    with caplog.at_level(logging.INFO, logger="portfolio.labs.flows"):
+        outcome = _run(client, [("A", "1"), ("L", "1")])
+
+    assert outcome.risk.common_start is None
+    assert not [c for c in client.calls if c[0] == "risk_free"]
+    assert any("don't overlap" in r.getMessage() for r in caplog.records)
+
+
+def test_the_risk_section_logs_its_start_each_mix_window_each_asset_and_a_summary(caplog):
+    with caplog.at_level(logging.INFO, logger="portfolio.labs.flows"):
+        _run(_two_assets(), [("B", "60"), ("A", "40")])
+
+    messages = [r.getMessage() for r in caplog.records if "backtest risk:" in r.getMessage()]
+    assert any(
+        "2 asset(s)" in m and "2026-01-08" in m and "2026-01-05" in m and "B, A" in m
+        for m in messages
+    )
+    assert any("risk-free rate: 2 point(s)" in m for m in messages)
+    assert any(
+        "mix 1Y: not covered, limited by B, A (history from 2026-01-05)." in m for m in messages
+    )
+    assert any("mix Max: measured 2026-01-05..2026-01-08" in m and "greyed" in m for m in messages)
+    assert any("B: measured in 1 of 5 window(s)." in m for m in messages)
+    assert any("done, the mix is measured in 1 of 5 window(s)" in m for m in messages)

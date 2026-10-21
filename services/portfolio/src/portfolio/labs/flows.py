@@ -8,15 +8,19 @@ every input is data-store's. See docs/architecture.md's "Labs orchestration" not
 The fetch itself -- two concurrent phases, a failure isolated to the assets it belongs to -- is
 eur_returns/fetch.py's, shared with the portfolio TWR (RK-10). This module words each asset's
 status and logs it.
+
+The risk section (RK-8) needs one more call, the risk-free series, over the span the backtest
+turned out to have, so it follows the price fetch rather than joining it. It can't fail the
+backtest: no rates stored, or a failed call, greys the figures that subtract rf and is logged.
 """
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 
-from portfolio.datastore_client.base import DataStoreClient
+from portfolio.datastore_client.base import DataStoreClient, RiskFreeSeries
 from portfolio.eur_returns import fetch
 from portfolio.eur_returns.fetch import Fetched
 from portfolio.labs.calculator import (
@@ -27,6 +31,18 @@ from portfolio.labs.calculator import (
     Period,
     compute_backtest,
 )
+from portfolio.labs.risk import (
+    NO_OVERLAP,
+    BacktestRisk,
+    RiskFree,
+    RiskFreeMissing,
+    WindowRisk,
+    compute_backtest_risk,
+    risk_free_span,
+)
+from portfolio.risk.risk_free import RatePoint
+from portfolio.risk.types import RiskFigure
+from portfolio.risk.windows import StandardWindow
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +66,9 @@ _REASONS = {
 # compute_backtest's own Unavailable reasons, mapped back to a status.
 _CALCULATOR_STATUSES = {NO_HISTORY: NO_HISTORY_STATUS, NO_FX_RATE: NO_FX_RATE_STATUS}
 
+NO_RISK_FREE = "no risk-free rate data"
+RISK_FREE_FAILED = _REASONS[FAILED]
+
 
 @dataclass(frozen=True)
 class AssetStatus:
@@ -62,6 +81,7 @@ class AssetStatus:
 class LabsBacktest:
     result: BacktestResult
     statuses: list[AssetStatus]  # every requested asset, in input order
+    risk: BacktestRisk | None = None  # None exactly when no asset is included
 
 
 def run_backtest(
@@ -120,7 +140,128 @@ def run_backtest(
                 info.currency or info.fx_currency,
             )
             statuses.append(AssetStatus(ticker, INCLUDED, None))
-    return LabsBacktest(result=result, statuses=statuses)
+
+    risk = _risk(datastore_client, inputs, result) if inputs else None
+    return LabsBacktest(result=result, statuses=statuses, risk=risk)
+
+
+def _risk(
+    datastore_client: DataStoreClient, inputs: Sequence[AssetInput], result: BacktestResult
+) -> BacktestRisk | None:
+    span = risk_free_span(result)
+    if span is None:
+        risk_free = RiskFreeMissing(NO_OVERLAP)
+    else:
+        risk_free = _fetch_risk_free(datastore_client, *span)
+    risk = compute_backtest_risk(inputs, risk_free, result.growth)
+    if risk is not None:
+        _log_risk(risk)
+    return risk
+
+
+def _fetch_risk_free(
+    datastore_client: DataStoreClient, start: date, end: date
+) -> RiskFree | RiskFreeMissing:
+    try:
+        series: RiskFreeSeries | None = datastore_client.get_risk_free_series(start, end)
+    except Exception as exc:
+        logger.error(
+            "backtest risk: the risk-free fetch failed, so downside deviation, Sharpe and "
+            "Sortino are greyed -- a data-store call raised: %s",
+            exc,
+            exc_info=exc,
+        )
+        return RiskFreeMissing(RISK_FREE_FAILED)
+    if series is None:
+        logger.warning(
+            "backtest risk: data-store has no risk-free rates stored, so downside deviation, "
+            "Sharpe and Sortino are greyed."
+        )
+        return RiskFreeMissing(NO_RISK_FREE)
+    logger.info(
+        "backtest risk: risk-free rate: %d point(s) for %s..%s, series from %s.",
+        len(series.points),
+        start,
+        end,
+        series.first_date,
+    )
+    return RiskFree(
+        rates=[RatePoint(point.date, float(point.rate)) for point in series.points],
+        first_published=series.first_date,
+    )
+
+
+def _log_risk(risk: BacktestRisk) -> None:
+    if risk.common_start is None:
+        logger.info(
+            "backtest risk: %d asset(s), ending %s: %s, so no window is measured.",
+            len(risk.assets),
+            risk.end_date,
+            NO_OVERLAP,
+        )
+    else:
+        logger.info(
+            "backtest risk: %d asset(s), windows end %s, common start %s (limited by %s).",
+            len(risk.assets),
+            risk.end_date,
+            risk.common_start,
+            ", ".join(risk.limited_by),
+        )
+    if not risk.risk_free.available and risk.common_start is not None:
+        logger.info("backtest risk: excess-return figures greyed: %s.", risk.risk_free.reason)
+
+    for label, window in risk.mix.windows.items():
+        if not window.covered:
+            logger.info("backtest risk: mix %s: not covered, %s.", label, window.reason)
+        else:
+            greyed = sum(1 for figure in _figures(window) if figure.value is None)
+            logger.info(
+                "backtest risk: mix %s: measured %s..%s, %d of %d figure(s) greyed.",
+                label,
+                window.start,
+                window.end,
+                greyed,
+                len(_figures(window)),
+            )
+    for row in risk.assets:
+        logger.info(
+            "backtest risk: %s: measured in %d of %d window(s).",
+            row.ticker,
+            _measured(row.windows),
+            len(row.windows),
+        )
+    logger.info(
+        "backtest risk: done, the mix is measured in %d of %d window(s), %d asset row(s)%s.",
+        _measured(risk.mix.windows),
+        len(risk.mix.windows),
+        len(risk.assets),
+        (
+            ""
+            if risk.drawdown is None
+            else f", drawdown series of {len(risk.drawdown.dates)} point(s)"
+        ),
+    )
+
+
+def _figures(window: WindowRisk) -> list[RiskFigure | None]:
+    return [
+        window.cumulative_return,
+        window.cagr,
+        window.volatility,
+        window.downside_deviation,
+        window.sharpe,
+        window.sortino,
+        window.calmar,
+        window.max_drawdown,
+        window.var_95,
+        window.cvar_95,
+        window.var_99,
+        window.cvar_99,
+    ]
+
+
+def _measured(windows: Mapping[StandardWindow, WindowRisk]) -> int:
+    return sum(1 for window in windows.values() if window.covered)
 
 
 def _log_left_out(ticker: str, status: str, exc: BaseException | None) -> None:

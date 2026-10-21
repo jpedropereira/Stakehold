@@ -14,6 +14,7 @@ from typing import Annotated
 from uuid import UUID
 
 from portfolio.labs.calculator import Period
+from portfolio.risk.windows import StandardWindow
 from portfolio.transactions.base import TRANSACTION_TYPES
 from pydantic import BaseModel, Field, PlainSerializer, field_validator, model_validator
 
@@ -446,9 +447,85 @@ class AssetStatusResponse(BaseModel):
     reason: str | None  # null when included
 
 
+# --- labs risk (RK-8) ---
+# Risk figures are statistical estimates, not ledger amounts, so they are JSON numbers rather
+# than BacktestDecimal strings. Fractions, like the backtest's: 0.10 is 10%.
+
+
+class RiskFigureResponse(BaseModel):
+    value: float | None  # null exactly when greyed, and `reason` says why (R9)
+    window_start: date  # the figure's own window: a weekly one is shrunk to whole weeks
+    window_end: date
+    frequency: str  # daily or weekly
+    q: float  # periods per year
+    n_obs: int
+    n_gaps: int
+    flags: list[str]  # sorted
+    reason: str | None
+    standard_error: float | None  # a Sharpe's 1 s.e.; null on every other figure
+
+
+class WindowRiskResponse(BaseModel):
+    """One standard window of one row. Not covered: `reason` says why and every figure is null.
+    `start` is null only for Max when the assets' histories don't overlap."""
+
+    start: date | None
+    end: date
+    covered: bool
+    reason: str | None
+    cumulative_return: RiskFigureResponse | None
+    cagr: RiskFigureResponse | None
+    volatility: RiskFigureResponse | None
+    downside_deviation: RiskFigureResponse | None
+    sharpe: RiskFigureResponse | None
+    sortino: RiskFigureResponse | None
+    calmar: RiskFigureResponse | None
+    max_drawdown: RiskFigureResponse | None
+    peak_date: date | None
+    trough_date: date | None
+    recovery_date: date | None  # null when not recovered, or the drawdown is greyed
+    max_days_under_water: int | None
+    var_95: RiskFigureResponse | None
+    cvar_95: RiskFigureResponse | None
+    var_99: RiskFigureResponse | None
+    cvar_99: RiskFigureResponse | None
+
+
+class RowRiskResponse(BaseModel):
+    ticker: str | None  # null for the mix
+    windows: dict[StandardWindow, WindowRiskResponse]
+
+
+class RiskFreeStatusResponse(BaseModel):
+    available: bool
+    reason: str | None  # why not, when it isn't: downside deviation, Sharpe, Sortino greyed
+    first_date: date | None
+
+
+class DrawdownSeriesResponse(BaseModel):
+    """The mix's drawdown over the growth period, one value per `growth.dates` entry, null
+    where a member's return was NULL."""
+
+    period: Period
+    dates: list[date]
+    values: list[float | None]
+
+
+class BacktestRiskResponse(BaseModel):
+    label: str  # "buy & hold (drifting)" (R3)
+    end_date: date
+    common_start: date | None  # null when the assets' histories don't overlap
+    limited_by: list[str]
+    risk_free: RiskFreeStatusResponse
+    mix: RowRiskResponse
+    assets: list[RowRiskResponse]  # included assets, in request order
+    drawdown: DrawdownSeriesResponse | None
+
+
 class BacktestResponse(BaseModel):
     end_date: date | None  # null when no asset could be included
     mix: BacktestRowResponse | None
     assets: list[BacktestRowResponse]  # included assets, in request order
     growth: GrowthSeriesResponse | None
     statuses: list[AssetStatusResponse]  # every requested asset, in request order
+    risk: BacktestRiskResponse | None = None  # null exactly when no asset could be included

@@ -39,7 +39,9 @@ The rules, as agreed for RK-8 (tasks-risk-thread.md):
   rule is by currency: EUR-listed assets close at about the same time, and anything else is
   FX-converted at a time that matches neither close.
 - **No risk-free data** (none stored, or the fetch failed) greys downside deviation, Sharpe and
-  Sortino with the caller's reason. They are never computed against rf = 0 (RK-4).
+  Sortino with the caller's reason. They are never computed against rf = 0 (RK-4). So does a
+  series with no rate on or before the common start, unless that day is before the series began
+  (R4): data-store's rates then stopped updating before the window.
 - **The drawdown chart** is the mix's only, over the requested growth period, on Labs' own growth
   line, so it lines up date for date with the chart above it, including LB-9's members and Max's
   joins. Its points are None on the dates a member's return is NULL, so the line breaks where a
@@ -96,6 +98,13 @@ class RiskFreeMissing:
 
 
 @dataclass(frozen=True)
+class RiskFreeStatus:
+    available: bool
+    reason: str | None  # why not, when it isn't
+    first_date: date | None  # the series' first published date, when one was fetched
+
+
+@dataclass(frozen=True)
 class WindowRisk:
     """One window of one row. Uncovered: `reason` says why, and every figure is None. Covered:
     each figure is a RiskFigure, greyed with its own reason where it must be (R9)."""
@@ -141,8 +150,7 @@ class BacktestRisk:
     end_date: date
     common_start: date | None  # None when the histories don't overlap
     limited_by: list[str]  # the asset(s) whose first day is the common start
-    risk_free_reason: str | None  # None when the risk-free series was available
-    risk_free_first_date: date | None
+    risk_free: RiskFreeStatus
     mix: RowRisk
     assets: list[RowRisk]  # available assets, in input order
     drawdown: DrawdownSeries | None  # None when the mix has no growth line
@@ -177,34 +185,36 @@ def compute_backtest_risk(
     common_start = max(s.dates[0] for s in series)
     limited_by = [s.ticker for s in series if s.dates[0] == common_start]
     overlap = common_start < end
+    used = _usable(risk_free, common_start)
     windows = _windows(end, common_start if overlap else None)
     if overlap:
         uncovered = f"limited by {', '.join(limited_by)} (history from {common_start.isoformat()})"
     else:
         uncovered = NO_OVERLAP
 
-    def row(ticker, daily_for, days, nonsync):
-        """daily_for(window) gives the row's daily series for one window."""
+    def row(ticker, series_for, days, nonsync):
+        """series_for(window) gives the row's (daily, weekly) series for one window."""
         out = {}
         for label, start, window in windows:
             if window is None or window.start < common_start:
                 out[label] = WindowRisk(start=start, end=end, covered=False, reason=uncovered)
             else:
-                out[label] = _measure(daily_for(window), window, risk_free, days, nonsync)
+                out[label] = _measure(*series_for(window), window, used, days, nonsync)
         return RowRisk(ticker=ticker, windows=out)
 
     levels = {s.ticker: _EurLevels(s) for s in series}
     mix = row(
         None,
-        lambda window: _mix_daily(series, levels, weights, window),
+        lambda window: _with_weekly(_mix_daily(series, levels, weights, window)),
         [trading[s.ticker] for s in series],
         any(s.fx is not None for s in series),
     )
     asset_rows = []
     for s in series:
-        daily = _asset_daily(s)
+        # An asset's own series is the same in every window; only the mix is re-based.
+        own = _with_weekly(_asset_daily(s))
         asset_rows.append(
-            row(s.ticker, lambda _window, d=daily: d, [trading[s.ticker]], s.fx is not None)
+            row(s.ticker, lambda _window, own=own: own, [trading[s.ticker]], s.fx is not None)
         )
 
     return BacktestRisk(
@@ -212,14 +222,28 @@ def compute_backtest_risk(
         end_date=end,
         common_start=common_start if overlap else None,
         limited_by=limited_by if overlap else [],
-        risk_free_reason=risk_free.reason if isinstance(risk_free, RiskFreeMissing) else None,
-        risk_free_first_date=(
-            risk_free.first_published if isinstance(risk_free, RiskFree) else None
+        risk_free=RiskFreeStatus(
+            available=isinstance(used, RiskFree),
+            reason=used.reason if isinstance(used, RiskFreeMissing) else None,
+            first_date=risk_free.first_published if isinstance(risk_free, RiskFree) else None,
         ),
         mix=mix,
         assets=asset_rows,
         drawdown=_drawdown_series(growth, series),
     )
+
+
+def _usable(
+    risk_free: RiskFree | RiskFreeMissing, common_start: date
+) -> RiskFree | RiskFreeMissing:
+    """A fetched series is usable when it has a rate on or before the first day any window
+    needs one, or that day is before the series began (R4's rf = 0). Otherwise data-store's rates
+    stopped before the window, and risk_free_returns would refuse to forward-fill from nothing."""
+    if isinstance(risk_free, RiskFreeMissing) or common_start < risk_free.first_published:
+        return risk_free
+    if any(point.date <= common_start for point in risk_free.rates):
+        return risk_free
+    return RiskFreeMissing(f"no risk-free rate on or before {common_start.isoformat()}")
 
 
 def _windows(
@@ -235,14 +259,18 @@ def _windows(
     ]
 
 
+def _with_weekly(daily: ReturnSeries) -> tuple[ReturnSeries, ReturnSeries]:
+    return daily, to_weekly(daily)
+
+
 def _measure(
     daily: ReturnSeries,
+    weekly: ReturnSeries,
     window: Window,
     risk_free: RiskFree | RiskFreeMissing,
     trading_days: Sequence[AbstractSet[date]],
     nonsync: bool,
 ) -> WindowRisk:
-    weekly = to_weekly(daily)
     returns = return_figures(daily, window)
     drawdown = drawdown_figures(daily, window)
     if isinstance(risk_free, RiskFree):

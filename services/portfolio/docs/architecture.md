@@ -70,7 +70,7 @@ flowchart TD
         JOBS["jobs.py<br/><i>runnable units: config + connection + one flow</i>"]
         PIPE["pipeline.py<br/><i>the flows; broker-parser/cashflow-parser (entry-point discovered)<br/>and datastore-client registries</i>"]
         HFLOW["holdings/flows.py<br/><i>reads that span a user's accounts (PF-1, PF-5)</i>"]
-        LFLOW["labs/flows.py<br/><i>backtest fetches, concurrent (LB-4)</i>"]
+        LFLOW["labs/flows.py<br/><i>backtest fetches, concurrent (LB-4);<br/>risk-free fetch (RK-8)</i>"]
         TFLOW["twr/flows.py<br/><i>portfolio TWR: rows + data-store fetch (RK-10)</i>"]
     end
 
@@ -82,10 +82,10 @@ flowchart TD
         POS["positions/<br/>calculator · repository"]
         RET["returns/<br/>calculator · performance · repository"]
         HOLD["holdings/<br/>aggregator"]
-        LABS["labs/<br/>calculator<br/><i>backtests (LB-3)</i>"]
+        LABS["labs/<br/>calculator · risk<br/><i>backtests (LB-3); their risk table (RK-8)</i>"]
         TWR["twr/<br/>calculator<br/><i>holdings-based daily TWR (RK-10)</i>"]
         EURR["eur_returns/<br/>calculator · fetch<br/><i>daily EUR returns, shared with risk (RK-5);<br/>data-store fan-out (RK-10)</i>"]
-        RISK["risk/<br/>types · weekly · quality · history<br/>windows · risk_free · var_mask<br/>measures · drawdown · tail · single_series<br/>covariance · listwise · ex_ante<br/>correlation<br/><i>pure library (RK-6, RK-7, RK-15, RK-16), no caller yet</i>"]
+        RISK["risk/<br/>types · weekly · quality · history<br/>windows · risk_free · var_mask<br/>measures · drawdown · tail · single_series<br/>covariance · listwise · ex_ante<br/>correlation<br/><i>pure library (RK-6, RK-7, RK-15, RK-16);<br/>first caller labs/risk (RK-8)</i>"]
     end
 
     subgraph found["Foundation"]
@@ -106,6 +106,7 @@ flowchart TD
     JOBS --> LFLOW
     LFLOW --> LABS
     LABS --> EURR
+    LABS --> RISK
     LFLOW --> DSC
     JOBS --> TFLOW
     TFLOW --> ACC
@@ -208,6 +209,16 @@ builds the data-store client and calls it, with no connection to open or close.
   wording of each status, the log lines, and the mapping of the calculator's ineligible reasons
   back to a status. The shared module neither words nor logs, because the TWR words "no FX
   series for <CCY>" where Labs says "no FX rate".
+- **The risk section adds one sequential call (RK-8).** `get_risk_free_series` runs after the
+  price fetch, not beside it, because its range is the span the backtest turned out to have
+  (from just before the assets' common start to their common end), which only the prices tell.
+  Fetching the whole series from 1999 alongside the prices was the alternative; it would save
+  one round trip at the cost of about 7,000 points a request. Like a ticker, the call fails
+  alone: no rates stored, or a raised call, greys downside deviation, Sharpe and Sortino with a
+  reason and is logged, and the backtest still answers 200.
+- **The risk table's arithmetic is `labs/risk.py`**, pure, beside the calculator, rather than in
+  `risk/`. `risk/` imports nothing from portfolio, so the code that turns Labs' series into the
+  library's `ReturnSeries` belongs with Labs. Its rules are in that module's docstring.
 
 **Built as of task 5** — `add_account`, `list_accounts`, `add_manual_transaction`. `pipeline.py`
 (not a per-flow `service.py`) is where the `with transaction(conn):` boundary lives, the role

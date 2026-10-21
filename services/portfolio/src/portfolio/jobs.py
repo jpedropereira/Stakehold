@@ -1377,7 +1377,20 @@ def get_backtest(
         )
     result = asdict(outcome.result)
     del result["unavailable"]  # `statuses` covers every asset left out, with its reason
-    return {**result, "statuses": [asdict(s) for s in outcome.statuses]}
+    risk = None if outcome.risk is None else _sorted_flags(asdict(outcome.risk))
+    return {**result, "statuses": [asdict(s) for s in outcome.statuses], "risk": risk}
+
+
+def _sorted_flags(value):
+    """asdict keeps a RiskFigure's flags as a frozenset; the response lists them in a stable
+    order."""
+    if isinstance(value, dict):
+        return {key: _sorted_flags(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_sorted_flags(item) for item in value]
+    if isinstance(value, frozenset):
+        return sorted(value)
+    return value
 
 
 def _log_mix_left_out(result: BacktestResult) -> None:

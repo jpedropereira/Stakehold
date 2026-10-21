@@ -16,6 +16,7 @@ from portfolio.labs.risk import (
     LABEL,
     RiskFree,
     RiskFreeMissing,
+    RiskFreeStatus,
     compute_backtest_risk,
     risk_free_span,
 )
@@ -282,13 +283,44 @@ def test_without_risk_free_data_the_excess_measures_are_greyed():
 
     _, risk = _run(assets, risk_free=RiskFreeMissing("no risk-free rate data"))
 
-    assert risk.risk_free_reason == "no risk-free rate data"
+    assert risk.risk_free == RiskFreeStatus(False, "no risk-free rate data", None)
     for row in (risk.mix, _row(risk, "A")):
         window = row.windows[StandardWindow.Y3]
         assert window.volatility.value is not None
         for figure in (window.sharpe, window.sortino, window.downside_deviation):
             assert figure.value is None
             assert figure.reason == "no risk-free rate data"
+
+
+def test_an_available_risk_free_series_reports_its_first_date():
+    _, risk = _run([_long("A", "1", date(2025, 1, 2), date(2026, 6, 30))])
+
+    assert risk.risk_free == RiskFreeStatus(True, None, FIRST_PUBLISHED)
+
+
+def test_a_risk_free_series_with_no_rate_by_the_common_start_greys_rather_than_raises():
+    # The series began in 1999 but nothing was fetched on or before 2023-01-02: data-store's
+    # rates stopped updating before the window. Forward-filling from nothing would invent a rate.
+    stale = RiskFree(rates=[RatePoint(date(2024, 1, 2), 2.0)], first_published=FIRST_PUBLISHED)
+
+    _, risk = _run([_long("A", "1", date(2023, 1, 2), date(2026, 6, 30))], risk_free=stale)
+
+    reason = "no risk-free rate on or before 2023-01-02"
+    assert risk.risk_free == RiskFreeStatus(False, reason, FIRST_PUBLISHED)
+    window = risk.mix.windows[StandardWindow.Y3]
+    assert window.volatility.value is not None
+    assert window.sharpe.reason == reason
+
+
+def test_a_window_before_the_risk_free_series_needs_no_rate_before_it():
+    # A history from 1998 starts before €STR/EONIA's first date: R4's rf = 0 there, not an error.
+    end = date(2000, 6, 30)
+    rates = RiskFree(rates=[RatePoint(FIRST_PUBLISHED, 3.0)], first_published=FIRST_PUBLISHED)
+
+    _, risk = _run([_long("A", "1", date(1998, 1, 2), end)], risk_free=rates)
+
+    assert risk.risk_free.available is True
+    assert Flag.RF_PARTIAL in risk.mix.windows[StandardWindow.MAX].sharpe.flags
 
 
 def test_risk_free_is_fetched_from_just_before_the_common_start_to_the_end():
