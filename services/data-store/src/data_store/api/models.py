@@ -70,6 +70,47 @@ class RiskFreeSeries(BaseModel):
     points: list[RiskFreePoint]
 
 
+class EtfHoldingsFund(BaseModel):
+    fund_key: str
+    display_name: str
+    # The fund's own tradeable ticker (etfs.yaml's `ticker`), e.g. IWDA.AS: how a caller gets
+    # from a ticker it holds to this fund's holdings. None when the config doesn't set one.
+    ticker: str | None
+    enabled: bool
+    # None when the fund has never been scraped.
+    latest_as_of_date: date | None
+
+
+class EtfHoldingsFundList(BaseModel):
+    funds: list[EtfHoldingsFund]
+
+
+class EtfConstituent(BaseModel):
+    # The raw symbol iShares lists, or None for a line with none (cash, some derivatives).
+    ticker: str | None
+    # What ingest prices this line as. None unless it's an equity line on a mapped exchange.
+    yfinance_ticker: str | None
+    name: str | None
+    sector: str | None
+    asset_class: str | None
+    location: str | None
+    exchange: str | None
+    # iShares' "market currency", verbatim: the listing's currency (`GBP` where yfinance says
+    # `GBp`), not where the revenue comes from.
+    currency: str | None
+    # As stored, not normalised: a snapshot can sum to a little over 100.
+    weight_percent: Decimal | None
+
+
+class EtfHoldings(BaseModel):
+    fund_key: str
+    ticker: str | None
+    # The scrape date, not the provider's own as-of date (schema.md's v1 simplification).
+    as_of_date: date
+    # Every line, heaviest first.
+    constituents: list[EtfConstituent]
+
+
 class TickerList(BaseModel):
     tickers: list[str]
 

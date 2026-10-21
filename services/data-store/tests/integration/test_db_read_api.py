@@ -459,3 +459,83 @@ def test_ticker_endpoint_reports_no_currency_when_nothing_knows_it(currency_api)
     body = currency_api.get("/tickers/TEST_TOTALLY_UNKNOWN", headers=AUTH).json()
 
     assert (body["currency"], body["fx_currency"]) == (None, None)
+
+
+@pytest.fixture
+def holdings_api(monkeypatch, tmp_path):
+    etfs = tmp_path / "etfs.yaml"
+    etfs.write_text(
+        "funds:\n"
+        f"  - key: {FUND}\n"
+        '    display_name: "Test World"\n'
+        "    provider: ishares\n"
+        '    url: "https://example.com/fund"\n'
+        "    isin: null\n"
+        "    ticker: TESTIWDA.AS\n"
+        "    price_source: yfinance\n"
+        "    enabled: true\n"
+    )
+    suffixes = tmp_path / "suffixes.yaml"
+    suffixes.write_text(
+        "exchanges:\n"
+        '  - exchange: "London Stock Exchange"\n'
+        '    suffix: ".L"\n'
+        '  - exchange: "NASDAQ"\n'
+        "    suffix: null\n"
+    )
+    monkeypatch.setenv("DATA_STORE_CONFIG_PATH", str(etfs))
+    monkeypatch.setenv("DATA_STORE_EXCHANGE_SUFFIXES_PATH", str(suffixes))
+    monkeypatch.setenv("INTERNAL_API_SECRET", "integration-test-secret")
+    return TestClient(create_app())
+
+
+def test_etf_holdings_endpoints_need_the_bearer_token(holdings_api):
+    assert holdings_api.get("/etf-holdings").status_code == 401
+    assert holdings_api.get(f"/etf-holdings/{FUND}/latest").status_code == 401
+
+
+def test_etf_holdings_endpoints_serve_the_latest_snapshot_end_to_end(holdings_api):
+    conn = _connect()
+    save_holdings(
+        conn, FUND, date(2026, 1, 1), make_holdings_df([("TESTOLD", "Equity", "NASDAQ", "USD")])
+    )
+    save_holdings(
+        conn,
+        FUND,
+        date(2026, 2, 1),
+        make_holdings_df(
+            [
+                ("TESTBP.", "Equity", "London Stock Exchange", "GBP"),
+                (None, "Cash", "-", "USD"),
+            ]
+        ),
+    )
+    conn.close()
+
+    funds = holdings_api.get("/etf-holdings", headers=AUTH).json()
+    latest = holdings_api.get(f"/etf-holdings/{FUND}/latest", headers=AUTH).json()
+
+    assert funds == {
+        "funds": [
+            {
+                "fund_key": FUND,
+                "display_name": "Test World",
+                "ticker": "TESTIWDA.AS",
+                "enabled": True,
+                "latest_as_of_date": "2026-02-01",
+            }
+        ]
+    }
+    assert (latest["ticker"], latest["as_of_date"]) == ("TESTIWDA.AS", "2026-02-01")
+    # The newest snapshot only, cash line included, each line resolved as ingest would price it.
+    assert sorted(
+        (c["ticker"] or "", c["yfinance_ticker"], c["weight_percent"])
+        for c in latest["constituents"]
+    ) == [("", None, "1.0000"), ("TESTBP.", "TESTBP.L", "1.0000")]
+
+
+def test_etf_holdings_endpoint_404s_for_a_configured_fund_never_scraped(holdings_api):
+    response = holdings_api.get(f"/etf-holdings/{FUND}/latest", headers=AUTH)
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": f"no holdings snapshot stored: {FUND}"}

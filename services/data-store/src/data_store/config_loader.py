@@ -28,6 +28,9 @@ class FundConfig:
     isin: str | None
     price_source: str
     enabled: bool
+    # The fund's own tradeable ticker (e.g. IWDA.AS), which links a portfolio holding to this
+    # fund's holdings snapshots. Optional: a fund nobody holds needs no link.
+    ticker: str | None = None
 
 
 @dataclass(frozen=True)
@@ -84,6 +87,7 @@ def load_funds(path: Path) -> list[FundConfig]:
 
     funds = []
     seen_keys = set()
+    seen_tickers = set()
     for entry in entries:
         missing = [field for field in _REQUIRED_FIELDS if field not in entry]
         if missing:
@@ -94,6 +98,12 @@ def load_funds(path: Path) -> list[FundConfig]:
             raise ConfigError(f"Duplicate fund key: {key}")
         seen_keys.add(key)
 
+        ticker = entry.get("ticker")
+        if ticker is not None:
+            if ticker in seen_tickers:
+                raise ConfigError(f"Duplicate fund ticker: {ticker}")
+            seen_tickers.add(ticker)
+
         funds.append(
             FundConfig(
                 key=key,
@@ -103,6 +113,7 @@ def load_funds(path: Path) -> list[FundConfig]:
                 isin=entry.get("isin"),
                 price_source=entry["price_source"],
                 enabled=entry["enabled"],
+                ticker=ticker,
             )
         )
 

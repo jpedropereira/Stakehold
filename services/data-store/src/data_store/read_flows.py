@@ -13,7 +13,7 @@ import logging
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 
-from data_store.config_loader import CurrenciesConfig, TickerResolution
+from data_store.config_loader import CurrenciesConfig, FundConfig, TickerResolution
 from data_store.fx import repository as fx_repository
 from data_store.holdings import repository as holdings_repository
 from data_store.returns import repository as returns_repository
@@ -49,6 +49,14 @@ class TickerNotFound(Exception):
 
 class CurrencyNotTracked(Exception):
     """The requested currency is not one of config/currencies.yaml's enabled codes."""
+
+
+class FundNotConfigured(Exception):
+    """The requested fund_key is not a fund in config/etfs.yaml -- most likely a typo."""
+
+
+class NoHoldingsSnapshot(Exception):
+    """The fund is configured, but no holdings snapshot of it has been stored."""
 
 
 def price_series(conn, ticker: str, source: str, start: date, end: date) -> dict:
@@ -255,3 +263,120 @@ def risk_free_series(conn, source: str, start: date, end: date) -> dict:
         )
 
     return {"source": source, "first_date": first_date, "points": points}
+
+
+_CONSTITUENT_FIELDS = (
+    "ticker",
+    "name",
+    "sector",
+    "asset_class",
+    "location",
+    "exchange",
+    "currency",
+    "weight_percent",
+)
+
+
+def etf_holdings_funds(conn, funds: list[FundConfig]) -> dict:
+    """Every configured fund, enabled or not, with its tradeable ticker and newest snapshot date
+    (None when it has never been scraped). It is how a caller gets from a ticker it holds
+    (IWDA.AS) to the fund_key whose holdings it wants. A disabled fund is listed too: its old
+    snapshot is still served, and a caller can say why it has nothing newer."""
+    latest = holdings_repository.get_latest_as_of_dates(conn)
+    result = [
+        {
+            "fund_key": fund.key,
+            "display_name": fund.display_name,
+            "ticker": fund.ticker,
+            "enabled": fund.enabled,
+            "latest_as_of_date": latest.get(fund.key),
+        }
+        for fund in funds
+    ]
+    logger.info(
+        "etf-holdings: %d configured fund(s), %d with a snapshot.",
+        len(result),
+        sum(f["latest_as_of_date"] is not None for f in result),
+    )
+    return {"funds": result}
+
+
+def latest_etf_holdings(
+    conn, funds: list[FundConfig], fund_key: str, resolution: TickerResolution
+) -> dict:
+    """Every line of `fund_key`'s newest snapshot, cash and derivatives included, with weights
+    as stored (a snapshot can sum to a little over 100; normalising is the caller's decision).
+
+    Each line also carries `yfinance_ticker`: what ingest prices it as, resolved with ingest's
+    own rules, or None for a line ingest doesn't price (not equity, no symbol, or an unmapped
+    exchange). Serving it here keeps the resolution rules in one service: a caller matching a
+    stock it holds directly (0700.HK) to a constituent would otherwise need a copy of them.
+
+    Raises FundNotConfigured for a key outside etfs.yaml, NoHoldingsSnapshot for a configured
+    fund never scraped."""
+    fund = next((f for f in funds if f.key == fund_key), None)
+    if fund is None:
+        logger.warning("etf-holdings: fund %r is not configured in etfs.yaml.", fund_key)
+        raise FundNotConfigured(fund_key)
+
+    snapshot = holdings_repository.get_latest_snapshot(conn, fund_key)
+    if snapshot is None:
+        logger.warning(
+            "etf-holdings: no holdings snapshot stored for %s -- has ingest-holdings run?",
+            fund_key,
+        )
+        raise NoHoldingsSnapshot(fund_key)
+
+    as_of_date, rows = snapshot
+    logger.info("etf-holdings: %s snapshot %s, %d line(s).", fund_key, as_of_date, len(rows))
+
+    constituents = [_constituent(row, resolution) for row in rows]
+
+    equity = [c for c in constituents if _is_priced_line(c)]
+    resolved = sum(c["yfinance_ticker"] is not None for c in equity)
+    weight_sum = sum(
+        (c["weight_percent"] for c in constituents if c["weight_percent"] is not None),
+        Decimal(0),
+    )
+    logger.info(
+        "etf-holdings: %s: %d line(s), weights sum to %s%%; %d equity line(s): %d resolved, "
+        "%d unresolvable.",
+        fund_key,
+        len(constituents),
+        weight_sum,
+        len(equity),
+        resolved,
+        len(equity) - resolved,
+    )
+
+    return {
+        "fund_key": fund.key,
+        "ticker": fund.ticker,
+        "as_of_date": as_of_date,
+        "constituents": constituents,
+    }
+
+
+def _constituent(row: tuple, resolution: TickerResolution) -> dict:
+    constituent = dict(zip(_CONSTITUENT_FIELDS, row))
+    constituent["ticker"] = holding_symbol(constituent["ticker"])
+    constituent["yfinance_ticker"] = (
+        resolve_yfinance_ticker(
+            constituent["ticker"],
+            constituent["exchange"],
+            resolution.exchange_suffixes,
+            resolution.ticker_overrides,
+        )
+        if _is_priced_line(constituent)
+        else None
+    )
+    return constituent
+
+
+def _is_priced_line(constituent: dict) -> bool:
+    """The lines ingest prices: equity with a real symbol. The Python twin of
+    holdings_repository.get_latest_tickers' `asset_class ILIKE 'equity'` filter, plus
+    pipeline's holding_symbol check."""
+    return (
+        constituent["ticker"] is not None and (constituent["asset_class"] or "").lower() == "equity"
+    )
