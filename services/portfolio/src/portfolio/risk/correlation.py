@@ -17,23 +17,21 @@
 - **Currency is the caller's.** The same functions take weekly series built from RK-5's `r_eur`
   or its `r_local`; which one, and the label saying so, belong to the caller.
 
-Inputs are weekly series (`weekly.to_weekly`), keyed by ticker in display order. Every weekly
-series sits on the same Friday grid, so aligning two is a date intersection. The window is shrunk
-to whole weeks first (`weekly.weekly_window`), as the weekly single-series measures are.
+Inputs are weekly series (`weekly.to_weekly`), keyed by ticker in display order. A pairwise
+cell's overlap is `pairing.paired_weeks`, shared with the relative measures (RK-13): the window
+shrunk to whole weeks, then the weeks both series have.
 """
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import date, timedelta
 
 import numpy as np
 from portfolio.risk.history import Measure, check_minimum
 from portfolio.risk.listwise import ListwiseReturns
-from portfolio.risk.quality import WEEKLY_Q, any_suspect, over_gap_budget
+from portfolio.risk.pairing import paired_weeks
+from portfolio.risk.quality import WEEKLY_Q, over_gap_budget
 from portfolio.risk.types import Flag, Frequency, ReturnSeries, RiskFigure, Window
-from portfolio.risk.weekly import weekly_window
 
-_WEEK = timedelta(days=7)
 _NO_VARIATION = "no variation in returns"
 
 
@@ -65,13 +63,10 @@ class ListwiseCorrelation:
 def pairwise_correlation(series: Mapping[str, ReturnSeries], window: Window) -> PairwiseCorrelation:
     _require_weekly(series)
     keys = tuple(series)
-    whole_weeks = weekly_window(window)
-    by_date = {label: _by_date(s) for label, s in series.items()}
-
     cells = {}
     for i, a in enumerate(keys):
         for b in keys[i:]:
-            cells[(a, b)] = _pair_cell(by_date[a], by_date[b], window, whole_weeks)
+            cells[(a, b)] = _pair_cell(series[a], series[b], window)
     return PairwiseCorrelation(keys, cells)
 
 
@@ -104,54 +99,26 @@ def listwise_correlation(panel: ListwiseReturns) -> ListwiseCorrelation:
     )
 
 
-def _pair_cell(
-    a: Mapping[date, float | None],
-    b: Mapping[date, float | None],
-    window: Window,
-    whole_weeks: Window | None,
-) -> RiskFigure:
-    weeks = (
-        sorted(d for d in a.keys() & b.keys() if whole_weeks.start < d <= whole_weeks.end)
-        if whole_weeks is not None
-        else []
-    )
-    pairs = [(a[d], b[d]) for d in weeks if a[d] is not None and b[d] is not None]
-    n_obs, n_gaps = len(pairs), len(weeks) - len(pairs)
-    x = np.array([p[0] for p in pairs], dtype=float)
-    y = np.array([p[1] for p in pairs], dtype=float)
-    start, end = (weeks[0] - _WEEK, weeks[-1]) if weeks else (window.start, window.end)
-
-    check = check_minimum(Measure.CORRELATION, n_obs, start, end)
+def _pair_cell(a: ReturnSeries, b: ReturnSeries, window: Window) -> RiskFigure:
+    pair = paired_weeks(a, b, window)
+    check = check_minimum(Measure.CORRELATION, pair.n_obs, pair.start, pair.end)
     value, reason = None, check.reason
     if check.sufficient:
-        if np.all(x == x[0]) or np.all(y == y[0]):
+        if np.all(pair.x == pair.x[0]) or np.all(pair.y == pair.y[0]):
             reason = _NO_VARIATION
         else:
-            value = float(np.corrcoef(x, y)[0, 1])
+            value = float(np.corrcoef(pair.x, pair.y)[0, 1])
     return RiskFigure(
         value=value,
-        window_start=start,
-        window_end=end,
+        window_start=pair.start,
+        window_end=pair.end,
         frequency=Frequency.WEEKLY,
         q=WEEKLY_Q,
-        n_obs=n_obs,
-        n_gaps=n_gaps,
-        flags=_quality_flags(n_obs, n_gaps, np.column_stack([x, y])) | check.flags,
+        n_obs=pair.n_obs,
+        n_gaps=pair.n_gaps,
+        flags=pair.flags | check.flags,
         reason=reason,
     )
-
-
-def _quality_flags(n_obs: int, n_gaps: int, returns: np.ndarray) -> frozenset[Flag]:
-    flags = set()
-    if over_gap_budget(n_obs, n_gaps):
-        flags.add(Flag.DATA_GAPS)
-    if any_suspect(returns.ravel().tolist()):
-        flags.add(Flag.HAS_SUSPECT_ROWS)
-    return frozenset(flags)
-
-
-def _by_date(series: ReturnSeries) -> dict[date, float | None]:
-    return dict(zip(series.dates, series.values))
 
 
 def _require_weekly(series: Mapping[str, ReturnSeries]) -> None:
