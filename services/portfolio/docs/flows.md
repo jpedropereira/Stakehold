@@ -36,6 +36,7 @@ this file; references to sections that stayed in `architecture.md` name it.
 | Holdings across accounts | — (CLI has none) | `GET /holdings?user_id=` | on demand (web's `/portfolio` page, PF-4) | `accounts` by `user_id`, then each account's latest `position_snapshots` and `return_snapshots` rows | — (computed on read, see "Holdings across accounts") |
 | Portfolio return series | — (CLI has none) | `GET /returns/portfolio?user_id=[&start=&end=]` | on demand (web's `/portfolio` chart, PF-6) | `accounts` by `user_id`, then each account's full `return_snapshots` history | — (computed on read, see "Portfolio return series") |
 | Portfolio TWR | — (CLI has none) | `GET /returns/portfolio/twr?user_id=` | on demand (ex-post risk, RK-11) | `accounts` by `user_id`, then each account's full `return_snapshots` and latest `position_snapshots`; `data-store`'s `GET /tickers/{t}`, `GET /prices/{t}` and `GET /fx/EUR/{c}` per held ticker | — |
+| Ex-post risk | — (CLI has none) | `GET /risk/ex-post?user_id=` | on demand (web's `/risk` page, RK-12) | as for the portfolio TWR, plus `data-store`'s `GET /rates/risk-free` | — |
 | Labs backtest | — (CLI has none) | `POST /labs/backtest` | on demand (web's `/labs` page, LB-6) | `data-store`'s `GET /tickers/{t}`, `GET /prices/{t}` and `GET /fx/EUR/{c}` per asset; no portfolio table | — (read-only: nothing is stored) |
 
 **No separate `brokers` table** ever materialized — `schema.md` settled on `broker` as a plain
@@ -440,6 +441,44 @@ per ticker (included, or left out and why); the job logs a start line and a summ
 whether there were no rows at all or every holding was left out. Why it is holdings-based, and
 what that gives up, is in `architecture.md`'s `twr/` row.
 
+### Ex-post risk
+
+The §5.1–5.5 risk figures on the portfolio TWR above (RK-11; spec §6.1), labelled "ex-post ·
+invested assets": cash isn't tracked, so they measure the invested positions only.
+`risk/flows.compute_ex_post` runs `twr/flows.compute_portfolio_twr` (same reads, fetches and
+exclusions), fetches data-store's risk-free series from two weeks before the TWR's base date to
+its last date, converts both to floats, and hands them to `risk/ex_post.py`. The response is
+
+    {"label", "base_date", "end_date", "rf_available",
+     "windows": [{"label", "start", "end", "covered",
+                  "cumulative_return", "cagr", "volatility", "downside_deviation", "sharpe",
+                  "sortino", "max_drawdown", "peak_date", "trough_date", "recovery_date",
+                  "max_days_under_water", "calmar", "var_95", "cvar_95", "var_99", "cvar_99"},
+                 ...],
+     "n_excluded", "excluded": [{"ticker", "status", "reason"}, ...]}
+
+Each figure is `{value, window_start, window_end, frequency, q, n_obs, n_gaps, flags, reason,
+standard_error}`, the metadata spec §9 and §10 ask every number to carry.
+
+- **Windows** are 1Y, 3Y, 5Y, 10Y and Max, all ending at `end_date`, the TWR's last date. Max
+  starts at `base_date`. A window that starts before `base_date` has `covered: false`, and every
+  figure in it is greyed with "insufficient history (portfolio history from <date>)".
+- **Frequencies** follow spec §4.3: cumulative return, CAGR, drawdown and VaR are daily;
+  volatility, downside deviation, Sharpe and Sortino are weekly, on whole Friday-to-Friday weeks,
+  so their window is the daily one shrunk to Fridays.
+- **A greyed figure** has `value: null` and a `reason`: below its §4.5 minimum, an undefined
+  ratio, an uncovered window, or "no risk-free rate data" when `rf_available` is false.
+- **VaR and CVaR** keep only the dates on which every ticker held the day before traded, and
+  carry `nonsync_daily` unless the window held exactly one EUR ticker.
+- **`excluded`** is the TWR's, with the same statuses and wording.
+
+With no TWR returns (no accounts, no rows, or every holding left out) the response has no
+windows, not a 404, and no risk-free fetch is made. A failed risk-free fetch isn't a 502: it
+greys the three figures that need the rate, and the exception is logged. The flow logs the start,
+one line per window (measured with its daily obs and how many figures are greyed, or greyed and
+why) and the risk-free outcome; the job logs a start line and a summary. The rules' reasons are
+in `architecture.md`'s `risk/` row.
+
 ### Labs backtest
 
 How a mix of assets, bought at its weights and held, would have done over 1M, 3M, 6M, 1Y, 2Y,
@@ -589,6 +628,10 @@ account's latest rows, so no calendar question arises. See "Holdings across acco
 `GET /returns/portfolio/twr` uses the same union calendar and keying, with one difference: a
 closed holding counts only through its last row. Like the backtest, a data-store failure doesn't
 make it a 502: the ticker is listed in `excluded`. See "Portfolio TWR" above.
+
+`GET /risk/ex-post` measures that series, so it inherits its calendar and its exclusions. A
+failed risk-free fetch isn't a 502 either: the figures that need the rate are greyed. See
+"Ex-post risk" above.
 
 `POST /labs/backtest` answers the calendar question the way `GET /returns/portfolio` does: each
 asset carries its last value over days it didn't trade. Unlike every other route here, an

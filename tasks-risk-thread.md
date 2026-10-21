@@ -122,8 +122,8 @@ checked against the code, docs and dev DB:
 | RK-8 | [portfolio: Labs risk in the backtest](#rk-8-portfolio-labs-risk-in-the-backtest) | RK-4, RK-5, RK-7 | ready |
 | RK-9 | [web: Labs risk panel and drawdown chart](#rk-9-web-labs-risk-panel-and-drawdown-chart) | RK-8 | blocked |
 | RK-10 | [portfolio: daily TWR of invested positions](#rk-10-portfolio-daily-twr-of-invested-positions) | RK-5 | done |
-| RK-11 | [portfolio: ex-post risk endpoint](#rk-11-portfolio-ex-post-risk-endpoint) | RK-4, RK-7, RK-10 | ready |
-| RK-12 | [web: `/risk` page with the ex-post summary](#rk-12-web-risk-page-with-the-ex-post-summary) | RK-11 | blocked |
+| RK-11 | [portfolio: ex-post risk endpoint](#rk-11-portfolio-ex-post-risk-endpoint) | RK-4, RK-7, RK-10 | done |
+| RK-12 | [web: `/risk` page with the ex-post summary](#rk-12-web-risk-page-with-the-ex-post-summary) | RK-11 | ready |
 | RK-13 | [portfolio: benchmark and relative measures](#rk-13-portfolio-benchmark-and-relative-measures) | RK-8, RK-11 | blocked |
 | RK-14 | [web: benchmark selector, relative measures, benchmark line](#rk-14-web-benchmark-selector-relative-measures-benchmark-line) | RK-9, RK-12, RK-13 | blocked |
 | RK-15 | [portfolio: ex-ante covariance and risk decomposition](#rk-15-portfolio-ex-ante-covariance-and-risk-decomposition) | RK-6, RK-7 | done |
@@ -468,15 +468,36 @@ payload is unchanged and that route still doesn't call data-store. Decisions:
 
 ### RK-11. portfolio: ex-post risk endpoint
 
-**Status:** ready
+**Status:** done
 
 `GET /risk/ex-post?user_id=` returns the §5.1–5.5 measures from RK-10's series over the
 standard windows, labelled "ex-post · invested assets". It has its own `portfolio/risk/flows.py`
 and jobs entry. It logs a start line, each window's outcome and a summary.
 
+**As built:** `risk/ex_post.py` (pure) and `risk/flows.py`, the only I/O module in `risk/`.
+`GET /risk/ex-post?user_id=` →
+`{label, base_date, end_date, rf_available, windows: [...], n_excluded, excluded}`. Each window
+has `label, start, end, covered`, the twelve figures (each with its window, frequency, q,
+`n_obs`, `n_gaps`, flags, reason, standard error) and the max drawdown's dates. portfolio's
+`architecture.md` was split first: "Cross-cutting decisions" is now
+`docs/cross-cutting-decisions.md`. Decisions:
+- **VaR mask per date** (agreed): a date counts when every ticker weighted at the previous date
+  has its own return dated on it. RK-10's calculator gained a `TwrDay` per point for this, and
+  `PortfolioTwr` each included ticker's FX currency. `GET /returns/portfolio/twr` is unchanged.
+- **`nonsync_daily`** is set unless the window held exactly one EUR ticker.
+- **No risk-free data** (agreed), whether none is stored or the fetch fails: downside deviation,
+  Sharpe and Sortino are greyed, "no risk-free rate data", and the rest are still measured.
+  `weekly_figures` takes `rates=None` for this. The fetch starts two weeks before the base date,
+  so the first week has a rate to forward-fill from.
+- **An uncovered window is greyed, not shortened**: "insufficient history (portfolio history
+  from <date>)", `covered: false`.
+- **No DD series** in the response (agreed). RK-12 shows the summary only.
+- **For RK-12:** values are fractions, VaR and CVaR positive losses. An empty portfolio is a 200
+  with `windows: []`.
+
 ### RK-12. web: `/risk` page with the ex-post summary
 
-**Status:** blocked
+**Status:** ready
 
 - A new router `web/api/risk.py`, a "Risk" nav link, `templates/risk.html`, and a view builder.
 - First section: the ex-post summary, with every figure's window, `n_obs` and label on hover
