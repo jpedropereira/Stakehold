@@ -12,6 +12,7 @@ import threading
 from datetime import date
 from decimal import Decimal
 
+from portfolio.benchmark.base import BenchmarkUnavailable, build_benchmark
 from portfolio.datastore_client.base import (
     FxPoint,
     PricePoint,
@@ -20,15 +21,17 @@ from portfolio.datastore_client.base import (
     TickerInfo,
 )
 from portfolio.errors import DataStoreApiError
+from portfolio.eur_returns.fetch import Fetched
 from portfolio.labs import flows
 from portfolio.labs.calculator import AssetInput, Period, compute_backtest
-from portfolio.labs.risk import RiskFree, RiskFreeStatus, compute_backtest_risk
+from portfolio.labs.risk import BenchmarkStatus, RiskFree, RiskFreeStatus, compute_backtest_risk
 from portfolio.risk.risk_free import RatePoint
 
 TODAY = date(2026, 1, 9)
 
 EUR = TickerInfo(exists=True, has_returns=True, currency="EUR", fx_currency="EUR")
 USD = TickerInfo(exists=True, has_returns=True, currency="USD", fx_currency="USD")
+UNKNOWN = TickerInfo(exists=False, has_returns=False)
 
 
 def _prices(*returns):
@@ -73,7 +76,9 @@ class _FakeDataStoreClient:
         return answer
 
     def get_ticker_info(self, ticker):
-        return self._answer(("info", ticker), self._info[ticker])
+        # As data-store answers: a ticker it never ingested isn't an error. The default
+        # benchmark is one, unless a test gives it.
+        return self._answer(("info", ticker), self._info.get(ticker, UNKNOWN))
 
     def get_price_series(self, ticker, start, end):
         return self._answer(("prices", ticker, start, end), self._prices[ticker])
@@ -85,8 +90,10 @@ class _FakeDataStoreClient:
         return self._answer(("risk_free", start, end), self._risk_free)
 
 
-def _run(client, mix, period=Period.MAX):
-    return flows.run_backtest(client, [(t, Decimal(w)) for t, w in mix], period, today=TODAY)
+def _run(client, mix, period=Period.MAX, **kwargs):
+    return flows.run_backtest(
+        client, [(t, Decimal(w)) for t, w in mix], period, today=TODAY, **kwargs
+    )
 
 
 def _statuses(outcome):
@@ -290,7 +297,8 @@ def test_the_risk_section_is_labs_risk_on_the_same_inputs_and_the_fetched_rates(
         first_published=date(1999, 1, 4),
     )
     growth = compute_backtest(_INPUTS, growth_period=Period.MAX).growth
-    assert outcome.risk == compute_backtest_risk(_INPUTS, rates, growth)
+    vwce = BenchmarkUnavailable("VWCE.DE", "not_tracked", "not tracked")
+    assert outcome.risk == compute_backtest_risk(_INPUTS, rates, growth, vwce)
     assert outcome.risk.risk_free == RiskFreeStatus(True, None, date(1999, 1, 4))
 
 
@@ -369,3 +377,78 @@ def test_the_risk_section_logs_its_start_each_mix_window_each_asset_and_a_summar
     assert any("mix Max: measured 2026-01-05..2026-01-08" in m and "greyed" in m for m in messages)
     assert any("B: measured in 1 of 5 window(s)." in m for m in messages)
     assert any("done, the mix is measured in 1 of 5 window(s)" in m for m in messages)
+
+
+# --- the benchmark (RK-13) ---
+
+
+def test_the_default_benchmark_is_vwce_fetched_over_its_whole_history():
+    client = _two_assets()
+    client._info["VWCE.DE"] = EUR
+    client._prices["VWCE.DE"] = _prices("0.01", "0.0", "-0.01")
+
+    outcome = _run(client, [("B", "60"), ("A", "40")])
+
+    assert ("prices", "VWCE.DE", flows.EPOCH, TODAY) in client.calls
+    rates = RiskFree(
+        rates=[RatePoint(date(2025, 12, 31), 1.925), RatePoint(date(2026, 1, 5), 1.931)],
+        first_published=date(1999, 1, 4),
+    )
+    growth = compute_backtest(_INPUTS, growth_period=Period.MAX).growth
+    vwce = build_benchmark("VWCE.DE", Fetched(EUR, _prices("0.01", "0.0", "-0.01"), None))
+    assert outcome.risk == compute_backtest_risk(_INPUTS, rates, growth, vwce)
+    assert outcome.risk.benchmark.ticker == "VWCE.DE"
+    assert outcome.risk.benchmark.available is True
+
+
+def test_the_named_benchmark_is_the_only_one_fetched():
+    # VWCE.DE's history is short here, as it is from 2019; IWDA.AS is never fetched in its
+    # place (spec §5.6). Only the named benchmark is.
+    client = _two_assets()
+    client._info.update({"VWCE.DE": EUR, "IWDA.AS": EUR, "SPY": USD})
+    client._prices.update({"VWCE.DE": _prices("0.01"), "IWDA.AS": _prices("0.01")})
+    client._prices["SPY"] = _prices("0.01", "0.02", "0")
+
+    _run(client, [("B", "60"), ("A", "40")], benchmark="SPY")
+
+    fetched = {call[1] for call in client.calls if call[0] in ("info", "prices")}
+    assert "SPY" in fetched
+    assert not fetched & {"VWCE.DE", "IWDA.AS"}
+
+    client = _two_assets()
+    client._info.update({"VWCE.DE": EUR, "IWDA.AS": EUR})
+    client._prices.update({"VWCE.DE": _prices("0.01"), "IWDA.AS": _prices("0.01")})
+    _run(client, [("B", "60"), ("A", "40")])
+    assert "IWDA.AS" not in {call[1] for call in client.calls if call[0] in ("info", "prices")}
+
+
+def test_an_unknown_benchmark_is_reported_and_the_backtest_still_answers(caplog):
+    with caplog.at_level(logging.INFO):
+        outcome = _run(_two_assets(), [("B", "60"), ("A", "40")], benchmark="NOPE")
+
+    assert outcome.result.mix is not None
+    assert outcome.risk.benchmark == BenchmarkStatus(
+        ticker="NOPE",
+        available=False,
+        reason="not tracked",
+        first_date=None,
+        growth=None,
+        growth_reason="benchmark unavailable: not tracked",
+    )
+    assert "backtest risk: benchmark NOPE: unavailable, not tracked." in caplog.messages
+
+
+def test_with_no_asset_included_the_benchmark_is_not_fetched():
+    client = _FakeDataStoreClient(info={"X": UNKNOWN})
+
+    _run(client, [("X", "1")])
+
+    assert not [c for c in client.calls if c[1] == "VWCE.DE"]
+
+
+def test_the_risk_summary_names_the_benchmark(caplog):
+    with caplog.at_level(logging.INFO, logger="portfolio.labs.flows"):
+        _run(_two_assets(), [("B", "60"), ("A", "40")], benchmark="NOPE")
+
+    summary = next(m for m in caplog.messages if "backtest risk: done" in m)
+    assert "against NOPE (unavailable: not tracked)" in summary

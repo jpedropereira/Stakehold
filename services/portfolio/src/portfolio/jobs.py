@@ -20,6 +20,7 @@ from uuid import UUID
 
 from portfolio import pipeline
 from portfolio.accounts.repository import Account
+from portfolio.benchmark.base import DEFAULT_BENCHMARK
 from portfolio.datastore_client.http_client import HttpDataStoreClient
 from portfolio.holdings import flows as holdings_flows
 from portfolio.labs import flows as labs_flows
@@ -1423,6 +1424,7 @@ def get_backtest(
     *,
     assets: list[tuple[str, Decimal]],
     period: Period,
+    benchmark: str = DEFAULT_BENCHMARK,
     settings: Settings | None = None,
 ) -> dict:
     """A Labs backtest of `assets` (ticker, weight) pairs: every period's return for the mix and
@@ -1432,8 +1434,10 @@ def get_backtest(
     configure_logging()
     settings = settings or load_settings()
     datastore_client = _require_datastore_client(settings, command="a backtest")
-    logger.info("backtest: %d asset(s), growth series for %s.", len(assets), period)
-    outcome = labs_flows.run_backtest(datastore_client, assets, period)
+    logger.info(
+        "backtest: %d asset(s), growth series for %s, against %s.", len(assets), period, benchmark
+    )
+    outcome = labs_flows.run_backtest(datastore_client, assets, period, benchmark=benchmark)
 
     _log_mix_left_out(outcome.result)
     included = sum(1 for s in outcome.statuses if s.status == labs_flows.INCLUDED)

@@ -540,5 +540,6 @@ def backtest(body: BacktestRequest, settings: Settings = Depends(get_settings)) 
     return jobs.get_backtest(
         assets=[(asset.ticker, asset.weight) for asset in body.assets],
         period=body.period,
+        benchmark=body.benchmark,
         settings=settings,
     )

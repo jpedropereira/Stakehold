@@ -56,6 +56,17 @@ def test_backtest_parses_the_mix_and_returns_the_jobs_result(monkeypatch, client
     assert response.json() == result
     assert calls[0]["assets"] == [("IWDA.AS", Decimal("60")), ("AAPL", Decimal("40"))]
     assert calls[0]["period"] is Period.Y1
+    assert calls[0]["benchmark"] == "VWCE.DE"  # the default (RK-13)
+
+
+def test_backtest_passes_a_named_benchmark_through(monkeypatch, client):
+    calls = []
+    monkeypatch.setattr(jobs, "get_backtest", lambda **kw: calls.append(kw) or _empty_result([]))
+
+    response = client.post("/labs/backtest", json={**_body(), "benchmark": "IWDA.AS"})
+
+    assert response.status_code == 200
+    assert calls[0]["benchmark"] == "IWDA.AS"
 
 
 @pytest.mark.parametrize(
@@ -78,6 +89,8 @@ def test_backtest_parses_the_mix_and_returns_the_jobs_result(monkeypatch, client
         pytest.param(_body(assets=[{"ticker": "A" * 21, "weight": "1"}]), id="21-char ticker"),
         pytest.param(_body(period="10Y"), id="unknown period"),
         pytest.param({"assets": [{"ticker": "A", "weight": "1"}]}, id="missing period"),
+        pytest.param({**_body(), "benchmark": ""}, id="empty benchmark"),
+        pytest.param({**_body(), "benchmark": "B" * 21}, id="21-char benchmark"),
     ],
 )
 def test_backtest_rejects_an_invalid_mix_with_422(monkeypatch, client, body):
@@ -100,14 +113,19 @@ def test_backtest_accepts_exactly_fifty_assets(monkeypatch, client):
 
 
 class _FakeDataStoreClient:
+    """E and U are the mix; VWCE.DE, the default benchmark, moves as E does."""
+
     def get_ticker_info(self, ticker):
         return {
             "E": TickerInfo(exists=True, has_returns=True, currency="EUR", fx_currency="EUR"),
             "U": TickerInfo(exists=True, has_returns=True, currency="USD", fx_currency="USD"),
+            "VWCE.DE": TickerInfo(
+                exists=True, has_returns=True, currency="EUR", fx_currency="EUR"
+            ),
         }[ticker]
 
     def get_price_series(self, ticker, start, end):
-        returns = {"E": "0.10", "U": "0"}[ticker]
+        returns = {"E": "0.10", "U": "0", "VWCE.DE": "0.10"}[ticker]
         return [
             PricePoint(date(2026, 1, 5), Decimal("100"), None),
             PricePoint(date(2026, 1, 6), Decimal("100"), Decimal(returns)),
@@ -241,6 +259,7 @@ def test_backtest_serializes_the_risk_section_end_to_end(monkeypatch, client):
         "trough_date": None,
         "recovery_date": None,
         "max_days_under_water": None,
+        "relative": None,
     }
     max_window = risk["mix"]["windows"]["Max"]
     # One day, so the cumulative return is the backtest's own: 0.25 x 1.10 + 0.75 x 1.25 - 1.
@@ -266,6 +285,27 @@ def test_backtest_serializes_the_risk_section_end_to_end(monkeypatch, client):
         "dates": ["2026-01-05", "2026-01-06"],
         "values": [0.0, 0.0],
     }
+    # RK-13: the default benchmark, its growth line on the growth series' dates, and the
+    # relative figures, greyed here: a day of history is no week.
+    assert risk["benchmark"] == {
+        "ticker": "VWCE.DE",
+        "available": True,
+        "reason": None,
+        "first_date": "2026-01-05",
+        "growth": ["0.00000000", "0.10000000"],
+        "growth_reason": None,
+    }
+    assert list(max_window["relative"]) == [
+        "beta",
+        "correlation",
+        "tracking_error",
+        "information_ratio",
+    ]
+    beta = max_window["relative"]["beta"]
+    assert beta["value"] is None
+    assert beta["frequency"] == "weekly"
+    assert beta["flags"] == ["insufficient_history"]
+    assert beta["reason"] == "insufficient history (have 0, need 104)"
 
 
 _WINDOW_FIGURES = (

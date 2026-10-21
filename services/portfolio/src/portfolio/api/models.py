@@ -13,6 +13,7 @@ from decimal import Decimal
 from typing import Annotated
 from uuid import UUID
 
+from portfolio.benchmark.base import DEFAULT_BENCHMARK
 from portfolio.labs.calculator import Period
 from portfolio.risk.windows import StandardWindow
 from portfolio.transactions.base import TRANSACTION_TYPES
@@ -382,6 +383,8 @@ class RebuildReturnsResponse(BaseModel):
 # while bounding one request's fan-out (about two data-store calls per asset, plus one per
 # currency) and its growth payload (one point per trading day per asset for Max).
 MAX_BACKTEST_ASSETS = 50
+# A benchmark is a ticker, so it takes data-store's 20-character limit too (RK-13).
+BenchmarkTicker = Annotated[str, Field(min_length=1, max_length=20)]
 
 # Fixed-point, never scientific notation: a quantized zero is Decimal("0E-8"), and str() would
 # write 0.00000012 as "1.2E-7". Every figure in a backtest is a fraction (0.10 is +10%).
@@ -401,6 +404,8 @@ class BacktestRequest(BaseModel):
     assets: list[BacktestAssetRequest] = Field(min_length=1, max_length=MAX_BACKTEST_ASSETS)
     # The period the growth series is for; the table always has every period.
     period: Period
+    # What the risk table's relative figures and the benchmark line measure against (RK-13).
+    benchmark: BenchmarkTicker = DEFAULT_BENCHMARK
 
     @model_validator(mode="after")
     def _no_duplicate_tickers(self):
@@ -465,6 +470,17 @@ class RiskFigureResponse(BaseModel):
     standard_error: float | None  # a Sharpe's 1 s.e.; null on every other figure
 
 
+class RelativeRiskResponse(BaseModel):
+    """Against the benchmark, on weekly returns (RK-13, spec §5.6). Each figure is greyed with a
+    reason when the benchmark doesn't cover the window ("benchmark history too short (from
+    <date>)") or is unavailable ("benchmark unavailable: not tracked")."""
+
+    beta: RiskFigureResponse
+    correlation: RiskFigureResponse
+    tracking_error: RiskFigureResponse
+    information_ratio: RiskFigureResponse
+
+
 class WindowRiskResponse(BaseModel):
     """One standard window of one row. Not covered: `reason` says why and every figure is null.
     `start` is null only for Max when the assets' histories don't overlap."""
@@ -489,6 +505,7 @@ class WindowRiskResponse(BaseModel):
     cvar_95: RiskFigureResponse | None
     var_99: RiskFigureResponse | None
     cvar_99: RiskFigureResponse | None
+    relative: RelativeRiskResponse | None  # null exactly when the window isn't covered
 
 
 class RowRiskResponse(BaseModel):
@@ -500,6 +517,20 @@ class RiskFreeStatusResponse(BaseModel):
     available: bool
     reason: str | None  # why not, when it isn't: downside deviation, Sharpe, Sortino greyed
     first_date: date | None
+
+
+class BenchmarkStatusResponse(BaseModel):
+    ticker: str
+    available: bool
+    reason: str | None  # why not, when it isn't: "not tracked", "couldn't reach data-store", ...
+    first_date: date | None  # its first day, which a greyed window names
+
+
+class BacktestBenchmarkResponse(BenchmarkStatusResponse):
+    # Its cumulative growth on each `growth.dates` entry, from 0, priced as an asset's line is.
+    # Null, with growth_reason, when it is unavailable or starts after the growth period.
+    growth: list[BacktestDecimal] | None
+    growth_reason: str | None
 
 
 class DrawdownSeriesResponse(BaseModel):
@@ -517,6 +548,7 @@ class BacktestRiskResponse(BaseModel):
     common_start: date | None  # null when the assets' histories don't overlap
     limited_by: list[str]
     risk_free: RiskFreeStatusResponse
+    benchmark: BacktestBenchmarkResponse
     mix: RowRiskResponse
     assets: list[RowRiskResponse]  # included assets, in request order
     drawdown: DrawdownSeriesResponse | None

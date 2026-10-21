@@ -10,10 +10,13 @@ from datetime import date, timedelta
 from decimal import Decimal
 
 import pytest
-from portfolio.datastore_client.base import FxPoint, PricePoint
+from portfolio.benchmark.base import Benchmark, BenchmarkUnavailable, build_benchmark
+from portfolio.datastore_client.base import FxPoint, PricePoint, TickerInfo
+from portfolio.eur_returns.fetch import Fetched
 from portfolio.labs.calculator import AssetInput, Period, compute_backtest
 from portfolio.labs.risk import (
     LABEL,
+    BenchmarkStatus,
     RiskFree,
     RiskFreeMissing,
     RiskFreeStatus,
@@ -21,8 +24,9 @@ from portfolio.labs.risk import (
     risk_free_span,
 )
 from portfolio.risk.ex_ante import constant_weight_series
+from portfolio.risk.relative import relative_figures
 from portfolio.risk.risk_free import RatePoint
-from portfolio.risk.types import Flag, Frequency, ReturnSeries
+from portfolio.risk.types import Flag, Frequency, ReturnSeries, Window
 from portfolio.risk.windows import StandardWindow
 
 FIRST_PUBLISHED = date(1999, 1, 4)
@@ -79,9 +83,19 @@ def _long(ticker, weight, start, end, *, offset=0, gaps=(), skip=(), fx=False):
     return _asset(ticker, weight, points, fx=rates)
 
 
-def _run(assets, growth_period=Period.MAX, risk_free=RISK_FREE):
+NOT_TRACKED = BenchmarkUnavailable("BM", "not_tracked", "not tracked")
+
+
+def _benchmark(asset: AssetInput, ticker="BM") -> Benchmark:
+    """A benchmark with `asset`'s prices, as benchmark/flows.py would build it."""
+    currency = "EUR" if asset.fx is None else "USD"
+    info = TickerInfo(exists=True, has_returns=True, currency=currency, fx_currency=currency)
+    return build_benchmark(ticker, Fetched(info, list(asset.prices), asset.fx))
+
+
+def _run(assets, growth_period=Period.MAX, risk_free=RISK_FREE, benchmark=NOT_TRACKED):
     backtest = compute_backtest(assets, growth_period=growth_period)
-    return backtest, compute_backtest_risk(assets, risk_free, backtest.growth)
+    return backtest, compute_backtest_risk(assets, risk_free, backtest.growth, benchmark)
 
 
 def _row(risk, ticker):
@@ -371,3 +385,135 @@ def test_with_nothing_available_there_is_no_risk_section():
     _, risk = _run([unavailable])
 
     assert risk is None
+
+
+# --- relative to the benchmark (RK-13, spec §5.6) ---
+
+END = date(2026, 6, 30)
+
+
+def _window(window_risk, label):
+    return Window(label, window_risk.start, window_risk.end)
+
+
+def test_every_row_is_measured_against_the_benchmark():
+    a = _long("A", "0.6", date(2020, 1, 2), END)
+    b = _long("B", "0.4", date(2020, 1, 2), END, offset=3, fx=True)
+    benchmark = _benchmark(_long("BM", "1", date(2018, 1, 2), END, offset=7))
+
+    _, risk = _run([a, b], benchmark=benchmark)
+
+    for label in (StandardWindow.Y3, StandardWindow.Y5, StandardWindow.MAX):
+        for row, asset in ((_row(risk, "A"), a), (_row(risk, "B"), b)):
+            window = row.windows[label]
+            own = _benchmark(asset, asset.ticker).weekly
+            assert window.relative == relative_figures(
+                own, benchmark.weekly, _window(window, label)
+            )
+        mix = risk.mix.windows[label].relative
+        assert mix.beta.value is not None
+        assert mix.tracking_error.value is not None
+        assert mix.beta.frequency is Frequency.WEEKLY
+
+
+def test_a_mix_of_the_benchmark_alone_tracks_it():
+    a = _long("A", "1", date(2020, 1, 2), END)
+
+    _, risk = _run([a], benchmark=_benchmark(a))
+
+    asset = _row(risk, "A").windows[StandardWindow.Y5].relative
+    assert asset.beta.value == pytest.approx(1.0)
+    assert asset.correlation.value == pytest.approx(1.0)
+    assert asset.tracking_error.value == 0.0
+    assert asset.information_ratio.reason == "no tracking difference"
+    mix = risk.mix.windows[StandardWindow.Y5].relative
+    assert mix.beta.value == pytest.approx(1.0, abs=1e-9)
+    assert mix.tracking_error.value == pytest.approx(0.0, abs=1e-9)
+
+
+def test_a_window_the_benchmark_does_not_cover_is_greyed_with_its_first_day():
+    # Ten years of assets against a benchmark from 2019-07-29 (VWCE.DE's first day): 10Y is
+    # greyed and names that day; nothing measures it against another index.
+    assets = [_long("A", "1", date(2015, 1, 2), END)]
+    vwce = _benchmark(_long("VWCE.DE", "1", date(2019, 7, 29), END), "VWCE.DE")
+
+    _, risk = _run(assets, benchmark=vwce)
+
+    for row in (risk.mix, _row(risk, "A")):
+        greyed = row.windows[StandardWindow.Y10].relative
+        for figure in (
+            greyed.beta,
+            greyed.correlation,
+            greyed.tracking_error,
+            greyed.information_ratio,
+        ):
+            assert figure.value is None
+            assert figure.reason == "benchmark history too short (from 2019-07-29)"
+            assert Flag.INSUFFICIENT_HISTORY in figure.flags
+        # Max starts with A, before the benchmark, so it is greyed too.
+        assert row.windows[StandardWindow.MAX].relative.beta.reason == (
+            "benchmark history too short (from 2019-07-29)"
+        )
+        assert row.windows[StandardWindow.Y5].relative.beta.value is not None
+    assert risk.benchmark == BenchmarkStatus(
+        ticker="VWCE.DE",
+        available=True,
+        reason=None,
+        first_date=date(2019, 7, 29),
+        growth=None,
+        growth_reason="benchmark history too short (from 2019-07-29)",
+    )
+
+
+def test_an_uncovered_row_window_has_no_relative_figures():
+    old = _long("OLD", "0.5", date(2014, 1, 2), END)
+    young = _long("NEW", "0.5", date(2024, 3, 4), END, offset=5)
+
+    _, risk = _run([old, young], benchmark=_benchmark(old))
+
+    assert risk.mix.windows[StandardWindow.Y5].covered is False
+    assert risk.mix.windows[StandardWindow.Y5].relative is None
+    assert risk.mix.windows[StandardWindow.Y1].relative is not None
+
+
+def test_an_unavailable_benchmark_greys_the_relative_figures_and_nothing_else():
+    a = _long("A", "1", date(2020, 1, 2), END)
+
+    _, risk = _run([a], benchmark=BenchmarkUnavailable("NOPE", "not_tracked", "not tracked"))
+
+    window = risk.mix.windows[StandardWindow.Y3]
+    assert window.relative.beta.value is None
+    assert window.relative.beta.reason == "benchmark unavailable: not tracked"
+    assert window.volatility.value is not None
+    assert risk.benchmark == BenchmarkStatus(
+        ticker="NOPE",
+        available=False,
+        reason="not tracked",
+        first_date=None,
+        growth=None,
+        growth_reason="benchmark unavailable: not tracked",
+    )
+
+
+def test_the_benchmark_line_is_priced_as_labs_prices_an_asset():
+    a = _long("A", "0.5", date(2024, 1, 2), END)
+    b = _long("B", "0.5", date(2024, 1, 2), END, offset=3, fx=True)
+    # A USD benchmark with B's prices: its line must equal B's own line, gaps bridged and FX
+    # applied as Labs does.
+    benchmark = _benchmark(b)
+
+    backtest, risk = _run([a, b], growth_period=Period.M6, benchmark=benchmark)
+
+    assert risk.benchmark.growth == backtest.growth.assets["B"]
+    assert len(risk.benchmark.growth) == len(backtest.growth.dates)
+    assert risk.benchmark.growth_reason is None
+
+
+def test_a_benchmark_starting_after_the_growth_period_has_no_line():
+    a = _long("A", "1", date(2024, 1, 2), END)
+    late = _benchmark(_long("BM", "1", date(2026, 3, 2), END))
+
+    _, risk = _run([a], growth_period=Period.Y1, benchmark=late)
+
+    assert risk.benchmark.growth is None
+    assert risk.benchmark.growth_reason == "benchmark history too short (from 2026-03-02)"

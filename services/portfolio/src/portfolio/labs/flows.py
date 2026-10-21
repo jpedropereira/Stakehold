@@ -12,6 +12,8 @@ status and logs it.
 The risk section (RK-8) needs one more call, the risk-free series, over the span the backtest
 turned out to have, so it follows the price fetch rather than joining it. It can't fail the
 backtest: no rates stored, or a failed call, greys the figures that subtract rf and is logged.
+So does the benchmark (RK-13), fetched by benchmark/flows.py: an unknown or unreachable one greys
+the relative figures, never the backtest.
 """
 
 import logging
@@ -20,6 +22,8 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 
+from portfolio.benchmark.base import DEFAULT_BENCHMARK
+from portfolio.benchmark.flows import fetch_benchmark
 from portfolio.datastore_client.base import DataStoreClient, RiskFreeSeries
 from portfolio.eur_returns import fetch
 from portfolio.eur_returns.fetch import Fetched
@@ -89,10 +93,12 @@ def run_backtest(
     mix: Sequence[tuple[str, Decimal]],
     period: Period,
     *,
+    benchmark: str = DEFAULT_BENCHMARK,
     today: date | None = None,
 ) -> LabsBacktest:
-    """Backtest `mix` (ticker, weight) pairs, with the growth series for `period`. The mix is
-    assumed valid (non-empty, unique tickers, positive weights): the API checks that first."""
+    """Backtest `mix` (ticker, weight) pairs, with the growth series for `period` and the risk
+    table measured against `benchmark`. The mix is assumed valid (non-empty, unique tickers,
+    positive weights): the API checks that first."""
     today = today or date.today()
     fetched_or_not = fetch.fetch_series(
         datastore_client, [ticker for ticker, _ in mix], EPOCH, today
@@ -141,19 +147,24 @@ def run_backtest(
             )
             statuses.append(AssetStatus(ticker, INCLUDED, None))
 
-    risk = _risk(datastore_client, inputs, result) if inputs else None
+    risk = _risk(datastore_client, inputs, result, benchmark, today) if inputs else None
     return LabsBacktest(result=result, statuses=statuses, risk=risk)
 
 
 def _risk(
-    datastore_client: DataStoreClient, inputs: Sequence[AssetInput], result: BacktestResult
+    datastore_client: DataStoreClient,
+    inputs: Sequence[AssetInput],
+    result: BacktestResult,
+    benchmark_ticker: str,
+    today: date,
 ) -> BacktestRisk | None:
     span = risk_free_span(result)
     if span is None:
         risk_free = RiskFreeMissing(NO_OVERLAP)
     else:
         risk_free = _fetch_risk_free(datastore_client, *span)
-    risk = compute_backtest_risk(inputs, risk_free, result.growth)
+    benchmark = fetch_benchmark(datastore_client, benchmark_ticker, today, context="backtest risk")
+    risk = compute_backtest_risk(inputs, risk_free, result.growth, benchmark)
     if risk is not None:
         _log_risk(risk)
     return risk
@@ -230,10 +241,17 @@ def _log_risk(risk: BacktestRisk) -> None:
             _measured(row.windows),
             len(row.windows),
         )
+    benchmark = risk.benchmark
     logger.info(
-        "backtest risk: done, the mix is measured in %d of %d window(s), %d asset row(s)%s.",
+        "backtest risk: done, the mix is measured in %d of %d window(s) against %s, %d asset "
+        "row(s)%s.",
         _measured(risk.mix.windows),
         len(risk.mix.windows),
+        (
+            benchmark.ticker
+            if benchmark.available
+            else f"{benchmark.ticker} (unavailable: {benchmark.reason})"
+        ),
         len(risk.assets),
         (
             ""
@@ -257,6 +275,16 @@ def _figures(window: WindowRisk) -> list[RiskFigure | None]:
         window.cvar_95,
         window.var_99,
         window.cvar_99,
+        *(
+            ()
+            if window.relative is None
+            else (
+                window.relative.beta,
+                window.relative.correlation,
+                window.relative.tracking_error,
+                window.relative.information_ratio,
+            )
+        ),
     ]
 
 

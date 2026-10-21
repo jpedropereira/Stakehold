@@ -22,6 +22,10 @@ _OBS_MINIMUMS = [
     (Measure.CORRELATION, 104),
     (Measure.BETA, 104),
     (Measure.COVARIANCE, 104),
+    # Agreed for RK-13: tracking error is the active return's volatility and the information
+    # ratio its Sharpe, so they take those minimums, not beta's.
+    (Measure.TRACKING_ERROR, 52),
+    (Measure.INFORMATION_RATIO, 52),
 ]
 
 
@@ -101,6 +105,8 @@ def test_a_span_under_three_years_is_a_short_window(measure, start, flags):
         (Measure.CORRELATION, Frequency.WEEKLY),
         (Measure.BETA, Frequency.WEEKLY),
         (Measure.COVARIANCE, Frequency.WEEKLY),
+        (Measure.TRACKING_ERROR, Frequency.WEEKLY),
+        (Measure.INFORMATION_RATIO, Frequency.WEEKLY),
         (Measure.MAX_DRAWDOWN, Frequency.DAILY),
         (Measure.CAGR, Frequency.DAILY),
         (Measure.CALMAR, Frequency.DAILY),
