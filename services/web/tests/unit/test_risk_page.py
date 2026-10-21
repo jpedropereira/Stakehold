@@ -18,8 +18,10 @@ from web.api.deps import get_auth_client, get_portfolio_client
 from web.auth_client.base import AuthResult, AuthUser
 from web.auth_client.errors import SessionInvalid
 from web.portfolio_client.base import (
+    RELATIVE_FIGURE_KEYS,
     RISK_FIGURE_KEYS,
     RISK_WINDOWS,
+    BenchmarkStatus,
     ExcludedHolding,
     ExPostRisk,
     ExPostWindow,
@@ -39,7 +41,10 @@ _STARTS = {
     "10Y": date(2016, 10, 16),
     "Max": date(2023, 1, 2),
 }
-_WEEKLY = {"volatility", "downside_deviation", "sharpe", "sortino"}
+_WEEKLY = {"volatility", "downside_deviation", "sharpe", "sortino", *RELATIVE_FIGURE_KEYS}
+BENCHMARK = BenchmarkStatus(
+    ticker="VWCE.DE", available=True, reason=None, first_date=date(2019, 7, 29)
+)
 # One value per figure, each distinct, so a test can find a figure by its printed value.
 _VALUES = {
     "cumulative_return": 0.1234,
@@ -53,6 +58,10 @@ _VALUES = {
     "var_95": 0.0213,
     "cvar_95": 0.0318,
     "var_99": 0.0377,
+    "beta": 0.9321,
+    "correlation": 0.8765,
+    "tracking_error": 0.0432,
+    "information_ratio": -0.2178,
     "cvar_99": 0.0482,
 }
 
@@ -73,8 +82,8 @@ class FakePortfolioClient:
         self.ex_post_error: Exception | None = None
         self.calls: list[tuple] = []
 
-    async def ex_post_risk(self, *, user_id):
-        self.calls.append(("ex_post_risk", user_id))
+    async def ex_post_risk(self, *, user_id, benchmark):
+        self.calls.append(("ex_post_risk", user_id, benchmark))
         if self.ex_post_error:
             raise self.ex_post_error
         return self.ex_post
@@ -131,13 +140,16 @@ def _greyed(name, start, reason, flags=("insufficient_history",)) -> RiskFigure:
     return replace(_figure(name, start), value=None, reason=reason, flags=flags)
 
 
-def _window(label, *, covered=True, **figures) -> ExPostWindow:
+def _window(label, *, covered=True, relative=None, **figures) -> ExPostWindow:
     start = _STARTS[label]
     if covered:
         all_figures = {name: _figure(name, start) for name in RISK_FIGURE_KEYS}
+        all_relative = {name: _figure(name, start) for name in RELATIVE_FIGURE_KEYS}
     else:
         all_figures = {name: _greyed(name, start, UNCOVERED) for name in RISK_FIGURE_KEYS}
+        all_relative = {name: _greyed(name, start, UNCOVERED) for name in RELATIVE_FIGURE_KEYS}
     all_figures.update(figures)
+    all_relative.update(relative or {})
     return ExPostWindow(
         label=label,
         start=start,
@@ -148,6 +160,7 @@ def _window(label, *, covered=True, **figures) -> ExPostWindow:
         trough_date=date(2026, 4, 7) if covered else None,
         recovery_date=None,
         max_days_under_water=256 if covered else None,
+        relative=all_relative,
     )
 
 
@@ -160,6 +173,7 @@ def _risk(*, one_y=None, **changes) -> ExPostRisk:
         base_date=date(2023, 1, 2),
         end_date=END,
         rf_available=True,
+        benchmark=BENCHMARK,
         windows=tuple(windows),
         excluded=(),
     )
@@ -232,7 +246,7 @@ def test_asks_portfolio_for_this_users_figures(client):
 
     _page(test_client)
 
-    assert fake_portfolio.calls == [("ex_post_risk", "u1")]
+    assert fake_portfolio.calls == [("ex_post_risk", "u1", "VWCE.DE")]
 
 
 # --- the summary table ------------------------------------------------------------------------

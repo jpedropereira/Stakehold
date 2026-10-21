@@ -18,7 +18,9 @@ from web.labs_risk_view import (
 )
 from web.portfolio_client.base import (
     BACKTEST_RISK_WINDOWS,
+    RELATIVE_FIGURE_KEYS,
     RISK_FIGURE_KEYS,
+    BacktestBenchmark,
     BacktestRisk,
     BacktestRowRisk,
     BacktestWindowRisk,
@@ -29,6 +31,14 @@ from web.portfolio_client.base import (
 
 MINUS = "−"
 END = date(2026, 10, 9)
+BENCHMARK = BacktestBenchmark(
+    ticker="VWCE.DE",
+    available=True,
+    reason=None,
+    first_date=date(2019, 7, 29),
+    growth=None,
+    growth_reason="history starts after the growth period",
+)
 START = date(2025, 10, 9)
 
 
@@ -47,7 +57,7 @@ def _figure(value, *, frequency="daily", n_obs=252, flags=(), reason=None, se=No
     )
 
 
-def _covered(**figures):
+def _covered(relative=None, **figures):
     defaults = {
         "cumulative_return": _figure(0.12),
         "cagr": _figure(0.0712, flags=("short_window",)),
@@ -63,6 +73,8 @@ def _covered(**figures):
         "cvar_99": _figure(0.04),
     }
     defaults.update(figures)
+    if relative is None:
+        relative = {key: _figure(0.5, frequency="weekly", n_obs=52) for key in RELATIVE_FIGURE_KEYS}
     assert set(defaults) == set(RISK_FIGURE_KEYS)
     return BacktestWindowRisk(
         start=START,
@@ -74,6 +86,7 @@ def _covered(**figures):
         trough_date=date(2026, 4, 7),
         recovery_date=None,
         max_days_under_water=249,
+        relative=relative,
     )
 
 
@@ -88,6 +101,7 @@ def _uncovered(reason="limited by AAPL (history from 2021-11-01)"):
         trough_date=None,
         recovery_date=None,
         max_days_under_water=None,
+        relative=None,
     )
 
 
@@ -97,13 +111,14 @@ def _row(ticker, **windows):
     return BacktestRowRisk(ticker=ticker, windows=all_windows)
 
 
-def _risk(mix=None, assets=None, drawdown=None):
+def _risk(mix=None, assets=None, drawdown=None, benchmark=None):
     return BacktestRisk(
         label="buy & hold (drifting)",
         end_date=END,
         common_start=date(2021, 11, 1),
         limited_by=("AAPL",),
         risk_free=RiskFreeStatus(available=True, reason=None, first_date=date(1999, 1, 4)),
+        benchmark=benchmark or BENCHMARK,
         mix=mix or _row(None),
         assets=tuple(assets) if assets is not None else (_row("VWCE.DE"), _row("AAPL")),
         drawdown=drawdown,

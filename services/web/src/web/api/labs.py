@@ -60,6 +60,7 @@ from web.labs_view import (
 from web.portfolio_client.base import (
     BACKTEST_PERIODS,
     BACKTEST_RISK_WINDOWS,
+    DEFAULT_BENCHMARK,
     Backtest,
     BacktestRisk,
     PortfolioClient,
@@ -155,7 +156,9 @@ async def _run_backtest(
 ) -> tuple[Backtest | None, str | None]:
     """The backtest and None, or None and the message to show in its place."""
     try:
-        result = await portfolio_client.backtest(assets=list(assets), period=period)
+        result = await portfolio_client.backtest(
+            assets=list(assets), period=period, benchmark=DEFAULT_BENCHMARK
+        )
     except InvalidPortfolioRequest as exc:
         # portfolio rejected the mix; its message is written to be shown.
         logger.warning("labs: portfolio rejected the mix: %s", exc)

@@ -6,6 +6,7 @@ import httpx
 from web.portfolio_client.base import (
     BACKTEST_PERIODS,
     BACKTEST_RISK_WINDOWS,
+    RELATIVE_FIGURE_KEYS,
     RISK_FIGURE_KEYS,
     RISK_WINDOWS,
     Account,
@@ -13,12 +14,14 @@ from web.portfolio_client.base import (
     AccountWriteResult,
     Backtest,
     BacktestAssetStatus,
+    BacktestBenchmark,
     BacktestGrowth,
     BacktestPeriodReturn,
     BacktestRisk,
     BacktestRow,
     BacktestRowRisk,
     BacktestWindowRisk,
+    BenchmarkStatus,
     Broker,
     DrawdownSeries,
     ExcludedHolding,
@@ -436,8 +439,20 @@ def _risk_figure(item: dict | None) -> RiskFigure | None:
     )
 
 
+def _relative(item: dict) -> dict[str, RiskFigure]:
+    """A window's figures against the benchmark (RK-13). portfolio greys one with a reason
+    rather than leaving it out, so a null figure is a contract break."""
+    relative = {}
+    for key in RELATIVE_FIGURE_KEYS:
+        figure = _risk_figure(item[key])
+        if figure is None:
+            raise TypeError(f"relative {key} is null")
+        relative[key] = figure
+    return relative
+
+
 def _window_risk(item: dict) -> BacktestWindowRisk:
-    days = item["max_days_under_water"]
+    days, relative = item["max_days_under_water"], item["relative"]
     return BacktestWindowRisk(
         start=_opt_date(item["start"]),
         end=date.fromisoformat(item["end"]),
@@ -448,6 +463,7 @@ def _window_risk(item: dict) -> BacktestWindowRisk:
         trough_date=_opt_date(item["trough_date"]),
         recovery_date=_opt_date(item["recovery_date"]),
         max_days_under_water=None if days is None else _int(item, "max_days_under_water"),
+        relative=None if relative is None else _relative(relative),
     )
 
 
@@ -472,7 +488,30 @@ def _drawdown(item: dict) -> DrawdownSeries:
     return DrawdownSeries(period=item["period"], dates=dates, values=values)
 
 
-def _backtest_risk(item: dict) -> BacktestRisk:
+def _benchmark_fields(item: dict) -> dict:
+    return {
+        "ticker": item["ticker"],
+        "available": _bool(item, "available"),
+        "reason": item["reason"],
+        "first_date": _opt_date(item["first_date"]),
+    }
+
+
+def _backtest_benchmark(item: dict, growth_dates: int | None) -> BacktestBenchmark:
+    growth = item["growth"]
+    if growth is not None:
+        if growth_dates is None:
+            raise ValueError("benchmark growth line with no growth series")
+        growth = _growth_line(growth, growth_dates)
+        if any(value is None for value in growth):
+            # Unlike a late asset's Max line, the benchmark's is null as a whole, never in part.
+            raise ValueError("benchmark growth line has a null point")
+    return BacktestBenchmark(
+        **_benchmark_fields(item), growth=growth, growth_reason=item["growth_reason"]
+    )
+
+
+def _backtest_risk(item: dict, growth_dates: int | None) -> BacktestRisk:
     risk_free, drawdown = item["risk_free"], item["drawdown"]
     return BacktestRisk(
         label=item["label"],
@@ -484,6 +523,7 @@ def _backtest_risk(item: dict) -> BacktestRisk:
             reason=risk_free["reason"],
             first_date=_opt_date(risk_free["first_date"]),
         ),
+        benchmark=_backtest_benchmark(item["benchmark"], growth_dates),
         mix=_row_risk(item["mix"]),
         assets=tuple(_row_risk(row) for row in item["assets"]),
         drawdown=None if drawdown is None else _drawdown(drawdown),
@@ -495,18 +535,23 @@ def _backtest(body: dict) -> Backtest:
         # `risk` is read as required: portfolio always sends it (null with no asset included),
         # so a missing key is a contract break, not a backtest with no risk figures.
         mix, growth, risk = body["mix"], body["growth"], body["risk"]
+        growth = None if growth is None else _backtest_growth(growth)
         return Backtest(
             end_date=_opt_date(body["end_date"]),
             mix=None if mix is None else _backtest_row(mix),
             assets=tuple(_backtest_row(item) for item in body["assets"]),
-            growth=None if growth is None else _backtest_growth(growth),
+            growth=growth,
             statuses=tuple(
                 BacktestAssetStatus(
                     ticker=item["ticker"], status=item["status"], reason=item["reason"]
                 )
                 for item in body["statuses"]
             ),
-            risk=None if risk is None else _backtest_risk(risk),
+            risk=(
+                None
+                if risk is None
+                else _backtest_risk(risk, None if growth is None else len(growth.dates))
+            ),
         )
     except (KeyError, TypeError, ValueError, InvalidOperation) as exc:
         raise PortfolioUnavailable(f"malformed portfolio response: {exc}") from exc
@@ -533,6 +578,7 @@ def _ex_post_window(item: dict) -> ExPostWindow:
         trough_date=_opt_date(item["trough_date"]),
         recovery_date=_opt_date(item["recovery_date"]),
         max_days_under_water=None if max_days is None else _int(item, "max_days_under_water"),
+        relative=_relative(item["relative"]),
     )
 
 
@@ -549,6 +595,7 @@ def _ex_post_risk(body: dict) -> ExPostRisk:
             base_date=_opt_date(body["base_date"]),
             end_date=_opt_date(body["end_date"]),
             rf_available=_bool(body, "rf_available"),
+            benchmark=BenchmarkStatus(**_benchmark_fields(body["benchmark"])),
             windows=windows,
             excluded=tuple(
                 ExcludedHolding(ticker=item["ticker"], status=item["status"], reason=item["reason"])
@@ -806,7 +853,9 @@ class HttpPortfolioClient:
             _raise_for_status(response)
         return _portfolio_returns(_json_body(response))
 
-    async def backtest(self, *, assets: list[tuple[str, Decimal]], period: str) -> Backtest:
+    async def backtest(
+        self, *, assets: list[tuple[str, Decimal]], period: str, benchmark: str
+    ) -> Backtest:
         response = await self._request(
             "POST",
             "/labs/backtest",
@@ -815,6 +864,7 @@ class HttpPortfolioClient:
                     {"ticker": ticker, "weight": _decimal_str(weight)} for ticker, weight in assets
                 ],
                 "period": period,
+                "benchmark": benchmark,
             },
         )
         if response.status_code == 422:
@@ -826,8 +876,10 @@ class HttpPortfolioClient:
             )
         return _backtest(_json_body(response))
 
-    async def ex_post_risk(self, *, user_id: str) -> ExPostRisk:
-        response = await self._request("GET", "/risk/ex-post", params={"user_id": user_id})
+    async def ex_post_risk(self, *, user_id: str, benchmark: str) -> ExPostRisk:
+        response = await self._request(
+            "GET", "/risk/ex-post", params={"user_id": user_id, "benchmark": benchmark}
+        )
         if response.status_code != 200:
             # Not _raise_for_status: its 404 means AccountNotFound, and this route has no account.
             raise PortfolioUnavailable(

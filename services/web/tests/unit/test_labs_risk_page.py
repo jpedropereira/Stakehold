@@ -23,9 +23,11 @@ from web.auth_client.errors import SessionInvalid
 from web.portfolio_client.base import (
     BACKTEST_PERIODS,
     BACKTEST_RISK_WINDOWS,
+    RELATIVE_FIGURE_KEYS,
     RISK_FIGURE_KEYS,
     Backtest,
     BacktestAssetStatus,
+    BacktestBenchmark,
     BacktestGrowth,
     BacktestPeriodReturn,
     BacktestRisk,
@@ -43,6 +45,14 @@ from web.settings import Settings
 SESSION_COOKIE = "stakehold_session=tok; Path=/; HttpOnly; SameSite=lax"
 MINUS = "−"
 END = date(2026, 10, 9)
+BENCHMARK = BacktestBenchmark(
+    ticker="VWCE.DE",
+    available=True,
+    reason=None,
+    first_date=date(2019, 7, 29),
+    growth=None,
+    growth_reason="history starts after the growth period",
+)
 COMMON_START = date(2021, 11, 1)
 LIMITED = "limited by AAPL (history from 2021-11-01)"
 
@@ -62,6 +72,7 @@ class FakePortfolioClient:
         self.holdings = Holdings(holdings=(), totals=None)
         self.backtest_result: Backtest | None = None
         self.backtest_calls: list[tuple] = []
+        self.benchmarks: list[str] = []
 
     async def list_tickers(self):
         return ["IWDA.AS", "AAPL"]
@@ -69,8 +80,9 @@ class FakePortfolioClient:
     async def list_holdings(self, *, user_id):
         return self.holdings
 
-    async def backtest(self, *, assets, period):
+    async def backtest(self, *, assets, period, benchmark):
         self.backtest_calls.append((tuple(assets), period))
+        self.benchmarks.append(benchmark)
         return self.backtest_result
 
 
@@ -150,7 +162,7 @@ def _figure(value, *, frequency="daily", n_obs=252, flags=(), reason=None, se=No
     )
 
 
-def _covered(start=date(2025, 10, 9), **figures):
+def _covered(start=date(2025, 10, 9), relative=None, **figures):
     weekly = {"frequency": "weekly", "n_obs": 52}
     all_figures = {key: _figure(0.01) for key in RISK_FIGURE_KEYS}
     all_figures.update(
@@ -172,6 +184,11 @@ def _covered(start=date(2025, 10, 9), **figures):
         trough_date=None,
         recovery_date=None,
         max_days_under_water=None,
+        relative=(
+            {key: _figure(0.5, **weekly) for key in RELATIVE_FIGURE_KEYS}
+            if relative is None
+            else relative
+        ),
     )
 
 
@@ -186,6 +203,7 @@ def _uncovered(reason=LIMITED):
         trough_date=None,
         recovery_date=None,
         max_days_under_water=None,
+        relative=None,
     )
 
 
@@ -204,7 +222,7 @@ def _risk_row(ticker, **windows):
 _DD_DATES = (date(2025, 10, 9), date(2025, 10, 10), date(2025, 10, 13))
 
 
-def _risk(*, mix=None, assets=None, risk_free=None, drawdown="default"):
+def _risk(*, mix=None, assets=None, risk_free=None, drawdown="default", benchmark=None):
     return BacktestRisk(
         label="buy & hold (drifting)",
         end_date=END,
@@ -212,6 +230,7 @@ def _risk(*, mix=None, assets=None, risk_free=None, drawdown="default"):
         limited_by=("AAPL",),
         risk_free=risk_free
         or RiskFreeStatus(available=True, reason=None, first_date=date(1999, 1, 4)),
+        benchmark=benchmark or BENCHMARK,
         mix=mix or _risk_row(None),
         assets=(
             tuple(assets)

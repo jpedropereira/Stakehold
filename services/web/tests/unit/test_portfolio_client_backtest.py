@@ -88,7 +88,9 @@ async def test_backtest_posts_the_mix_with_the_secret():
         return httpx.Response(200, json=_body())
 
     await _client(handler).backtest(
-        assets=[("VWCE.DE", Decimal("60")), ("IWDA.AS", Decimal("40.5"))], period="1M"
+        assets=[("VWCE.DE", Decimal("60")), ("IWDA.AS", Decimal("40.5"))],
+        period="1M",
+        benchmark="VWCE.DE",
     )
 
     # Weights travel as strings, so a Decimal never round-trips through a float.
@@ -101,13 +103,16 @@ async def test_backtest_posts_the_mix_with_the_secret():
                 {"ticker": "IWDA.AS", "weight": "40.5"},
             ],
             "period": "1M",
+            "benchmark": "VWCE.DE",
         },
         "secret": INTERNAL_SECRET,
     }
 
 
 async def test_backtest_parses_a_full_response():
-    result = await _ok(_body()).backtest(assets=[("VWCE.DE", Decimal("1"))], period="1M")
+    result = await _ok(_body()).backtest(
+        assets=[("VWCE.DE", Decimal("1"))], period="1M", benchmark="VWCE.DE"
+    )
 
     one_percent = BacktestPeriodReturn(
         start=date(2026, 9, 9),
@@ -159,7 +164,9 @@ async def test_backtest_keeps_an_asset_that_isnt_included_apart():
     )
 
     result = await _ok(body).backtest(
-        assets=[("VWCE.DE", Decimal("1")), ("NEW.L", Decimal("1"))], period="Max"
+        assets=[("VWCE.DE", Decimal("1")), ("NEW.L", Decimal("1"))],
+        period="Max",
+        benchmark="VWCE.DE",
     )
 
     assert [row.ticker for row in result.assets] == ["VWCE.DE"]
@@ -184,7 +191,9 @@ async def test_backtest_keeps_the_null_points_before_a_late_assets_max_line_star
         }
     )
 
-    result = await _ok(body).backtest(assets=[("IWDA.AS", Decimal("1"))], period="Max")
+    result = await _ok(body).backtest(
+        assets=[("IWDA.AS", Decimal("1"))], period="Max", benchmark="VWCE.DE"
+    )
 
     assert result.growth.assets["IWDA.AS"] == (None, Decimal("0"), Decimal("0.007"))
 
@@ -197,7 +206,9 @@ async def test_backtest_names_the_assets_the_mix_left_out():
     )
 
     result = await _ok(body).backtest(
-        assets=[("VWCE.DE", Decimal("1")), ("IWDA.AS", Decimal("1"))], period="1Y"
+        assets=[("VWCE.DE", Decimal("1")), ("IWDA.AS", Decimal("1"))],
+        period="1Y",
+        benchmark="VWCE.DE",
     )
 
     assert result.mix.periods["1Y"].left_out == ("IWDA.AS",)
@@ -215,7 +226,9 @@ async def test_backtest_with_no_asset_included():
         "risk": None,
     }
 
-    result = await _ok(body).backtest(assets=[("NOPE", Decimal("1"))], period="1Y")
+    result = await _ok(body).backtest(
+        assets=[("NOPE", Decimal("1"))], period="1Y", benchmark="VWCE.DE"
+    )
 
     assert result == Backtest(
         end_date=None,
@@ -232,7 +245,9 @@ async def test_backtest_rejected_mix_raises_invalid_portfolio_request_with_the_m
 
     with pytest.raises(InvalidPortfolioRequest, match="duplicate tickers in the mix: VWCE.DE"):
         await client.backtest(
-            assets=[("VWCE.DE", Decimal("1")), ("VWCE.DE", Decimal("1"))], period="1M"
+            assets=[("VWCE.DE", Decimal("1")), ("VWCE.DE", Decimal("1"))],
+            period="1M",
+            benchmark="VWCE.DE",
         )
 
 
@@ -242,7 +257,7 @@ async def test_backtest_any_other_error_status_raises_portfolio_unavailable(stat
     client = _client(lambda request: httpx.Response(status_code, json={"detail": "boom"}))
 
     with pytest.raises(PortfolioUnavailable):
-        await client.backtest(assets=[("VWCE.DE", Decimal("1"))], period="1M")
+        await client.backtest(assets=[("VWCE.DE", Decimal("1"))], period="1M", benchmark="VWCE.DE")
 
 
 async def test_backtest_unreachable_portfolio_raises_portfolio_unavailable():
@@ -250,14 +265,16 @@ async def test_backtest_unreachable_portfolio_raises_portfolio_unavailable():
         raise httpx.ConnectError("connection refused", request=request)
 
     with pytest.raises(PortfolioUnavailable):
-        await _client(handler).backtest(assets=[("VWCE.DE", Decimal("1"))], period="1M")
+        await _client(handler).backtest(
+            assets=[("VWCE.DE", Decimal("1"))], period="1M", benchmark="VWCE.DE"
+        )
 
 
 async def test_backtest_non_json_body_raises_portfolio_unavailable():
     client = _client(lambda request: httpx.Response(200, text="<html>oops</html>"))
 
     with pytest.raises(PortfolioUnavailable):
-        await client.backtest(assets=[("VWCE.DE", Decimal("1"))], period="1M")
+        await client.backtest(assets=[("VWCE.DE", Decimal("1"))], period="1M", benchmark="VWCE.DE")
 
 
 def _without(d, key):
@@ -315,4 +332,6 @@ def _period_without(key):
 )
 async def test_backtest_malformed_body_raises_portfolio_unavailable(body):
     with pytest.raises(PortfolioUnavailable):
-        await _ok(body).backtest(assets=[("VWCE.DE", Decimal("1"))], period="1M")
+        await _ok(body).backtest(
+            assets=[("VWCE.DE", Decimal("1"))], period="1M", benchmark="VWCE.DE"
+        )

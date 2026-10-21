@@ -19,7 +19,7 @@ from web.api.csrf import ensure_csrf_cookie
 from web.api.deps import get_portfolio_client, get_settings, get_templates, require_user
 from web.api.routes import _render
 from web.auth_client.base import AuthUser
-from web.portfolio_client.base import PortfolioClient
+from web.portfolio_client.base import DEFAULT_BENCHMARK, PortfolioClient
 from web.portfolio_client.errors import PortfolioClientError
 from web.risk_view import ExPostTable, build_ex_post_table
 from web.settings import Settings
@@ -38,7 +38,7 @@ async def _load_ex_post(
     nothing to measure yet."""
     logger.info("risk: loading the ex-post figures.")
     try:
-        risk = await portfolio_client.ex_post_risk(user_id=user_id)
+        risk = await portfolio_client.ex_post_risk(user_id=user_id, benchmark=DEFAULT_BENCHMARK)
     except PortfolioClientError:
         logger.exception("risk: portfolio service unavailable loading the ex-post figures.")
         return None, _UNAVAILABLE

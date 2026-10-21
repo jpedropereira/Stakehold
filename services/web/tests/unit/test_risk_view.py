@@ -7,8 +7,10 @@ from datetime import date
 
 import pytest
 from web.portfolio_client.base import (
+    RELATIVE_FIGURE_KEYS,
     RISK_FIGURE_KEYS,
     RISK_WINDOWS,
+    BenchmarkStatus,
     ExcludedHolding,
     ExPostRisk,
     ExPostWindow,
@@ -25,7 +27,10 @@ _STARTS = {
     "10Y": date(2016, 10, 16),
     "Max": date(2023, 1, 2),
 }
-_WEEKLY = {"volatility", "downside_deviation", "sharpe", "sortino"}
+BENCHMARK = BenchmarkStatus(
+    ticker="VWCE.DE", available=True, reason=None, first_date=date(2019, 7, 29)
+)
+_WEEKLY = {"volatility", "downside_deviation", "sharpe", "sortino", *RELATIVE_FIGURE_KEYS}
 
 
 def _figure(value=0.1, *, start=date(2025, 10, 16), name="cagr", **changes) -> RiskFigure:
@@ -45,18 +50,23 @@ def _figure(value=0.1, *, start=date(2025, 10, 16), name="cagr", **changes) -> R
     return replace(figure, **changes)
 
 
-def _window(label, covered=True, **figures) -> ExPostWindow:
+def _window(label, covered=True, relative=None, **figures) -> ExPostWindow:
     start = _STARTS[label]
     all_figures = {name: _figure(start=start, name=name) for name in RISK_FIGURE_KEYS}
+    all_relative = {name: _figure(start=start, name=name) for name in RELATIVE_FIGURE_KEYS}
     if not covered:
         reason = "insufficient history (portfolio history from 2023-01-02)"
-        all_figures = {
-            name: _figure(
-                None, start=start, name=name, flags=("insufficient_history",), reason=reason
-            )
-            for name in RISK_FIGURE_KEYS
-        }
+        all_figures, all_relative = (
+            {
+                name: _figure(
+                    None, start=start, name=name, flags=("insufficient_history",), reason=reason
+                )
+                for name in keys
+            }
+            for keys in (RISK_FIGURE_KEYS, RELATIVE_FIGURE_KEYS)
+        )
     all_figures.update(figures)
+    all_relative.update(relative or {})
     return ExPostWindow(
         label=label,
         start=start,
@@ -67,6 +77,7 @@ def _window(label, covered=True, **figures) -> ExPostWindow:
         trough_date=date(2026, 4, 7) if covered else None,
         recovery_date=None,
         max_days_under_water=256 if covered else None,
+        relative=all_relative,
     )
 
 
@@ -76,6 +87,7 @@ def _risk(windows=None, **changes) -> ExPostRisk:
         base_date=date(2023, 1, 2),
         end_date=END,
         rf_available=True,
+        benchmark=BENCHMARK,
         windows=(
             tuple(_window(w, covered=w not in ("5Y", "10Y")) for w in RISK_WINDOWS)
             if windows is None

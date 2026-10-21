@@ -62,6 +62,7 @@ class FakePortfolioClient:
         # Holdings and backtest calls, in order. The ticker list is counted apart, since it is
         # fetched alongside the holdings and its place among them isn't fixed.
         self.calls: list[tuple] = []
+        self.benchmarks: list[str] = []
 
     async def list_tickers(self):
         self.tickers_calls += 1
@@ -75,8 +76,9 @@ class FakePortfolioClient:
             raise self.list_holdings_error
         return self.holdings
 
-    async def backtest(self, *, assets, period):
+    async def backtest(self, *, assets, period, benchmark):
         self.calls.append(("backtest", tuple(assets), period))
+        self.benchmarks.append(benchmark)
         if self.backtest_error:
             raise self.backtest_error
         return self.backtest_result
