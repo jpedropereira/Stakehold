@@ -494,20 +494,34 @@ This shows how much of the "USD stock risk" is actually the dollar. Phase 5.
     The unmapped share is shown prominently.
   - ETCs: asset class "commodity". Currency is the underlying pricing currency (USD for
     gold/silver), not the listing currency.
+    - **Amended (RK-22):** which tickers are ETCs comes from a table in portfolio
+      (`look_through/instruments.py`), not from `asset_type`, which is wrong for some. It
+      lists EGLN.L, ISLN.L and SGLD.MI, the last missed by Phase 0. A direct stock that
+      isn't a constituent keeps its own listing currency in the currency view; only its
+      sector and country are "unknown".
 - **R16. Currency exposure ≠ trading currency.** A EUR-listed world ETF is mostly USD exposure.
   The currency view uses the constituents' `currency`, with the listing currency shown alongside.
   For a EUR investor this is the most important concentration view.
 - **Single-name overlap.** Also aggregate look-through by **issuer**: a stock held directly
   plus through IWDA is one exposure. For an investor holding single stocks beside a world ETF,
   the top look-through names are often the most actionable view.
+  - **Amended (RK-22):** an issuer is the constituent's name without its share-class suffix,
+    plus its location. Alphabet A and C are one issuer, and two companies named "EQT" in
+    different countries are two. A direct stock joins its constituent line by data-store's
+    `yfinance_ticker`.
 - **Currency-hedged share classes.** A EUR-hedged ETF's constituent currencies aren't its
   currency exposure. Until the hedge is known per holding, a hedged ETF goes into the currency
   view as "hedged: <ETF>" rather than through its constituents. **CHECK** whether any holding
   is hedged, and how that can be known (name suffix, a mapping).
+  - **Amended (RK-22):** checked on 2026-10-22: no holding is hedged. A hedged ticker is listed
+    by hand in portfolio's instrument table, since no source records the hedge.
 - **Constituent currency is a proxy.** It's the stock's trading currency, not where its revenue
   comes from. Label it "listing currency of holdings".
 - **Concentration metrics:** top-N weights, and the Herfindahl index (`Σ w²`) with its inverse as
   "effective number" per dimension.
+  - **Amended (RK-22):** both are over the known share only (no "unmapped" or "unknown"
+    bucket), rescaled to 1, with that share shown beside them. Otherwise an unmapped ETF would
+    count as one large single name.
 - **Snapshot date:** shown. Look-through is a point-in-time view only; there's no history of
   index composition.
 

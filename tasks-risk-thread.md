@@ -133,8 +133,8 @@ checked against the code, docs and dev DB:
 | RK-19 | [portfolio: candidate what-if](#rk-19-portfolio-candidate-what-if) | RK-17 | ready |
 | RK-20 | [web: what-if form](#rk-20-web-what-if-form) | RK-18, RK-19 | blocked |
 | RK-21 | [data-store: ETF holdings endpoint](#rk-21-data-store-etf-holdings-endpoint) | RK-1 | done |
-| RK-22 | [portfolio: look-through exposures](#rk-22-portfolio-look-through-exposures) | RK-21 | ready |
-| RK-23 | [web: concentration section](#rk-23-web-concentration-section) | RK-12, RK-22 | blocked |
+| RK-22 | [portfolio: look-through exposures](#rk-22-portfolio-look-through-exposures) | RK-21 | done |
+| RK-23 | [web: concentration section](#rk-23-web-concentration-section) | RK-12, RK-22 | ready |
 | RK-24 | [portfolio: rolling windows](#rk-24-portfolio-rolling-windows) | RK-11, RK-16, RK-17 | ready |
 | RK-25 | [web: rolling charts](#rk-25-web-rolling-charts) | RK-18, RK-24 | blocked |
 | RK-26 | [FX decomposition (portfolio and web)](#rk-26-fx-decomposition-portfolio-and-web) | RK-18 | blocked |
@@ -846,7 +846,7 @@ and `IWDA.AS` is an unrelated `tracked_tickers` row. Decisions (agreed):
 
 ### RK-22. portfolio: look-through exposures
 
-**Status:** ready
+**Status:** done
 
 §8 by currency, sector, country and asset class:
 - a direct stock looked up in the latest snapshot, otherwise "unknown"
@@ -868,9 +868,47 @@ Tests: hand-computed look-through. The unmapped share. A world ETF in EUR whose 
 mostly USD. A stock held directly and through IWDA, summed. A hedged ETF kept out of the
 constituent currencies.
 
+**As built:** `POST /risk/look-through` takes `{assets: [{ticker, weight}]}`, as ex-ante does,
+and returns each asset's kind and status, the snapshots, a coverage split, the five dimensions'
+buckets, and the top 25 names, each with its concentration. A new package, `look_through/`:
+`calculator.py` (pure, Decimal), `issuer.py`, `instruments.py` and `flows.py`. The client gained
+`list_etf_funds` and `get_latest_etf_holdings`. The deployed `etfs.yaml` already had
+`ticker: IWDA.AS`. No schema change. portfolio's `risk-flows.md` holds the reasoning.
+Decisions:
+- **The hedged CHECK:** no holding is hedged (checked on the dev data, 2026-10-22). How one is
+  known (agreed): a hand-kept `HEDGED` table in `instruments.py`, empty for now. A ticker in it
+  goes into the currency view as "hedged: <ticker>", and its other dimensions still look
+  through.
+- **ETCs come from the same table** (agreed), never from `asset_type`: EGLN.L, ISLN.L and
+  **SGLD.MI**, which Discovery missed (data-store tags it `etc` correctly). Each is "Commodity:
+  <gold|silver>" in USD, with country "n/a (commodity)". Two ETCs on one commodity are one name.
+- **An issuer is (name without share-class suffix, location)** (agreed). On IWDA's snapshot it
+  merges exactly the six real multi-line issuers (Alphabet, Lindt, …) and keeps the US and
+  Swedish "EQT" apart. A false merge needs one name in one country for two companies. None
+  occurs today; it's documented as the sharp edge.
+- **Herfindahl and effective N cover the known share only** (agreed), rescaled, with
+  `known_share` beside them. Each bucket has a kind: `known`, `unknown`, `unmapped` or `other`.
+- **Classification:** an ETC, then a fund with a snapshot (looked through), then a tracked
+  `etf`/`etc` (unmapped, with a `note` saying why), else a direct stock. A direct stock matches
+  a fund line on data-store's `yfinance_ticker`. Unmatched, its sector and country are
+  "unknown", but its currency is its own listing currency and its asset class "Equity".
+- **Snapshots are rescaled to 100%** (IWDA sums to 100.03), with the raw sum returned. Only
+  equity lines are names. Cash, FX, futures and money-market lines stay in the other dimensions.
+- **Two currency views** (R16): `currency`, labelled "listing currency of holdings", and
+  `trading_currency`, each held ticker's own.
+- **Failures:** a ticker-info failure leaves that asset out (the rest renormalised), and a
+  snapshot failure shows that fund unmapped. A failed fund list or tracked-ticker list is a 502,
+  because an ETF would otherwise be read as a stock.
+- **Against the dev data** (11 holdings): 0.17 s and 10 KB. 70.7% looked through, 13.1%
+  commodity, 12.8% unmapped (VWCE, IEMA, IUSN) and 3.4% direct. Constituent currency is 67.8%
+  USD, against 5.6% by trading currency. BRK-B and PEP merge with their IWDA lines, and gold is
+  the largest single name at 11.0%.
+- **For RK-23:** weights are fixed-point string fractions. `exposures` is null when nothing is
+  included. Show `coverage.unmapped` prominently, and use each dimension's `label`.
+
 ### RK-23. web: concentration section
 
-**Status:** blocked
+**Status:** ready
 
 Exposure tables or bars per dimension, with the unmapped share shown prominently, the
 listing-vs-exposure currency view, the top look-through single names, and the snapshot date.

@@ -2,7 +2,7 @@
 
 The "Ex-post risk" and "Labs backtest" sections of [`flows.md`](flows.md), moved here verbatim to
 keep that file under the repo's 64KB limit (RK-13). Later risk flows belong here too: ex-ante
-risk (RK-17) is, and the what-if and rolling windows will be. Their rows in the flow table, and the HTTP API's notes
+risk (RK-17) and look-through exposures (RK-22) are, and the what-if and rolling windows will be. Their rows in the flow table, and the HTTP API's notes
 on them, stay in `flows.md`. "Above" and "below" in the sections here refer to this file;
 references to sections that stayed in `flows.md` link to it.
 
@@ -149,6 +149,90 @@ summary of how many figures and cells are greyed. The job logs a start line and 
 **Size and time, synthetic worst case** (every asset on 16.8 years of weekdays, half in USD,
 Max): 12 assets give 25 KB in 0.18 s; 50 assets give 294 KB in 1.1 s, almost all of it the
 1,326 correlation cells.
+
+### Look-through exposures
+
+Where the mix is concentrated, by currency, sector, country and asset class, and by single name
+(RK-22; spec §8). `POST /risk/look-through` takes `{assets: [{ticker, weight}]}`, the mix
+ex-ante takes, for the same reason: web builds it from the holdings. The weights are
+normalised over the assets data-store knows. The response is
+
+    {"assets": [{"ticker", "status", "reason", "kind", "weight", "matched_in", "note"}, ...],
+     "exposures": {"snapshots": [{"ticker", "fund_key", "as_of_date", "n_lines",
+                                  "raw_weight_sum"}, ...],
+                   "coverage": {"look_through", "direct_matched", "direct_unmatched",
+                                "commodity", "unmapped"},
+                   "dimensions": {"currency" | "trading_currency" | "sector" | "country" |
+                                  "asset_class": {"label", "buckets": [{"label", "weight",
+                                  "kind"}, ...], "concentration": {...}}},
+                   "names": {"top": [{"issuer", "location", "weight", "sources"}, ...],
+                             "n_names", "concentration": {...}}}}
+
+with every weight a fixed-point string fraction of the mix, and `concentration` as
+`{top_shares: {1, 5, 10}, known_share, herfindahl, effective_n, reason}`.
+
+`look_through/flows.py` classifies each held ticker, in this order:
+1. **A commodity**, if it's in `look_through/instruments.py`'s `ETCS` (EGLN.L, SGLD.MI: gold;
+   ISLN.L: silver; all priced in USD). Its sector bucket is "Commodity: gold", its asset class
+   "Commodity", its country "n/a (commodity)", and its currency the commodity's.
+2. **Looked through**, if `GET /etf-holdings` names it as a fund with a snapshot. Today that's
+   only IWDA.AS.
+3. **Unmapped**, if `tracked_tickers` says `etf` or `etc` (VWCE, EM IMI and Small Cap today).
+   It gets one "unmapped: <ticker>" bucket in every dimension, and a `note` says why: "no
+   holdings data for this ETF", "holdings never ingested", "no holdings snapshot", "holdings
+   unavailable: couldn't reach data-store", or "ETC not in portfolio's instrument table".
+4. **A direct stock** otherwise. That includes tickers data-store prices only through a fund's
+   holdings, which aren't in `tracked_tickers` at all (BRK-B, PEP). It is matched to a
+   looked-through fund's line on that line's `yfinance_ticker` (data-store resolves it, so
+   portfolio keeps no copy of the rules). Unmatched (BABA, NVCR), its sector and country are
+   "unknown". Its currency is still its own listing currency, and its asset class "Equity".
+
+Agreed rules, and why:
+- **ETCs and hedged share classes come from a table in code, not from data-store.**
+  `asset_type` is wrong for EGLN.L and ISLN.L (`equity`), and nothing records an ETC's
+  underlying currency or a share class's hedge. *Rejected: a YAML config in portfolio*, a new
+  config surface for three rows; *and fixing it in data-store*, which needs a schema change.
+  `HEDGED` is empty: RK-22's CHECK found no hedged holding. A ticker added there goes into the
+  currency view as "hedged: <ticker>" (kind `other`) instead of through its constituents. Its
+  other dimensions still look through.
+- **An issuer is (normalised name, location)** (`look_through/issuer.py`). Trailing share-class
+  words ("CLASS A", "SUBORDINATE VOTING", "PREF", …) are stripped. On IWDA's 2026-08-30
+  snapshot this merges exactly the six real multi-line issuers (Alphabet, Atlas Copco, Epiroc,
+  Heico, Fox, Lindt). The location keeps apart the two different companies called "EQT" (US and
+  Sweden). **Sharp edge:** two different companies with one name in one country would merge.
+  None do today. The exact fix is an issuer id from the source. *Rejected: one name per
+  listing*, which splits Alphabet, the fifth-biggest name, in two; *and a hand-kept
+  share-class map*.
+- **Only equity lines are names.** A fund's cash, FX, futures and money-market lines stay in the
+  other dimensions under their own asset class, but aren't a company you're exposed to. Two
+  ETCs on one commodity are one name ("Commodity: gold"), because that is one exposure.
+- **A snapshot is rescaled to 100%.** IWDA's sums to 100.03. The raw sum is returned, and lines
+  with no weight are skipped.
+- **Every bucket has a kind**: `known`, `unknown`, `unmapped` or `other` (a real exposure that
+  isn't one of the dimension's categories). **Herfindahl and effective N are over the known
+  share only**, rescaled to 1, with `known_share` beside them. *Rejected: counting an unmapped
+  ETF as one bucket*, which would rank VWCE as the biggest single name. With nothing known they
+  are null, "no known exposure: every holding is unmapped or unknown". `top_shares` are shares
+  of the whole mix.
+- **Two currency views** (R16). `currency` is the constituents' listing currency, labelled
+  "listing currency of holdings": it's a proxy for exposure, not where revenue comes from.
+  `trading_currency` is each held ticker's own listing currency (data-store's `fx_currency`).
+- **`names.top` is the 25 heaviest known names**; the concentration and `n_names` cover all of
+  them.
+
+Statuses: `included`, `not_tracked` ("not tracked") or `failed` ("couldn't reach data-store",
+the exception logged). The remaining weights are renormalised. A failed snapshot fetch makes
+that fund unmapped, logged as an error, and the response still answers 200. A failed fund
+list or tracked-ticker list fails the request (502), because the classification would be
+wrong rather than partial. With nothing included, `exposures` is null.
+
+The flow logs the start (asset count), one line per fund snapshot (date, lines), and one line
+per asset (its kind, the fund it matched in, or why it's unmapped or left out). The job logs a
+done line with each coverage share, the snapshot and name counts, and how many were left out.
+
+**Against the dev data** (11 holdings, 2026-10-22): 0.17 s and 10 KB. The mix is 70.7% looked
+through, 13.1% commodity, 12.8% unmapped and 3.4% direct (1.3% of it matched). The
+constituents' currency is 67.8% USD against 5.6% USD by trading currency.
 
 ### Labs backtest
 

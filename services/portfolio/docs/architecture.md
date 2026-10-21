@@ -77,6 +77,7 @@ flowchart TD
         TFLOW["twr/flows.py<br/><i>portfolio TWR: rows + data-store fetch (RK-10)</i>"]
         RFLOW["risk/flows.py<br/><i>ex-post risk: TWR + risk-free fetch (RK-11);<br/>ex-ante risk of a mix (RK-17)</i>"]
         BFLOW["benchmark/flows.py<br/><i>the request's benchmark: fetch + wording (RK-13)</i>"]
+        LTFLOW["look_through/flows.py<br/><i>classify holdings + fund snapshots (RK-22)</i>"]
     end
 
     subgraph domain["Domain modules"]
@@ -92,13 +93,14 @@ flowchart TD
         EURR["eur_returns/<br/>calculator · fetch · eligibility<br/><i>daily EUR returns, shared with risk (RK-5);<br/>data-store fan-out (RK-10);<br/>risk path's wording (RK-17)</i>"]
         RISK["risk/<br/>types · weekly · quality · history<br/>windows · risk_free · var_mask<br/>measures · drawdown · tail · single_series<br/>covariance · listwise · ex_ante<br/>correlation · pairing · relative · ex_post<br/>ex_ante_report<br/><i>pure library (RK-6, RK-7, RK-15, RK-16, RK-11, RK-13, RK-17);<br/>first caller labs/risk (RK-8)</i>"]
         BENCH["benchmark/<br/>base<br/><i>the benchmark's return series and status (RK-13)</i>"]
+        LT["look_through/<br/>calculator · issuer · instruments<br/><i>exposures and concentration of a mix (RK-22)</i>"]
     end
 
     subgraph found["Foundation"]
         SET["settings.py"]
         DB["db/schema.sql"]
         ERR["errors.py<br/><i>PortfolioError and subclasses</i>"]
-        DSC["datastore_client/<br/>base · http_client<br/><i>get_fx_rate built (task 14);<br/>price/FX-series/ticker methods built (task 8);<br/>risk-free series built (RK-4)</i>"]
+        DSC["datastore_client/<br/>base · http_client<br/><i>get_fx_rate built (task 14);<br/>price/FX-series/ticker methods built (task 8);<br/>risk-free series built (RK-4);<br/>ETF funds and holdings (RK-22)</i>"]
     end
 
     SH[["shared<br/><i>workspace package: db.connection, logging_config</i>"]]
@@ -135,6 +137,10 @@ flowchart TD
     BENCH --> EURR
     BENCH --> RISK
     LABS --> BENCH
+    JOBS --> LTFLOW
+    LTFLOW --> LT
+    LTFLOW --> DSC
+    LT --> DSC
     HFLOW --> ACC
     HFLOW --> POS
     HFLOW --> RET
@@ -261,6 +267,25 @@ same way.
 - **It is never saved and never swapped.** It is a request parameter: saving a choice needs a
   settings schema, deferred. A window it doesn't cover is greyed with its first day rather than
   measured against another index (spec §5.6).
+
+**Look-through has a package of its own, `look_through/` (RK-22)**, rather than living in
+`risk/`. `risk/` is a float library of return statistics that imports nothing from portfolio;
+look-through is Decimal arithmetic on a mix's weights and data-store's holdings snapshots, with
+no returns at all. It keeps the three-file shape: `calculator.py` (pure), `flows.py` (the only
+module that calls data-store), and two small pure modules of its own rules, `issuer.py` and
+`instruments.py`.
+- **What data-store can't say is a table in code** (`instruments.py`): which tickers are ETCs,
+  with their commodity and its currency, and which share classes are currency-hedged.
+  `asset_type` is wrong for some ETCs, and no source records a hedge. *Rejected: a config file
+  for portfolio*, which has none and would gain a loader and a deploy step for three rows; *and
+  correcting data-store*, which needs a schema change. Changing a row is a reviewed code change
+  on purpose: a wrong row silently moves exposure between buckets.
+- **The calculator imports `datastore_client/base.py`'s `EtfHoldings`**, as `labs/` imports
+  `PricePoint`, rather than defining a look-alike the flow would copy into.
+- **The two list calls fail the request; the per-asset calls don't.** Without the fund list or
+  `asset_type`, an ETF would be read as a stock, a wrong answer rather than a partial one. A
+  failed ticker-info call leaves that asset out, and a failed snapshot shows that fund
+  unmapped. See [`risk-flows.md`](risk-flows.md)'s "Look-through exposures".
 
 **Built as of task 5** — `add_account`, `list_accounts`, `add_manual_transaction`. `pipeline.py`
 (not a per-flow `service.py`) is where the `with transaction(conn):` boundary lives, the role
