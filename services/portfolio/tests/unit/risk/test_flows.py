@@ -12,7 +12,14 @@ from datetime import date, timedelta
 from decimal import Decimal
 
 import pytest
-from portfolio.datastore_client.base import RiskFreePoint, RiskFreeSeries
+from portfolio.benchmark.base import BenchmarkStatus
+from portfolio.benchmark.flows import EPOCH
+from portfolio.datastore_client.base import (
+    PricePoint,
+    RiskFreePoint,
+    RiskFreeSeries,
+    TickerInfo,
+)
 from portfolio.errors import DataStoreApiError
 from portfolio.risk import flows
 from portfolio.risk.types import Flag
@@ -54,10 +61,31 @@ def _twr(n=530, *, gap_on=None, excluded=()):
     )
 
 
+EUR = TickerInfo(exists=True, has_returns=True, currency="EUR", fx_currency="EUR")
+# The default benchmark, from 2019-07-29 (as VWCE.DE is) to past the TWR's end. Its returns
+# cycle every 7 weekdays, so no two consecutive weeks compound to the same return.
+VWCE_FIRST = date(2019, 7, 29)
+_CYCLE = ["0.004", "-0.002", "0.001", "-0.003", "0.002", "0", "-0.001"]
+VWCE = [PricePoint(VWCE_FIRST, Decimal("100"), None)] + [
+    PricePoint(d, Decimal("100"), Decimal(_CYCLE[k % len(_CYCLE)]))
+    for k, d in enumerate(_weekdays(VWCE_FIRST, 700))
+]
+
+
 class _FakeDataStoreClient:
+    """The risk-free series, and VWCE.DE as the only tracked ticker."""
+
     def __init__(self, risk_free=RF):
         self._risk_free = risk_free
         self.calls = []
+        self.price_calls = []
+
+    def get_ticker_info(self, ticker):
+        return EUR if ticker == "VWCE.DE" else TickerInfo(exists=False, has_returns=False)
+
+    def get_price_series(self, ticker, start, end):
+        self.price_calls.append((ticker, start, end))
+        return VWCE
 
     def get_risk_free_series(self, start, end):
         self.calls.append((start, end))
@@ -184,6 +212,7 @@ def test_no_twr_points_means_no_windows_and_no_risk_free_fetch(monkeypatch, capl
     assert (result.base_date, result.end_date) == (None, None)
     assert result.excluded == twr.excluded
     assert client.calls == []
+    assert client.price_calls == []  # nor a benchmark fetch
     assert [r.getMessage() for r in caplog.records] == [
         "ex-post-risk: no TWR returns to measure, so no windows."
     ]
@@ -208,7 +237,8 @@ def test_each_window_logs_its_outcome(monkeypatch, caplog):
     )
     assert window_lines[4].startswith(f"ex-post-risk: window Max (2020-01-03..{end}): measured, ")
     assert messages[0] == (
-        f"ex-post-risk: measuring 530 day(s) of TWR from 2020-01-03 to {end}, 1 ticker(s)."
+        f"ex-post-risk: measuring 530 day(s) of TWR from 2020-01-03 to {end}, 1 ticker(s), "
+        "against VWCE.DE."
     )
 
 
@@ -223,4 +253,59 @@ def test_a_measured_window_counts_its_greyed_figures(monkeypatch, caplog):
     one_year = _by_label(result)["1Y"]
     assert Flag.INSUFFICIENT_HISTORY in one_year.tail.var_99.flags
     line = next(r.getMessage() for r in caplog.records if "window 1Y" in r.getMessage())
-    assert line.endswith(f"{one_year.drawdown.max_drawdown.n_obs} daily obs, 2 of 12 greyed.")
+    # 1Y holds 52 whole weeks: enough for tracking error and the information ratio, under beta's
+    # and correlation's 104.
+    assert one_year.relative.beta.reason == "insufficient history (have 52, need 104)"
+    assert line.endswith(
+        f"{one_year.drawdown.max_drawdown.n_obs} daily obs, 2 of 12 greyed; against VWCE.DE, "
+        "2 of 4 greyed."
+    )
+
+
+# --- the benchmark (RK-13) ---
+
+
+def test_the_default_benchmark_is_vwce_fetched_up_to_the_twr_end(monkeypatch):
+    _fake_twr(monkeypatch, _twr())
+    client = _FakeDataStoreClient()
+
+    result = flows.compute_ex_post(object(), client, user_id=uuid.uuid4())
+
+    assert client.price_calls == [("VWCE.DE", EPOCH, _weekdays(BASE, 530)[-1])]
+    assert result.benchmark == BenchmarkStatus("VWCE.DE", True, None, VWCE_FIRST)
+    assert _by_label(result)["Max"].relative.beta.value is not None
+
+
+def test_a_named_benchmark_is_the_one_measured_against(monkeypatch):
+    _fake_twr(monkeypatch, _twr())
+    client = _FakeDataStoreClient()
+
+    result = flows.compute_ex_post(object(), client, user_id=uuid.uuid4(), benchmark="IWDA.AS")
+
+    # IWDA.AS is untracked here; VWCE.DE is never fetched in its place.
+    assert client.price_calls == []
+    assert result.benchmark == BenchmarkStatus("IWDA.AS", False, "not tracked", None)
+
+
+def test_an_unknown_benchmark_is_reported_and_the_rest_still_measured(monkeypatch, caplog):
+    _fake_twr(monkeypatch, _twr())
+
+    with caplog.at_level(logging.INFO):
+        result = flows.compute_ex_post(
+            object(), _FakeDataStoreClient(), user_id=uuid.uuid4(), benchmark="NOPE"
+        )
+
+    max_window = _by_label(result)["Max"]
+    assert max_window.relative.beta.reason == "benchmark unavailable: not tracked"
+    assert max_window.weekly.volatility.value is not None
+    assert "ex-post-risk: benchmark NOPE: unavailable, not tracked." in caplog.messages
+
+
+def test_with_nothing_to_measure_the_benchmark_is_named_but_not_fetched(monkeypatch):
+    _fake_twr(monkeypatch, PortfolioTwr(base_date=None, points=[], n_gaps=0, excluded=[]))
+
+    result = flows.compute_ex_post(object(), _FakeDataStoreClient(), user_id=uuid.uuid4())
+
+    assert result.benchmark == BenchmarkStatus(
+        "VWCE.DE", False, "not fetched: nothing to measure", None
+    )

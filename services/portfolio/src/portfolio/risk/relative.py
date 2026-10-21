@@ -16,10 +16,9 @@ information ratio, on weekly EUR returns.
   series have a tracking error of exactly 0, a real value, and no information ratio. "Never
   varies" is tested as identical values, not a zero stdev, which floats can miss
   (`measures.sharpe`).
-- **Coverage is the caller's call, with this rule**: the benchmark covers a window when its
-  first day is on or before the window's start (`benchmark_covers`). A window it doesn't cover
-  is greyed with `benchmark_too_short`'s reason (`relative_greyed`), and **never measured
-  against another index** (§5.6: VWCE and IWDA track different indices, so swapping by window
+- **Coverage**: the benchmark covers a window when its first day is on or before the window's
+  start (`benchmark_covers`). `relative_to` applies it: a window it doesn't cover is greyed
+  with `benchmark_too_short`'s reason, and **never measured against another index** (§5.6: VWCE and IWDA track different indices, so swapping by window
   would make each window's beta answer a different question). A benchmark whose data ends
   before the window does is measured on the overlap, which its figures' windows show.
 """
@@ -36,6 +35,15 @@ from portfolio.risk.types import Flag, Frequency, ReturnSeries, RiskFigure, Wind
 _NO_BENCHMARK_VARIATION = "no variation in benchmark returns"
 _NO_VARIATION = "no variation in returns"
 _NO_TRACKING_DIFFERENCE = "no tracking difference"
+
+
+@dataclass(frozen=True)
+class BenchmarkReturns:
+    """The benchmark as the library takes it: its first day and its weekly EUR returns. The
+    caller builds it (benchmark/), since this package imports nothing from portfolio."""
+
+    first_date: date
+    weekly: ReturnSeries
 
 
 @dataclass(frozen=True)
@@ -80,6 +88,18 @@ def relative_figures(
         tracking_error=_figure(pair, Measure.TRACKING_ERROR, lambda: (tracking_error, None)),
         information_ratio=_figure(pair, Measure.INFORMATION_RATIO, information_ratio),
     )
+
+
+def relative_to(
+    weekly: ReturnSeries, window: Window, benchmark: BenchmarkReturns | str
+) -> RelativeFigures:
+    """`weekly` against `benchmark` over `window`, greyed when the benchmark doesn't cover it.
+    A str is the reason there is no benchmark, which greys every figure."""
+    if isinstance(benchmark, str):
+        return relative_greyed(window, benchmark)
+    if not benchmark_covers(benchmark.first_date, window):
+        return relative_greyed(window, benchmark_too_short(benchmark.first_date))
+    return relative_figures(weekly, benchmark.weekly, window)
 
 
 def relative_greyed(window: Window, reason: str) -> RelativeFigures:

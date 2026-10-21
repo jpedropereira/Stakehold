@@ -13,8 +13,11 @@ them to risk/ex_post.py.
 - **No risk-free data is not rf = 0.** When data-store has none stored (RK-4's None) or the call
   fails, the measures on excess returns are greyed and everything else is still measured. A
   failure logs its exception here; the response only says the rate was unavailable.
+- **The benchmark** (RK-13) is fetched by benchmark/flows.py over its whole history, up to the
+  TWR's last date, and handed to the library as its weekly returns. An unknown or unreachable
+  one greys the relative figures with its reason; everything else is still measured.
 - **Nothing to measure is said so.** With no TWR returns (no rows yet, or every holding left
-  out), there are no windows and no risk-free fetch.
+  out), there are no windows, no risk-free fetch and no benchmark fetch.
 """
 
 import logging
@@ -22,8 +25,17 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from uuid import UUID
 
+from portfolio.benchmark.base import (
+    DEFAULT_BENCHMARK,
+    BenchmarkStatus,
+    BenchmarkUnavailable,
+    status_of,
+    unavailable_reason,
+)
+from portfolio.benchmark.flows import fetch_benchmark
 from portfolio.datastore_client.base import DataStoreClient
 from portfolio.risk.ex_post import WindowFigures, ex_post_figures
+from portfolio.risk.relative import BenchmarkReturns
 from portfolio.risk.risk_free import RatePoint
 from portfolio.risk.types import Frequency, ReturnSeries, RiskFigure
 from portfolio.twr import flows as twr_flows
@@ -41,6 +53,7 @@ class ExPostRisk:
     base_date: date | None  # the TWR's level 1; None when there's nothing to measure
     end_date: date | None  # every window's end
     rf_available: bool
+    benchmark: BenchmarkStatus
     windows: tuple[WindowFigures, ...]
     excluded: list[ExcludedHolding]  # from the TWR: by ticker, their weight went to the rest
 
@@ -50,13 +63,16 @@ def compute_ex_post(
     datastore_client: DataStoreClient,
     *,
     user_id: UUID,
+    benchmark: str = DEFAULT_BENCHMARK,
     today: date | None = None,
 ) -> ExPostRisk:
-    """This user's ex-post risk figures over the standard windows. Read-only, like the TWR."""
+    """This user's ex-post risk figures over the standard windows, with relative figures against
+    `benchmark`. Read-only, like the TWR."""
     twr = twr_flows.compute_portfolio_twr(conn, datastore_client, user_id=user_id, today=today)
     if not twr.points:
         logger.info("ex-post-risk: no TWR returns to measure, so no windows.")
-        return ExPostRisk(LABEL, None, None, False, (), twr.excluded)
+        not_fetched = BenchmarkStatus(benchmark, False, "not fetched: nothing to measure", None)
+        return ExPostRisk(LABEL, None, None, False, not_fetched, (), twr.excluded)
 
     daily = ReturnSeries(
         Frequency.DAILY,
@@ -65,13 +81,21 @@ def compute_ex_post(
         tuple(None if p.twr_return is None else float(p.twr_return) for p in twr.points),
     )
     logger.info(
-        "ex-post-risk: measuring %d day(s) of TWR from %s to %s, %d ticker(s).",
+        "ex-post-risk: measuring %d day(s) of TWR from %s to %s, %d ticker(s), against %s.",
         len(daily.dates),
         daily.base_date,
         daily.last_date,
         len(twr.currencies),
+        benchmark,
     )
     rates, first_published = _risk_free(datastore_client, daily.base_date, daily.last_date)
+    fetched = fetch_benchmark(
+        datastore_client, benchmark, daily.last_date, context="ex-post-risk"
+    )
+    if isinstance(fetched, BenchmarkUnavailable):
+        against: BenchmarkReturns | str = unavailable_reason(fetched)
+    else:
+        against = BenchmarkReturns(fetched.first_date, fetched.weekly)
     windows = ex_post_figures(
         daily,
         traded_days={d.price_date for d in twr.days if d.traded},
@@ -79,17 +103,30 @@ def compute_ex_post(
         currencies=twr.currencies,
         rates=rates,
         first_published=first_published,
+        benchmark=against,
     )
     for window in windows:
-        _log_window(window)
+        _log_window(window, benchmark)
     return ExPostRisk(
         label=LABEL,
         base_date=daily.base_date,
         end_date=daily.last_date,
         rf_available=rates is not None,
+        benchmark=status_of(fetched),
         windows=windows,
         excluded=twr.excluded,
     )
+
+
+def relative_of(window: WindowFigures) -> dict[str, RiskFigure]:
+    """A window's figures against the benchmark, by their response name."""
+    relative = window.relative
+    return {
+        "beta": relative.beta,
+        "correlation": relative.correlation,
+        "tracking_error": relative.tracking_error,
+        "information_ratio": relative.information_ratio,
+    }
 
 
 def figures_of(window: WindowFigures) -> dict[str, RiskFigure]:
@@ -133,7 +170,7 @@ def _risk_free(
     return rates, series.first_date
 
 
-def _log_window(window: WindowFigures) -> None:
+def _log_window(window: WindowFigures, benchmark: str) -> None:
     span = f"{window.window.label} ({window.window.start}..{window.window.end})"
     if not window.covered:
         logger.info(
@@ -142,10 +179,16 @@ def _log_window(window: WindowFigures) -> None:
         return
     figures = figures_of(window).values()
     greyed = sum(1 for figure in figures if figure.value is None)
+    relative = relative_of(window).values()
+    relative_greyed = sum(1 for figure in relative if figure.value is None)
     logger.info(
-        "ex-post-risk: window %s: measured, %d daily obs, %d of %d greyed.",
+        "ex-post-risk: window %s: measured, %d daily obs, %d of %d greyed; against %s, %d of %d "
+        "greyed.",
         span,
         window.drawdown.max_drawdown.n_obs,
         greyed,
         len(figures),
+        benchmark,
+        relative_greyed,
+        len(relative),
     )

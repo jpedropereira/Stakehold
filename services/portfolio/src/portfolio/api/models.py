@@ -593,6 +593,8 @@ class ExPostWindowResponse(BaseModel):
     cvar_95: RiskFigureResponse
     var_99: RiskFigureResponse
     cvar_99: RiskFigureResponse
+    # Against the benchmark (RK-13): greyed like the rest when the window isn't covered.
+    relative: RelativeRiskResponse
 
 
 class ExPostRiskResponse(BaseModel):
@@ -603,6 +605,8 @@ class ExPostRiskResponse(BaseModel):
     end_date: date | None
     # false: downside deviation, Sharpe and Sortino are greyed, "no risk-free rate data".
     rf_available: bool
+    # Not fetched when there's nothing to measure: available false, "not fetched: ...".
+    benchmark: BenchmarkStatusResponse
     windows: list[ExPostWindowResponse]
     n_excluded: int
     # Held tickers left out of the TWR, by ticker; the rest were renormalised to 100%.

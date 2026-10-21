@@ -67,7 +67,7 @@ from datetime import date, timedelta
 from decimal import Decimal
 
 import numpy as np
-from portfolio.benchmark.base import Benchmark, BenchmarkUnavailable
+from portfolio.benchmark.base import Benchmark, BenchmarkUnavailable, unavailable_reason
 from portfolio.labs.calculator import (
     AssetInput,
     AssetSeries,
@@ -79,11 +79,10 @@ from portfolio.labs.calculator import (
     growth_line,
 )
 from portfolio.risk.relative import (
+    BenchmarkReturns,
     RelativeFigures,
-    benchmark_covers,
     benchmark_too_short,
-    relative_figures,
-    relative_greyed,
+    relative_to,
 )
 from portfolio.risk.risk_free import RatePoint
 from portfolio.risk.single_series import (
@@ -221,6 +220,10 @@ def compute_backtest_risk(
     limited_by = [s.ticker for s in series if s.dates[0] == common_start]
     overlap = common_start < end
     used = _usable(risk_free, common_start)
+    if isinstance(benchmark, BenchmarkUnavailable):
+        against: BenchmarkReturns | str = unavailable_reason(benchmark)
+    else:
+        against = BenchmarkReturns(benchmark.first_date, benchmark.weekly)
     windows = _windows(end, common_start if overlap else None)
     if overlap:
         uncovered = f"limited by {', '.join(limited_by)} (history from {common_start.isoformat()})"
@@ -235,7 +238,7 @@ def compute_backtest_risk(
                 out[label] = WindowRisk(start=start, end=end, covered=False, reason=uncovered)
             else:
                 daily, weekly = series_for(window)
-                relative = _relative(weekly, window, benchmark)
+                relative = relative_to(weekly, window, against)
                 out[label] = _measure(daily, weekly, window, used, days, nonsync, relative)
         return RowRisk(ticker=ticker, windows=out)
 
@@ -341,21 +344,11 @@ def _measure(
     )
 
 
-def _relative(
-    weekly: ReturnSeries, window: Window, benchmark: Benchmark | BenchmarkUnavailable
-) -> RelativeFigures:
-    if isinstance(benchmark, BenchmarkUnavailable):
-        return relative_greyed(window, _unavailable(benchmark))
-    if not benchmark_covers(benchmark.first_date, window):
-        return relative_greyed(window, benchmark_too_short(benchmark.first_date))
-    return relative_figures(weekly, benchmark.weekly, window)
-
-
 def _benchmark_status(
     benchmark: Benchmark | BenchmarkUnavailable, growth: GrowthSeries | None
 ) -> BenchmarkStatus:
     if isinstance(benchmark, BenchmarkUnavailable):
-        reason = _unavailable(benchmark)
+        reason = unavailable_reason(benchmark)
         return BenchmarkStatus(benchmark.ticker, False, benchmark.reason, None, None, reason)
     line, reason = None, None
     if growth is not None:
@@ -366,10 +359,6 @@ def _benchmark_status(
             asset = AssetInput(benchmark.ticker, Decimal("1"), fetched.prices, fetched.fx)
             line = growth_line(asset, growth.dates)
     return BenchmarkStatus(benchmark.ticker, True, None, benchmark.first_date, line, reason)
-
-
-def _unavailable(benchmark: BenchmarkUnavailable) -> str:
-    return f"benchmark unavailable: {benchmark.reason}"
 
 
 class _EurLevels:

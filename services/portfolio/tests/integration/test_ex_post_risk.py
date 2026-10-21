@@ -4,7 +4,8 @@ reads, and GET /risk/ex-post through a real create_app() -- the secret check and
 Seeds through the real CLI stack, exactly as test_portfolio_twr.py does (its helpers are
 repeated here: test modules can't import each other). The history is three days, so only the
 Max window is measured, and only its cumulative return has enough history for a value: the
-point is the wiring, not the figures, which the unit suite pins.
+point is the wiring, not the figures, which the unit suite pins. The benchmark (RK-13) is the
+same IWDA.AS series, named per request; the stub serves no other prices.
 """
 
 import os
@@ -16,6 +17,7 @@ import pytest
 from fastapi.testclient import TestClient
 from portfolio import cli, jobs
 from portfolio.api.app import create_app
+from portfolio.benchmark.base import BenchmarkStatus
 from portfolio.datastore_client.base import (
     PricePoint,
     RiskFreePoint,
@@ -136,7 +138,9 @@ def test_the_twr_from_two_accounts_is_measured_over_the_standard_windows(pg_conn
     owner = _seed()
 
     with pg_connect() as conn:
-        result = flows.compute_ex_post(conn, StubDataStoreClient(), user_id=owner, today=TODAY)
+        result = flows.compute_ex_post(
+            conn, StubDataStoreClient(), user_id=owner, benchmark="IWDA.AS", today=TODAY
+        )
 
     # The TWR is +5%, then -2%: a cumulative 1.05 x 0.98 - 1 = 0.029 over Max.
     assert (result.base_date, result.end_date, result.rf_available) == (D1, D3, True)
@@ -147,6 +151,20 @@ def test_the_twr_from_two_accounts_is_measured_over_the_standard_windows(pg_conn
     assert windows["Max"].drawdown.max_drawdown.reason == "insufficient history (have 2, need 200)"
     assert not windows["1Y"].covered
     assert result.excluded == []
+    assert result.benchmark == BenchmarkStatus("IWDA.AS", True, None, D1)
+    assert windows["Max"].relative.beta.reason == "insufficient history (have 0, need 104)"
+
+
+def test_the_default_benchmark_without_prices_is_reported_not_fatal(pg_connect):
+    owner = _seed()
+
+    with pg_connect() as conn:
+        result = flows.compute_ex_post(conn, StubDataStoreClient(), user_id=owner, today=TODAY)
+
+    assert result.benchmark == BenchmarkStatus("VWCE.DE", False, "no history yet", None)
+    windows = {w.window.label: w for w in result.windows}
+    assert windows["Max"].returns.cumulative_return.value == pytest.approx(0.029)
+    assert windows["Max"].relative.beta.reason == "benchmark unavailable: no history yet"
 
 
 @pytest.fixture
@@ -167,7 +185,9 @@ def test_get_risk_ex_post_serves_every_window(client):
     owner = _seed()
 
     response = client.get(
-        "/risk/ex-post", params={"user_id": str(owner)}, headers={"X-Internal-Secret": _SECRET}
+        "/risk/ex-post",
+        params={"user_id": str(owner), "benchmark": "IWDA.AS"},
+        headers={"X-Internal-Secret": _SECRET},
     )
 
     assert response.status_code == 200
@@ -193,6 +213,14 @@ def test_get_risk_ex_post_serves_every_window(client):
         "standard_error": None,
     }
     assert (body["n_excluded"], body["excluded"]) == (0, [])
+    assert body["benchmark"] == {
+        "ticker": "IWDA.AS",
+        "available": True,
+        "reason": None,
+        "first_date": "2026-01-05",
+    }
+    assert max_window["relative"]["beta"]["reason"] == "insufficient history (have 0, need 104)"
+    assert max_window["relative"]["tracking_error"]["frequency"] == "weekly"
 
 
 def test_get_risk_ex_post_for_a_user_with_no_accounts_has_no_windows(client):
@@ -210,6 +238,12 @@ def test_get_risk_ex_post_for_a_user_with_no_accounts_has_no_windows(client):
         "base_date": None,
         "end_date": None,
         "rf_available": False,
+        "benchmark": {
+            "ticker": "VWCE.DE",
+            "available": False,
+            "reason": "not fetched: nothing to measure",
+            "first_date": None,
+        },
         "windows": [],
         "n_excluded": 0,
         "excluded": [],

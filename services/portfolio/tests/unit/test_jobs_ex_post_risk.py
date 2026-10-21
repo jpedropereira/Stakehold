@@ -10,8 +10,10 @@ from datetime import date
 import pytest
 from portfolio import jobs
 from portfolio.api.models import ExPostRiskResponse
+from portfolio.benchmark.base import BenchmarkStatus
 from portfolio.risk.ex_post import WindowFigures
 from portfolio.risk.flows import LABEL, ExPostRisk
+from portfolio.risk.relative import RelativeFigures, relative_greyed
 from portfolio.risk.single_series import (
     DrawdownFigures,
     ReturnFigures,
@@ -23,6 +25,8 @@ from portfolio.settings import SettingsError
 from portfolio.twr.flows import ExcludedHolding
 
 BASE = date(2024, 1, 5)
+VWCE = BenchmarkStatus("VWCE.DE", True, None, date(2019, 7, 29))
+NOT_FETCHED = BenchmarkStatus("VWCE.DE", False, "not fetched: nothing to measure", None)
 END = date(2026, 1, 9)
 ONE_YEAR = Window("1Y", date(2025, 1, 9), END)
 THREE_YEARS = Window("3Y", date(2023, 1, 9), END)
@@ -76,6 +80,14 @@ def _window(window, covered=True):
         drawdown = DrawdownFigures(daily, BASE, END, None, 30, ((BASE, 0.0), (END, -0.1)))
         tail = TailFigures(daily, daily, var_99, var_99)
         weekly_figures = WeeklyFigures(weekly, weekly, sharpe, weekly)
+        beta = _figure(
+            window,
+            None,
+            Frequency.WEEKLY,
+            flags={Flag.INSUFFICIENT_HISTORY},
+            reason="insufficient history (have 52, need 104)",
+        )
+        relative = RelativeFigures(beta, beta, weekly, weekly)
     else:
         reason = "insufficient history (portfolio history from 2024-01-05)"
         daily = _figure(window, None, reason=reason, flags={Flag.INSUFFICIENT_HISTORY})
@@ -85,6 +97,7 @@ def _window(window, covered=True):
         drawdown = DrawdownFigures(daily, None, None, None, None, ())
         tail = TailFigures(daily, daily, daily, daily)
         weekly_figures = WeeklyFigures(weekly, weekly, weekly, weekly)
+        relative = relative_greyed(window, reason)
     return WindowFigures(
         window=window,
         covered=covered,
@@ -93,6 +106,7 @@ def _window(window, covered=True):
         drawdown=drawdown,
         calmar=daily,
         tail=tail,
+        relative=relative,
     )
 
 
@@ -101,6 +115,7 @@ _RISK = ExPostRisk(
     base_date=BASE,
     end_date=END,
     rf_available=True,
+    benchmark=VWCE,
     windows=(_window(ONE_YEAR), _window(THREE_YEARS, covered=False)),
     excluded=[ExcludedHolding("U", "no_fx_rate", "no FX series for HKD")],
 )
@@ -163,9 +178,29 @@ def test_get_ex_post_risk_returns_builtins_the_response_model_accepts(monkeypatc
     assert one_year["var_99"]["reason"] == "insufficient history (have 260, need 500)"
     assert three_years["covered"] is False
     assert three_years["volatility"]["flags"] == ["insufficient_history"]
+    # RK-13: the benchmark, and each window's figures against it.
+    assert result["benchmark"] == {
+        "ticker": "VWCE.DE",
+        "available": True,
+        "reason": None,
+        "first_date": date(2019, 7, 29),
+    }
+    assert list(one_year["relative"]) == [
+        "beta",
+        "correlation",
+        "tracking_error",
+        "information_ratio",
+    ]
+    assert one_year["relative"]["beta"]["reason"] == "insufficient history (have 52, need 104)"
+    assert one_year["relative"]["beta"]["flags"] == ["insufficient_history"]
+    assert one_year["relative"]["tracking_error"]["frequency"] == "weekly"
+    assert three_years["relative"]["beta"]["reason"] == (
+        "insufficient history (portfolio history from 2024-01-05)"
+    )
     ExPostRiskResponse.model_validate(result)
     assert captured["conn"] is fake_conn
     assert captured["user_id"] == user_id
+    assert captured["benchmark"] == "VWCE.DE"
     assert captured["client"] is not None
     assert fake_conn.closed is True
 
@@ -191,14 +226,40 @@ def test_get_ex_post_risk_logs_a_start_line_and_a_summary(monkeypatch, fake_conn
     assert f"get-ex-post-risk: measuring ex-post risk for user {user_id}." in caplog.text
     assert (
         "get-ex-post-risk: done, 2024-01-05 to 2026-01-09: 1 window(s) measured, 1 greyed for "
-        "short history, risk-free rate available, 1 holding(s) left out." in caplog.text
+        "short history, risk-free rate available, benchmark VWCE.DE (from 2019-07-29), 1 "
+        "holding(s) left out." in caplog.text
     )
+
+
+def test_get_ex_post_risk_passes_the_benchmark_and_says_when_it_is_unavailable(
+    monkeypatch, fake_conn, caplog
+):
+    captured = {}
+    unavailable = ExPostRisk(
+        **{
+            **_RISK.__dict__,
+            "benchmark": BenchmarkStatus("NOPE", False, "not tracked", None),
+        }
+    )
+
+    def fake_compute(conn, client, **kw):
+        captured.update(kw)
+        return unavailable
+
+    monkeypatch.setattr(jobs.risk_flows, "compute_ex_post", fake_compute)
+
+    with caplog.at_level(logging.INFO, logger="portfolio.jobs"):
+        result = jobs.get_ex_post_risk(user_id=uuid.uuid4(), benchmark="NOPE")
+
+    assert captured["benchmark"] == "NOPE"
+    assert result["benchmark"]["available"] is False
+    assert "benchmark NOPE unavailable (not tracked)" in caplog.text
 
 
 def test_get_ex_post_risk_says_when_the_risk_free_rate_was_unavailable(
     monkeypatch, fake_conn, caplog
 ):
-    no_rf = ExPostRisk(LABEL, BASE, END, False, (_window(ONE_YEAR),), [])
+    no_rf = ExPostRisk(LABEL, BASE, END, False, VWCE, (_window(ONE_YEAR),), [])
     monkeypatch.setattr(jobs.risk_flows, "compute_ex_post", lambda c, d, **kw: no_rf)
 
     with caplog.at_level(logging.INFO, logger="portfolio.jobs"):
@@ -206,14 +267,15 @@ def test_get_ex_post_risk_says_when_the_risk_free_rate_was_unavailable(
 
     assert (
         "get-ex-post-risk: done, 2024-01-05 to 2026-01-09: 1 window(s) measured, 0 greyed for "
-        "short history, risk-free rate unavailable, 0 holding(s) left out." in caplog.text
+        "short history, risk-free rate unavailable, benchmark VWCE.DE (from 2019-07-29), 0 "
+        "holding(s) left out." in caplog.text
     )
 
 
 def test_get_ex_post_risk_says_plainly_when_there_is_nothing_to_measure(
     monkeypatch, fake_conn, caplog
 ):
-    empty = ExPostRisk(LABEL, None, None, False, (), [])
+    empty = ExPostRisk(LABEL, None, None, False, NOT_FETCHED, (), [])
     monkeypatch.setattr(jobs.risk_flows, "compute_ex_post", lambda c, d, **kw: empty)
 
     with caplog.at_level(logging.INFO, logger="portfolio.jobs"):
@@ -231,7 +293,13 @@ def test_get_ex_post_risk_warns_when_holdings_exist_but_none_could_be_measured(
     monkeypatch, fake_conn, caplog
 ):
     none_left = ExPostRisk(
-        LABEL, None, None, False, (), [ExcludedHolding("U", "failed", "couldn't reach data-store")]
+        LABEL,
+        None,
+        None,
+        False,
+        NOT_FETCHED,
+        (),
+        [ExcludedHolding("U", "failed", "couldn't reach data-store")],
     )
     monkeypatch.setattr(jobs.risk_flows, "compute_ex_post", lambda c, d, **kw: none_left)
 

@@ -19,11 +19,13 @@ from datetime import date, timedelta
 
 import pytest
 from portfolio.risk.relative import (
+    BenchmarkReturns,
     RelativeFigures,
     benchmark_covers,
     benchmark_too_short,
     relative_figures,
     relative_greyed,
+    relative_to,
 )
 from portfolio.risk.types import Flag, Frequency, ReturnSeries, Window
 
@@ -194,4 +196,24 @@ def test_the_benchmark_covers_a_window_starting_on_or_after_its_first_day():
 def test_too_short_names_the_benchmark_s_first_day():
     assert (
         benchmark_too_short(date(2019, 7, 29)) == "benchmark history too short (from 2019-07-29)"
+    )
+
+
+def test_relative_to_measures_a_covered_window_and_greys_the_rest():
+    n = 104
+    portfolio, benchmark = _pair(n)
+    window = _window(n)
+
+    covering = BenchmarkReturns(F0, benchmark)
+    assert relative_to(portfolio, window, covering) == relative_figures(
+        portfolio, benchmark, window
+    )
+
+    late = BenchmarkReturns(F0 + WEEK, benchmark)
+    assert relative_to(portfolio, window, late) == relative_greyed(
+        window, "benchmark history too short (from 2020-01-10)"
+    )
+
+    assert relative_to(portfolio, window, "benchmark unavailable: not tracked") == (
+        relative_greyed(window, "benchmark unavailable: not tracked")
     )

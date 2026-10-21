@@ -32,6 +32,28 @@ class BenchmarkUnavailable:
     reason: str
 
 
+@dataclass(frozen=True)
+class BenchmarkStatus:
+    """What a response says about its benchmark (spec §5.6: the benchmark and its start date are
+    shown wherever relative measures appear)."""
+
+    ticker: str
+    available: bool
+    reason: str | None  # why not, when it isn't
+    first_date: date | None  # its first day, when it was fetched
+
+
+def status_of(benchmark: Benchmark | BenchmarkUnavailable) -> BenchmarkStatus:
+    if isinstance(benchmark, BenchmarkUnavailable):
+        return BenchmarkStatus(benchmark.ticker, False, benchmark.reason, None)
+    return BenchmarkStatus(benchmark.ticker, True, None, benchmark.first_date)
+
+
+def unavailable_reason(benchmark: BenchmarkUnavailable) -> str:
+    """What greys the relative figures when there is no benchmark to measure against."""
+    return f"benchmark unavailable: {benchmark.reason}"
+
+
 def build_benchmark(ticker: str, fetched: Fetched) -> Benchmark | Ineligible:
     returns = eur_daily_returns(fetched.prices, fetched.fx)
     if isinstance(returns, Ineligible):
