@@ -89,6 +89,24 @@ def test_get_backtest_returns_builtins_the_response_model_accepts(fake_client):
     assert response.risk.common_start == date(2025, 1, 2)
     assert [row.ticker for row in response.risk.assets] == ["A"]
     assert response.risk.mix.windows["Max"].covered is True
+    # RK-13: the default benchmark, untracked here, greys the relative figures with its reason.
+    assert response.risk.benchmark.ticker == "VWCE.DE"
+    assert response.risk.benchmark.available is False
+    beta = response.risk.mix.windows["Max"].relative.beta
+    assert beta.reason == "benchmark unavailable: not tracked"
+
+
+def test_get_backtest_measures_against_the_named_benchmark(fake_client):
+    result = jobs.get_backtest(assets=[("A", Decimal("1"))], period=Period.MAX, benchmark="A")
+
+    benchmark = BacktestResponse.model_validate(result).risk.benchmark
+    assert (benchmark.ticker, benchmark.available, benchmark.first_date) == (
+        "A",
+        True,
+        date(2025, 1, 2),
+    )
+    flags = result["risk"]["mix"]["windows"]["Max"]["relative"]["beta"]["flags"]
+    assert isinstance(flags, list)
 
 
 def test_get_backtest_sorts_each_figures_flags(fake_client):
@@ -104,7 +122,7 @@ def test_get_backtest_logs_a_start_line_and_a_summary(fake_client, caplog):
         jobs.get_backtest(assets=[("A", Decimal("1")), ("X", Decimal("1"))], period=Period.Y1)
 
     messages = [r.getMessage() for r in caplog.records]
-    assert any("2 asset(s)" in m and "1Y" in m for m in messages)
+    assert any("2 asset(s)" in m and "1Y" in m and "against VWCE.DE" in m for m in messages)
     assert any("1 included" in m and "1 left out" in m and "2026-01-07" in m for m in messages)
 
 

@@ -28,6 +28,8 @@ class Measure(StrEnum):
     CORRELATION = "correlation"
     BETA = "beta"
     COVARIANCE = "covariance"
+    TRACKING_ERROR = "tracking_error"
+    INFORMATION_RATIO = "information_ratio"
 
 
 @dataclass(frozen=True)
@@ -50,6 +52,10 @@ _MINIMUMS = {
     Measure.CORRELATION: _Minimum(Frequency.WEEKLY, min_obs=104),
     Measure.BETA: _Minimum(Frequency.WEEKLY, min_obs=104),
     Measure.COVARIANCE: _Minimum(Frequency.WEEKLY, min_obs=104),
+    # §4.5 doesn't list these two. Agreed for RK-13: tracking error is the volatility of the
+    # active return and the information ratio its Sharpe, so they take those minimums.
+    Measure.TRACKING_ERROR: _Minimum(Frequency.WEEKLY, min_obs=52),
+    Measure.INFORMATION_RATIO: _Minimum(Frequency.WEEKLY, min_obs=52),
 }
 
 _SHORT_WINDOW_YEARS = 3

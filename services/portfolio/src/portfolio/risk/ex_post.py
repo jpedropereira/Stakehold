@@ -15,6 +15,10 @@ invested positions, over the standard windows. Pure, like the rest of the librar
   the previous date traded on it (`traded_days`, from twr/'s `TwrDay`). The holdings change over
   time, so one fixed set of assets, as `var_mask.var_days` takes for a mix, would drop days
   for tickers not even held then. The mask reaches `tail_figures` as a single set of days.
+- **Relative to the benchmark (RK-13, §5.6)**: beta, correlation, tracking error and information
+  ratio of the weekly TWR against the benchmark's weekly returns, through
+  `relative.relative_to`. A window the benchmark doesn't cover is greyed with its first day, and
+  a window the portfolio doesn't cover with the same reason as every other figure in it.
 - **`nonsync_daily`** (§4.3, §5.5) is set unless the tickers held inside the window are exactly
   one EUR ticker: a non-EUR ticker mixes local and FX timings, and two tickers mix two closes.
 """
@@ -25,6 +29,12 @@ from dataclasses import dataclass
 from datetime import date
 
 from portfolio.risk.quality import WEEKLY_Q
+from portfolio.risk.relative import (
+    BenchmarkReturns,
+    RelativeFigures,
+    relative_greyed,
+    relative_to,
+)
 from portfolio.risk.risk_free import RatePoint
 from portfolio.risk.single_series import (
     DrawdownFigures,
@@ -55,6 +65,7 @@ class WindowFigures:
     drawdown: DrawdownFigures
     calmar: RiskFigure
     tail: TailFigures
+    relative: RelativeFigures
 
 
 def ex_post_figures(
@@ -65,16 +76,28 @@ def ex_post_figures(
     currencies: Mapping[str, str],
     rates: Sequence[RatePoint] | None,
     first_published: date | None,
+    benchmark: BenchmarkReturns | str,
 ) -> tuple[WindowFigures, ...]:
     """`daily` is the TWR as returns. `held` maps each of its dates to the tickers weighted at
     the previous date, and `currencies` each ticker to its FX currency. `rates` and
-    `first_published` are None together when there's no risk-free series."""
+    `first_published` are None together when there's no risk-free series. `benchmark` is the
+    benchmark's returns, or the reason there are none."""
     if not daily.dates:
         raise ValueError("ex-post figures need at least one return")
     weekly = to_weekly(daily)
     return tuple(
         (
-            _measured(daily, weekly, window, traded_days, held, currencies, rates, first_published)
+            _measured(
+                daily,
+                weekly,
+                window,
+                traded_days,
+                held,
+                currencies,
+                rates,
+                first_published,
+                benchmark,
+            )
             if covers(daily, window)
             else _uncovered(window, daily.base_date)
         )
@@ -82,7 +105,9 @@ def ex_post_figures(
     )
 
 
-def _measured(daily, weekly, window, traded_days, held, currencies, rates, first_published):
+def _measured(
+    daily, weekly, window, traded_days, held, currencies, rates, first_published, benchmark
+):
     returns = return_figures(daily, window)
     drawdown = drawdown_figures(daily, window)
     tickers = set().union(*(held[d] for d in daily.dates if window.start < d <= window.end))
@@ -99,6 +124,7 @@ def _measured(daily, weekly, window, traded_days, held, currencies, rates, first
         drawdown=drawdown,
         calmar=calmar_figure(returns.cagr, drawdown.max_drawdown),
         tail=tail_figures(daily, window, [traded_days], nonsync=nonsync),
+        relative=relative_to(weekly, window, benchmark),
     )
 
 
@@ -128,4 +154,5 @@ def _uncovered(window: Window, base_date: date) -> WindowFigures:
         drawdown=DrawdownFigures(daily, None, None, None, None, ()),
         calmar=daily,
         tail=TailFigures(daily, daily, daily, daily),
+        relative=relative_greyed(window, reason),
     )

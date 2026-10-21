@@ -65,6 +65,7 @@ from portfolio.api.models import (
     UnmappedInstrumentResponse,
 )
 from portfolio.api.security import get_settings, require_internal_secret
+from portfolio.benchmark.base import DEFAULT_BENCHMARK
 from portfolio.run_result import STATUS_OK
 from portfolio.settings import Settings
 from shared.db.connection import get_connection
@@ -512,9 +513,10 @@ def get_portfolio_twr(
 @router.get("/risk/ex-post", response_model=ExPostRiskResponse)
 def get_ex_post_risk(
     user_id: UUID = Query(...),
+    benchmark: str = Query(default=DEFAULT_BENCHMARK, min_length=1, max_length=20),
     settings: Settings = Depends(get_settings),
 ) -> dict:
-    return jobs.get_ex_post_risk(user_id=user_id, settings=settings)
+    return jobs.get_ex_post_risk(user_id=user_id, benchmark=benchmark, settings=settings)
 
 
 @router.post("/returns/rebuild", response_model=RebuildReturnsResponse)
@@ -540,5 +542,6 @@ def backtest(body: BacktestRequest, settings: Settings = Depends(get_settings)) 
     return jobs.get_backtest(
         assets=[(asset.ticker, asset.weight) for asset in body.assets],
         period=body.period,
+        benchmark=body.benchmark,
         settings=settings,
     )

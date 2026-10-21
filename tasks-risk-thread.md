@@ -124,11 +124,11 @@ checked against the code, docs and dev DB:
 | RK-10 | [portfolio: daily TWR of invested positions](#rk-10-portfolio-daily-twr-of-invested-positions) | RK-5 | done |
 | RK-11 | [portfolio: ex-post risk endpoint](#rk-11-portfolio-ex-post-risk-endpoint) | RK-4, RK-7, RK-10 | done |
 | RK-12 | [web: `/risk` page with the ex-post summary](#rk-12-web-risk-page-with-the-ex-post-summary) | RK-11 | done |
-| RK-13 | [portfolio: benchmark and relative measures](#rk-13-portfolio-benchmark-and-relative-measures) | RK-8, RK-11 | ready |
-| RK-14 | [web: benchmark selector, relative measures, benchmark line](#rk-14-web-benchmark-selector-relative-measures-benchmark-line) | RK-9, RK-12, RK-13 | blocked |
+| RK-13 | [portfolio: benchmark and relative measures](#rk-13-portfolio-benchmark-and-relative-measures) | RK-8, RK-11 | done |
+| RK-14 | [web: benchmark selector, relative measures, benchmark line](#rk-14-web-benchmark-selector-relative-measures-benchmark-line) | RK-9, RK-12, RK-13 | ready |
 | RK-15 | [portfolio: ex-ante covariance and risk decomposition](#rk-15-portfolio-ex-ante-covariance-and-risk-decomposition) | RK-6, RK-7 | done |
 | RK-16 | [portfolio: correlation matrix](#rk-16-portfolio-correlation-matrix) | RK-6 | done |
-| RK-17 | [portfolio: ex-ante endpoint](#rk-17-portfolio-ex-ante-endpoint) | RK-4, RK-5, RK-13, RK-15, RK-16 | blocked |
+| RK-17 | [portfolio: ex-ante endpoint](#rk-17-portfolio-ex-ante-endpoint) | RK-4, RK-5, RK-13, RK-15, RK-16 | ready |
 | RK-18 | [web: ex-ante summary, decomposition and heatmap](#rk-18-web-ex-ante-summary-decomposition-and-heatmap) | RK-12, RK-17 | blocked |
 | RK-19 | [portfolio: candidate what-if](#rk-19-portfolio-candidate-what-if) | RK-17 | blocked |
 | RK-20 | [web: what-if form](#rk-20-web-what-if-form) | RK-18, RK-19 | blocked |
@@ -589,7 +589,7 @@ Decisions (agreed):
 
 ### RK-13. portfolio: benchmark and relative measures
 
-**Status:** ready
+**Status:** done
 
 - Library: weekly beta, correlation, tracking error and information ratio (§5.6).
 - A `benchmark` parameter on the backtest and ex-post endpoints, defaulting to VWCE.DE. One
@@ -605,9 +605,40 @@ Tests: beta/correlation on a constructed series with a known answer. VWCE.DE on 
 greyed with its start date, not swapped for IWDA.AS. An unknown benchmark ticker reported, not
 fatal.
 
+**As built:** `risk/relative.py` (the four measures), on the overlap `risk/pairing.py` builds
+(extracted from `correlation.py`'s pairwise cell first, so both use the same weeks). A new
+package, `benchmark/`, fetches the benchmark (`flows.py`) and turns it into return series
+(`base.py`), for both endpoints. `POST /labs/backtest` takes `"benchmark"` and
+`GET /risk/ex-post` takes `?benchmark=`, both defaulting to `VWCE.DE`. portfolio's `flows.md`
+was split first: the risk and Labs flows are now `docs/risk-flows.md`. Decisions:
+- **A longer All-World history: VWRL** (agreed), opt-in, no splice. The CHECK found `VWRL.AS`,
+  EUR, from 2012-05-22, distributing, so its total return compares with VWCE's. Tracking it is
+  a data-store onboarding step with no code.
+- **Tracking error and the information ratio need 52 weeks** (agreed), like volatility and
+  Sharpe. Beta and correlation keep §4.5's 104. The spec's §4.5 table has an "Amended (RK-13)"
+  note. A 1Y window (52 or 53 whole weeks) therefore never has a beta.
+- **Labs measures the mix and each asset** (agreed), each from its own weekly series. The
+  benchmark isn't a row, so it doesn't move the common window.
+- **The benchmark's growth line is null when it starts after the growth period** (agreed), with
+  `growth_reason`. It is priced as an asset's line is (`labs/calculator.growth_line`), so it
+  matches the mix's.
+- **The benchmark is fetched over its whole history**, so the first date a greyed window names is
+  its own. It is fetched separately even when it's also in a Labs mix: two more calls, and one
+  code path.
+- **An unavailable benchmark** (not tracked, no history, no FX series, or a failed call) greys
+  every relative figure with "benchmark unavailable: <reason>", and the response still answers
+  200. The response names the benchmark: `{ticker, available, reason, first_date}`.
+- **Undefined figures are greyed**: a constant benchmark greys beta and correlation, a constant
+  series greys correlation (its beta is a real 0), and identical series show a tracking error of
+  0 and grey the information ratio.
+- **For RK-14:** the relative figures are each window's `relative`, and the line is
+  `risk.benchmark.growth`, one value per `growth.dates` entry, as fixed-point strings like the
+  other lines. Ex-post's `relative` is never null: an uncovered window's figures are greyed like
+  its others. Labs' is null on an uncovered window, like its other figures.
+
 ### RK-14. web: benchmark selector, relative measures, benchmark line
 
-**Status:** blocked
+**Status:** ready
 
 - A benchmark field (a datalist of tickers) on `/labs` and `/risk`, kept in the query string.
 - Relative-measure rows.
@@ -683,7 +714,7 @@ in a constructed FX fixture.
 
 ### RK-17. portfolio: ex-ante endpoint
 
-**Status:** blocked
+**Status:** ready
 
 `POST /risk/ex-ante` takes `{assets, window, benchmark, exclude?}`. It returns σ_p, the
 decomposition table, the constant-weight measures, and the correlation matrix over the holdings

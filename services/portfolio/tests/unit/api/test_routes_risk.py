@@ -3,6 +3,7 @@ stubbed; it's tested in tests/unit/test_jobs_ex_post_risk.py."""
 
 import uuid
 
+import pytest
 from portfolio import jobs
 
 
@@ -41,6 +42,12 @@ _EX_POST = {
     "base_date": "2024-01-05",
     "end_date": "2026-01-09",
     "rf_available": True,
+    "benchmark": {
+        "ticker": "VWCE.DE",
+        "available": True,
+        "reason": None,
+        "first_date": "2019-07-29",
+    },
     "windows": [
         {
             "label": "1Y",
@@ -54,6 +61,14 @@ _EX_POST = {
             **{name: _figure(0.1, flags=["nonsync_daily"]) for name in _NAMES},
             "sharpe": _figure(0.5, "weekly", standard_error=0.9),
             "var_99": _figure(None, reason="insufficient history (have 260, need 500)"),
+            "relative": {
+                "beta": _figure(None, "weekly", reason="insufficient history (have 52, need 104)"),
+                "correlation": _figure(
+                    None, "weekly", reason="insufficient history (have 52, need 104)"
+                ),
+                "tracking_error": _figure(0.03, "weekly"),
+                "information_ratio": _figure(-0.4, "weekly"),
+            },
         }
     ],
     "n_excluded": 1,
@@ -76,6 +91,29 @@ def test_ex_post_passes_the_user_through_and_returns_the_jobs_own_dict(monkeypat
     assert response.status_code == 200
     assert response.json() == _EX_POST
     assert captured["user_id"] == user_id
+    assert captured["benchmark"] == "VWCE.DE"  # the default (RK-13)
+
+
+def test_ex_post_passes_a_named_benchmark_through(monkeypatch, client):
+    captured = {}
+    monkeypatch.setattr(jobs, "get_ex_post_risk", lambda **kw: captured.update(kw) or _EX_POST)
+
+    response = client.get(
+        "/risk/ex-post", params={"user_id": str(uuid.uuid4()), "benchmark": "VWRL.AS"}
+    )
+
+    assert response.status_code == 200
+    assert captured["benchmark"] == "VWRL.AS"
+
+
+def test_ex_post_rejects_an_empty_or_too_long_benchmark(monkeypatch, client):
+    monkeypatch.setattr(jobs, "get_ex_post_risk", lambda **kw: pytest.fail("job must not run"))
+
+    for benchmark in ("", "B" * 21):
+        response = client.get(
+            "/risk/ex-post", params={"user_id": str(uuid.uuid4()), "benchmark": benchmark}
+        )
+        assert response.status_code == 422
 
 
 def test_ex_post_with_nothing_to_measure_has_no_windows(monkeypatch, client):
@@ -84,6 +122,12 @@ def test_ex_post_with_nothing_to_measure_has_no_windows(monkeypatch, client):
         "base_date": None,
         "end_date": None,
         "rf_available": False,
+        "benchmark": {
+            "ticker": "VWCE.DE",
+            "available": False,
+            "reason": "not fetched: nothing to measure",
+            "first_date": None,
+        },
         "windows": [],
         "n_excluded": 0,
         "excluded": [],

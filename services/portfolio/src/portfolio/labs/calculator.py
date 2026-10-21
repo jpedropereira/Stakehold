@@ -267,6 +267,16 @@ def build_series(asset: AssetInput) -> AssetSeries | Unavailable:
     return AssetSeries(asset.ticker, asset.weight, dates, native, gap_dates, returns.fx, returns)
 
 
+def growth_line(asset: AssetInput, dates: Sequence[date]) -> list[Decimal] | None:
+    """`asset`'s cumulative growth from dates[0] on each of `dates`, priced and quantized as an
+    asset's growth line is, for a line drawn beside them: the benchmark's (RK-13). None when the
+    asset can't be priced or starts after dates[0]."""
+    s = build_series(asset)
+    if isinstance(s, Unavailable) or s.first > dates[0]:
+        return None
+    return [_quantize(s.growth(day, dates[0]) - _ONE) for day in dates]
+
+
 def _period_start(period: Period, end: date, series: list[AssetSeries]) -> date:
     """The mix's start. For Max, that is the earliest first day; each asset's own Max starts on
     its own first day (_asset_start)."""
