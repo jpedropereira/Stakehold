@@ -178,9 +178,7 @@ def test_var_keeps_only_the_days_every_holding_traded():
     # B's exchange is shut every Monday: those days are 0% for the mix, and out of VaR's sample.
     b_full = _daily(FRIDAY, END, 2)
     kept = [(d, v) for d, v in zip(b_full.dates, b_full.values) if d.weekday() != 0]
-    b = ReturnSeries(
-        Frequency.DAILY, FRIDAY, tuple(d for d, _ in kept), tuple(v for _, v in kept)
-    )
+    b = ReturnSeries(Frequency.DAILY, FRIDAY, tuple(d for d, _ in kept), tuple(v for _, v in kept))
     report = _report({"A": a, "B": b}, WEIGHTS)
 
     cw = report.constant_weight

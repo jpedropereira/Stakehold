@@ -26,6 +26,7 @@ from portfolio.twr.calculator import TwrDay, TwrPoint, compute_twr
 
 logger = logging.getLogger(__name__)
 
+
 @dataclass(frozen=True)
 class PortfolioTwr:
     base_date: date | None  # growth's level 1; None when there's no series

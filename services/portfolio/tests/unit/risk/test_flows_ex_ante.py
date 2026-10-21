@@ -95,9 +95,7 @@ class _FakeDataStoreClient:
 
 def _run(client, mix, **kw):
     kw.setdefault("window", StandardWindow.Y3)
-    return flows.compute_ex_ante(
-        client, [(t, Decimal(w)) for t, w in mix], today=TODAY, **kw
-    )
+    return flows.compute_ex_ante(client, [(t, Decimal(w)) for t, w in mix], today=TODAY, **kw)
 
 
 def _statuses(result):

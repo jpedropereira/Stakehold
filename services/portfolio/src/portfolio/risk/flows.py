@@ -217,9 +217,7 @@ def compute_ex_ante(
     if not eligible.returns:
         logger.info("ex-ante-risk: no holding could be included, so nothing to measure.")
         not_fetched = BenchmarkStatus(benchmark, False, _NOTHING_TO_MEASURE, None)
-        return ExAnteRisk(
-            EX_ANTE_LABEL, currency, False, not_fetched, None, statuses, {}, None
-        )
+        return ExAnteRisk(EX_ANTE_LABEL, currency, False, not_fetched, None, statuses, {}, None)
 
     included = [(ticker, weight) for ticker, weight in mix if ticker in eligible.returns]
     total = sum(weight for _, weight in included)
