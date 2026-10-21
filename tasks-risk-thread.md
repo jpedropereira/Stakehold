@@ -138,8 +138,8 @@ checked against the code, docs and dev DB:
 | RK-24 | [portfolio: rolling windows](#rk-24-portfolio-rolling-windows) | RK-11, RK-16, RK-17 | ready |
 | RK-25 | [web: rolling charts](#rk-25-web-rolling-charts) | RK-18, RK-24 | blocked |
 | RK-26 | [FX decomposition (portfolio and web)](#rk-26-fx-decomposition-portfolio-and-web) | RK-18 | blocked |
-| RK-27 | [data-store: regimes endpoint](#rk-27-data-store-regimes-endpoint) | RK-1 | ready |
-| RK-28 | [Regime view (portfolio and web)](#rk-28-regime-view-portfolio-and-web) | RK-14, RK-27 | blocked |
+| RK-27 | [data-store: regimes endpoint](#rk-27-data-store-regimes-endpoint) | RK-1 | done |
+| RK-28 | [Regime view (portfolio and web)](#rk-28-regime-view-portfolio-and-web) | RK-14, RK-27 | ready |
 | RK-29 | [Candidate ranking mode](#rk-29-candidate-ranking-mode) | RK-20 | blocked |
 | RK-30 | [Ledoit–Wolf shrinkage (optional)](#rk-30-ledoitwolf-shrinkage-optional) | RK-15 | ready |
 | RK-31 | [VaR day mask on traded volume](#rk-31-var-day-mask-on-traded-volume) | RK-1 | ready |
@@ -898,13 +898,29 @@ corr(r_local, r_fx), and EUR volatility. It reuses RK-5's `r_local` and `r_fx`.
 
 ### RK-27. data-store: regimes endpoint
 
-**Status:** ready
+**Status:** done
 
 `GET /regimes?start&end` returns the rows that overlap the range.
 
+**As built:** `GET /regimes?start&end` → `{total_regimes, regimes: [...]}`. Each regime carries
+every column but `ingested_at`, ordered by `start_date, regime_id`. The read is
+`regimes/repository.py`'s `get_overlapping_regimes` and `count_regimes`, through `read_flows.py`'s
+`regimes_overlapping`. There's no schema change. The reasoning is in data-store's `read-api.md`.
+Decisions (agreed):
+- **Only the range.** There are no `dimension` or `scope` filters: the table holds about a
+  hundred rows, so the caller filters.
+- **Overlap is inclusive at both ends**, and a NULL `end_date` is ongoing. **Dates are
+  unclipped.**
+- **`total_regimes` is the whole table's count**, so 0 ("nothing loaded", logged as a warning)
+  reads differently from an empty range, as RK-3's `first_date: null` does.
+- **`known_from` and `notes` are served.** `known_from` isn't applied (§11).
+- **For RK-28:** add `get_regimes` to the client Protocol, the HTTP client and the fakes, as in
+  RK-4. Treat `total_regimes: 0` as "no regimes loaded", not as "none in this window". Clip each
+  regime to the window, and filter by dimension or scope there.
+
 ### RK-28. Regime view (portfolio and web)
 
-**Status:** blocked
+**Status:** ready
 
 For each regime overlapping the window, the portfolio's and the benchmark's return and MDD inside
 it. This is descriptive only, so `known_from` isn't applied (§11 phase 5).

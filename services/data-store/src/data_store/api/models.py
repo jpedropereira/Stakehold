@@ -70,6 +70,29 @@ class RiskFreeSeries(BaseModel):
     points: list[RiskFreePoint]
 
 
+class Regime(BaseModel):
+    regime_id: str
+    dimension: str
+    scope: str
+    name: str
+    # The regime's own dates, not clipped to the requested range.
+    start_date: date
+    # None for an ongoing regime.
+    end_date: date | None
+    # When the regime was identified; served, not applied (spec §11: descriptive use).
+    known_from: date | None
+    severity: str | None
+    # A citation (NBER, CEPR-EABCDC, manual_approx...), not a provider key.
+    source: str
+    notes: str | None
+
+
+class RegimeList(BaseModel):
+    # Every regime stored, whatever the range: 0 means nothing is loaded, not an empty range.
+    total_regimes: int
+    regimes: list[Regime]
+
+
 class EtfHoldingsFund(BaseModel):
     fund_key: str
     display_name: str

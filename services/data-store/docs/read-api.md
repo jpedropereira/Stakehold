@@ -20,6 +20,7 @@ call beyond one quick lookup.
 | `GET /prices/{ticker}` | `market_returns` | Not `raw_market_data` — schema.md calls `market_returns` "the table a portfolio or chart should read"; serving raw OHLCV would push return computation onto every consumer. |
 | `GET /fx/{base}/{quote}` | `fx_rates` | See below — the endpoint derives pairs `fx_rates` never stores directly. |
 | `GET /rates/risk-free` | `risk_free_rates` | The risk measures' `rf_eur` (spec §4.1), spliced from €STR and EONIA on read. See below. |
+| `GET /regimes` | `regimes` | Every regime overlapping `[start, end]`, with the table's `total_regimes`. Built for the risk regime view (RK-28). See below. |
 | `GET /etf-holdings` | `config/etfs.yaml` + `etf_holdings` | Every configured fund, enabled or not, with its tradeable `ticker` and `latest_as_of_date` (null if never scraped). How a caller gets from a ticker it holds (`IWDA.AS`) to a `fund_key`. See below. |
 | `GET /etf-holdings/{fund_key}/latest` | `etf_holdings` | Every line of the fund's newest snapshot, heaviest first, each with the yfinance ticker ingest prices it as. 404 for a fund not in `etfs.yaml`, and for one with no snapshot. See below. |
 | `GET /tickers` | `raw_market_data` | Every ingested ticker for `source`, sorted and unpaginated (~1.3k tickers, ~10 KB). Built for `portfolio`'s manual-entry picker, which needs the whole set at once. Uses the same "ingested universe" definition as `GET /tickers/{ticker}`'s `exists` (`returns/repository.py`'s `list_tickers` sits next to `ticker_exists`), so a ticker in the list always reports `exists: true`. The query is a recursive-CTE loose index scan over the primary key: Postgres 17 has no skip scan, and a plain `SELECT DISTINCT` would read all ~9M rows to find the ~1.3k tickers. Measured at ~25 ms on the dev database. |
@@ -128,6 +129,25 @@ the rate is a string at the column's four places. The rule and its two constants
   **Sharp edge:** a misspelt `source` gets the same answer. A consumer must treat a null
   `first_date` as "no risk-free data", never as "rf = 0 everywhere". RK-4 (the portfolio
   client) has to build that in.
+
+**Regimes are served whole, for the caller to clip** (built for RK-27, spec §11 phase 5).
+`GET /regimes?start&end` → `{total_regimes, regimes: [...]}`, each regime with every column
+but `ingested_at`, ordered by `start_date, regime_id`.
+
+- **Overlap is inclusive at both ends**, and a NULL `end_date` is an ongoing regime, so it
+  overlaps every range ending on or after its start.
+- **Dates are the regime's own, not clipped to the range.** The caller measures returns inside
+  the regime on its own calendar, so it knows where to clip, and data-store doesn't.
+- **No filters beyond the range.** The table holds about a hundred hand-curated rows, so a
+  caller filters by `dimension` or `scope` itself. Filters can be added when a caller needs them.
+- **No `source` parameter.** Here `source` is a citation (`NBER`, `CEPR-EABCDC`,
+  `manual_approx`), not a provider in the primary key, so the stance above doesn't apply.
+- **`known_from` is served but not applied.** The regime view is descriptive, so it doesn't need
+  it. Filtering on it only matters if regimes ever become a signal (spec §11).
+- **An empty table is a 200 with `total_regimes: 0`**, as risk-free's `first_date: null` is.
+  An empty range has a non-zero total. `ingest-regimes` loads nothing when
+  `config/regimes.csv` is missing (it's gitignored), so the flow logs a zero total as a
+  warning.
 
 **ETF holdings serve a fund's look-through** (spec §8, built for RK-22). A fund is linked to the
 ticker it trades under by `etfs.yaml`'s optional `ticker`. Nothing else connects

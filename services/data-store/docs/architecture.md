@@ -110,6 +110,8 @@ flowchart TD
     READ --> RET
     READ --> HOLD
     READ --> TRK
+    READ --> REG
+    READ --> RF
     READ --> RESOLVE
     READ --> ONB
     ONB --> TRK
@@ -216,8 +218,9 @@ instead of an external source is a shape the original three-file split didn't an
 
 `regimes/` has a similar two-file shape: `loader.py` (reads and validates a local CSV into
 `RegimeConfig` dataclasses, following the `config_loader.py` vocabulary for errors and validation)
-and `repository.py` (writes to the `regimes` table). There is no external provider — the only
-source is a hand-curated CSV in `config/`, updated manually — and no base Protocol.
+and `repository.py` (writes the `regimes` table, and reads it for `GET /regimes`). There is no
+external provider — the only source is a hand-curated CSV in `config/`, updated manually — and
+no base Protocol.
 
 `macro/` combines both patterns seen so far, because it has both a provider-backed raw table and
 a derived one: `base.py` (the `MacroIndicatorSource` Protocol, shared by both providers),

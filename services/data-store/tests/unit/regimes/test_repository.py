@@ -2,7 +2,11 @@ from datetime import date
 
 import pytest
 from data_store.regimes.loader import RegimeConfig
-from data_store.regimes.repository import save_regimes
+from data_store.regimes.repository import (
+    count_regimes,
+    get_overlapping_regimes,
+    save_regimes,
+)
 
 
 class FakeCopy:
@@ -195,3 +199,55 @@ def test_save_regimes_rolls_back_on_error():
 
     assert conn.rolled_back is True
     assert conn.committed is False
+
+
+# --- reads -------------------------------------------------------------------------------------
+
+
+class ReadCursor:
+    def __init__(self, *, rows=(), one=None):
+        self.executed = []
+        self._rows = list(rows)
+        self._one = one
+
+    def execute(self, sql, params=None):
+        self.executed.append((sql, params))
+
+    def fetchall(self):
+        return self._rows
+
+    def fetchone(self):
+        return self._one
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class ReadConnection:
+    def __init__(self, cursor):
+        self._cursor = cursor
+
+    def cursor(self):
+        return self._cursor
+
+
+def test_get_overlapping_regimes_binds_the_range_as_parameters():
+    row = ("gfc", "drawdown", "SPX", "GFC", date(2007, 10, 9), None, None, None, "x", None)
+    cursor = ReadCursor(rows=[row])
+
+    result = get_overlapping_regimes(ReadConnection(cursor), date(2008, 1, 1), date(2008, 12, 31))
+
+    assert result == [row]
+    sql, params = cursor.executed[0]
+    assert params == (date(2008, 12, 31), date(2008, 1, 1))
+    assert "2008" not in sql
+
+
+def test_count_regimes_returns_the_count():
+    cursor = ReadCursor(one=(93,))
+
+    assert count_regimes(ReadConnection(cursor)) == 93
+    assert "COUNT(*)" in cursor.executed[0][0]
