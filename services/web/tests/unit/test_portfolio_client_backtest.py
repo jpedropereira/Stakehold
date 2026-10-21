@@ -67,6 +67,8 @@ def _body(**changes):
             {"ticker": "VWCE.DE", "status": "included", "reason": None},
             {"ticker": "IWDA.AS", "status": "included", "reason": None},
         ],
+        # Parsed in test_portfolio_client_backtest_risk.py.
+        "risk": None,
         **changes,
     }
 
@@ -210,6 +212,7 @@ async def test_backtest_with_no_asset_included():
         "assets": [],
         "growth": None,
         "statuses": [{"ticker": "NOPE", "status": "not_tracked", "reason": "not tracked"}],
+        "risk": None,
     }
 
     result = await _ok(body).backtest(assets=[("NOPE", Decimal("1"))], period="1Y")
