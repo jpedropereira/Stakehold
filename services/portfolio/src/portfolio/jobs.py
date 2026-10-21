@@ -1650,13 +1650,10 @@ def get_look_through(
 
     coverage = exposures.coverage
     logger.info(
-        "get-look-through: done: %s looked through, %s direct (%s of it in no fund), %s "
-        "commodity, %s unmapped; %d snapshot(s), %d name(s), %d asset(s) left out.",
-        *(
-            f"{coverage[key] * 100:.1f}%"
-            for key in ("look_through", "direct_matched", "direct_unmatched", "commodity")
-        ),
-        f"{coverage['unmapped'] * 100:.1f}%",
+        "get-look-through: done: %s looked through, %s direct and matched in a fund, %s direct "
+        "in no fund, %s commodity, %s unmapped; %d snapshot(s), %d name(s), %d asset(s) left "
+        "out.",
+        *(f"{share * 100:.1f}%" for share in coverage.values()),
         len(exposures.snapshots),
         exposures.names.n_names,
         left_out,
