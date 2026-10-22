@@ -1,13 +1,14 @@
 """POST /labs/backtest: request validation, and the job's result passed through. Most tests stub
-`jobs.get_backtest` outright, like the other route tests; the last one stubs only the data-store
-client, so the job, the flow and the calculator run for real and the JSON shape is checked whole.
+`analytics_jobs.get_backtest` outright, like the other route tests; the last one stubs only the
+data-store client, so the job, the flow and the calculator run for real and the JSON shape is
+checked whole.
 """
 
 from datetime import date
 from decimal import Decimal
 
 import pytest
-from portfolio import jobs
+from portfolio import analytics_jobs
 from portfolio.datastore_client.base import (
     FxPoint,
     PricePoint,
@@ -48,7 +49,7 @@ def test_backtest_parses_the_mix_and_returns_the_jobs_result(monkeypatch, client
         calls.append(kwargs)
         return result
 
-    monkeypatch.setattr(jobs, "get_backtest", fake_get_backtest)
+    monkeypatch.setattr(analytics_jobs, "get_backtest", fake_get_backtest)
 
     response = client.post("/labs/backtest", json=_body())
 
@@ -61,7 +62,9 @@ def test_backtest_parses_the_mix_and_returns_the_jobs_result(monkeypatch, client
 
 def test_backtest_passes_a_named_benchmark_through(monkeypatch, client):
     calls = []
-    monkeypatch.setattr(jobs, "get_backtest", lambda **kw: calls.append(kw) or _empty_result([]))
+    monkeypatch.setattr(
+        analytics_jobs, "get_backtest", lambda **kw: calls.append(kw) or _empty_result([])
+    )
 
     response = client.post("/labs/backtest", json={**_body(), "benchmark": "IWDA.AS"})
 
@@ -94,7 +97,9 @@ def test_backtest_passes_a_named_benchmark_through(monkeypatch, client):
     ],
 )
 def test_backtest_rejects_an_invalid_mix_with_422(monkeypatch, client, body):
-    monkeypatch.setattr(jobs, "get_backtest", lambda **kw: pytest.fail("job must not run"))
+    monkeypatch.setattr(
+        analytics_jobs, "get_backtest", lambda **kw: pytest.fail("job must not run")
+    )
 
     response = client.post("/labs/backtest", json=body)
 
@@ -102,7 +107,7 @@ def test_backtest_rejects_an_invalid_mix_with_422(monkeypatch, client, body):
 
 
 def test_backtest_accepts_exactly_fifty_assets(monkeypatch, client):
-    monkeypatch.setattr(jobs, "get_backtest", lambda **kw: _empty_result([]))
+    monkeypatch.setattr(analytics_jobs, "get_backtest", lambda **kw: _empty_result([]))
 
     response = client.post(
         "/labs/backtest",
@@ -139,7 +144,7 @@ class _FakeDataStoreClient:
 
 def test_backtest_serializes_a_real_result_end_to_end(monkeypatch, client):
     monkeypatch.setattr(
-        jobs, "_require_datastore_client", lambda settings, command: _FakeDataStoreClient()
+        analytics_jobs, "require_datastore_client", lambda settings, command: _FakeDataStoreClient()
     )
 
     response = client.post(
@@ -193,7 +198,7 @@ def test_backtest_writes_small_figures_in_fixed_point_not_scientific_notation(mo
         "mix": [Decimal("1.2E-7")],
         "assets": {},
     }
-    monkeypatch.setattr(jobs, "get_backtest", lambda **kw: result)
+    monkeypatch.setattr(analytics_jobs, "get_backtest", lambda **kw: result)
 
     response = client.post("/labs/backtest", json=_body())
 
@@ -219,7 +224,7 @@ def test_backtest_serializes_left_out_tickers_and_null_points_in_a_line(monkeypa
         "assets": {"LATE": [None, Decimal("0")]},
         "left_out": ["NEW"],
     }
-    monkeypatch.setattr(jobs, "get_backtest", lambda **kw: result)
+    monkeypatch.setattr(analytics_jobs, "get_backtest", lambda **kw: result)
 
     body = client.post("/labs/backtest", json=_body()).json()
 
@@ -230,7 +235,7 @@ def test_backtest_serializes_left_out_tickers_and_null_points_in_a_line(monkeypa
 
 def test_backtest_serializes_the_risk_section_end_to_end(monkeypatch, client):
     monkeypatch.setattr(
-        jobs, "_require_datastore_client", lambda settings, command: _FakeDataStoreClient()
+        analytics_jobs, "require_datastore_client", lambda settings, command: _FakeDataStoreClient()
     )
 
     body = client.post(
@@ -323,7 +328,7 @@ _WINDOW_FIGURES = (
 
 
 def test_backtest_has_no_risk_section_when_no_asset_is_included(monkeypatch, client):
-    monkeypatch.setattr(jobs, "get_backtest", lambda **kw: _empty_result([]))
+    monkeypatch.setattr(analytics_jobs, "get_backtest", lambda **kw: _empty_result([]))
 
     body = client.post("/labs/backtest", json=_body()).json()
 

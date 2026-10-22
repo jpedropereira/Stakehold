@@ -1,4 +1,4 @@
-"""jobs.get_look_through: runs look_through/flows.py, logs its summary, and returns plain
+"""analytics_jobs.get_look_through: runs look_through/flows.py, logs its summary, and returns plain
 builtins the API's LookThroughResponse accepts. Small helpers are repeated here rather than
 shared (no test packages: see CLAUDE.md)."""
 
@@ -6,7 +6,7 @@ import logging
 from datetime import date
 from decimal import Decimal
 
-from portfolio import jobs
+from portfolio import analytics_jobs
 from portfolio.api.models import LookThroughResponse
 from portfolio.datastore_client.base import (
     EtfConstituent,
@@ -37,9 +37,9 @@ class _FakeDataStoreClient:
 
 def _run(monkeypatch, assets):
     monkeypatch.setattr(
-        jobs, "_require_datastore_client", lambda settings, command: _FakeDataStoreClient()
+        analytics_jobs, "require_datastore_client", lambda settings, command: _FakeDataStoreClient()
     )
-    return jobs.get_look_through(assets=assets, settings=object())
+    return analytics_jobs.get_look_through(assets=assets, settings=object())
 
 
 def test_the_summary_line_names_each_share_of_the_mix(monkeypatch, caplog):
@@ -50,7 +50,7 @@ def test_the_summary_line_names_each_share_of_the_mix(monkeypatch, caplog):
         ("EGLN.L", Decimal("1")),
         ("NOPE", Decimal("1")),
     ]
-    with caplog.at_level(logging.INFO, logger="portfolio.jobs"):
+    with caplog.at_level(logging.INFO, logger="portfolio.analytics_jobs"):
         _run(monkeypatch, assets)
     assert caplog.messages[-1] == (
         "get-look-through: done: 50.0% looked through, 20.0% direct and matched in a fund, "
@@ -60,7 +60,7 @@ def test_the_summary_line_names_each_share_of_the_mix(monkeypatch, caplog):
 
 
 def test_nothing_included_says_so(monkeypatch, caplog):
-    with caplog.at_level(logging.INFO, logger="portfolio.jobs"):
+    with caplog.at_level(logging.INFO, logger="portfolio.analytics_jobs"):
         result = _run(monkeypatch, [("NOPE", Decimal("1"))])
     assert result["exposures"] is None
     assert caplog.records[-1].levelno == logging.WARNING

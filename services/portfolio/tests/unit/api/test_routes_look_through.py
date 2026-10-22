@@ -6,7 +6,7 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
-from portfolio import jobs
+from portfolio import analytics_jobs
 from portfolio.datastore_client.base import (
     EtfConstituent,
     EtfFund,
@@ -27,7 +27,7 @@ _EMPTY = {"assets": [], "exposures": None}
 
 def test_look_through_parses_the_mix_and_returns_the_jobs_result(monkeypatch, client):
     calls = []
-    monkeypatch.setattr(jobs, "get_look_through", lambda **kw: calls.append(kw) or _EMPTY)
+    monkeypatch.setattr(analytics_jobs, "get_look_through", lambda **kw: calls.append(kw) or _EMPTY)
 
     response = client.post("/risk/look-through", json=_body())
 
@@ -48,7 +48,9 @@ def test_look_through_parses_the_mix_and_returns_the_jobs_result(monkeypatch, cl
     ids=["no assets", "duplicate ticker", "zero weight", "ticker too long", "too many assets"],
 )
 def test_look_through_rejects_an_invalid_request(monkeypatch, client, body):
-    monkeypatch.setattr(jobs, "get_look_through", lambda **kw: pytest.fail("job must not run"))
+    monkeypatch.setattr(
+        analytics_jobs, "get_look_through", lambda **kw: pytest.fail("job must not run")
+    )
 
     assert client.post("/risk/look-through", json=body).status_code == 422
 
@@ -59,7 +61,9 @@ def test_a_failed_fund_list_raises_the_data_store_error(monkeypatch, client):
         def list_etf_funds(self):
             raise DataStoreApiError("boom")
 
-    monkeypatch.setattr(jobs, "_require_datastore_client", lambda settings, command: _Failing())
+    monkeypatch.setattr(
+        analytics_jobs, "require_datastore_client", lambda settings, command: _Failing()
+    )
 
     with pytest.raises(DataStoreApiError):
         client.post("/risk/look-through", json=_body())
@@ -122,7 +126,7 @@ def _concentration(top1, top5, known, hhi, n):
 
 def test_look_through_end_to_end(monkeypatch, client):
     monkeypatch.setattr(
-        jobs, "_require_datastore_client", lambda settings, command: _FakeDataStoreClient()
+        analytics_jobs, "require_datastore_client", lambda settings, command: _FakeDataStoreClient()
     )
 
     response = client.post("/risk/look-through", json=_body())

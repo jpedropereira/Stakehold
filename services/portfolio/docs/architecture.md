@@ -71,6 +71,7 @@ flowchart TD
 
     subgraph orch["Orchestration"]
         JOBS["jobs.py<br/><i>runnable units: config + connection + one flow</i>"]
+        AJOBS["analytics_jobs.py<br/><i>the read-only analytics jobs: backtest,<br/>ex-post, ex-ante, what-if, look-through</i>"]
         PIPE["pipeline.py<br/><i>the flows; broker-parser/cashflow-parser (entry-point discovered)<br/>and datastore-client registries</i>"]
         HFLOW["holdings/flows.py<br/><i>reads that span a user's accounts (PF-1, PF-5)</i>"]
         LFLOW["labs/flows.py<br/><i>backtest fetches, concurrent (LB-4);<br/>risk-free fetch (RK-8)</i>"]
@@ -109,9 +110,11 @@ flowchart TD
 
     CLI --> JOBS
     API --> JOBS
+    API --> AJOBS
+    AJOBS --> JOBS
     JOBS --> PIPE
     JOBS --> HFLOW
-    JOBS --> LFLOW
+    AJOBS --> LFLOW
     LFLOW --> LABS
     LABS --> EURR
     LABS --> RISK
@@ -124,7 +127,7 @@ flowchart TD
     TFLOW --> TWR
     TWR --> RET
     TWR --> EURR
-    JOBS --> RFLOW
+    AJOBS --> RFLOW
     RFLOW --> TFLOW
     RFLOW --> RISK
     RFLOW --> DSC
@@ -137,7 +140,7 @@ flowchart TD
     BENCH --> EURR
     BENCH --> RISK
     LABS --> BENCH
-    JOBS --> LTFLOW
+    AJOBS --> LTFLOW
     LTFLOW --> LT
     LTFLOW --> DSC
     LT --> DSC
@@ -185,6 +188,13 @@ connection, return a result. `cli.py` is argument parsing plus a call into it, a
 `api/routes.py` (built at task 9) is a call into it and nothing else, too. Anything that lived in
 only one of those two would be, by construction, untested by the other.
 
+**The read-only analytics jobs live in `analytics_jobs.py`**: Labs' backtest, ex-post and
+ex-ante risk, the what-if (RK-19) and the look-through. They are the same kind of runnable unit
+and follow the same conventions. They moved out when `jobs.py` crossed the 64 KB file limit (at
+RK-19). They are the natural cut: none of them writes, they all build a data-store client, and
+they share no helper with the write jobs except `jobs.require_datastore_client`, which became
+public for that. Only `api/routes.py` calls them; the CLI has no analytics commands.
+
 That result is a plain dict of builtins, built by portfolio's own `run_result.py` — following the
 same two-key `{"status", "rows_saved"}` plus per-flow named-counts contract as
 [`data-store/run_result.py`](../../data-store/src/data_store/run_result.py), and the same
@@ -217,7 +227,7 @@ ticker's failed fetch excludes and names that ticker, never the whole series.
 
 **Labs orchestration lives in `labs/flows.py` (LB-4)**, beside `labs/calculator.py`, for the
 same file-size reason as `holdings/flows.py`, and because a backtest opens no database
-connection at all: nothing is stored, and every input is data-store's. `jobs.get_backtest`
+connection at all: nothing is stored, and every input is data-store's. `analytics_jobs.get_backtest`
 builds the data-store client and calls it, with no connection to open or close.
 - **It is the service's first concurrent fan-out.** A mix of up to 50 assets needs two or three
   data-store calls each, so sequential calls would put several seconds between the user and the
