@@ -24,6 +24,11 @@ holdings, converts them to daily EUR returns and normalises the weights.
   cells. The caller picks its series, EUR or local currency, with or without the benchmark.
 - **Histories that don't overlap** grey the constant-weight figures with `NO_OVERLAP` (Labs'
   wording) rather than raise; σ_p and the decomposition grey through their own minimums.
+- **Rolling 1Y volatility and Sharpe (RK-24)** run on the same weekly mix, over its whole
+  common history whatever the requested window, because a rolling view is for watching a figure
+  move through time. Its monthly windows come from the daily mix, as ex-post's come from the
+  daily TWR, so the last point is the 1Y constant-weight figure. `mix_weekly` is that weekly
+  mix, which a rolling correlation against "the portfolio" uses.
 """
 
 from collections.abc import Mapping, Sequence
@@ -38,6 +43,7 @@ from portfolio.risk.ex_ante import (
 )
 from portfolio.risk.ex_post import SeriesFigures, greyed_series_figures, series_figures
 from portfolio.risk.risk_free import RatePoint
+from portfolio.risk.rolling import RollingFigures, monthly_windows, rolling_weekly
 from portfolio.risk.types import ReturnSeries, Window
 from portfolio.risk.weekly import to_weekly
 from portfolio.risk.windows import (
@@ -60,6 +66,9 @@ class ExAnteReport:
     decomposition: ExAnteDecomposition
     constant_weight: SeriesFigures
     correlation: PairwiseCorrelation
+    # The constant-weight weekly mix over the holdings' common span; None when they don't overlap.
+    mix_weekly: ReturnSeries | None
+    rolling: RollingFigures  # over the mix's whole history; empty when they don't overlap
 
 
 def ex_ante_report(
@@ -96,6 +105,8 @@ def ex_ante_report(
             decomposition,
             greyed_series_figures(requested, NO_OVERLAP),
             correlation,
+            None,
+            RollingFigures((), ()),
         )
 
     mix_daily = constant_weight_series(daily, weights)
@@ -103,16 +114,27 @@ def ex_ante_report(
     # before the mix does.
     start = max(decomposition.sigma_p.window_start, mix_daily.base_date)
     window = Window(label, start, end)
+    mix_weekly = constant_weight_series(weekly, weights)
     nonsync = not (len(daily) == 1 and currencies.get(next(iter(daily))) == _EUR)
     figures = series_figures(
         mix_daily,
-        constant_weight_series(weekly, weights),
+        mix_weekly,
         window,
         trading_days=[set(series.dates) for series in daily.values()],
         nonsync=nonsync,
         rates=rates,
         first_published=first_published,
     )
+    rolling = rolling_weekly(
+        mix_weekly, monthly_windows(mix_daily), rates=rates, first_published=first_published
+    )
     return ExAnteReport(
-        requested, window, decomposition.limited_by, decomposition, figures, correlation
+        requested,
+        window,
+        decomposition.limited_by,
+        decomposition,
+        figures,
+        correlation,
+        mix_weekly,
+        rolling,
     )

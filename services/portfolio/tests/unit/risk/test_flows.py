@@ -309,3 +309,54 @@ def test_with_nothing_to_measure_the_benchmark_is_named_but_not_fetched(monkeypa
     assert result.benchmark == BenchmarkStatus(
         "VWCE.DE", False, "not fetched: nothing to measure", None
     )
+
+
+# --- rolling (RK-24) --------------------------------------------------------------------------
+
+
+def test_rolling_volatility_and_sharpe_run_monthly_on_the_twr_and_end_on_the_1y_figure(
+    monkeypatch, caplog
+):
+    _fake_twr(monkeypatch, _twr())
+
+    with caplog.at_level(logging.INFO, logger="portfolio.risk.flows"):
+        result = flows.compute_ex_post(object(), _FakeDataStoreClient(), user_id=uuid.uuid4())
+
+    rolling = result.rolling
+    # The first full year ends in January 2021, the TWR in January 2022: 13 month ends.
+    assert len(rolling.volatility) == len(rolling.sharpe) == 13
+    one_year = _by_label(result)["1Y"].weekly
+    assert rolling.volatility[-1] == one_year.volatility
+    assert rolling.sharpe[-1] == one_year.sharpe
+    assert all(f.value is not None for f in (*rolling.volatility, *rolling.sharpe))
+    assert (
+        "ex-post-risk: rolling 1Y: 13 monthly point(s); 0 of 13 volatility and 0 of 13 Sharpe "
+        "greyed." in caplog.text
+    )
+
+
+def test_without_risk_free_data_the_rolling_sharpe_is_greyed(monkeypatch):
+    _fake_twr(monkeypatch, _twr())
+
+    result = flows.compute_ex_post(object(), _FakeDataStoreClient(None), user_id=uuid.uuid4())
+
+    assert all(f.value is not None for f in result.rolling.volatility)
+    assert all(f.reason == "no risk-free rate data" for f in result.rolling.sharpe)
+
+
+def test_a_twr_under_a_year_has_no_rolling_points_and_says_so(monkeypatch, caplog):
+    _fake_twr(monkeypatch, _twr(n=200))
+
+    with caplog.at_level(logging.INFO, logger="portfolio.risk.flows"):
+        result = flows.compute_ex_post(object(), _FakeDataStoreClient(), user_id=uuid.uuid4())
+
+    assert result.rolling.volatility == () and result.rolling.sharpe == ()
+    assert "ex-post-risk: rolling 1Y: no point, the history is under a year." in caplog.text
+
+
+def test_with_nothing_to_measure_there_is_no_rolling(monkeypatch):
+    _fake_twr(monkeypatch, PortfolioTwr(base_date=None, points=[], n_gaps=0, excluded=[]))
+
+    result = flows.compute_ex_post(object(), _FakeDataStoreClient(), user_id=uuid.uuid4())
+
+    assert result.rolling is None
