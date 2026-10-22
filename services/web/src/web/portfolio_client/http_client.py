@@ -23,7 +23,12 @@ from web.portfolio_client.base import (
     BacktestWindowRisk,
     BenchmarkStatus,
     Broker,
+    CorrelationCell,
+    CorrelationMatrix,
     DrawdownSeries,
+    ExAnteHolding,
+    ExAnteRisk,
+    ExAnteWindow,
     ExcludedHolding,
     ExPostRisk,
     ExPostWindow,
@@ -37,6 +42,7 @@ from web.portfolio_client.base import (
     Return,
     RiskFigure,
     RiskFreeStatus,
+    SeriesRisk,
     TickerLookup,
     TickerMapping,
     TickerMappingWriteResult,
@@ -606,6 +612,79 @@ def _ex_post_risk(body: dict) -> ExPostRisk:
         raise PortfolioUnavailable(f"malformed portfolio response: {exc}") from exc
 
 
+def _ex_ante_holding(item: dict) -> ExAnteHolding:
+    return ExAnteHolding(
+        ticker=item["ticker"],
+        weight=_float(item["weight"], "weight"),
+        **{
+            key: _opt_float(item[key], key)
+            for key in ("volatility", "mcr", "cr", "pcr", "corr_with_portfolio")
+        },
+    )
+
+
+def _series_risk(item: dict) -> SeriesRisk:
+    max_days = item["max_days_under_water"]
+    return SeriesRisk(
+        figures={name: _ex_post_figure(item, name) for name in RISK_FIGURE_KEYS},
+        peak_date=_opt_date(item["peak_date"]),
+        trough_date=_opt_date(item["trough_date"]),
+        recovery_date=_opt_date(item["recovery_date"]),
+        max_days_under_water=None if max_days is None else _int(item, "max_days_under_water"),
+    )
+
+
+def _correlation_matrix(item: dict) -> CorrelationMatrix:
+    keys = _tickers(item, "keys")
+    cells = tuple(
+        CorrelationCell(a=cell["a"], b=cell["b"], figure=_ex_post_figure(cell, "figure"))
+        for cell in item["cells"]
+    )
+    expected = [(a, b) for i, a in enumerate(keys) for b in keys[i:]]
+    if [(cell.a, cell.b) for cell in cells] != expected:
+        # The heatmap mirrors the upper triangle into its squares: a missing, extra or
+        # misnamed cell would put a figure in the wrong square or leave one blank.
+        raise ValueError("correlation cells aren't the upper triangle of keys, row by row")
+    return CorrelationMatrix(keys=keys, benchmark_key=item["benchmark_key"], cells=cells)
+
+
+def _ex_ante_window(item: dict) -> ExAnteWindow:
+    return ExAnteWindow(
+        label=item["label"],
+        requested_start=date.fromisoformat(item["requested_start"]),
+        start=_opt_date(item["start"]),
+        end=date.fromisoformat(item["end"]),
+        limited_by=_tickers(item, "limited_by"),
+    )
+
+
+def _ex_ante_risk(body: dict) -> ExAnteRisk:
+    try:
+        window, holdings = body["window"], body["holdings"]
+        constant, matrix = body["constant_weight"], body["correlation"]
+        return ExAnteRisk(
+            label=body["label"],
+            currency=body["currency"],
+            rf_available=_bool(body, "rf_available"),
+            window=None if window is None else _ex_ante_window(window),
+            benchmark=BenchmarkStatus(**_benchmark_fields(body["benchmark"])),
+            statuses=tuple(
+                BacktestAssetStatus(
+                    ticker=item["ticker"], status=item["status"], reason=item["reason"]
+                )
+                for item in body["statuses"]
+            ),
+            sigma_p=_risk_figure(body["sigma_p"]),
+            diversification_ratio=_risk_figure(body["diversification_ratio"]),
+            effective_n=_opt_float(body["effective_n"], "effective_n"),
+            holdings=None if holdings is None else tuple(_ex_ante_holding(h) for h in holdings),
+            constant_weight=None if constant is None else _series_risk(constant),
+            correlation=None if matrix is None else _correlation_matrix(matrix),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise PortfolioUnavailable(f"malformed portfolio response: {exc}") from exc
+
+
 def _transaction(item: dict) -> Transaction:
     try:
         return Transaction(
@@ -886,6 +965,37 @@ class HttpPortfolioClient:
                 f"unexpected portfolio response {response.status_code}: {_error_detail(response)}"
             )
         return _ex_post_risk(_json_body(response))
+
+    async def ex_ante_risk(
+        self,
+        *,
+        assets: list[tuple[str, Decimal]],
+        window: str,
+        benchmark: str,
+        exclude: list[str],
+    ) -> ExAnteRisk:
+        response = await self._request(
+            "POST",
+            "/risk/ex-ante",
+            json={
+                "assets": [
+                    {"ticker": ticker, "weight": _decimal_str(weight)} for ticker, weight in assets
+                ],
+                "window": window,
+                "benchmark": benchmark,
+                # RK-18 shows the matrix in EUR only: a EUR investor's risk (spec §7.1).
+                "currency": "eur",
+                "exclude": exclude,
+            },
+        )
+        if response.status_code == 422:
+            raise InvalidPortfolioRequest(_error_detail(response))
+        if response.status_code != 200:
+            # Not _raise_for_status: its 404 means AccountNotFound, and this route has no account.
+            raise PortfolioUnavailable(
+                f"unexpected portfolio response {response.status_code}: {_error_detail(response)}"
+            )
+        return _ex_ante_risk(_json_body(response))
 
     async def list_ticker_mappings(self) -> list[TickerMapping]:
         response = await self._request("GET", "/ticker-mappings")

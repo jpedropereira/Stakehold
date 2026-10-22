@@ -507,6 +507,84 @@ class ExPostRisk:
     excluded: tuple[ExcludedHolding, ...]
 
 
+@dataclass(frozen=True)
+class ExAnteWindow:
+    """The requested standard window (RK-17), ending on the holdings' latest common date. The
+    measured one starts where every holding has weekly returns (R12): later than requested when
+    a holding starts later, which `limited_by` names. `start` is None when the holdings'
+    histories don't overlap."""
+
+    label: str
+    requested_start: date
+    start: date | None
+    end: date
+    limited_by: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ExAnteHolding:
+    """One holding's row of the decomposition (spec §6.3). The figures are None exactly when the
+    diversification ratio is greyed (under 104 weeks); the weight, normalised over the included
+    holdings, is always there. Fractions: the PCRs sum to 1, negative for a hedge."""
+
+    ticker: str
+    weight: float
+    volatility: float | None
+    mcr: float | None
+    cr: float | None
+    pcr: float | None
+    corr_with_portfolio: float | None
+
+
+@dataclass(frozen=True)
+class SeriesRisk:
+    """One series' twelve figures over one window: here, ex-ante's constant-weight mix.
+    `figures` has every RISK_FIGURE_KEYS key, in that order, none None (greyed with a reason)."""
+
+    figures: dict[str, RiskFigure]
+    peak_date: date | None
+    trough_date: date | None
+    recovery_date: date | None
+    max_days_under_water: int | None
+
+
+@dataclass(frozen=True)
+class CorrelationCell:
+    a: str
+    b: str
+    figure: RiskFigure  # over the weeks this pair shares inside the window (R13)
+
+
+@dataclass(frozen=True)
+class CorrelationMatrix:
+    """Pairwise, for display only (R13). `cells` is the upper triangle, diagonal included, row
+    by row in `keys` order: the included holdings in request order, then the benchmark."""
+
+    keys: tuple[str, ...]
+    benchmark_key: str | None  # the benchmark's row, when it has one
+    cells: tuple[CorrelationCell, ...]
+
+
+@dataclass(frozen=True)
+class ExAnteRisk:
+    """portfolio's ExAnteRiskResponse (RK-17): a mix held at constant weights through history.
+    Every section but `statuses` and `benchmark` is None exactly when no asset was included.
+    Statuses add "excluded" to the backtest's."""
+
+    label: str  # "ex-ante · constant weights"
+    currency: str  # the matrix's returns: "eur" or "local"; σ_p is always EUR
+    rf_available: bool
+    window: ExAnteWindow | None
+    benchmark: BenchmarkStatus
+    statuses: tuple[BacktestAssetStatus, ...]  # every requested asset, in request order
+    sigma_p: RiskFigure | None  # greyed under 52 weeks
+    diversification_ratio: RiskFigure | None  # greyed under 104 weeks
+    effective_n: float | None
+    holdings: tuple[ExAnteHolding, ...] | None
+    constant_weight: SeriesRisk | None  # its weekly volatility is σ_p
+    correlation: CorrelationMatrix | None
+
+
 class PortfolioClient(Protocol):
     async def list_accounts(self, *, user_id: str) -> list[Account]: ...
 
@@ -594,6 +672,18 @@ class PortfolioClient(Protocol):
     # This user's ex-post risk figures over the standard windows (RK-11), and against
     # `benchmark` (RK-13). Read-only.
     async def ex_post_risk(self, *, user_id: str, benchmark: str) -> ExPostRisk: ...
+
+    # The ex-ante risk of (ticker, weight) pairs held at constant weights (RK-17), over one
+    # standard window, with `exclude` left out of the mix. Read-only despite the POST; the
+    # matrix is in EUR. InvalidPortfolioRequest means the mix itself was rejected.
+    async def ex_ante_risk(
+        self,
+        *,
+        assets: list[tuple[str, Decimal]],
+        window: str,
+        benchmark: str,
+        exclude: list[str],
+    ) -> ExAnteRisk: ...
 
     async def list_ticker_mappings(self) -> list[TickerMapping]: ...
 

@@ -153,3 +153,37 @@ def test_web_css_aliases_are_not_self_referencing(theme):
     cycles = sorted(name for name, target in _web_css_aliases(theme).items() if name == target)
 
     assert cycles == [], f"web.css {theme} alias(es) reference themselves: {cycles}"
+
+
+# The correlation heatmap's squares (RK-18): an ink ramp of --text over the card's surface,
+# with --text on the light steps and the surface colour on the darkest. Read from web.css, so
+# deepening a step past what its text allows fails here.
+_HEAT_STEP = re.compile(
+    r"\.corr-(\d)\s*\{\s*background:\s*color-mix\(in srgb, var\(--text\) (\d+)%, transparent\);"
+    r"(\s*color:\s*var\(--surface-raised\);)?"
+)
+
+
+def _heat_steps():
+    css = re.sub(r"/\*.*?\*/", "", _WEB_CSS_PATH.read_text(), flags=re.S)
+    return [(int(n), int(pct) / 100, bool(flipped)) for n, pct, flipped in _HEAT_STEP.findall(css)]
+
+
+def test_the_heatmap_has_four_tinted_steps_the_darkest_flipped():
+    steps = _heat_steps()
+
+    assert [n for n, _, _ in steps] == [1, 2, 3, 4]
+    assert [flipped for _, _, flipped in steps] == [False, False, False, True]
+    assert [a for _, a, _ in steps] == sorted(a for _, a, _ in steps)
+
+
+@pytest.mark.parametrize("theme", list(_THEMES))
+@pytest.mark.parametrize("surface", ["--surface", "--surface-raised"])
+def test_heatmap_text_meets_wcag_aa_on_every_step(theme, surface):
+    aliases, tokens = _web_css_aliases(theme), _tokens()
+    text = _rgba(tokens[aliases["--text"]])[:3]
+    under = _rgba(tokens[aliases[surface]])[:3]
+    for n, alpha, flipped in _heat_steps():
+        fill = _blend(text + (alpha,), under)
+        ratio = _contrast(under if flipped else text, fill)
+        assert ratio >= _TEXT, f"{theme}: step {n} on {surface} is {ratio:.2f}:1"

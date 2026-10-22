@@ -1495,6 +1495,106 @@ img.logo-on-dark {
   margin: 0 var(--space-1) 0 0;
 }
 
+/* ---- ex-ante (RK-18) ---- */
+
+/* The € tail figures: sentences, one per level, without bullets. */
+.risk-tail {
+  margin: 0;
+  padding-left: 0;
+  list-style: none;
+}
+
+/* The holding whose share of risk outweighs its share of the money (spec §6.3), and a hedge:
+   plain ink with a gold rule beside it, the accent's "look here". Never oxblood: it isn't a
+   loss. */
+.risk-insight,
+.risk-hedge {
+  margin: var(--space-2) 0;
+  padding-left: var(--space-3);
+  border-left: 3px solid var(--accent);
+}
+
+.risk-decomposition tr.risk-outsized th {
+  font-weight: 600;
+}
+
+/* The heatmap: square cells, an ink ramp on ρ from 0 to 1 (risk_ex_ante_view.bucket). The
+   tints are --text over the surface, so they work in both themes. AA allows ink text on a tint
+   of at most 33% and flipped text on one of at least 69%, in both themes on both surfaces
+   (test_brand_contrast.py checks these percentages): three light steps with ink text, then one
+   dark step, ρ 0.8 and above, with the surface colour as text. */
+.risk-heatmap {
+  border-collapse: separate;
+  border-spacing: 2px;
+}
+
+.risk-heatmap th {
+  padding: var(--space-1) var(--space-2);
+  font: var(--text-caption);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.risk-heatmap thead th {
+  text-align: center;
+  vertical-align: bottom;
+}
+
+.corr-cell {
+  min-width: 56px;
+  height: 40px;
+  padding: var(--space-1);
+  text-align: center;
+  border-radius: 2px;
+}
+
+.corr-cell .mono {
+  font-size: 13px;
+}
+
+.corr-0,
+.corr-greyed {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.corr-1 {
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+}
+
+.corr-2 {
+  background: color-mix(in srgb, var(--text) 20%, transparent);
+}
+
+.corr-3 {
+  background: color-mix(in srgb, var(--text) 30%, transparent);
+}
+
+.corr-4 {
+  background: color-mix(in srgb, var(--text) 80%, transparent);
+  color: var(--surface-raised);
+}
+
+.corr-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  margin: var(--space-3) 0 0;
+  padding-left: 0;
+  list-style: none;
+  font: var(--text-caption);
+  color: var(--text-muted);
+}
+
+.corr-swatch {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  margin-right: var(--space-1);
+  vertical-align: -2px;
+  border-radius: 2px;
+}
+
 /* ---- benchmark (RK-14) ---- */
 
 /* The benchmark field and its button on one line, the button level with the input. */

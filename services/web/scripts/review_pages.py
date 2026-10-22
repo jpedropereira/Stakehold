@@ -127,6 +127,14 @@ PAGES = [
     Page("risk-benchmark", "/risk?benchmark=IWDA.AS", "user"),
     Page("risk-benchmark-unavailable", "/risk?benchmark=NOPE.XX", "user"),
     Page("risk-benchmark-too-long", "/risk?benchmark=ABCDEFGHIJKLMNOPQRSTU", "user"),
+    # RK-18: the ex-ante section. 3Y (the default) names AAPL as outsized; 1Y greys the
+    # decomposition and the squares; Max is limited by AAPL, and excluding it offers it back;
+    # IWDA.AS adds the benchmark as its own row; 10Y is the fake's failure.
+    Page("risk-ex-ante-1y", "/risk?ex_ante_window=1Y#risk-ex-ante", "user"),
+    Page("risk-ex-ante-max", "/risk?ex_ante_window=Max#risk-ex-ante", "user"),
+    Page("risk-ex-ante-excluded", "/risk?ex_ante_window=Max&exclude=AAPL#risk-ex-ante", "user"),
+    Page("risk-ex-ante-benchmark", "/risk?benchmark=IWDA.AS#risk-ex-ante", "user"),
+    Page("risk-ex-ante-unavailable", "/risk?ex_ante_window=10Y#risk-ex-ante", "user"),
     # RK-9: the risk comparison over 3Y (AAPL's volatility has a gap note), over 10Y (not
     # covered, so no table), a mix the fake answers with no risk-free data, and the drawdown
     # chart over Max.
@@ -162,6 +170,12 @@ PAGES = [
 _CONTRAST_JS = """
 () => {
   const parse = (value) => {
+    // color-mix() computes to color(srgb r g b / a), its channels 0-1 (RK-18's heatmap).
+    const srgb = value.match(/color\\(srgb ([^)]+)\\)/);
+    if (srgb) {
+      const parts = srgb[1].split(/[ \\/]+/).filter(Boolean).map(Number);
+      return [parts[0] * 255, parts[1] * 255, parts[2] * 255, parts.length > 3 ? parts[3] : 1];
+    }
     const m = value.match(/rgba?\\(([^)]+)\\)/);
     if (!m) return null;
     const parts = m[1].split(/[ ,\\/]+/).filter(Boolean).map(Number);
@@ -378,7 +392,12 @@ def _fakes():
         BacktestWindowRisk,
         BenchmarkStatus,
         Broker,
+        CorrelationCell,
+        CorrelationMatrix,
         DrawdownSeries,
+        ExAnteHolding,
+        ExAnteRisk,
+        ExAnteWindow,
         ExcludedHolding,
         ExPostRisk,
         ExPostWindow,
@@ -392,12 +411,14 @@ def _fakes():
         Return,
         RiskFigure,
         RiskFreeStatus,
+        SeriesRisk,
         TickerLookup,
         TickerMapping,
         TrackedTicker,
         Transaction,
         UnmappedInstrument,
     )
+    from web.portfolio_client.errors import PortfolioUnavailable
     from web.portfolio_view import aggregate_portfolio_returns
 
     # The benchmarks the review data has (RK-13): VWCE.DE's short history greys 10Y, IWDA.AS
@@ -1092,6 +1113,118 @@ def _fakes():
                 ),
                 windows=tuple(window(label) for label in RISK_WINDOWS),
                 excluded=(ExcludedHolding("7203.T", "no_fx_rate", "no FX series for JPY"),),
+            )
+
+        async def ex_ante_risk(self, *, assets, window, benchmark, exclude):
+            """The review mix at constant weights (RK-18). AAPL's history starts in 2015, so it
+            limits Max; 1Y has too few weeks for the decomposition and the squares; 10Y fails."""
+            if window == "10Y":
+                raise PortfolioUnavailable("review: 10Y fails on purpose")
+            years = {"1Y": 1, "3Y": 3, "5Y": 5, "Max": 17}[window]
+            requested = date(today.year - years, today.month, today.day)
+            tickers = [t for t, _ in assets if t not in exclude]
+            limited = "AAPL" in tickers and requested < date(2019, 7, 29)
+            start = max(requested, date(2019, 7, 29) if "VWCE.DE" in tickers else requested)
+            start = max(start, date(2015, 3, 6)) if "AAPL" in tickers else start
+            weeks = (today - start).days // 7
+            short = weeks < 104
+
+            def figure(value, daily=False, reason=None):
+                return RiskFigure(
+                    None if reason else value,
+                    start,
+                    today,
+                    "daily" if daily else "weekly",
+                    251.6 if daily else 52.0,
+                    weeks * (5 if daily else 1),
+                    0,
+                    ("insufficient_history",) if reason else (),
+                    reason,
+                    None,
+                )
+
+            grey = f"insufficient history (have {weeks}, need 104)" if short else None
+            total = sum(w for t, w in assets if t in tickers)
+            weights = {t: float(w / total) for t, w in assets if t in tickers}
+            pcrs = {"VWCE.DE": 0.54, "AAPL": 0.46} if len(tickers) == 2 else {tickers[0]: 1.0}
+            daily = {"cumulative_return", "cagr", "max_drawdown", "calmar"}
+            values = (
+                0.31,
+                0.081,
+                0.152,
+                0.101,
+                0.48,
+                0.66,
+                0.43,
+                -0.212,
+                0.0167,
+                0.0244,
+                0.0298,
+                0.0371,
+            )
+            figures = {
+                n: figure(v, daily=n in daily or n.startswith(("var", "cvar")))
+                for n, v in zip(RISK_FIGURE_KEYS, values)
+            }
+            keys = tickers + ([] if benchmark in tickers else [benchmark])
+            rho = {
+                ("VWCE.DE", "AAPL"): 0.71,
+                ("VWCE.DE", "IWDA.AS"): 0.98,
+                ("AAPL", "IWDA.AS"): 0.74,
+            }
+            return ExAnteRisk(
+                label="ex-ante · constant weights",
+                currency="eur",
+                rf_available=True,
+                window=ExAnteWindow(window, requested, start, today, ("AAPL",) if limited else ()),
+                benchmark=BenchmarkStatus(benchmark, True, None, benchmark_firsts.get(benchmark)),
+                statuses=tuple(
+                    (
+                        BacktestAssetStatus(t, "excluded", "excluded by request")
+                        if t in exclude
+                        else BacktestAssetStatus(t, "included", None)
+                    )
+                    for t, _ in assets
+                ),
+                sigma_p=figure(0.152),
+                diversification_ratio=figure(1.18, reason=grey),
+                effective_n=1 / sum(w * w for w in weights.values()),
+                holdings=tuple(
+                    ExAnteHolding(
+                        t,
+                        w,
+                        *(
+                            (None,) * 5
+                            if short
+                            else (
+                                0.17 + pcrs[t] / 5,
+                                0.15,
+                                pcrs[t] * 0.152,
+                                pcrs[t],
+                                0.9 - pcrs[t] / 4,
+                            )
+                        ),
+                    )
+                    for t, w in weights.items()
+                ),
+                constant_weight=SeriesRisk(
+                    figures, date(2022, 1, 4), date(2022, 9, 30), date(2023, 12, 14), 709
+                ),
+                correlation=CorrelationMatrix(
+                    keys=tuple(keys),
+                    benchmark_key=benchmark,
+                    cells=tuple(
+                        CorrelationCell(
+                            a,
+                            b,
+                            figure(
+                                1.0 if a == b else rho.get((a, b), rho.get((b, a))), reason=grey
+                            ),
+                        )
+                        for i, a in enumerate(keys)
+                        for b in keys[i:]
+                    ),
+                ),
             )
 
         async def list_unmapped_instruments(self, *, user_id):

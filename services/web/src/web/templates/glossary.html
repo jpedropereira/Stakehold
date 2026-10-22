@@ -168,6 +168,41 @@
     <dd>The historical return above the benchmark's, per year, divided by the tracking error,
       from weekly returns: how much was gained or lost relative to the benchmark for each unit
       of straying from it.</dd>
+
+    {# Ex-ante (RK-18), for /risk's second section. Historical too (R15): today's mix, measured
+       on how its holdings moved in the past. #}
+    <dt id="ex-ante">Ex-ante</dt>
+    <dd>Measured on today's mix as if you had held it, at today's weights, through the whole
+      window, rebalanced back to those weights every week. It answers "how has this mix behaved?"
+      where ex-post answers "how did what I held behave?", so the two differ. It is still
+      historical: how these holdings moved in the past, not how they will move. The window
+      starts where every holding has prices, so a young holding shortens it; you can exclude
+      that holding to measure the rest over longer.</dd>
+
+    <dt id="diversification-ratio">Diversification ratio</dt>
+    <dd>The holdings' volatilities, weighted, divided by the mix's volatility. 1 means the
+      holdings moved in lockstep, so mixing them smoothed nothing; higher means their ups and
+      downs partly cancelled out. Needs two years of weekly returns.</dd>
+
+    <dt id="effective-n">Effective number of holdings</dt>
+    <dd>How many equal-sized holdings the weights amount to: 1 ÷ the sum of the squared weights.
+      Ten holdings at 10% each give 10; one at 91% and nine at 1% give about 1.2. It looks at
+      the money only, not at how the holdings move.</dd>
+
+    <dt id="share-of-risk">Share of risk</dt>
+    <dd>How much of the mix's historical volatility each holding accounts for, given its weight,
+      its own volatility and how it moved with the rest. The shares add up to 100%. A holding
+      with a larger share of risk than of the money moved a lot, or moved with everything else;
+      a negative share means it lowered the mix's volatility, as a hedge does. The contribution
+      is the same share in volatility points: they add up to the mix's volatility. Correlation
+      with the mix says how closely each holding moved with the whole.</dd>
+
+    <dt id="correlation-matrix">Correlation matrix</dt>
+    <dd>How closely each pair of holdings' weekly euro returns rose and fell together, from −1
+      (always opposite) to 1 (always together), with the benchmark added for comparison. Each
+      pair is measured over the weeks both have prices, so a young holding's squares cover
+      less time than the others. In euros, two dollar assets share the dollar's moves, which
+      raises their correlation: that is real risk for a euro investor.</dd>
   </dl>
 </section>
 {% endblock %}

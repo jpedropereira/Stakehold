@@ -19,6 +19,7 @@ kind.
 """
 
 import logging
+from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from datetime import date
 
@@ -32,11 +33,11 @@ from web.portfolio_client.base import (
 
 logger = logging.getLogger(__name__)
 
-# (response name, label, glossary anchor, kind). The kind picks the format: "return" is a signed
-# percentage to 1 decimal coloured as a gain or a loss, "pct1" a percentage to 1 decimal and
-# "ratio" 2 decimals (spec §10), both in plain ink: a volatility, a drawdown or a VaR isn't a
-# gain or a loss.
-_ROWS = (
+# (response name, label, glossary anchor, kind), shared with the ex-ante summary
+# (risk_ex_ante_view.py). The kind picks the format: "return" is a signed percentage to 1
+# decimal coloured as a gain or a loss, "pct1" a percentage to 1 decimal and "ratio" 2 decimals
+# (spec §10), both in plain ink: a volatility, a drawdown or a VaR isn't a gain or a loss.
+SUMMARY_ROWS = (
     ("cumulative_return", "Cumulative return", "cumulative-return", "return"),
     ("cagr", "CAGR", "cagr", "return"),
     ("volatility", "Volatility", "volatility", "pct1"),
@@ -164,7 +165,7 @@ def build_ex_post_table(risk: ExPostRisk) -> ExPostTable | None:
             kind=kind,
             cells=tuple(_cell(window, key, risk.label, markers) for window in risk.windows),
         )
-        for key, label, anchor, kind in _ROWS
+        for key, label, anchor, kind in SUMMARY_ROWS
     )
     against = f"{risk.label} · against {risk.benchmark.ticker}"
     relative_rows = tuple(
@@ -196,14 +197,18 @@ def build_ex_post_table(risk: ExPostRisk) -> ExPostTable | None:
 
 
 def _legend(windows: tuple[ExPostWindow, ...]) -> tuple[FlagNote, ...]:
-    present = {
-        flag
+    return legend_for(
+        figure
         for window in windows
         if window.covered
         for figure in (*window.figures.values(), *window.relative.values())
-        for flag in figure.flags
-        if flag not in _NO_MARKER
-    }
+    )
+
+
+def legend_for(figures: Iterable[RiskFigure]) -> tuple[FlagNote, ...]:
+    """A numbered note for each flag `figures` carry, in FLAG_NOTES' order: the ex-post table's
+    legend, and the ex-ante section's (risk_ex_ante_view.py)."""
+    present = {flag for figure in figures for flag in figure.flags if flag not in _NO_MARKER}
     unknown = sorted(present - set(FLAG_NOTES))
     if unknown:
         # A flag portfolio added after this table: shown by name rather than dropped.
@@ -246,13 +251,29 @@ def _figure_cell(
     markers: dict[str, str],
     drawdown: DrawdownDates | None = None,
 ) -> Cell:
+    return figure_cell(
+        figure, window.label, label, markers, covered=window.covered, drawdown=drawdown
+    )
+
+
+def figure_cell(
+    figure: RiskFigure,
+    window_label: str,
+    label: str,
+    markers: dict[str, str],
+    *,
+    covered: bool = True,
+    drawdown: DrawdownDates | None = None,
+) -> Cell:
+    """One figure's cell, in a window `covered` or not. `label` ends its title: the section's
+    ex-post or ex-ante label (spec §10, R2)."""
     return Cell(
         value=figure.value,
-        reason=figure.reason if window.covered else None,
-        title=_title(window.label, figure, label),
+        reason=figure.reason if covered else None,
+        title=figure_title(window_label, figure, label),
         markers=(
             tuple(sorted({markers[f] for f in figure.flags if f in markers}, key=int))
-            if window.covered
+            if covered
             else ()
         ),
         standard_error=figure.standard_error,
@@ -260,7 +281,8 @@ def _figure_cell(
     )
 
 
-def _title(window_label: str, figure: RiskFigure, label: str) -> str:
+def figure_title(window_label: str, figure: RiskFigure, label: str) -> str:
+    """A figure's window, frequency, n_obs, gaps and label, for its `title` (spec §10)."""
     gaps = "1 gap" if figure.n_gaps == 1 else f"{figure.n_gaps} gaps"
     return (
         f"{window_label}: {figure.window_start.isoformat()} to {figure.window_end.isoformat()}"

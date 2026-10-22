@@ -9,6 +9,7 @@ import logging
 import re
 from dataclasses import replace
 from datetime import date
+from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
@@ -21,11 +22,20 @@ from web.portfolio_client.base import (
     RELATIVE_FIGURE_KEYS,
     RISK_FIGURE_KEYS,
     RISK_WINDOWS,
+    BacktestAssetStatus,
     BenchmarkStatus,
+    CorrelationCell,
+    CorrelationMatrix,
+    ExAnteHolding,
+    ExAnteRisk,
+    ExAnteWindow,
     ExcludedHolding,
     ExPostRisk,
     ExPostWindow,
+    Holding,
+    Holdings,
     RiskFigure,
+    SeriesRisk,
 )
 from web.portfolio_client.errors import PortfolioUnavailable
 from web.settings import Settings
@@ -66,6 +76,99 @@ _VALUES = {
 }
 
 
+EX_ANTE_LABEL = "ex-ante · constant weights"
+EX_ANTE_START = date(2023, 10, 20)
+
+
+def _ex_ante_figure(value, frequency="weekly", **changes) -> RiskFigure:
+    figure = RiskFigure(
+        value=value,
+        window_start=EX_ANTE_START,
+        window_end=END,
+        frequency=frequency,
+        q=52.0 if frequency == "weekly" else 251.4,
+        n_obs=156 if frequency == "weekly" else 753,
+        n_gaps=0,
+        flags=(),
+        reason=None,
+        standard_error=None,
+    )
+    return replace(figure, **changes)
+
+
+def _held(ticker, market_value) -> Holding:
+    return Holding(
+        canonical_ticker=ticker,
+        quantity=Decimal("1"),
+        average_cost_eur=None,
+        cost_basis_eur=Decimal("1"),
+        native_currency="EUR",
+        mixed_currency=False,
+        average_cost_native=None,
+        market_value_native=None,
+        priced=True,
+        price_date=END,
+        market_value_eur=Decimal(market_value),
+        unrealized_return_eur=None,
+        unrealized_return_pct=None,
+        dividends_received_eur=None,
+        total_return_eur=None,
+        total_return_pct=None,
+        accounts=(),
+    )
+
+
+# 70/20/10 by market value: build_default_mix sends these weights, largest first.
+_HOLDINGS = (_held("IWDA.AS", "7000"), _held("TSLA", "1000"), _held("AAPL", "2000"))
+_EX_ANTE_KEYS = ("IWDA.AS", "AAPL", "TSLA", "VWCE.DE")
+# One distinct ρ per pair, so a test can find a square by its printed value.
+_RHO = {
+    ("IWDA.AS", "AAPL"): 0.6512,
+    ("IWDA.AS", "TSLA"): 0.4123,
+    ("IWDA.AS", "VWCE.DE"): 0.9734,
+    ("AAPL", "TSLA"): 0.3311,
+    ("AAPL", "VWCE.DE"): 0.6201,
+    ("TSLA", "VWCE.DE"): -0.1234,
+}
+
+
+def _ex_ante(**changes) -> ExAnteRisk:
+    figures = {
+        name: _ex_ante_figure(_VALUES[name] / 2, "weekly" if name in _WEEKLY else "daily")
+        for name in RISK_FIGURE_KEYS
+    }
+    risk = ExAnteRisk(
+        label=EX_ANTE_LABEL,
+        currency="eur",
+        rf_available=True,
+        window=ExAnteWindow("3Y", date(2023, 10, 16), EX_ANTE_START, END, ()),
+        benchmark=BENCHMARK,
+        statuses=tuple(
+            BacktestAssetStatus(t, "included", None) for t in ("IWDA.AS", "AAPL", "TSLA")
+        ),
+        sigma_p=_ex_ante_figure(0.1418),
+        diversification_ratio=_ex_ante_figure(1.2345),
+        effective_n=1.8519,
+        holdings=(
+            ExAnteHolding("IWDA.AS", 0.7, 0.15, 0.13, 0.091, 0.6418, 0.95),
+            ExAnteHolding("AAPL", 0.2, 0.25, 0.14, 0.028, 0.1975, 0.71),
+            # 10% of the money, 16% of the risk: spec §6.3's headline case.
+            ExAnteHolding("TSLA", 0.1, 0.55, 0.23, 0.023, 0.1607, 0.52),
+        ),
+        constant_weight=SeriesRisk(figures, date(2024, 2, 2), date(2024, 4, 7), None, 256),
+        correlation=CorrelationMatrix(
+            keys=_EX_ANTE_KEYS,
+            benchmark_key="VWCE.DE",
+            cells=tuple(
+                CorrelationCell(a, b, _ex_ante_figure(1.0 if a == b else _RHO[a, b]))
+                for i, a in enumerate(_EX_ANTE_KEYS)
+                for b in _EX_ANTE_KEYS[i:]
+            ),
+        ),
+    )
+    return replace(risk, **changes)
+
+
 class FakeAuthClient:
     def __init__(self):
         self.validate_result: AuthResult | None = None
@@ -83,6 +186,10 @@ class FakePortfolioClient:
         self.calls: list[tuple] = []
         self.tickers = ["IWDA.AS", "VWCE.DE"]
         self.tickers_error: Exception | None = None
+        self.holdings = Holdings(holdings=_HOLDINGS, totals=None)
+        self.holdings_error: Exception | None = None
+        self.ex_ante: ExAnteRisk = _ex_ante()
+        self.ex_ante_error: Exception | None = None
 
     async def list_tickers(self):
         if self.tickers_error:
@@ -94,6 +201,18 @@ class FakePortfolioClient:
         if self.ex_post_error:
             raise self.ex_post_error
         return self.ex_post
+
+    async def list_holdings(self, *, user_id):
+        self.calls.append(("list_holdings", user_id))
+        if self.holdings_error:
+            raise self.holdings_error
+        return self.holdings
+
+    async def ex_ante_risk(self, *, assets, window, benchmark, exclude):
+        self.calls.append(("ex_ante_risk", tuple(assets), window, benchmark, tuple(exclude)))
+        if self.ex_ante_error:
+            raise self.ex_ante_error
+        return self.ex_ante
 
 
 def _settings() -> Settings:
@@ -187,6 +306,10 @@ def _risk(*, one_y=None, **changes) -> ExPostRisk:
     return replace(risk, **changes)
 
 
+def _ex_post_calls(fake_portfolio):
+    return [call for call in fake_portfolio.calls if call[0] == "ex_post_risk"]
+
+
 def _page(test_client):
     response = test_client.get("/risk")
     assert response.status_code == 200
@@ -253,7 +376,7 @@ def test_asks_portfolio_for_this_users_figures(client):
 
     _page(test_client)
 
-    assert fake_portfolio.calls == [("ex_post_risk", "u1", "VWCE.DE")]
+    assert _ex_post_calls(fake_portfolio) == [("ex_post_risk", "u1", "VWCE.DE")]
 
 
 # --- the summary table ------------------------------------------------------------------------
@@ -475,7 +598,7 @@ def test_nothing_to_measure_says_so(client):
 
     assert "Nothing to measure yet" in html
     assert 'href="/accounts"' in html
-    assert "risk-table" not in html
+    assert 'aria-label="Ex-post risk figures"' not in html
     # Nothing was measured, so there's no rate to miss.
     assert "No risk-free rate" not in html
 
@@ -490,7 +613,7 @@ def test_a_failing_portfolio_shows_the_sections_notice_and_still_renders_the_pag
     assert "Couldn't load the ex-post figures." in html
     assert "reach the portfolio service right now" in html
     assert "site-nav" in html
-    assert "risk-table" not in html
+    assert 'aria-label="Ex-post risk figures"' not in html
 
 
 # --- logging ----------------------------------------------------------------------------------
@@ -599,7 +722,7 @@ def test_the_benchmark_is_asked_for_and_kept_in_the_field(client):
     response = test_client.get("/risk?benchmark=IWDA.AS")
 
     assert response.status_code == 200
-    assert fake_portfolio.calls == [("ex_post_risk", "u1", "IWDA.AS")]
+    assert _ex_post_calls(fake_portfolio) == [("ex_post_risk", "u1", "IWDA.AS")]
     form = _benchmark_form(response.text)
     assert 'method="get"' in form and 'action="/risk"' in form
     assert 'name="benchmark"' in form and 'value="IWDA.AS"' in form
@@ -643,7 +766,7 @@ def test_an_over_long_benchmark_says_so_and_shows_the_default(client):
 
     html = test_client.get("/risk?benchmark=" + "A" * 21).text
 
-    assert fake_portfolio.calls == [("ex_post_risk", "u1", "VWCE.DE")]
+    assert _ex_post_calls(fake_portfolio) == [("ex_post_risk", "u1", "VWCE.DE")]
     form = _benchmark_form(html)
     assert "at most 20 characters" in form
     assert 'aria-invalid="true"' in form
@@ -717,3 +840,314 @@ def test_logs_the_benchmark(client, caplog):
     assert any(
         "against VWCE.DE (available)" in m and "8 of 20 relative" in m for m in messages
     ), messages
+
+
+# --- the ex-ante section (RK-18) ---------------------------------------------------------------
+
+
+def _ex_ante_html(html):
+    return re.search(
+        r'<section class="risk-section" aria-labelledby="risk-ex-ante-title".*?</section>',
+        html,
+        re.S,
+    ).group(0)
+
+
+def _ex_ante_calls(fake_portfolio):
+    return [call for call in fake_portfolio.calls if call[0] == "ex_ante_risk"]
+
+
+def test_ex_ante_sends_the_holdings_mix_over_3y_by_default(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+
+    _page(test_client)
+
+    ((_, assets, window, benchmark, exclude),) = _ex_ante_calls(fake_portfolio)
+    assert [ticker for ticker, _ in assets] == ["IWDA.AS", "AAPL", "TSLA"]
+    assert sum(weight for _, weight in assets) == 1
+    assert (window, benchmark, exclude) == ("3Y", "VWCE.DE", ())
+
+
+def test_ex_ante_window_and_exclusions_reach_portfolio(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+
+    test_client.get("/risk?ex_ante_window=5Y&exclude=TSLA&benchmark=IWDA.AS")
+
+    ((_, _, window, benchmark, exclude),) = _ex_ante_calls(fake_portfolio)
+    assert (window, benchmark, exclude) == ("5Y", "IWDA.AS", ("TSLA",))
+
+
+def test_an_unknown_window_falls_back_to_3y(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+
+    test_client.get("/risk?ex_ante_window=2Y")
+
+    assert _ex_ante_calls(fake_portfolio)[0][2] == "3Y"
+
+
+def test_an_exclusion_not_in_the_mix_isnt_sent(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+
+    test_client.get("/risk?exclude=NOPE.XX&exclude=TSLA")
+
+    assert _ex_ante_calls(fake_portfolio)[0][4] == ("TSLA",)
+
+
+def test_excluding_every_holding_sends_no_exclusion(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+
+    test_client.get("/risk?exclude=IWDA.AS&exclude=AAPL&exclude=TSLA")
+
+    # portfolio would reject it with a 422; the page measures the whole mix instead.
+    assert _ex_ante_calls(fake_portfolio)[0][4] == ()
+
+
+def test_the_ex_ante_section_is_labelled_and_historical(client):
+    test_client, fake_auth, _ = client
+    _logged_in(test_client, fake_auth)
+
+    section = _ex_ante_html(_page(test_client))
+
+    assert "Ex-ante · constant weights" in section
+    assert "historical" in section
+    assert "expected" not in section.lower()
+
+
+def test_the_ex_ante_summary_shows_sigma_p_and_the_diversification_ratio(client):
+    test_client, fake_auth, _ = client
+    _logged_in(test_client, fake_auth)
+
+    section = _ex_ante_html(_page(test_client))
+
+    assert '<span class="mono">14.2%</span>' in section  # σ_p
+    assert '<span class="mono">1.23</span>' in section  # diversification ratio
+    assert '<span class="mono">1.9</span>' in section  # effective N
+    assert f"· {EX_ANTE_LABEL}" in section  # every cell's title carries the label
+
+
+def test_the_decomposition_shows_weight_beside_risk(client):
+    test_client, fake_auth, _ = client
+    _logged_in(test_client, fake_auth)
+
+    section = _ex_ante_html(_page(test_client))
+
+    table = re.search(r"<table[^>]*risk-decomposition.*?</table>", section, re.S).group(0)
+    tsla = re.search(r"<tr[^>]*>(?:(?!</tr>).)*TSLA.*?</tr>", table, re.S).group(0)
+    assert "10.0%" in tsla and "16.1%" in tsla and "1.61" in tsla
+
+
+def test_an_outsized_holding_is_named_in_a_note(client):
+    test_client, fake_auth, _ = client
+    _logged_in(test_client, fake_auth)
+
+    section = _ex_ante_html(_page(test_client))
+
+    note = re.search(r'<p class="risk-insight">.*?</p>', section, re.S).group(0)
+    assert "TSLA" in note and "10.0%" in note and "16.1%" in note
+    assert "IWDA.AS" not in note
+
+
+def test_no_note_when_risk_follows_weight(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.ex_ante = _ex_ante(
+        holdings=(
+            ExAnteHolding("IWDA.AS", 0.7, 0.15, 0.13, 0.1, 0.7, 0.95),
+            ExAnteHolding("AAPL", 0.2, 0.25, 0.14, 0.03, 0.2, 0.71),
+            ExAnteHolding("TSLA", 0.1, 0.55, 0.23, 0.01, 0.1, 0.52),
+        )
+    )
+
+    assert 'class="risk-insight"' not in _ex_ante_html(_page(test_client))
+
+
+def test_a_greyed_decomposition_says_why_once(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    reason = "insufficient history (52 of 104 weeks)"
+    fake_portfolio.ex_ante = _ex_ante(
+        diversification_ratio=_ex_ante_figure(None, reason=reason),
+        holdings=tuple(
+            ExAnteHolding(t, w, None, None, None, None, None)
+            for t, w in (("IWDA.AS", 0.7), ("AAPL", 0.2), ("TSLA", 0.1))
+        ),
+    )
+
+    section = _ex_ante_html(_page(test_client))
+
+    assert section.count(reason) >= 1
+    assert "70.0%" in section  # the weights are still shown
+
+
+def test_the_euro_var_is_on_the_measured_holdings_value(client):
+    test_client, fake_auth, _ = client
+    _logged_in(test_client, fake_auth)
+
+    section = _ex_ante_html(_page(test_client))
+
+    # var_95 is 0.0213 / 2 on €10,000.
+    assert "1 in 20" in section
+    assert "€106.50" in section
+    assert "€10,000.00" in section
+
+
+def test_the_heatmap_has_a_square_per_pair_with_its_bucket(client):
+    test_client, fake_auth, _ = client
+    _logged_in(test_client, fake_auth)
+
+    section = _ex_ante_html(_page(test_client))
+
+    heatmap = re.search(r"<table[^>]*risk-heatmap.*?</table>", section, re.S).group(0)
+    assert heatmap.count("0.97") == 2  # mirrored
+    assert re.search(r'class="[^"]*corr-4[^"]*"[^>]*>\s*<span class="mono">0.97', heatmap)
+    assert re.search(r'class="[^"]*corr-0[^"]*"[^>]*>\s*<span class="mono">−0.12', heatmap)
+    assert "TSLA and VWCE.DE: 2023-10-20 to 2026-10-16 · weekly" in heatmap
+
+
+def test_the_limiting_holding_can_be_excluded(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.ex_ante = _ex_ante(
+        window=ExAnteWindow("Max", date(2009, 9, 25), date(2015, 3, 6), END, ("TSLA",))
+    )
+
+    section = _ex_ante_html(test_client.get("/risk?ex_ante_window=Max").text)
+
+    assert "limited by" in section.lower()
+    assert 'href="/risk?ex_ante_window=Max&amp;exclude=TSLA#risk-ex-ante"' in section
+
+
+def test_an_excluded_holding_can_be_included_again(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.ex_ante = _ex_ante(
+        statuses=(
+            BacktestAssetStatus("IWDA.AS", "included", None),
+            BacktestAssetStatus("AAPL", "included", None),
+            BacktestAssetStatus("TSLA", "excluded", "excluded by request"),
+        )
+    )
+
+    section = _ex_ante_html(test_client.get("/risk?exclude=TSLA").text)
+
+    assert 'href="/risk?#risk-ex-ante"' in section
+    assert "Include" in section
+
+
+def test_the_window_links_mark_the_current_one(client):
+    test_client, fake_auth, _ = client
+    _logged_in(test_client, fake_auth)
+
+    section = _ex_ante_html(test_client.get("/risk?benchmark=IWDA.AS").text)
+
+    assert re.search(r'href="[^"]*ex_ante_window=3Y[^"]*" aria-current="true"', section)
+    assert 'href="/risk?benchmark=IWDA.AS&amp;ex_ante_window=5Y#risk-ex-ante"' in section
+
+
+def test_the_benchmark_form_keeps_the_ex_ante_choices(client):
+    test_client, fake_auth, _ = client
+    _logged_in(test_client, fake_auth)
+
+    html = test_client.get("/risk?ex_ante_window=5Y&exclude=TSLA").text
+
+    form = _benchmark_form(html)
+    assert '<input type="hidden" name="ex_ante_window" value="5Y">' in form
+    assert '<input type="hidden" name="exclude" value="TSLA">' in form
+
+
+def test_ex_ante_left_out_holdings_are_named(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.ex_ante = _ex_ante(
+        statuses=(
+            BacktestAssetStatus("IWDA.AS", "included", None),
+            BacktestAssetStatus("AAPL", "included", None),
+            BacktestAssetStatus("TSLA", "no_fx_rate", "no FX series for USD"),
+        )
+    )
+
+    section = _ex_ante_html(_page(test_client))
+
+    assert "no FX series for USD" in section
+
+
+def test_an_ex_ante_failure_leaves_the_ex_post_summary(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.ex_ante_error = PortfolioUnavailable("down")
+
+    html = _page(test_client)
+
+    assert "Couldn't load the ex-ante figures." in _ex_ante_html(html)
+    assert 'aria-label="Ex-post risk figures"' in html
+
+
+def test_a_holdings_failure_shows_the_ex_ante_notice(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.holdings_error = PortfolioUnavailable("down")
+
+    html = _page(test_client)
+
+    assert "Couldn't load the ex-ante figures." in _ex_ante_html(html)
+    assert _ex_ante_calls(fake_portfolio) == []
+
+
+def test_an_ex_post_failure_leaves_the_ex_ante_section(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.ex_post_error = PortfolioUnavailable("down")
+
+    section = _ex_ante_html(_page(test_client))
+
+    assert '<span class="mono">14.2%</span>' in section
+
+
+def test_no_holdings_means_no_ex_ante_call(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.holdings = Holdings(holdings=(), totals=None)
+
+    section = _ex_ante_html(_page(test_client))
+
+    assert _ex_ante_calls(fake_portfolio) == []
+    assert "Nothing to measure yet" in section
+
+
+def test_logs_the_ex_ante_outcome(client, caplog):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.ex_ante = _ex_ante(
+        window=ExAnteWindow("Max", date(2009, 9, 25), date(2015, 3, 6), END, ("TSLA",))
+    )
+
+    with caplog.at_level(logging.INFO, logger="web.api.risk"):
+        test_client.get("/risk?ex_ante_window=Max&exclude=NOPE.XX")
+
+    messages = _messages(caplog)
+    assert any("ex-ante" in m and "3 holdings" in m and "Max" in m for m in messages), messages
+    assert any("NOPE.XX" in m and "not in the mix" in m for m in messages), messages
+    assert any(
+        "ex-ante" in m and "limited by TSLA" in m and "0 of 10 correlation cells greyed" in m
+        for m in messages
+    ), messages
+
+
+def test_the_ex_ante_terms_link_to_the_glossary(client):
+    test_client, fake_auth, _ = client
+    _logged_in(test_client, fake_auth)
+
+    anchors = {anchor for anchor, _ in _glossary_links(_page(test_client))}
+
+    assert {
+        "ex-ante",
+        "diversification-ratio",
+        "effective-n",
+        "share-of-risk",
+        "correlation-matrix",
+    } <= anchors
