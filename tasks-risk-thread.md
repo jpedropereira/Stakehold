@@ -134,7 +134,7 @@ checked against the code, docs and dev DB:
 | RK-20 | [web: what-if form](#rk-20-web-what-if-form) | RK-18, RK-19 | blocked |
 | RK-21 | [data-store: ETF holdings endpoint](#rk-21-data-store-etf-holdings-endpoint) | RK-1 | done |
 | RK-22 | [portfolio: look-through exposures](#rk-22-portfolio-look-through-exposures) | RK-21 | done |
-| RK-23 | [web: concentration section](#rk-23-web-concentration-section) | RK-12, RK-22 | ready |
+| RK-23 | [web: concentration section](#rk-23-web-concentration-section) | RK-12, RK-22 | done |
 | RK-24 | [portfolio: rolling windows](#rk-24-portfolio-rolling-windows) | RK-11, RK-16, RK-17 | ready |
 | RK-25 | [web: rolling charts](#rk-25-web-rolling-charts) | RK-18, RK-24 | blocked |
 | RK-26 | [FX decomposition (portfolio and web)](#rk-26-fx-decomposition-portfolio-and-web) | RK-18 | ready |
@@ -930,10 +930,20 @@ Decisions:
 
 ### RK-23. web: concentration section
 
-**Status:** ready
+**Status:** done
 
 Exposure tables or bars per dimension, with the unmapped share shown prominently, the
 listing-vs-exposure currency view, the top look-through single names, and the snapshot date.
+
+**As built:** a third `/risk` section, built by `risk_concentration_view.py`. The client
+gained `look_through`, and `review_pages.py`'s fakes moved to `scripts/review_fakes.py` first.
+web's `ui-architecture.md` holds the reasoning. Agreed:
+- A table per dimension, each weight with an inline-SVG ink bar (the CSP blocks inline styles).
+- The unmapped share first, with each fund's reason.
+- One currency table with both R16 views.
+- The 10 heaviest known buckets, with the rest in a `<details>`.
+- Always the whole mix: `?exclude=` stays ex-ante's.
+- One holdings call shared with ex-ante.
 
 ### RK-24. portfolio: rolling windows
 
