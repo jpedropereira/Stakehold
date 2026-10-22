@@ -1595,6 +1595,65 @@ img.logo-on-dark {
   border-radius: 2px;
 }
 
+/* ---- concentration (RK-23) ---- */
+
+/* The unmapped share: the gold rule of .risk-insight, the accent's "look here". It is what
+   every table below can't see into, so it sits above them. */
+.lt-unmapped {
+  margin-top: var(--space-3);
+}
+
+/* How the mix splits between looked through, direct, commodity and unmapped: one line each. */
+.lt-coverage {
+  margin: var(--space-2) 0 0;
+  padding-left: 0;
+  list-style: none;
+  font: var(--text-caption);
+  color: var(--text-muted);
+}
+
+.lt-coverage .mono {
+  color: var(--text);
+}
+
+/* A weight's bar: its share of the whole mix, under the figure. The width is the SVG rect's
+   attribute (the CSP allows no inline styles); the fill is an ink tint, as the heatmap's, since
+   an exposure isn't a gain or a loss. aria-hidden: the printed figure carries the value. */
+.lt-bar {
+  display: block;
+  width: 100%;
+  min-width: 80px;
+  height: 4px;
+  margin-top: 2px;
+}
+
+.lt-bar rect {
+  fill: color-mix(in srgb, var(--text) 45%, transparent);
+}
+
+.lt-bar-greyed rect {
+  fill: color-mix(in srgb, var(--text) 20%, transparent);
+}
+
+.lt-table th[scope="row"] {
+  white-space: normal;
+}
+
+.lt-concentration {
+  margin-top: var(--space-2);
+}
+
+/* "Show all": the buckets past the 10 heaviest known ones, and names 11 to 25. No JS. */
+.lt-more {
+  margin-top: var(--space-2);
+}
+
+.lt-more summary {
+  cursor: pointer;
+  font: var(--text-caption);
+  color: var(--text-muted);
+}
+
 /* ---- benchmark (RK-14) ---- */
 
 /* The benchmark field and its button on one line, the button level with the input. */
