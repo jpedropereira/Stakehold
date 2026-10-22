@@ -22,8 +22,10 @@ from portfolio.eur_returns.calculator import EurReturns, eur_daily_returns
 from portfolio.risk.correlation import (
     ListwiseCorrelation,
     listwise_correlation,
+    pair_cell,
     pairwise_correlation,
 )
+from portfolio.risk.history import Measure
 from portfolio.risk.listwise import listwise
 from portfolio.risk.types import Flag, Frequency, ReturnSeries, Window
 from portfolio.risk.weekly import to_weekly
@@ -164,6 +166,25 @@ def test_pairwise_minimum_is_104_overlapping_weeks():
     assert enough.n_obs == 104
     assert enough.value == pytest.approx(1.0)
     assert enough.reason is None
+
+
+def test_a_pair_cell_takes_the_minimum_of_the_measure_it_is_given():
+    a = _pattern(_p, 0, 52)
+    b = _pattern(_p, 0, 52, scale=2.0, shift=0.001)
+
+    standard = pair_cell(a, b, FULL)
+    assert standard == pairwise_correlation({"A": a, "B": b}, FULL).cell("A", "B")
+    assert standard.value is None
+    assert standard.reason == "insufficient history (have 52, need 104)"
+
+    rolling = pair_cell(a, b, FULL, Measure.ROLLING_CORRELATION)
+    assert rolling.n_obs == 52
+    assert rolling.value == pytest.approx(1.0)
+    assert rolling.reason is None
+
+    short = pair_cell(a, _pattern(_p, 1, 52), FULL, Measure.ROLLING_CORRELATION)
+    assert short.value is None
+    assert short.reason == "insufficient history (have 51, need 52)"
 
 
 def test_no_overlap_is_greyed_with_zero_obs():

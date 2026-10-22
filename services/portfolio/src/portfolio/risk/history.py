@@ -30,6 +30,7 @@ class Measure(StrEnum):
     COVARIANCE = "covariance"
     TRACKING_ERROR = "tracking_error"
     INFORMATION_RATIO = "information_ratio"
+    ROLLING_CORRELATION = "rolling_correlation"
 
 
 @dataclass(frozen=True)
@@ -56,6 +57,9 @@ _MINIMUMS = {
     # active return and the information ratio its Sharpe, so they take those minimums.
     Measure.TRACKING_ERROR: _Minimum(Frequency.WEEKLY, min_obs=52),
     Measure.INFORMATION_RATIO: _Minimum(Frequency.WEEKLY, min_obs=52),
+    # Agreed for RK-24: §7.1's rolling correlation runs over 52 weekly obs, which §4.5's 104
+    # would grey at every point. It is for display only and never feeds portfolio maths (R13).
+    Measure.ROLLING_CORRELATION: _Minimum(Frequency.WEEKLY, min_obs=52),
 }
 
 _SHORT_WINDOW_YEARS = 3

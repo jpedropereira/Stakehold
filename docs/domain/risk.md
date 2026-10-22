@@ -206,6 +206,11 @@ Standard windows: **1Y, 3Y, 5Y, 10Y, Max**, ending at the latest common date. Ro
 > ≥ 52 overlapping weekly obs, like volatility and Sharpe: tracking error is the volatility of
 > the active return and the information ratio its Sharpe.
 
+> **Amended (RK-24):** the rolling correlation (§7.1) takes ≥ 52 overlapping weekly obs, its own
+> 52-week window, not the 104 above. Under 104, every rolling point would be greyed. A rolling
+> ρ is for display only, as a pairwise cell is (R13), and never feeds portfolio maths. Over 52
+> obs its standard error is about 0.14, which the chart has to carry.
+
 - **R9.** Below the minimum: show the measure greyed out with "insufficient history (have N,
   need M)", never a number and never a hidden row. **DECISION.**
 - **R10. Comparability.** When ranking or comparing several assets or mixes side by side, the
@@ -431,7 +436,8 @@ This shows how much of the "USD stock risk" is actually the dollar. Phase 5.
   is real risk for a EUR investor.
 - **Rolling correlation:** a selected pair, or one asset against the portfolio, over a 1-year
   rolling window of weekly returns (52 obs), stepped weekly. Phase 5. The useful lesson here is
-  that correlations rise in crises.
+  that correlations rise in crises. (Its minimum is 52 obs, not §4.5's 104: see the RK-24 amendment
+  there.)
 - **Clustering:** order rows by hierarchical clustering of the distance `√(2(1−ρ))`, so
   similar assets sit together. Nice to have.
 
