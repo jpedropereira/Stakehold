@@ -44,6 +44,15 @@ def fakes():
         HoldingAccount,
         Holdings,
         HoldingsTotals,
+        LookThrough,
+        LookThroughAsset,
+        LookThroughBucket,
+        LookThroughConcentration,
+        LookThroughDimension,
+        LookThroughExposures,
+        LookThroughName,
+        LookThroughNames,
+        LookThroughSnapshot,
         PortfolioReturns,
         PortfolioSeriesPoint,
         Position,
@@ -862,6 +871,172 @@ def fakes():
                         )
                         for i, a in enumerate(keys)
                         for b in keys[i:]
+                    ),
+                ),
+            )
+
+        async def look_through(self, *, assets):
+            """The concentration section (RK-23), shaped like the dev run (RK-22), not the
+            review holdings: they hold no fund portfolio can look through. 70.7% through
+            IWDA.AS, gold as a commodity, three unmapped funds (the prominent note), a direct
+            stock merged with its IWDA line and one portfolio can't place, and more than 10
+            countries and names, so each table has a "show all"."""
+            d = Decimal
+
+            def concentration(top1, known, hhi, reason=None):
+                return LookThroughConcentration(
+                    top_shares={1: d(top1), 5: d(known) * d("0.8"), 10: d(known) * d("0.9")},
+                    known_share=d(known),
+                    herfindahl=None if reason else d(hhi),
+                    effective_n=None if reason else 1 / d(hhi),
+                    reason=reason,
+                )
+
+            unmapped = (
+                ("unmapped: VWCE.DE", "0.080", "unmapped"),
+                ("unmapped: IEMA.AS", "0.030", "unmapped"),
+                ("unmapped: IUSN.DE", "0.018", "unmapped"),
+            )
+
+            def dimension(label, known, *buckets, top1="0.5", hhi="0.3", looked=True):
+                # The trading-currency view isn't looked through: an unmapped fund's own
+                # trading currency is known, so it has no unmapped bucket.
+                rows = (*buckets, *unmapped) if looked else buckets
+                return LookThroughDimension(
+                    label,
+                    tuple(LookThroughBucket(b, d(w), k) for b, w, k in rows),
+                    concentration(top1, known, hhi),
+                )
+
+            countries = (
+                ("United States", "0.522"), ("Japan", "0.039"), ("United Kingdom", "0.025"),
+                ("Canada", "0.021"), ("France", "0.021"), ("Switzerland", "0.018"),
+                ("Germany", "0.017"), ("Australia", "0.011"), ("Netherlands", "0.010"),
+                ("Denmark", "0.006"), ("Sweden", "0.006"), ("Italy", "0.005"),
+                ("Spain", "0.005"), ("Hong Kong", "0.004"), ("Singapore", "0.003"),
+                ("Finland", "0.002"), ("Belgium", "0.002"), ("Israel", "0.002"),
+            )  # fmt: skip
+            names = (
+                ("Commodity: gold", None, "0.131", ("EGLN.L",)),
+                ("NVIDIA CORP", "United States", "0.038", ("IWDA.AS",)),
+                ("APPLE INC", "United States", "0.035", ("IWDA.AS",)),
+                ("MICROSOFT CORP", "United States", "0.031", ("IWDA.AS",)),
+                ("ALPHABET INC", "United States", "0.022", ("IWDA.AS",)),
+                ("ALIBABA GROUP HOLDING LTD", None, "0.021", ("BABA",)),
+                ("AMAZON COM INC", "United States", "0.020", ("IWDA.AS",)),
+                ("BERKSHIRE HATHAWAY INC", "United States", "0.016", ("IWDA.AS", "BRK-B")),
+                ("META PLATFORMS INC", "United States", "0.014", ("IWDA.AS",)),
+                ("BROADCOM INC", "United States", "0.012", ("IWDA.AS",)),
+                ("TESLA INC", "United States", "0.009", ("IWDA.AS",)),
+                ("JPMORGAN CHASE & CO", "United States", "0.008", ("IWDA.AS",)),
+                ("ELI LILLY", "United States", "0.007", ("IWDA.AS",)),
+                ("VISA INC", "United States", "0.006", ("IWDA.AS",)),
+                ("ASML HOLDING NV", "Netherlands", "0.005", ("IWDA.AS",)),
+            )
+            return LookThrough(
+                assets=(
+                    LookThroughAsset("IWDA.AS", "included", None, "look_through", d("0.707"),
+                                     None, None),
+                    LookThroughAsset("EGLN.L", "included", None, "commodity", d("0.131"),
+                                     None, None),
+                    LookThroughAsset("VWCE.DE", "included", None, "unmapped", d("0.080"),
+                                     None, "no holdings data for this ETF"),
+                    LookThroughAsset("IEMA.AS", "included", None, "unmapped", d("0.030"),
+                                     None, "no holdings data for this ETF"),
+                    LookThroughAsset("IUSN.DE", "included", None, "unmapped", d("0.018"),
+                                     None, "no holdings snapshot"),
+                    LookThroughAsset("BABA", "included", None, "direct", d("0.021"),
+                                     None, None),
+                    LookThroughAsset("BRK-B", "included", None, "direct", d("0.013"),
+                                     "IWDA.AS", None),
+                ),  # fmt: skip
+                exposures=LookThroughExposures(
+                    snapshots=(
+                        LookThroughSnapshot("IWDA.AS", "world", date(2026, 8, 30), 1324,
+                                            d("100.03")),
+                    ),  # fmt: skip
+                    coverage={
+                        "look_through": d("0.707"),
+                        "direct_matched": d("0.013"),
+                        "direct_unmatched": d("0.021"),
+                        "commodity": d("0.131"),
+                        "unmapped": d("0.128"),
+                    },
+                    dimensions={
+                        "currency": dimension(
+                            "listing currency of holdings",
+                            "0.872",
+                            ("USD", "0.674", "known"),
+                            ("EUR", "0.057", "known"),
+                            ("JPY", "0.039", "known"),
+                            ("GBP", "0.025", "known"),
+                            ("CAD", "0.021", "known"),
+                            ("CHF", "0.018", "known"),
+                            ("AUD", "0.011", "known"),
+                            ("DKK", "0.007", "known"),
+                            ("SEK", "0.006", "known"),
+                            ("HKD", "0.004", "known"),
+                            ("SGD", "0.003", "known"),
+                            ("NOK", "0.002", "known"),
+                            top1="0.674",
+                            hhi="0.61",
+                        ),
+                        "trading_currency": dimension(
+                            "trading currency of positions",
+                            "1",
+                            ("EUR", "0.835", "known"),
+                            ("GBP", "0.131", "known"),
+                            ("USD", "0.034", "known"),
+                            top1="0.835",
+                            hhi="0.715",
+                            looked=False,
+                        ),
+                        "sector": dimension(
+                            "sector",
+                            "0.851",
+                            ("Information Technology", "0.180", "known"),
+                            ("Financials", "0.133", "known"),
+                            ("Commodity: gold", "0.131", "other"),
+                            ("Industrials", "0.075", "known"),
+                            ("Health Care", "0.070", "known"),
+                            ("Consumer Discretionary", "0.070", "known"),
+                            ("Communication", "0.050", "known"),
+                            ("Consumer Staples", "0.040", "known"),
+                            ("Energy", "0.030", "known"),
+                            ("Materials", "0.025", "known"),
+                            ("Utilities", "0.020", "known"),
+                            ("Real Estate", "0.015", "known"),
+                            ("Cash and/or Derivatives", "0.002", "known"),
+                            ("unknown", "0.021", "unknown"),
+                            top1="0.18",
+                            hhi="0.14",
+                        ),
+                        "country": dimension(
+                            "country",
+                            "0.72",
+                            *((c, w, "known") for c, w in countries),
+                            ("n/a (commodity)", "0.131", "other"),
+                            ("unknown", "0.021", "unknown"),
+                            top1="0.522",
+                            hhi="0.53",
+                        ),
+                        "asset_class": dimension(
+                            "asset class",
+                            "0.872",
+                            ("Equity", "0.739", "known"),
+                            ("Commodity", "0.131", "known"),
+                            ("Cash", "0.002", "known"),
+                            top1="0.739",
+                            hhi="0.74",
+                        ),
+                    },
+                    names=LookThroughNames(
+                        top=tuple(
+                            LookThroughName(issuer, location, d(w), sources)
+                            for issuer, location, w, sources in names
+                        ),
+                        n_names=1311,
+                        concentration=concentration("0.131", "0.872", "0.031"),
                     ),
                 ),
             )

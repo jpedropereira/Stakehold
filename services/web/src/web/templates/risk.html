@@ -37,17 +37,18 @@
   {% endfor %}
 </tr>
 {%- endmacro %}
-{# RK-23: a weight and its bar, a share of the whole mix. The bar's width is an SVG attribute,
-   not a style: the CSP has no 'unsafe-inline' for styles. #}
+{# RK-23: a weight and its bar, a share of the whole mix, on a fixed-width track beside the
+   figure, so the two stay together at every width. The bar's width is an SVG attribute, not a
+   style: the CSP has no 'unsafe-inline' for styles. #}
 {% macro share_cell(weight, bar, label, greyed=false) -%}
-<td class="num" role="cell" data-label="{{ label }}"><span class="mono">{{ weight | pct1 }}</span>{% if bar is not none %}<svg class="lt-bar{% if greyed %} lt-bar-greyed{% endif %}" viewBox="0 0 100 4" preserveAspectRatio="none" aria-hidden="true" focusable="false"><rect width="{{ bar }}" height="4"/></svg>{% endif %}</td>
+<td class="num" role="cell" data-label="{{ label }}"><span class="lt-share">{% if bar is not none %}<svg class="lt-bar{% if greyed %} lt-bar-greyed{% endif %}" viewBox="0 0 100 4" preserveAspectRatio="none" aria-hidden="true" focusable="false"><rect class="lt-track" width="100" height="4"/><rect width="{{ bar }}" height="4"/></svg>{% endif %}<span class="mono">{{ weight | pct1 }}</span></span></td>
 {%- endmacro %}
 {% macro bucket_rows(table, rows) -%}
 <div class="table-scroll" tabindex="0" role="region" aria-label="{{ caller() }}">
 <table class="positions-table holdings-table lt-table stack-table" role="table">
   <thead role="rowgroup">
     <tr role="row">
-      <th role="columnheader" scope="col">{{ table.label | capitalize }}</th>
+      <th role="columnheader" scope="col">{% if table.trading_label %}Currency{% else %}{{ table.label | capitalize }}{% endif %}</th>
       <th class="num" role="columnheader" scope="col">{% if table.trading_label %}{{ table.label | capitalize }}{% else %}Share of the mix{% endif %}</th>
       {% if table.trading_label %}<th class="num" role="columnheader" scope="col">{{ table.trading_label | capitalize }}</th>{% endif %}
     </tr>
@@ -56,8 +57,9 @@
     {% for row in rows %}
     <tr role="row">
       <th role="rowheader" scope="row">{% if row.greyed %}<span class="risk-greyed">{{ row.label }}</span>{% else %}{{ row.label }}{% endif %}</th>
-      {{ share_cell(row.weight, row.bar, table.label | capitalize if table.trading_label else "Share of the mix", row.greyed) }}
-      {% if table.trading_label %}{{ share_cell(row.trading, none, table.trading_label | capitalize) }}{% endif %}
+      {#- A stacked row's labels are short, to leave the bar room beside them on a phone. #}
+      {{ share_cell(row.weight, row.bar, "Listing currency" if table.trading_label else "Share of the mix", row.greyed) }}
+      {% if table.trading_label %}{{ share_cell(row.trading, none, "Trading currency") }}{% endif %}
     </tr>
     {% endfor %}
   </tbody>

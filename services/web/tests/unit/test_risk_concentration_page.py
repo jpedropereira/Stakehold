@@ -343,8 +343,8 @@ def test_the_currency_table_shows_both_views(client):
 
     table = _table(_section(test_client), "Exposure by currency")
 
-    assert "Listing currency of holdings" in table
-    assert "Trading currency of positions" in table
+    headers = re.findall(r'<th[^>]*role="columnheader"[^>]*>([^<]*)</th>', table)
+    assert headers == ["Currency", "Listing currency of holdings", "Trading currency of positions"]
     gbp = re.search(r"<tr[^>]*>(?:(?!</tr>).)*GBP.*?</tr>", table, re.S).group(0)
     assert re.findall(r'<span class="mono">([^<]*)</span>', gbp) == ["0.0%", "15.0%"]
 

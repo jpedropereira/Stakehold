@@ -1616,19 +1616,31 @@ img.logo-on-dark {
   color: var(--text);
 }
 
-/* A weight's bar: its share of the whole mix, under the figure. The width is the SVG rect's
-   attribute (the CSP allows no inline styles); the fill is an ink tint, as the heatmap's, since
-   an exposure isn't a gain or a loss. aria-hidden: the printed figure carries the value. */
+/* A weight and its bar, one unit at the cell's end: the bar on a fixed-width track (0 to 100%
+   of the mix), so bars compare down a table and across tables, and a stacked row on a phone
+   keeps them beside each other. The width is the SVG rect's attribute (the CSP allows no inline
+   styles); the fill is an ink tint, as the heatmap's, since an exposure isn't a gain or a loss.
+   aria-hidden: the printed figure carries the value. */
+.lt-share {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
 .lt-bar {
   display: block;
-  width: 100%;
-  min-width: 80px;
-  height: 4px;
-  margin-top: 2px;
+  flex: none;
+  width: 96px;
+  height: 6px;
 }
 
 .lt-bar rect {
   fill: color-mix(in srgb, var(--text) 45%, transparent);
+}
+
+.lt-bar rect.lt-track {
+  fill: color-mix(in srgb, var(--text) 8%, transparent);
 }
 
 .lt-bar-greyed rect {
@@ -1772,6 +1784,19 @@ img.logo-on-dark {
 
   .risk-table .risk-dd {
     flex-basis: 100%;
+  }
+
+  /* A bucket or a name heads its block, as a risk row's measure does (RK-23). */
+  .lt-table tbody th {
+    display: block;
+    padding: 0 0 var(--space-2);
+    border-bottom: none;
+    font-weight: 600;
+  }
+
+  /* When the label leaves no room, the bar and figure wrap to the right, under it. */
+  .lt-table .lt-share {
+    margin-left: auto;
   }
 
   /* Max's start, which the hidden header carries at other widths. */

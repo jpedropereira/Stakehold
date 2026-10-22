@@ -133,6 +133,16 @@ PAGES = [
     Page("risk-ex-ante-excluded", "/risk?ex_ante_window=Max&exclude=AAPL#risk-ex-ante", "user"),
     Page("risk-ex-ante-benchmark", "/risk?benchmark=IWDA.AS#risk-ex-ante", "user"),
     Page("risk-ex-ante-unavailable", "/risk?ex_ante_window=10Y#risk-ex-ante", "user"),
+    # RK-23: the concentration section, with the unmapped note, the currency table's two views
+    # and greyed buckets; then with every "show all" open.
+    Page("risk-concentration", "/risk#risk-concentration", "user"),
+    Page(
+        "risk-concentration-all",
+        "/risk#risk-concentration",
+        "user",
+        # Each click opens the first one still closed: currency, sector, country and names.
+        click=(".lt-more:not([open]) > summary",) * 4,
+    ),
     # RK-9: the risk comparison over 3Y (AAPL's volatility has a gap note), over 10Y (not
     # covered, so no table), a mix the fake answers with no risk-free data, and the drawdown
     # chart over Max.
