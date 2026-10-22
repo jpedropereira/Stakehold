@@ -16,6 +16,7 @@ from portfolio.look_through import flows as look_through_flows
 from portfolio.look_through.calculator import DIMENSION_LABELS, Concentration, Dimension
 from portfolio.risk import flows as risk_flows
 from portfolio.risk.ex_post import WindowFigures
+from portfolio.risk.rolling import CORRELATION_WINDOW, ROLLING_WINDOW, RollingFigures
 from portfolio.risk.types import RiskFigure
 from portfolio.risk.windows import StandardWindow
 from portfolio.settings import Settings, load_settings
@@ -80,6 +81,7 @@ def get_ex_post_risk(
         "windows": [_ex_post_window(window) for window in result.windows],
         "n_excluded": len(result.excluded),
         "excluded": [asdict(holding) for holding in result.excluded],
+        "rolling": None if result.rolling is None else _rolling(result.rolling),
     }
 
 
@@ -111,6 +113,28 @@ def _series_figures(figures) -> dict:
     }
 
 
+def _rolling(rolling: RollingFigures) -> dict:
+    return {
+        "window": ROLLING_WINDOW,
+        "step": "monthly",
+        "volatility": [_figure(figure) for figure in rolling.volatility],
+        "sharpe": [_figure(figure) for figure in rolling.sharpe],
+    }
+
+
+def _rolling_correlation(pair: risk_flows.RollingCorrelation | None) -> dict | None:
+    if pair is None:
+        return None
+    return {
+        "a": pair.a,
+        "b": pair.b,
+        "window": CORRELATION_WINDOW,
+        "step": "weekly",
+        "reason": pair.reason,
+        "points": [_figure(figure) for figure in pair.points],
+    }
+
+
 def _figure(figure: RiskFigure) -> dict:
     return {
         **asdict(figure),
@@ -126,6 +150,7 @@ def get_ex_ante_risk(
     benchmark: str = DEFAULT_BENCHMARK,
     currency: str = risk_flows.EUR_RETURNS,
     exclude: Collection[str] = (),
+    rolling_pair: tuple[str, str | None] | None = None,
     settings: Settings | None = None,
 ) -> dict:
     """Ex-ante risk of `assets` (ticker, weight) pairs held at constant weights, over `window`
@@ -142,6 +167,7 @@ def get_ex_ante_risk(
         benchmark=benchmark,
         currency=currency,
         exclude=exclude,
+        rolling_pair=rolling_pair,
     )
 
     included = sum(1 for s in result.statuses if s.status == risk_flows.INCLUDED)
@@ -185,6 +211,8 @@ def get_ex_ante_risk(
                     "holdings",
                     "constant_weight",
                     "correlation",
+                    "rolling",
+                    "rolling_correlation",
                 )
             ),
         }
@@ -222,6 +250,8 @@ def get_ex_ante_risk(
                 for a, b, figure in risk_flows.correlation_cells(report)
             ],
         },
+        "rolling": _rolling(report.rolling),
+        "rolling_correlation": _rolling_correlation(result.rolling_correlation),
     }
 
 

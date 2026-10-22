@@ -128,10 +128,32 @@ def test_get_ex_ante_risk_returns_builtins_the_response_model_accepts(fake_clien
         ("VWCE.DE", "VWCE.DE"),
     ]
     assert result["benchmark"]["first_date"] == FIRST
+    rolling = result["rolling"]
+    assert (rolling["window"], rolling["step"]) == ("1Y", "monthly")
+    assert len(rolling["volatility"]) == len(rolling["sharpe"]) > 0
+    assert rolling["volatility"][-1]["frequency"] == "weekly"
+    assert isinstance(rolling["volatility"][-1]["flags"], list)
+    assert result["rolling_correlation"] is None
+
+
+def test_get_ex_ante_risk_returns_a_requested_rolling_pair(fake_client):
+    result = _get([("A", "3"), ("B", "1")], rolling_pair=("A", None))
+
+    ExAnteRiskResponse.model_validate(result)
+    pair = result["rolling_correlation"]
+    assert {k: pair[k] for k in ("a", "b", "window", "step", "reason")} == {
+        "a": "A",
+        "b": "portfolio",
+        "window": "52W",
+        "step": "weekly",
+        "reason": None,
+    }
+    assert pair["points"] and all(p["n_obs"] <= 52 for p in pair["points"])
+    assert pair["points"][0]["frequency"] == "weekly"
 
 
 def test_get_ex_ante_risk_with_nothing_included_has_only_statuses(fake_client):
-    result = _get([("A", "1"), ("X", "1")], exclude={"A"})
+    result = _get([("A", "1"), ("X", "1")], exclude={"A"}, rolling_pair=("X", None))
 
     ExAnteRiskResponse.model_validate(result)
     assert [s["status"] for s in result["statuses"]] == ["excluded", "not_tracked"]
@@ -143,6 +165,8 @@ def test_get_ex_ante_risk_with_nothing_included_has_only_statuses(fake_client):
         "holdings",
         "constant_weight",
         "correlation",
+        "rolling",
+        "rolling_correlation",
     ):
         assert result[key] is None
     assert result["benchmark"]["available"] is False

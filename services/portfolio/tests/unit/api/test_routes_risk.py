@@ -76,6 +76,19 @@ _EX_POST = {
     ],
     "n_excluded": 1,
     "excluded": [{"ticker": "U", "status": "no_fx_rate", "reason": "no FX series for HKD"}],
+    # RK-24: one figure per month end, a gap greyed in place.
+    "rolling": {
+        "window": "1Y",
+        "step": "monthly",
+        "volatility": [
+            _figure(None, "weekly", reason="insufficient history (have 51, need 52)"),
+            _figure(0.2, "weekly"),
+        ],
+        "sharpe": [
+            _figure(None, "weekly", reason="insufficient history (have 51, need 52)"),
+            _figure(0.5, "weekly", standard_error=0.9),
+        ],
+    },
 }
 
 
@@ -134,6 +147,7 @@ def test_ex_post_with_nothing_to_measure_has_no_windows(monkeypatch, client):
         "windows": [],
         "n_excluded": 0,
         "excluded": [],
+        "rolling": None,
     }
     monkeypatch.setattr(risk_jobs, "get_ex_post_risk", lambda **kw: empty)
 
@@ -212,6 +226,23 @@ _EX_ANTE = {
             {"a": "VWCE.DE", "b": "VWCE.DE", "figure": _figure(1.0, "weekly")},
         ],
     },
+    "rolling": {
+        "window": "1Y",
+        "step": "monthly",
+        "volatility": [_figure(0.14, "weekly")],
+        "sharpe": [_figure(0.6, "weekly", standard_error=0.9)],
+    },
+    "rolling_correlation": {
+        "a": "A",
+        "b": "portfolio",
+        "window": "52W",
+        "step": "weekly",
+        "reason": None,
+        "points": [
+            _figure(0.9, "weekly"),
+            _figure(None, "weekly", reason="no variation in returns"),
+        ],
+    },
 }
 
 
@@ -241,6 +272,7 @@ def test_ex_ante_parses_the_mix_with_its_defaults_and_returns_the_jobs_own_dict(
     assert captured["benchmark"] == "VWCE.DE"
     assert captured["currency"] == "eur"
     assert captured["exclude"] == []
+    assert captured["rolling_pair"] is None
 
 
 def test_ex_ante_passes_its_options_through(monkeypatch, client):
@@ -260,6 +292,26 @@ def test_ex_ante_passes_its_options_through(monkeypatch, client):
 
 
 @pytest.mark.parametrize(
+    "pair, expected",
+    [
+        ({"a": "A"}, ("A", None)),
+        ({"a": "A", "b": None}, ("A", None)),
+        ({"a": "B", "b": "A"}, ("B", "A")),
+        ({"a": "A", "b": "VWCE.DE"}, ("A", "VWCE.DE")),
+    ],
+    ids=["against the portfolio", "explicit null", "two holdings", "the benchmark"],
+)
+def test_ex_ante_passes_a_rolling_pair_through(monkeypatch, client, pair, expected):
+    captured = {}
+    monkeypatch.setattr(risk_jobs, "get_ex_ante_risk", lambda **kw: captured.update(kw) or _EX_ANTE)
+
+    response = client.post("/risk/ex-ante", json=_ex_ante_body(rolling_correlation=pair))
+
+    assert response.status_code == 200
+    assert captured["rolling_pair"] == expected
+
+
+@pytest.mark.parametrize(
     "body",
     [
         {"assets": []},
@@ -270,6 +322,12 @@ def test_ex_ante_passes_its_options_through(monkeypatch, client):
         _ex_ante_body(window="2Y"),
         _ex_ante_body(currency="usd"),
         _ex_ante_body(benchmark=""),
+        _ex_ante_body(rolling_correlation={"a": "Z"}),
+        _ex_ante_body(rolling_correlation={"a": "A", "b": "Z"}),
+        _ex_ante_body(exclude=["C"], rolling_correlation={"a": "C"}),
+        _ex_ante_body(rolling_correlation={"a": "A", "b": "A"}),
+        _ex_ante_body(rolling_correlation={"b": "A"}),
+        _ex_ante_body(rolling_correlation={"a": ""}),
     ],
     ids=[
         "no assets",
@@ -280,6 +338,12 @@ def test_ex_ante_passes_its_options_through(monkeypatch, client):
         "unknown window",
         "unknown currency",
         "empty benchmark",
+        "pair ticker not in the mix",
+        "pair's other ticker not in the mix",
+        "pair ticker excluded",
+        "pair of one ticker",
+        "pair without a",
+        "empty pair ticker",
     ],
 )
 def test_ex_ante_rejects_an_invalid_request(monkeypatch, client, body):

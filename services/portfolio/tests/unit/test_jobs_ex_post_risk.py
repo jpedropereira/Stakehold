@@ -14,6 +14,7 @@ from portfolio.benchmark.base import BenchmarkStatus
 from portfolio.risk.ex_post import WindowFigures
 from portfolio.risk.flows import LABEL, ExPostRisk
 from portfolio.risk.relative import RelativeFigures, relative_greyed
+from portfolio.risk.rolling import RollingFigures
 from portfolio.risk.single_series import (
     DrawdownFigures,
     ReturnFigures,
@@ -118,6 +119,16 @@ _RISK = ExPostRisk(
     benchmark=VWCE,
     windows=(_window(ONE_YEAR), _window(THREE_YEARS, covered=False)),
     excluded=[ExcludedHolding("U", "no_fx_rate", "no FX series for HKD")],
+    rolling=RollingFigures(
+        volatility=(
+            _figure(ONE_YEAR, None, Frequency.WEEKLY, {Flag.INSUFFICIENT_HISTORY}, "short"),
+            _figure(ONE_YEAR, 0.2, Frequency.WEEKLY),
+        ),
+        sharpe=(
+            _figure(ONE_YEAR, None, Frequency.WEEKLY, {Flag.INSUFFICIENT_HISTORY}, "short"),
+            _figure(ONE_YEAR, 0.5, Frequency.WEEKLY, se=0.9),
+        ),
+    ),
 )
 
 
@@ -197,6 +208,13 @@ def test_get_ex_post_risk_returns_builtins_the_response_model_accepts(monkeypatc
     assert three_years["relative"]["beta"]["reason"] == (
         "insufficient history (portfolio history from 2024-01-05)"
     )
+    # RK-24: the rolling figures, gaps kept in place.
+    rolling = result["rolling"]
+    assert (rolling["window"], rolling["step"]) == ("1Y", "monthly")
+    assert [f["value"] for f in rolling["volatility"]] == [None, 0.2]
+    assert rolling["volatility"][0]["flags"] == ["insufficient_history"]
+    assert rolling["volatility"][0]["reason"] == "short"
+    assert rolling["sharpe"][1]["standard_error"] == 0.9
     ExPostRiskResponse.model_validate(result)
     assert captured["conn"] is fake_conn
     assert captured["user_id"] == user_id
@@ -282,6 +300,7 @@ def test_get_ex_post_risk_says_plainly_when_there_is_nothing_to_measure(
         result = risk_jobs.get_ex_post_risk(user_id=uuid.uuid4())
 
     assert result["windows"] == []
+    assert result["rolling"] is None
     ExPostRiskResponse.model_validate(result)
     assert (
         "get-ex-post-risk: done, no TWR returns in any account yet, so nothing to measure."

@@ -534,6 +534,11 @@ def get_ex_ante_risk(body: ExAnteRiskRequest, settings: Settings = Depends(get_s
         benchmark=body.benchmark,
         currency=body.currency,
         exclude=body.exclude,
+        rolling_pair=(
+            None
+            if body.rolling_correlation is None
+            else (body.rolling_correlation.a, body.rolling_correlation.b)
+        ),
         settings=settings,
     )
 
