@@ -1,9 +1,12 @@
 """Ex-ante risk of today's mix (spec §6.2-6.3): the reporting layer over covariance.py, and the
 constant-weight series the single-series measures run on.
 
-- **Weights** are today's EUR market-value shares, keyed like the return series: each above 0,
-  summing to 1, the same keys as the series. The caller (RK-17) builds and normalises them;
-  anything else raises.
+- **Weights** are today's EUR market-value shares, keyed like the return series: each 0 or
+  more, summing to 1, the same keys as the series. The caller (RK-17) builds and normalises them;
+  anything else raises. A zero weight keeps a series in the panel without holding it (RK-19):
+  the what-if's "before" holds the candidate at 0, so the candidate's late start and NULL weeks
+  shape both mixes' window, its CR and PCR are 0, and its correlation with the portfolio is its
+  correlation with "before".
 - **The decomposition runs on the listwise weekly window** (R12, listwise.py), which a late
   holding shortens; `limited_by` names it. Every figure carries that window, q = 52, the kept
   weeks as `n_obs` and the dropped ones as `n_gaps`, R8's `data_gaps` and `has_suspect_rows`.
@@ -128,8 +131,8 @@ def _check_weights(series: Mapping[str, ReturnSeries], weights: Mapping[str, flo
             f"returns {sorted(series)}"
         )
     for key, weight in weights.items():
-        if not weight > 0:
-            raise ValueError(f"every weight must be positive, got {weight} for {key}")
+        if not weight >= 0:
+            raise ValueError(f"no weight can be negative, got {weight} for {key}")
     total = math.fsum(weights.values())
     if abs(total - 1.0) > _WEIGHT_TOLERANCE:
         raise ValueError(f"weights must sum to 1, got {total}")

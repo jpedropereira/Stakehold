@@ -17,6 +17,7 @@ from portfolio.risk.single_series import (
     drawdown_figures,
     return_figures,
     tail_figures,
+    weekly_excess,
     weekly_figures,
     weekly_figures_without_rf,
 )
@@ -436,3 +437,27 @@ def test_var_keeps_only_days_every_asset_traded_and_counts_nulls_on_them():
 
     # 10 days the other exchange was closed are dropped; the NULL day is shared, so a gap.
     assert (figures.var_95.n_obs, figures.var_95.n_gaps) == (290, 1)
+
+
+# --- weekly_excess (RK-19) -----------------------------------------------------------------------
+
+
+def test_weekly_excess_is_what_the_sharpe_measures():
+    values = list(np.random.default_rng(4).normal(0.002, 0.02, 60))
+    values[7] = None
+    weekly = _weekly(values)
+    window = _whole(weekly)
+
+    x = weekly_excess(weekly, window, RATES, FIRST_PUBLISHED)
+
+    assert len(x) == 60
+    assert np.isnan(x[7])
+    assert x[0] == pytest.approx(values[0] - RF_WEEK)
+    observed = x[~np.isnan(x)]
+    sharpe = weekly_figures(weekly, window, RATES, FIRST_PUBLISHED).sharpe
+    assert sharpe.value == pytest.approx(observed.mean() / observed.std(ddof=1) * np.sqrt(52))
+
+
+def test_weekly_excess_refuses_a_daily_series():
+    with pytest.raises(ValueError, match="weekly"):
+        weekly_excess(_daily([0.01, 0.02]), Window("Max", FRIDAY, FRIDAY), RATES, FIRST_PUBLISHED)

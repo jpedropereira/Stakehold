@@ -184,8 +184,7 @@ def test_a_single_holding_is_its_own_portfolio():
     "weights, match",
     [
         ({"A": 0.5, "B": 0.4}, "sum to 1"),
-        ({"A": 1.2, "B": -0.2}, "positive"),
-        ({"A": 1.0, "B": 0.0}, "positive"),
+        ({"A": 1.2, "B": -0.2}, "negative"),
         ({"A": 1.0}, "same holdings"),
         ({"A": 0.6, "B": 0.3, "C": 0.1}, "same holdings"),
     ],
@@ -193,6 +192,37 @@ def test_a_single_holding_is_its_own_portfolio():
 def test_invalid_weights_are_refused(weights, match):
     with pytest.raises(ValueError, match=match):
         decomposition_figures(_pair(60), weights, _window(60))
+
+
+# A zero weight (RK-19): the what-if's "before" holds the candidate at 0, so before and after
+# share one listwise panel.
+
+
+def test_a_zero_weight_holding_owes_no_risk_but_has_a_correlation():
+    weekly = _pair(120)
+    result = decomposition_figures(weekly, {"A": 1.0, "B": 0.0}, _window(120))
+    alone = decomposition_figures({"A": weekly["A"]}, {"A": 1.0}, _window(120))
+    a, b = result.holdings
+
+    assert (b.weight, b.cr, b.pcr) == (0.0, 0.0, 0.0)
+    assert a.pcr == pytest.approx(1.0)
+    assert result.sigma_p.value == pytest.approx(alone.sigma_p.value)
+    # B's correlation with a portfolio that is all A is B's correlation with A.
+    rho = np.corrcoef(_random_weekly(120, 1), _random_weekly(120, 2, scale=0.01))[0, 1]
+    assert b.corr_with_portfolio == pytest.approx(rho)
+    assert result.effective_n == pytest.approx(1.0)
+
+
+def test_a_zero_weight_holdings_null_week_still_drops_the_week():
+    weekly = _pair(120, nulls_b=(7,))
+    result = decomposition_figures(weekly, {"A": 1.0, "B": 0.0}, _window(120))
+    alone = decomposition_figures({"A": weekly["A"]}, {"A": 1.0}, _window(120))
+
+    assert (result.sigma_p.n_obs, result.sigma_p.n_gaps) == (119, 1)
+    assert (alone.sigma_p.n_obs, alone.sigma_p.n_gaps) == (120, 0)
+    mix = constant_weight_series(weekly, {"A": 1.0, "B": 0.0})
+    assert mix.values[7] is None
+    assert mix.values[6] == pytest.approx(weekly["A"].values[6])
 
 
 # --- constant_weight_series ------------------------------------------------------------------
