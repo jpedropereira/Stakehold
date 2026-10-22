@@ -643,14 +643,17 @@ class ExAnteRiskRequest(BaseModel):
 
     @model_validator(mode="after")
     def _a_valid_mix(self):
-        tickers = [asset.ticker for asset in self.assets]
-        _check_unique(tickers)
-        unknown = sorted(set(self.exclude) - set(tickers))
-        if unknown:
-            raise ValueError(f"exclude names tickers not in the mix: {', '.join(unknown)}")
-        if set(tickers) <= set(self.exclude):
-            raise ValueError("exclude leaves nothing in the mix")
+        _check_exclude([asset.ticker for asset in self.assets], self.exclude)
         return self
+
+
+def _check_exclude(tickers: list[str], exclude: list[str]) -> None:
+    _check_unique(tickers)
+    unknown = sorted(set(exclude) - set(tickers))
+    if unknown:
+        raise ValueError(f"exclude names tickers not in the mix: {', '.join(unknown)}")
+    if set(tickers) <= set(exclude):
+        raise ValueError("exclude leaves nothing in the mix")
 
 
 class ExAnteWindowResponse(BaseModel):
@@ -711,6 +714,139 @@ class ExAnteRiskResponse(BaseModel):
     # "Today's mix" through history over the measured window; its volatility is σ_p.
     constant_weight: SeriesRiskResponse | None
     correlation: CorrelationMatrixResponse | None
+
+
+# --- what-if (RK-19) ---
+# Same RiskFigureResponse as ex-ante's. Values are fractions (0.14 is 14%).
+
+# Pro-rata (spec §7.2's default) or replacing one holding; "from cash" waits for cash tracking.
+_FUNDING_PATTERN = r"^(pro_rata|replace:.{1,20})$"
+
+
+class WhatIfCandidateRequest(BaseModel):
+    ticker: str = Field(min_length=1, max_length=20)
+    # A fraction of the whole mix after the change (0.05 is 5%), not a weight to normalise.
+    weight: Decimal = Field(gt=0, lt=1, allow_inf_nan=False)
+
+
+class WhatIfRequest(BaseModel):
+    # The mix as for ex-ante: web's default is the user's holdings with their weights.
+    assets: list[BacktestAssetRequest] = Field(min_length=1, max_length=MAX_BACKTEST_ASSETS)
+    candidate: WhatIfCandidateRequest
+    funding: str = Field(default="pro_rata", pattern=_FUNDING_PATTERN)
+    window: StandardWindow = StandardWindow.Y3
+    exclude: list[str] = Field(default_factory=list, max_length=MAX_BACKTEST_ASSETS)
+
+    @property
+    def replaced(self) -> str | None:
+        """The holding `replace:<ticker>` names; None under pro-rata."""
+        return self.funding.removeprefix("replace:") if self.funding != "pro_rata" else None
+
+    @model_validator(mode="after")
+    def _a_valid_what_if(self):
+        tickers = [asset.ticker for asset in self.assets]
+        _check_exclude(tickers, self.exclude)
+        if self.candidate.ticker in tickers:
+            raise ValueError(f"the candidate {self.candidate.ticker} is already in the mix")
+        if self.replaced is not None:
+            if self.replaced not in tickers:
+                raise ValueError(f"replace names a ticker not in the mix: {self.replaced}")
+            if self.replaced in self.exclude:
+                raise ValueError(f"replace names an excluded holding: {self.replaced}")
+        return self
+
+
+class WhatIfCandidateResponse(BaseModel):
+    ticker: str
+    # included, not_tracked, no_history, no_fx_rate or failed, as for a holding.
+    status: str
+    reason: str | None
+    requested_weight: float
+    # After funding: the replaced holding's weight when the request exceeded it (`capped`).
+    # Null, like `capped`, when there's nothing to compare.
+    weight: float | None
+    capped: bool | None
+    # R14: data-store prices the candidate only through a fund's holdings, so its history comes
+    # from today's index members. Every "after" figure carries the flag too.
+    survivorship: bool
+
+
+class WhatIfFundingResponse(BaseModel):
+    rule: Literal["pro_rata", "replace"]
+    ticker: str | None  # the replaced holding
+    reason: str | None  # why it can't fund the candidate (it can't be measured)
+
+
+class WhatIfWindowResponse(BaseModel):
+    """Before and after share one listwise window (R12). `shortened` says the candidate changed
+    it: the holdings alone would have had the `_without_candidate` one."""
+
+    label: StandardWindow
+    requested_start: date
+    start: date | None  # null when the histories don't overlap
+    end: date
+    limited_by: list[str]
+    shortened: bool
+    start_without_candidate: date | None
+    end_without_candidate: date | None
+
+
+class WhatIfWeightsResponse(BaseModel):
+    before: dict[str, float]  # the included holdings', normalised
+    after: dict[str, float]  # with the candidate, funded
+
+
+class WhatIfRowResponse(BaseModel):
+    before: RiskFigureResponse | None  # null on the candidate's own rows
+    after: RiskFigureResponse
+    delta: float | None  # after − before; null when either is greyed, or there's no before
+
+
+class WhatIfSharpeRowResponse(WhatIfRowResponse):
+    delta_se: float | None  # Memmel's SE of the delta (1 s.e.), on the same weeks
+
+
+class WhatIfRowsResponse(BaseModel):
+    """Spec §7.2's table, risk first: the risk deltas are the reliable outputs, ΔSharpe is
+    secondary and shown with its SE."""
+
+    sigma_p: WhatIfRowResponse
+    diversification_ratio: WhatIfRowResponse
+    candidate_pcr: WhatIfRowResponse
+    # The candidate's correlation with the portfolio before it joins.
+    candidate_correlation: WhatIfRowResponse
+    sharpe: WhatIfSharpeRowResponse
+    max_drawdown: WhatIfRowResponse
+
+
+class WhatIfThresholdResponse(BaseModel):
+    """A small amount of the candidate raises the historical Sharpe if SR_c > ρ(c, p) × SR_p
+    (spec §7.2): weekly, on the shared window. Pro-rata funding only."""
+
+    applicable: bool  # false under replace funding
+    reason: str | None  # why it isn't shown
+    candidate_sharpe: RiskFigureResponse | None
+    correlation: float | None
+    portfolio_sharpe: float | None
+    threshold: float | None  # ρ(c, p) × SR_p
+    improves: bool | None
+
+
+class WhatIfResponse(BaseModel):
+    """The mix before and after adding a candidate (RK-19, spec §7.2). `window`, `weights`,
+    `rows` and `threshold` are null exactly when there's nothing to compare: the candidate or
+    every holding can't be measured (see `statuses` and `candidate`), or the replaced holding
+    can't (`funding.reason`)."""
+
+    label: str  # "ex-ante · constant weights"
+    rf_available: bool
+    statuses: list[AssetStatusResponse]  # every requested holding, in request order
+    candidate: WhatIfCandidateResponse
+    funding: WhatIfFundingResponse
+    window: WhatIfWindowResponse | None
+    weights: WhatIfWeightsResponse | None
+    rows: WhatIfRowsResponse | None
+    threshold: WhatIfThresholdResponse | None
 
 
 # --- look-through (RK-22) ---

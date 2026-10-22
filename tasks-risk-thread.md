@@ -130,8 +130,8 @@ checked against the code, docs and dev DB:
 | RK-16 | [portfolio: correlation matrix](#rk-16-portfolio-correlation-matrix) | RK-6 | done |
 | RK-17 | [portfolio: ex-ante endpoint](#rk-17-portfolio-ex-ante-endpoint) | RK-4, RK-5, RK-13, RK-15, RK-16 | done |
 | RK-18 | [web: ex-ante summary, decomposition and heatmap](#rk-18-web-ex-ante-summary-decomposition-and-heatmap) | RK-12, RK-17 | done |
-| RK-19 | [portfolio: candidate what-if](#rk-19-portfolio-candidate-what-if) | RK-17 | ready |
-| RK-20 | [web: what-if form](#rk-20-web-what-if-form) | RK-18, RK-19 | blocked |
+| RK-19 | [portfolio: candidate what-if](#rk-19-portfolio-candidate-what-if) | RK-17 | done |
+| RK-20 | [web: what-if form](#rk-20-web-what-if-form) | RK-18, RK-19 | ready |
 | RK-21 | [data-store: ETF holdings endpoint](#rk-21-data-store-etf-holdings-endpoint) | RK-1 | done |
 | RK-22 | [portfolio: look-through exposures](#rk-22-portfolio-look-through-exposures) | RK-21 | done |
 | RK-23 | [web: concentration section](#rk-23-web-concentration-section) | RK-12, RK-22 | ready |
@@ -815,7 +815,7 @@ Decisions (agreed):
 
 ### RK-19. portfolio: candidate what-if
 
-**Status:** ready
+**Status:** done
 
 - Extend the ex-ante endpoint, or add a sibling, with `candidate {ticker, weight}` and
   `funding: pro_rata | replace:<ticker>`. "From cash" is deferred.
@@ -831,6 +831,21 @@ Decisions (agreed):
 Tests: pro-rata and replace weights. The shortened window. The threshold on a constructed case,
 checked against a numerical derivative of the mix's Sharpe. No threshold under "replace". The
 flag.
+
+**As built:** `POST /risk/what-if` (a sibling of ex-ante, agreed), in the new pure
+`risk/what_if.py` and `risk/flows.compute_what_if`. `jobs.py` had crossed 64 KB, so the read-only
+jobs moved to `analytics_jobs.py` first. portfolio's `risk-flows.md` holds the reasoning.
+Decisions:
+- **"Before" holds the candidate at weight 0** (agreed), so both mixes share one listwise
+  panel. A late candidate sets `shortened` and `limited_by`. RK-15's rule now allows a 0 weight.
+- **Replace is capped** at X's weight (`capped`). **ρ in the threshold** comes from the panel's
+  weekly excess returns, so the derivative identity is exact.
+- **The R14 CHECK:** `TickerInfo.status` is None when data-store prices a ticker only through
+  a fund's holdings.
+- **Nothing to compare is a 200** (agreed), with the reason in `candidate.status` or
+  `funding.reason`, and null figures.
+- **For RK-20:** fractions, `rows` in §7.2's order. Show `candidate.weight` when `capped`,
+  R14's warning when `candidate.survivorship`, and `threshold.reason` under replace.
 
 ### RK-20. web: what-if form
 

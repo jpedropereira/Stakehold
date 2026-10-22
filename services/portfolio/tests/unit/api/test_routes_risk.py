@@ -1,12 +1,14 @@
-"""GET /risk/ex-post (RK-11) and POST /risk/ex-ante (RK-17): argument coercion, request
-validation and the response models. The jobs are stubbed; they're tested in
-tests/unit/test_jobs_ex_post_risk.py and test_jobs_ex_ante_risk.py."""
+"""GET /risk/ex-post (RK-11), POST /risk/ex-ante (RK-17) and POST /risk/what-if (RK-19):
+argument coercion, request validation and the response models. The jobs are stubbed; they're
+tested in tests/unit/test_jobs_ex_post_risk.py, test_jobs_ex_ante_risk.py and
+test_jobs_what_if.py."""
 
 import uuid
 from decimal import Decimal
 
 import pytest
 from portfolio import analytics_jobs
+from portfolio.risk.what_if import PRO_RATA, Funding
 from portfolio.risk.windows import StandardWindow
 
 
@@ -296,3 +298,173 @@ def test_ex_ante_rejects_an_invalid_request(monkeypatch, client, body):
     )
 
     assert client.post("/risk/ex-ante", json=body).status_code == 422
+
+
+# --- POST /risk/what-if (RK-19) ------------------------------------------------------------------
+
+
+def _row(before, after, delta):
+    return {
+        "before": None if before is None else _figure(before, "weekly"),
+        "after": _figure(after, "weekly"),
+        "delta": delta,
+    }
+
+
+_WHAT_IF = {
+    "label": "ex-ante · constant weights",
+    "rf_available": True,
+    "statuses": [
+        {"ticker": "A", "status": "included", "reason": None},
+        {"ticker": "B", "status": "included", "reason": None},
+    ],
+    "candidate": {
+        "ticker": "C",
+        "status": "included",
+        "reason": None,
+        "requested_weight": 0.05,
+        "weight": 0.05,
+        "capped": False,
+        "survivorship": False,
+    },
+    "funding": {"rule": "pro_rata", "ticker": None, "reason": None},
+    "window": {
+        "label": "3Y",
+        "requested_start": "2023-01-09",
+        "start": "2023-01-13",
+        "end": "2026-01-09",
+        "limited_by": [],
+        "shortened": False,
+        "start_without_candidate": "2023-01-13",
+        "end_without_candidate": "2026-01-09",
+    },
+    "weights": {"before": {"A": 0.6, "B": 0.4}, "after": {"A": 0.57, "B": 0.38, "C": 0.05}},
+    "rows": {
+        "sigma_p": _row(0.14, 0.135, -0.005),
+        "diversification_ratio": _row(1.16, 1.2, 0.04),
+        "candidate_pcr": _row(None, 0.03, None),
+        "candidate_correlation": _row(None, 0.4, None),
+        "sharpe": {**_row(0.8, 0.82, 0.02), "delta_se": 0.03},
+        "max_drawdown": {
+            "before": _figure(-0.2),
+            "after": _figure(-0.19),
+            "delta": 0.01,
+        },
+    },
+    "threshold": {
+        "applicable": True,
+        "reason": None,
+        "candidate_sharpe": _figure(0.5, "weekly", standard_error=0.58),
+        "correlation": 0.4,
+        "portfolio_sharpe": 0.8,
+        "threshold": 0.32,
+        "improves": True,
+    },
+}
+
+
+def _what_if_body(**kw):
+    return {
+        "assets": [{"ticker": "A", "weight": "60"}, {"ticker": "B", "weight": "40"}],
+        "candidate": {"ticker": "C", "weight": "0.05"},
+        **kw,
+    }
+
+
+def test_what_if_parses_the_request_with_its_defaults_and_returns_the_jobs_own_dict(
+    monkeypatch, client
+):
+    captured = {}
+    monkeypatch.setattr(analytics_jobs, "get_what_if", lambda **kw: captured.update(kw) or _WHAT_IF)
+
+    response = client.post("/risk/what-if", json=_what_if_body())
+
+    assert response.status_code == 200
+    assert response.json() == _WHAT_IF
+    assert captured["assets"] == [("A", Decimal("60")), ("B", Decimal("40"))]
+    assert (captured["candidate"], captured["weight"]) == ("C", Decimal("0.05"))
+    assert captured["funding"] == PRO_RATA
+    assert captured["window"] is StandardWindow.Y3
+    assert captured["exclude"] == []
+
+
+def test_what_if_passes_replace_funding_and_its_options_through(monkeypatch, client):
+    captured = {}
+    monkeypatch.setattr(analytics_jobs, "get_what_if", lambda **kw: captured.update(kw) or _WHAT_IF)
+    body = _what_if_body(
+        assets=[
+            {"ticker": "A", "weight": "60"},
+            {"ticker": "B", "weight": "40"},
+            {"ticker": "D", "weight": "5"},
+        ],
+        funding="replace:B",
+        window="5Y",
+        exclude=["D"],
+    )
+
+    assert client.post("/risk/what-if", json=body).status_code == 200
+    assert captured["funding"] == Funding.replace("B")
+    assert captured["window"] is StandardWindow.Y5
+    assert captured["exclude"] == ["D"]
+
+
+def test_what_if_with_no_report_validates_with_null_sections(monkeypatch, client):
+    nothing = {
+        **_WHAT_IF,
+        "rf_available": False,
+        "candidate": {
+            **_WHAT_IF["candidate"],
+            "status": "not_tracked",
+            "reason": "not tracked",
+            "weight": None,
+            "capped": None,
+        },
+        **dict.fromkeys(("window", "weights", "rows", "threshold")),
+    }
+    monkeypatch.setattr(analytics_jobs, "get_what_if", lambda **kw: nothing)
+
+    response = client.post("/risk/what-if", json=_what_if_body())
+
+    assert response.status_code == 200
+    assert response.json() == nothing
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        _what_if_body(candidate={"ticker": "A", "weight": "0.05"}),
+        _what_if_body(candidate={"ticker": "C", "weight": "0"}),
+        _what_if_body(candidate={"ticker": "C", "weight": "1"}),
+        _what_if_body(candidate={"ticker": "C", "weight": "5"}),
+        _what_if_body(candidate={"ticker": "", "weight": "0.05"}),
+        {"assets": [{"ticker": "A", "weight": "1"}]},
+        _what_if_body(funding="cash"),
+        _what_if_body(funding="replace:"),
+        _what_if_body(funding="replace:Z"),
+        _what_if_body(funding="replace:B", exclude=["B"]),
+        _what_if_body(exclude=["Z"]),
+        _what_if_body(exclude=["A", "B"]),
+        _what_if_body(assets=[]),
+        _what_if_body(window="2Y"),
+    ],
+    ids=[
+        "candidate already held",
+        "zero weight",
+        "whole weight",
+        "a percentage, not a fraction",
+        "empty candidate",
+        "no candidate",
+        "unknown funding",
+        "replace without a ticker",
+        "replace a ticker not in the mix",
+        "replace an excluded holding",
+        "exclude not in the mix",
+        "exclude everything",
+        "no assets",
+        "unknown window",
+    ],
+)
+def test_what_if_rejects_an_invalid_request(monkeypatch, client, body):
+    monkeypatch.setattr(analytics_jobs, "get_what_if", lambda **kw: pytest.fail("job must not run"))
+
+    assert client.post("/risk/what-if", json=body).status_code == 422

@@ -67,9 +67,12 @@ from portfolio.api.models import (
     TransactionsWriteResponse,
     UnmappedInstrumentAnyBrokerResponse,
     UnmappedInstrumentResponse,
+    WhatIfRequest,
+    WhatIfResponse,
 )
 from portfolio.api.security import get_settings, require_internal_secret
 from portfolio.benchmark.base import DEFAULT_BENCHMARK
+from portfolio.risk.what_if import PRO_RATA, Funding
 from portfolio.run_result import STATUS_OK
 from portfolio.settings import Settings
 from shared.db.connection import get_connection
@@ -533,6 +536,22 @@ def get_ex_ante_risk(body: ExAnteRiskRequest, settings: Settings = Depends(get_s
         window=body.window,
         benchmark=body.benchmark,
         currency=body.currency,
+        exclude=body.exclude,
+        settings=settings,
+    )
+
+
+@router.post("/risk/what-if", response_model=WhatIfResponse)
+def get_what_if(body: WhatIfRequest, settings: Settings = Depends(get_settings)) -> dict:
+    """A candidate added to the mix, before and after (RK-19). A POST, no user_id and a 200 for
+    the same reasons as ex-ante: a candidate or holding data-store can't serve is reported in
+    the response, not as an error."""
+    return analytics_jobs.get_what_if(
+        assets=[(asset.ticker, asset.weight) for asset in body.assets],
+        candidate=body.candidate.ticker,
+        weight=body.candidate.weight,
+        funding=PRO_RATA if body.replaced is None else Funding.replace(body.replaced),
+        window=body.window,
         exclude=body.exclude,
         settings=settings,
     )
