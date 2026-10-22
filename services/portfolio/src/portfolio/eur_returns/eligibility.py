@@ -10,6 +10,10 @@ way ("no FX rate"). This module is the risk path's wording:
 - "no FX series for <CCY>" when the currency has no rates, and "no FX series for its currency"
   when data-store couldn't map the ticker to a currency at all.
 
+`untracked` names the included tickers data-store prices only through a fund's holdings
+(`TickerInfo.status` None, not in `tracked_tickers`): the what-if's R14 survivorship flag
+(RK-19).
+
 Every ticker gets one log line on the caller's `logger`, prefixed with its `context`: included,
 with its day count, or left out with its reason. The caller's logger, so each line stays under the
 flow it belongs to.
@@ -44,6 +48,7 @@ class EligibleReturns:
     returns: dict[str, EurReturns]  # the included tickers, in input order
     currencies: dict[str, str]  # each included ticker's FX currency
     excluded: list[ExcludedHolding]  # in input order
+    untracked: set[str]  # included, but priced only through a fund's holdings
 
 
 def fetch_eur_returns(
@@ -59,6 +64,7 @@ def fetch_eur_returns(
     returns: dict[str, EurReturns] = {}
     currencies: dict[str, str] = {}
     excluded = []
+    untracked = set()
     for ticker, outcome in fetch.fetch_series(datastore_client, tickers, start, end).items():
         if isinstance(outcome, fetch.LeftOut):
             reason = REASONS[outcome.status]
@@ -82,6 +88,8 @@ def fetch_eur_returns(
             )
             returns[ticker] = series
             currencies[ticker] = outcome.info.fx_currency
+            if outcome.info.status is None:
+                untracked.add(ticker)
             continue
         if series.reason == NO_FX_SERIES:
             status, reason = fetch.NO_FX_RATE, f"no FX series for {outcome.info.fx_currency}"
@@ -89,4 +97,4 @@ def fetch_eur_returns(
             status, reason = fetch.NO_HISTORY, REASONS[fetch.NO_HISTORY]
         logger.warning("%s: %s: left out, %s.", context, ticker, reason)
         excluded.append(ExcludedHolding(ticker, status, reason))
-    return EligibleReturns(returns, currencies, excluded)
+    return EligibleReturns(returns, currencies, excluded, untracked)
