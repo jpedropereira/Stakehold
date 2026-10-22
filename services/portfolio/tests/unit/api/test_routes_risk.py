@@ -6,7 +6,7 @@ import uuid
 from decimal import Decimal
 
 import pytest
-from portfolio import jobs
+from portfolio import risk_jobs
 from portfolio.risk.windows import StandardWindow
 
 
@@ -86,7 +86,7 @@ def test_ex_post_passes_the_user_through_and_returns_the_jobs_own_dict(monkeypat
         captured.update(kw)
         return _EX_POST
 
-    monkeypatch.setattr(jobs, "get_ex_post_risk", fake_get_ex_post_risk)
+    monkeypatch.setattr(risk_jobs, "get_ex_post_risk", fake_get_ex_post_risk)
     user_id = uuid.uuid4()
 
     response = client.get("/risk/ex-post", params={"user_id": str(user_id)})
@@ -99,7 +99,7 @@ def test_ex_post_passes_the_user_through_and_returns_the_jobs_own_dict(monkeypat
 
 def test_ex_post_passes_a_named_benchmark_through(monkeypatch, client):
     captured = {}
-    monkeypatch.setattr(jobs, "get_ex_post_risk", lambda **kw: captured.update(kw) or _EX_POST)
+    monkeypatch.setattr(risk_jobs, "get_ex_post_risk", lambda **kw: captured.update(kw) or _EX_POST)
 
     response = client.get(
         "/risk/ex-post", params={"user_id": str(uuid.uuid4()), "benchmark": "VWRL.AS"}
@@ -110,7 +110,7 @@ def test_ex_post_passes_a_named_benchmark_through(monkeypatch, client):
 
 
 def test_ex_post_rejects_an_empty_or_too_long_benchmark(monkeypatch, client):
-    monkeypatch.setattr(jobs, "get_ex_post_risk", lambda **kw: pytest.fail("job must not run"))
+    monkeypatch.setattr(risk_jobs, "get_ex_post_risk", lambda **kw: pytest.fail("job must not run"))
 
     for benchmark in ("", "B" * 21):
         response = client.get(
@@ -135,7 +135,7 @@ def test_ex_post_with_nothing_to_measure_has_no_windows(monkeypatch, client):
         "n_excluded": 0,
         "excluded": [],
     }
-    monkeypatch.setattr(jobs, "get_ex_post_risk", lambda **kw: empty)
+    monkeypatch.setattr(risk_jobs, "get_ex_post_risk", lambda **kw: empty)
 
     response = client.get("/risk/ex-post", params={"user_id": str(uuid.uuid4())})
 
@@ -230,7 +230,7 @@ def test_ex_ante_parses_the_mix_with_its_defaults_and_returns_the_jobs_own_dict(
     monkeypatch, client
 ):
     captured = {}
-    monkeypatch.setattr(jobs, "get_ex_ante_risk", lambda **kw: captured.update(kw) or _EX_ANTE)
+    monkeypatch.setattr(risk_jobs, "get_ex_ante_risk", lambda **kw: captured.update(kw) or _EX_ANTE)
 
     response = client.post("/risk/ex-ante", json=_ex_ante_body())
 
@@ -245,7 +245,7 @@ def test_ex_ante_parses_the_mix_with_its_defaults_and_returns_the_jobs_own_dict(
 
 def test_ex_ante_passes_its_options_through(monkeypatch, client):
     captured = {}
-    monkeypatch.setattr(jobs, "get_ex_ante_risk", lambda **kw: captured.update(kw) or _EX_ANTE)
+    monkeypatch.setattr(risk_jobs, "get_ex_ante_risk", lambda **kw: captured.update(kw) or _EX_ANTE)
 
     response = client.post(
         "/risk/ex-ante",
@@ -283,6 +283,6 @@ def test_ex_ante_passes_its_options_through(monkeypatch, client):
     ],
 )
 def test_ex_ante_rejects_an_invalid_request(monkeypatch, client, body):
-    monkeypatch.setattr(jobs, "get_ex_ante_risk", lambda **kw: pytest.fail("job must not run"))
+    monkeypatch.setattr(risk_jobs, "get_ex_ante_risk", lambda **kw: pytest.fail("job must not run"))
 
     assert client.post("/risk/ex-ante", json=body).status_code == 422

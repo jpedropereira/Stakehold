@@ -1,4 +1,4 @@
-"""jobs.get_ex_post_risk: builds the data-store client, runs risk/flows.py on one connection,
+"""risk_jobs.get_ex_post_risk: builds the data-store client, runs risk/flows.py on one connection,
 closes it either way, logs its start and summary, and returns plain builtins the API's
 ExPostRiskResponse accepts. Kept out of test_jobs.py, which is near the 64KB limit, so its
 small helpers are repeated here rather than shared."""
@@ -8,7 +8,7 @@ import uuid
 from datetime import date
 
 import pytest
-from portfolio import jobs
+from portfolio import risk_jobs
 from portfolio.api.models import ExPostRiskResponse
 from portfolio.benchmark.base import BenchmarkStatus
 from portfolio.risk.ex_post import WindowFigures
@@ -123,9 +123,9 @@ _RISK = ExPostRisk(
 
 @pytest.fixture
 def fake_conn(monkeypatch):
-    monkeypatch.setattr(jobs, "load_settings", _settings)
+    monkeypatch.setattr(risk_jobs, "load_settings", _settings)
     conn = _FakeConnection()
-    monkeypatch.setattr(jobs, "get_connection", lambda url: conn)
+    monkeypatch.setattr(risk_jobs, "get_connection", lambda url: conn)
     return conn
 
 
@@ -136,10 +136,10 @@ def test_get_ex_post_risk_returns_builtins_the_response_model_accepts(monkeypatc
         captured.update(kw, conn=conn, client=client)
         return _RISK
 
-    monkeypatch.setattr(jobs.risk_flows, "compute_ex_post", fake_compute)
+    monkeypatch.setattr(risk_jobs.risk_flows, "compute_ex_post", fake_compute)
     user_id = uuid.uuid4()
 
-    result = jobs.get_ex_post_risk(user_id=user_id)
+    result = risk_jobs.get_ex_post_risk(user_id=user_id)
 
     assert result["label"] == "ex-post · invested assets"
     assert (result["base_date"], result["end_date"], result["rf_available"]) == (BASE, END, True)
@@ -209,19 +209,19 @@ def test_get_ex_post_risk_closes_the_connection_on_error(monkeypatch, fake_conn)
     def boom(conn, client, **kw):
         raise RuntimeError("db went away")
 
-    monkeypatch.setattr(jobs.risk_flows, "compute_ex_post", boom)
+    monkeypatch.setattr(risk_jobs.risk_flows, "compute_ex_post", boom)
 
     with pytest.raises(RuntimeError):
-        jobs.get_ex_post_risk(user_id=uuid.uuid4())
+        risk_jobs.get_ex_post_risk(user_id=uuid.uuid4())
     assert fake_conn.closed is True
 
 
 def test_get_ex_post_risk_logs_a_start_line_and_a_summary(monkeypatch, fake_conn, caplog):
-    monkeypatch.setattr(jobs.risk_flows, "compute_ex_post", lambda c, d, **kw: _RISK)
+    monkeypatch.setattr(risk_jobs.risk_flows, "compute_ex_post", lambda c, d, **kw: _RISK)
     user_id = uuid.uuid4()
 
-    with caplog.at_level(logging.INFO, logger="portfolio.jobs"):
-        jobs.get_ex_post_risk(user_id=user_id)
+    with caplog.at_level(logging.INFO, logger="portfolio.risk_jobs"):
+        risk_jobs.get_ex_post_risk(user_id=user_id)
 
     assert f"get-ex-post-risk: measuring ex-post risk for user {user_id}." in caplog.text
     assert (
@@ -246,10 +246,10 @@ def test_get_ex_post_risk_passes_the_benchmark_and_says_when_it_is_unavailable(
         captured.update(kw)
         return unavailable
 
-    monkeypatch.setattr(jobs.risk_flows, "compute_ex_post", fake_compute)
+    monkeypatch.setattr(risk_jobs.risk_flows, "compute_ex_post", fake_compute)
 
-    with caplog.at_level(logging.INFO, logger="portfolio.jobs"):
-        result = jobs.get_ex_post_risk(user_id=uuid.uuid4(), benchmark="NOPE")
+    with caplog.at_level(logging.INFO, logger="portfolio.risk_jobs"):
+        result = risk_jobs.get_ex_post_risk(user_id=uuid.uuid4(), benchmark="NOPE")
 
     assert captured["benchmark"] == "NOPE"
     assert result["benchmark"]["available"] is False
@@ -260,10 +260,10 @@ def test_get_ex_post_risk_says_when_the_risk_free_rate_was_unavailable(
     monkeypatch, fake_conn, caplog
 ):
     no_rf = ExPostRisk(LABEL, BASE, END, False, VWCE, (_window(ONE_YEAR),), [])
-    monkeypatch.setattr(jobs.risk_flows, "compute_ex_post", lambda c, d, **kw: no_rf)
+    monkeypatch.setattr(risk_jobs.risk_flows, "compute_ex_post", lambda c, d, **kw: no_rf)
 
-    with caplog.at_level(logging.INFO, logger="portfolio.jobs"):
-        jobs.get_ex_post_risk(user_id=uuid.uuid4())
+    with caplog.at_level(logging.INFO, logger="portfolio.risk_jobs"):
+        risk_jobs.get_ex_post_risk(user_id=uuid.uuid4())
 
     assert (
         "get-ex-post-risk: done, 2024-01-05 to 2026-01-09: 1 window(s) measured, 0 greyed for "
@@ -276,10 +276,10 @@ def test_get_ex_post_risk_says_plainly_when_there_is_nothing_to_measure(
     monkeypatch, fake_conn, caplog
 ):
     empty = ExPostRisk(LABEL, None, None, False, NOT_FETCHED, (), [])
-    monkeypatch.setattr(jobs.risk_flows, "compute_ex_post", lambda c, d, **kw: empty)
+    monkeypatch.setattr(risk_jobs.risk_flows, "compute_ex_post", lambda c, d, **kw: empty)
 
-    with caplog.at_level(logging.INFO, logger="portfolio.jobs"):
-        result = jobs.get_ex_post_risk(user_id=uuid.uuid4())
+    with caplog.at_level(logging.INFO, logger="portfolio.risk_jobs"):
+        result = risk_jobs.get_ex_post_risk(user_id=uuid.uuid4())
 
     assert result["windows"] == []
     ExPostRiskResponse.model_validate(result)
@@ -301,10 +301,10 @@ def test_get_ex_post_risk_warns_when_holdings_exist_but_none_could_be_measured(
         (),
         [ExcludedHolding("U", "failed", "couldn't reach data-store")],
     )
-    monkeypatch.setattr(jobs.risk_flows, "compute_ex_post", lambda c, d, **kw: none_left)
+    monkeypatch.setattr(risk_jobs.risk_flows, "compute_ex_post", lambda c, d, **kw: none_left)
 
-    with caplog.at_level(logging.INFO, logger="portfolio.jobs"):
-        jobs.get_ex_post_risk(user_id=uuid.uuid4())
+    with caplog.at_level(logging.INFO, logger="portfolio.risk_jobs"):
+        risk_jobs.get_ex_post_risk(user_id=uuid.uuid4())
 
     warning = next(r for r in caplog.records if "get-ex-post-risk: done" in r.getMessage())
     assert warning.levelno == logging.WARNING
@@ -315,7 +315,7 @@ def test_get_ex_post_risk_warns_when_holdings_exist_but_none_could_be_measured(
 
 
 def test_get_ex_post_risk_needs_data_store_settings(monkeypatch):
-    monkeypatch.setattr(jobs, "load_settings", lambda: _settings(datastore_api_url=None))
+    monkeypatch.setattr(risk_jobs, "load_settings", lambda: _settings(datastore_api_url=None))
 
     with pytest.raises(SettingsError, match="ex-post risk"):
-        jobs.get_ex_post_risk(user_id=uuid.uuid4())
+        risk_jobs.get_ex_post_risk(user_id=uuid.uuid4())

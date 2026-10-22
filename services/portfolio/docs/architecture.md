@@ -70,7 +70,7 @@ flowchart TD
     end
 
     subgraph orch["Orchestration"]
-        JOBS["jobs.py<br/><i>runnable units: config + connection + one flow</i>"]
+        JOBS["jobs.py · risk_jobs.py<br/><i>runnable units: config + connection + one flow</i>"]
         PIPE["pipeline.py<br/><i>the flows; broker-parser/cashflow-parser (entry-point discovered)<br/>and datastore-client registries</i>"]
         HFLOW["holdings/flows.py<br/><i>reads that span a user's accounts (PF-1, PF-5)</i>"]
         LFLOW["labs/flows.py<br/><i>backtest fetches, concurrent (LB-4);<br/>risk-free fetch (RK-8)</i>"]
@@ -184,6 +184,14 @@ there is one complete operation — load settings, open a connection, run the fl
 connection, return a result. `cli.py` is argument parsing plus a call into it, and nothing else.
 `api/routes.py` (built at task 9) is a call into it and nothing else, too. Anything that lived in
 only one of those two would be, by construction, untested by the other.
+
+**The risk read jobs are `risk_jobs.py`**: `get_ex_post_risk`, `get_ex_ante_risk` and
+`get_look_through`, with the code that turns their results into builtins. They moved out of
+`jobs.py` when it crossed 64 KB, ahead of RK-24, with no change in behaviour. They are the
+same kind of unit and the same layer, called by `api/routes.py` the same way, and they reuse
+`jobs.py`'s data-store client check rather than keeping a copy. The split follows a subject
+(the risk endpoints) rather than a kind of job. Splitting reads from writes was rejected,
+because it would have cut through the rebuild-after-write helpers that the write jobs share.
 
 That result is a plain dict of builtins, built by portfolio's own `run_result.py` — following the
 same two-key `{"status", "rows_saved"}` plus per-flow named-counts contract as
@@ -533,6 +541,6 @@ data-store.
    `returns/calculator.py` next, since it's the one with an external dependency
    (`datastore_client`) deliberately kept out of the pure function itself.
 5. `jobs.py` — how configuration, a connection and a flow become one runnable operation, called by
-   both the CLI and the HTTP API.
+   both the CLI and the HTTP API. `risk_jobs.py` holds the risk endpoints' jobs, in the same shape.
 6. `api/routes.py` and `api/app.py` — the HTTP entry point; read after `jobs.py`, since a route is
    argument parsing plus one call into it and nothing else. See [`flows.md`](flows.md)'s "HTTP API".
