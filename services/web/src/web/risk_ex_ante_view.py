@@ -366,6 +366,14 @@ def _left_out(risk: ExAnteRisk, mix: DefaultMix) -> tuple[LeftOut, ...]:
             for s in risk.statuses
             if s.status not in {"included", "excluded"}
         ),
+        *mix_left_out(mix),
+    )
+
+
+def mix_left_out(mix: DefaultMix) -> tuple[LeftOut, ...]:
+    """The holdings the default mix leaves out before anything reaches portfolio, and why: this
+    section's and the concentration section's (risk_concentration_view.py)."""
+    return (
         *(LeftOut(t, "no price yet") for t in mix.unpriced),
         *(LeftOut(t, "worth nothing at today's price") for t in mix.unweighted),
         *(LeftOut(t, f"over the {MAX_BACKTEST_ASSETS}-holding limit") for t in mix.dropped),
