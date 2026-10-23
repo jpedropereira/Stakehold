@@ -1,4 +1,5 @@
-"""The I/O around the risk library: ex-post (RK-11) and ex-ante (RK-17). The only module in
+"""The I/O around the risk library: ex-post (RK-11), ex-ante (RK-17) and the candidate what-if
+(RK-19). The only module in
 risk/ that does I/O or logs, or imports from the rest of portfolio; everything else in the
 package stays pure, so the spec's golden tests run against the library alone.
 
@@ -41,6 +42,22 @@ out in one place. No user data is read and nothing is stored.
   always in EUR, whatever the matrix's currency, because the portfolio is EUR. A ticker that
   can't be measured (left out, excluded, or an unavailable benchmark) gives no points and says
   why. It never fails the request.
+
+The what-if (spec §7.2) takes the same mix plus a candidate, a weight and a funding rule, and
+hands them to risk/what_if.py. No benchmark and no matrix: its rows don't use them.
+
+- **One fetch covers the holdings and the candidate**, over their whole history, then one
+  risk-free fetch from two weeks before the oldest of them, as ex-ante does.
+- **The holdings get ex-ante's statuses and the candidate its own.** Their weights are
+  normalised over the included holdings and then funded, so `w_c` is a share of the whole mix
+  after the change.
+- **No comparison is said so, not raised**: an unmeasurable candidate, no included holding, or
+  an unmeasurable replaced holding (`funding_reason`) gives no report and no risk-free fetch.
+  The API has already refused the malformed requests (a candidate already held, a replace
+  target outside the mix or excluded).
+- **R14's survivorship flag** is set when data-store prices the candidate only through a fund's
+  holdings (`TickerInfo.status` None, eligibility.py's `untracked`): it is an index constituent
+  the owner never tracked, so its history comes from today's index members.
 """
 
 import logging
@@ -73,8 +90,9 @@ from portfolio.risk.rolling import (
     rolling_correlation,
     rolling_weekly,
 )
-from portfolio.risk.types import Frequency, ReturnSeries, RiskFigure
+from portfolio.risk.types import Flag, Frequency, ReturnSeries, RiskFigure
 from portfolio.risk.weekly import to_weekly
+from portfolio.risk.what_if import PRO_RATA_RULE, Funding, WhatIfReport, what_if_report
 from portfolio.risk.windows import StandardWindow
 from portfolio.twr import flows as twr_flows
 from portfolio.twr.flows import ExcludedHolding
@@ -241,14 +259,7 @@ def compute_ex_ante(
         context="ex-ante-risk",
     )
     left_out = {holding.ticker: holding for holding in eligible.excluded}
-    statuses = []
-    for ticker, _ in mix:
-        if ticker in excluded:
-            statuses.append(AssetStatus(ticker, EXCLUDED, EXCLUDED_REASON))
-        elif ticker in left_out:
-            statuses.append(AssetStatus(ticker, left_out[ticker].status, left_out[ticker].reason))
-        else:
-            statuses.append(AssetStatus(ticker, INCLUDED, None))
+    statuses = [_status(ticker, excluded, left_out) for ticker, _ in mix]
 
     if not eligible.returns:
         logger.info("ex-ante-risk: no holding could be included, so nothing to measure.")
@@ -349,6 +360,179 @@ def _pair_side(
     if status is None:
         raise ValueError(f"{key} is neither in the mix nor the benchmark")
     return f"{key} not included: {status.reason}"
+
+
+@dataclass(frozen=True)
+class WhatIfRisk:
+    label: str
+    rf_available: bool
+    statuses: list[AssetStatus]  # every requested holding, in input order
+    candidate: AssetStatus
+    survivorship: bool  # R14: the candidate is priced only through a fund's holdings
+    funding_reason: str | None  # why the replaced holding can't fund the candidate
+    weights: dict[str, float]  # the included holdings', normalised: "before"
+    report: WhatIfReport | None  # None when there's nothing to compare
+
+
+def compute_what_if(
+    datastore_client: DataStoreClient,
+    mix: Sequence[tuple[str, Decimal]],
+    candidate: str,
+    weight: float,
+    funding: Funding,
+    *,
+    window: StandardWindow = StandardWindow.Y3,
+    exclude: Collection[str] = (),
+    today: date | None = None,
+) -> WhatIfRisk:
+    """`mix` (ticker, weight) pairs, without the tickers in `exclude`, before and after adding
+    `candidate` at `weight` (a fraction of the whole mix) under `funding`, over `window`. The
+    request is assumed valid (the candidate not in the mix, `weight` in (0, 1), a replace
+    target in the mix and not excluded): the API checks that first."""
+    today = today or date.today()
+    excluded = set(exclude)
+    logger.info(
+        "what-if: %d holding(s), %d excluded by request, candidate %s at %.1f%%, funded %s, "
+        "window %s.",
+        len(mix),
+        len(excluded),
+        candidate,
+        weight * 100,
+        funding.rule if funding.ticker is None else f"{funding.rule} {funding.ticker}",
+        window,
+    )
+    for ticker, _ in mix:
+        if ticker in excluded:
+            logger.info("what-if: %s: %s.", ticker, EXCLUDED_REASON)
+    eligible = fetch_eur_returns(
+        datastore_client,
+        [ticker for ticker, _ in mix if ticker not in excluded] + [candidate],
+        EPOCH,
+        today,
+        logger=logger,
+        context="what-if",
+    )
+    left_out = {holding.ticker: holding for holding in eligible.excluded}
+    statuses = [_status(ticker, excluded, left_out) for ticker, _ in mix]
+    candidate_status = _status(candidate, (), left_out)
+    survivorship = candidate in eligible.untracked
+    included = [(ticker, w) for ticker, w in mix if ticker in eligible.returns]
+
+    def nothing(funding_reason: str | None = None) -> WhatIfRisk:
+        return WhatIfRisk(
+            EX_ANTE_LABEL,
+            False,
+            statuses,
+            candidate_status,
+            survivorship,
+            funding_reason,
+            {},
+            None,
+        )
+
+    if candidate not in eligible.returns:
+        logger.warning(
+            "what-if: the candidate %s can't be measured (%s), so nothing to compare.",
+            candidate,
+            candidate_status.reason,
+        )
+        return nothing()
+    if not included:
+        logger.warning("what-if: no holding could be included, so nothing to compare.")
+        return nothing()
+    if funding.rule != PRO_RATA_RULE and funding.ticker in left_out:
+        reason = (
+            f"{funding.ticker}, the holding to replace, can't be measured: "
+            f"{left_out[funding.ticker].reason}"
+        )
+        logger.warning("what-if: %s, so nothing to compare.", reason)
+        return nothing(reason)
+
+    total = sum(w for _, w in included)
+    weights = {ticker: float(w / total) for ticker, w in included}
+    daily = {
+        ticker: _series(eligible.returns[ticker], local=False) for ticker in [*weights, candidate]
+    }
+    oldest = min(series.base_date for series in daily.values())
+    end = min(series.last_date for series in daily.values())
+    rates, first_published = _risk_free(datastore_client, oldest, end, context="what-if")
+
+    report = what_if_report(
+        daily,
+        weights,
+        candidate,
+        weight,
+        funding,
+        window,
+        currencies=eligible.currencies,
+        rates=rates,
+        first_published=first_published,
+        survivorship=survivorship,
+    )
+    _log_what_if(report, len(included), sum(1 for s in statuses if s.status != INCLUDED))
+    return WhatIfRisk(
+        EX_ANTE_LABEL,
+        rates is not None,
+        statuses,
+        candidate_status,
+        survivorship,
+        None,
+        weights,
+        report,
+    )
+
+
+def _status(ticker: str, excluded: Collection[str], left_out: dict) -> AssetStatus:
+    if ticker in excluded:
+        return AssetStatus(ticker, EXCLUDED, EXCLUDED_REASON)
+    if ticker in left_out:
+        return AssetStatus(ticker, left_out[ticker].status, left_out[ticker].reason)
+    return AssetStatus(ticker, INCLUDED, None)
+
+
+def _log_what_if(report: WhatIfReport, n_included: int, n_left_out: int) -> None:
+    after = report.after
+    requested = after.requested
+    if after.window is None:
+        logger.info(
+            "what-if: window %s: requested %s..%s, but the histories don't overlap, so the "
+            "constant-weight figures are greyed.",
+            requested.label,
+            requested.start,
+            requested.end,
+        )
+    else:
+        without = report.without_candidate
+        logger.info(
+            "what-if: window %s: measured %s..%s%s.",
+            requested.label,
+            after.window.start,
+            after.window.end,
+            (
+                f", shortened by the candidate {report.candidate} (the holdings alone: "
+                f"{without.start}..{without.end})"
+                if report.shortened and without is not None
+                else ""
+            ),
+        )
+    sigma_p = report.sigma_p
+    threshold = report.threshold
+    if threshold.reason is not None:
+        threshold_text = f"threshold not shown ({threshold.reason})"
+    else:
+        threshold_text = (
+            f"threshold: candidate Sharpe {threshold.candidate_sharpe.value:.2f} "
+            f"{'>' if threshold.improves else '<='} {threshold.threshold:.2f}"
+        )
+    logger.info(
+        "what-if: done, %d holding(s) included, %d left out; delta sigma_p %s; %s; "
+        "survivorship %s.",
+        n_included,
+        n_left_out,
+        "greyed" if sigma_p.delta is None else f"{sigma_p.delta * 100:+.2f} pt",
+        threshold_text,
+        "flagged" if Flag.SURVIVORSHIP in sigma_p.after.flags else "not flagged",
+    )
 
 
 def correlation_cells(report: ExAnteReport) -> list[tuple[str, str, RiskFigure]]:

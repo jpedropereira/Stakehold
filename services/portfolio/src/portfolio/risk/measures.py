@@ -66,6 +66,33 @@ def sharpe(x: np.ndarray, q: float) -> SharpeRatio | None:
     )
 
 
+def sharpe_difference_se(x1: np.ndarray, x2: np.ndarray, q: float) -> float | None:
+    """The standard error of SR(x1) - SR(x2), two Sharpes on the same periods (RK-19: a
+    what-if's before and after mixes). Jobson and Korkie (1981) with Memmel's (2003)
+    correction, i.i.d. like `sharpe`'s SE: with per-period Sharpes SR1, SR2 and the
+    correlation ρ of the two series over N periods,
+    Var = (2 - 2ρ + (SR1² + SR2² - 2·SR1·SR2·ρ²) / 2) / N, annualised by √q.
+
+    Two highly correlated series have a far smaller SE on their difference than either Sharpe
+    has on its own, because their sampling errors mostly cancel. Fat tails and autocorrelation
+    widen it, so treat it as a lower bound. Gaps (NaN) must fall on the same periods in both:
+    the two are compared period by period."""
+    x1, x2 = np.asarray(x1, dtype=float), np.asarray(x2, dtype=float)
+    gaps = np.isnan(x1)
+    if x1.shape != x2.shape or not np.array_equal(gaps, np.isnan(x2)):
+        raise ValueError("a Sharpe difference needs both series on the same periods")
+    a, b = x1[~gaps], x2[~gaps]
+    # Identical values are tested directly, as in `sharpe`.
+    if a.size < 2 or np.ptp(a) == 0.0 or np.ptp(b) == 0.0:
+        return None
+    sr1 = np.mean(a) / np.std(a, ddof=1)
+    sr2 = np.mean(b) / np.std(b, ddof=1)
+    rho = np.corrcoef(a, b)[0, 1]
+    variance = (2.0 - 2.0 * rho + (sr1**2 + sr2**2 - 2.0 * sr1 * sr2 * rho**2) / 2.0) / a.size
+    # Identical series give 0 up to float rounding, which can land just below it.
+    return float(np.sqrt(q) * np.sqrt(max(variance, 0.0)))
+
+
 def sortino(x: np.ndarray, q: float) -> float | None:
     downside = downside_deviation(x, q)
     if downside == 0.0:

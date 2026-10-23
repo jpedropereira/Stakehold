@@ -18,6 +18,7 @@ from portfolio.risk.measures import (
     downside_deviation,
     growth_index,
     sharpe,
+    sharpe_difference_se,
     sortino,
     volatility,
 )
@@ -105,3 +106,38 @@ def test_ratios_with_a_zero_denominator_are_undefined_not_infinite():
 
 def test_calmar_divides_cagr_by_the_size_of_the_drawdown():
     assert calmar(0.06, -0.20) == pytest.approx(0.3)
+
+
+# --- sharpe_difference_se (RK-19: the what-if's ΔSharpe) -----------------------------------------
+# Jobson-Korkie with Memmel's correction, i.i.d.: on per-period Sharpes SR1, SR2 and the
+# correlation ρ of the two series, Var(SR1 - SR2) = (2 - 2ρ + (SR1² + SR2² - 2·SR1·SR2·ρ²) / 2) / T.
+
+
+def test_sharpe_difference_se_by_hand():
+    """x1 = 1,2,3,4 and x2 = 2,1,4,3: both have mean 2.5 and sample stdev √(5/3), so
+    SR1 = SR2 = √3.75, and ρ = 3/5. Var = (2 - 1.2 + (3.75 + 3.75 - 2·3.75·0.36) / 2) / 4 = 0.8."""
+    x1, x2 = np.array([1.0, 2.0, 3.0, 4.0]), np.array([2.0, 1.0, 4.0, 3.0])
+    assert sharpe_difference_se(x1, x2, 1) == pytest.approx(np.sqrt(0.8))
+    assert sharpe_difference_se(x1, x2, 52) == pytest.approx(np.sqrt(52) * np.sqrt(0.8))
+
+
+def test_sharpe_difference_se_of_a_series_with_itself_is_zero():
+    x = np.random.default_rng(1).normal(0.002, 0.02, 200)
+    assert sharpe_difference_se(x, x, 52) == pytest.approx(0.0, abs=1e-6)
+
+
+def test_sharpe_difference_se_skips_the_gaps():
+    x1, x2 = np.array([1.0, np.nan, 2.0, 3.0, 4.0]), np.array([2.0, np.nan, 1.0, 4.0, 3.0])
+    assert sharpe_difference_se(x1, x2, 1) == pytest.approx(np.sqrt(0.8))
+
+
+def test_sharpe_difference_se_needs_matching_gaps():
+    with pytest.raises(ValueError, match="same periods"):
+        sharpe_difference_se(np.array([1.0, np.nan, 2.0]), np.array([1.0, 2.0, np.nan]), 1)
+
+
+@pytest.mark.parametrize(
+    "x1, x2", [([1.0], [2.0]), ([1.0, 1.0, 1.0], [1.0, 2.0, 3.0])], ids=["one obs", "constant"]
+)
+def test_sharpe_difference_se_is_undefined_without_two_varying_series(x1, x2):
+    assert sharpe_difference_se(np.array(x1), np.array(x2), 52) is None

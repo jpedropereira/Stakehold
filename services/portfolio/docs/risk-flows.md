@@ -100,7 +100,7 @@ The mix held at constant weights through history (RK-17; spec §6.2–6.3, §7.1
 "ex-ante · constant weights". `POST /risk/ex-ante` takes the mix as Labs' backtest does,
 `{assets: [{ticker, weight}], window, benchmark, currency, exclude}`, because web builds it
 from the holdings with `labs_view.build_default_mix`: the weights are worked out in one place,
-and the what-if (RK-19) can send a changed mix in the same shape. No user data is read.
+and the what-if (RK-19) takes its mix in the same shape. No user data is read.
 `window` is one of 1Y, 3Y, 5Y, 10Y and Max (default 3Y, spec §7.1's), `currency` is `eur`
 (default) or `local`, and `exclude` names tickers from the mix to leave out. A ticker in
 `exclude` but not in the mix, or an `exclude` that leaves nothing, is a 422.
@@ -205,6 +205,90 @@ their risk-free and benchmark fetches.
 - **Logging:** each flow logs one rolling line, the monthly point count and how many volatility
   and Sharpe points are greyed, or "no point, the history is under a year". Ex-ante also logs
   the pair's weekly point count and gaps, or why it has none.
+
+### Candidate what-if
+
+Today's mix before and after adding a candidate (RK-19; spec §7.2), labelled "ex-ante · constant
+weights" like ex-ante, since it is ex-ante risk of two mixes. `POST /risk/what-if` is a sibling
+of `POST /risk/ex-ante` rather than an option on it (agreed): its response is a before/after
+table, not a decomposition and a matrix, and it needs no benchmark. It takes
+
+    {assets: [{ticker, weight}], candidate: {ticker, weight}, funding, window, exclude}
+
+`assets`, `window` and `exclude` are ex-ante's. `candidate.weight` is a fraction of the whole mix
+*after* the change, strictly between 0 and 1. `funding` is `pro_rata` (the default) or
+`replace:<ticker>`. "From cash" is deferred until cash is tracked. A 422 is only for a malformed
+request: a candidate already in the mix, a weight outside (0, 1), a replace target not in the
+mix or excluded, or ex-ante's own mix rules. `risk/flows.compute_what_if` fetches the holdings
+and the candidate in one `eur_returns/eligibility.py` call, normalises the holdings' weights
+over those included, funds the candidate, and hands the daily EUR returns to
+`risk/what_if.py`. The response is
+
+    {"label", "rf_available", "statuses": [...],
+     "candidate": {"ticker", "status", "reason", "requested_weight", "weight", "capped",
+                   "survivorship"},
+     "funding": {"rule", "ticker", "reason"},
+     "window": {"label", "requested_start", "start", "end", "limited_by", "shortened",
+                "start_without_candidate", "end_without_candidate"},
+     "weights": {"before", "after"},
+     "rows": {"sigma_p", "diversification_ratio", "candidate_pcr", "candidate_correlation",
+              "sharpe", "max_drawdown"},            # each {"before", "after", "delta"}
+     "threshold": {"applicable", "reason", "candidate_sharpe", "correlation",
+                   "portfolio_sharpe", "threshold", "improves"}}
+
+- **"Before" holds the candidate at weight 0** (agreed), so both mixes run on one listwise panel
+  (R12) with the same window and the same weeks, and the candidate's NULL weeks are dropped from
+  "before" too. This is what §7.2 means by "on the same listwise window". If the candidate starts
+  later (or ends earlier) than the holdings, `shortened` is true, `limited_by` names it, and
+  `start_without_candidate` says where the holdings alone would have started. "Before" is then
+  the holdings on the shortened window, not the ex-ante section's figures. To allow this,
+  `ex_ante.py` changed RK-15's rule: a weight may be 0 (it was "each above 0"). *Rejected: a
+  second panel-restriction path for "before"*, which would have duplicated R12's logic. The
+  zero weight also gives the candidate's correlation with the portfolio it would join for free:
+  its `corr_with_portfolio` in "before"'s decomposition.
+- **Funding.** Pro-rata scales every holding by `(1 − w_c)`. Replacing X moves up to `w_c` of
+  X's weight to the candidate (§7.2: "up to `w_c`"). If X weighs less than `w_c`, the candidate
+  gets X's whole weight, X is left at 0, `candidate.weight` is that weight, and `capped` is true.
+- **The rows lead with risk** (§7.2): Δσ_p, Δ diversification ratio, the candidate's share of
+  risk (after) and its correlation with the portfolio (before), then ΔSharpe with Memmel's SE,
+  then Δ max drawdown. The two candidate rows have no "before". Each is a RiskFigure on the
+  panel's metadata, greyed with the diversification ratio below 104 weeks. The SE is
+  Jobson–Korkie with Memmel's correction (`measures.sharpe_difference_se`), for two Sharpes
+  measured on the same weeks. The two mixes share most of their holdings, so it is far smaller
+  than either Sharpe's own SE (0.05 against about 0.6 for a 5% candidate over 3 years). Like
+  §5.4's, it is an i.i.d. lower bound.
+- **The threshold** SR_c > ρ(c, p)·SR_p is shown under pro-rata funding only. Under replace,
+  `applicable` is false, "shown under pro-rata funding only". It is the sign of the mix's Sharpe
+  derivative at zero weight, `(σ_c/σ_p)(SR_c − ρ·SR_p)`, which a test checks against a numerical
+  derivative. All three inputs are weekly, on the panel's weeks, from excess returns: SR_c is
+  the candidate's Sharpe, SR_p is "before"'s, and ρ is computed from the two excess series. ρ is
+  not taken from the decomposition, which uses raw returns, because that would make the identity
+  approximate. The two differ only through the risk-free rate's weekly variance: 0.3423 against
+  0.3424 for EGLN.L on the dev data. The threshold greys with no risk-free series, or below 104
+  weeks with the correlation's reason.
+- **R14's survivorship flag.** The CHECK found the field: `TickerInfo.status` is None for a ticker
+  data-store prices only through a fund's holdings, rather than through `tracked_tickers`
+  (data-store's `read_flows.ticker_info`). That ticker is an index constituent the owner never
+  tracked. `eligibility.py` names those tickers in `untracked`. A flagged candidate sets
+  `candidate.survivorship` and puts `survivorship` on every "after" figure and on
+  `candidate_sharpe`, never on a "before" figure. A tracked ticker that is also a constituent
+  isn't flagged.
+- **Nothing to compare is a 200, not an error** (agreed). If the candidate can't be measured,
+  `candidate.status` says why ("no FX series for HKD"). The same applies when no holding is
+  included, or when the replaced holding can't be measured (`funding.reason`, "X, the holding
+  to replace, can't be measured: …"). Then `window`, `weights`, `rows` and `threshold` are null,
+  and no risk-free fetch is made.
+
+The flow logs the start (holdings, exclusions, candidate, weight, funding, window), one line
+per asset, the window (and what shortened it), and a summary: Δσ_p, the threshold's outcome or
+why it isn't shown, and the survivorship flag. The job logs a start line and a done line, which
+is a warning, with the reason, when there is nothing to compare.
+
+**Against the dev data** (2026-10-23; IWDA, IEMA, IUSN, SGLD and VWCE): each request took
+0.3–0.4 s and returned about 4 KB. EGLN.L at 10% pro-rata lowered σ_p by 0.2 points, raised the
+diversification ratio by 0.09, and cleared the threshold (SR_c above 0.51), with ΔSharpe +0.08
+± 0.10. MSFT, which is priced only through IWDA's holdings, was flagged `survivorship`. On Max,
+NVCR shortened the window from 2019-08-02 to 2024-01-05.
 
 ### Look-through exposures
 

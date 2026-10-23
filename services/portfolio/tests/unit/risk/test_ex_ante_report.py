@@ -18,7 +18,7 @@ from datetime import date, timedelta
 import numpy as np
 import pytest
 from portfolio.risk.ex_ante import constant_weight_series
-from portfolio.risk.ex_ante_report import NO_OVERLAP, ex_ante_report
+from portfolio.risk.ex_ante_report import NO_OVERLAP, ex_ante_report, mix_report
 from portfolio.risk.ex_post import NO_RISK_FREE
 from portfolio.risk.risk_free import RatePoint
 from portfolio.risk.rolling import RollingFigures, monthly_windows, rolling_weekly
@@ -248,3 +248,29 @@ def test_a_null_day_in_one_holding_is_a_gap_in_the_constant_weight_daily_series(
 def test_weights_that_do_not_sum_to_one_raise():
     with pytest.raises(ValueError, match="sum to 1"):
         _report(_pair(), {"A": 0.6, "B": 0.6})
+
+
+# --- mix_report: the report without the matrix (RK-19's before and after) ----------------------
+
+
+@pytest.mark.parametrize("label", [StandardWindow.Y3, StandardWindow.MAX])
+def test_mix_report_is_the_ex_ante_report_without_the_matrix(label):
+    daily = _pair(b_base=date(2017, 3, 6))
+    report = _report(daily, WEIGHTS, label, rates=ZERO_RATES)
+    mix = mix_report(
+        daily,
+        WEIGHTS,
+        label,
+        currencies=EUR,
+        rates=ZERO_RATES,
+        first_published=ZERO_RATES[0].date,
+    )
+
+    assert (mix.requested, mix.window, mix.limited_by) == (
+        report.requested,
+        report.window,
+        report.limited_by,
+    )
+    assert mix.decomposition == report.decomposition
+    assert mix.constant_weight == report.constant_weight
+    assert mix.mix_weekly == report.mix_weekly

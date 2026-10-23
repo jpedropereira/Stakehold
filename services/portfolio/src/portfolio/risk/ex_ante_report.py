@@ -29,6 +29,8 @@ holdings, converts them to daily EUR returns and normalises the weights.
   move through time. Its monthly windows come from the daily mix, as ex-post's come from the
   daily TWR, so the last point is the 1Y constant-weight figure. `mix_weekly` is that weekly
   mix, which a rolling correlation against "the portfolio" uses.
+- **`mix_report` is the report without the matrix and the rolling figures**, which the what-if
+  (RK-19) measures twice, before and after; `ex_ante_report` is `mix_report` plus both.
 """
 
 from collections.abc import Mapping, Sequence
@@ -59,6 +61,22 @@ _EUR = "EUR"
 
 
 @dataclass(frozen=True)
+class MixReport:
+    """One mix's ex-ante figures without the correlation matrix or the rolling figures: what the
+    what-if (RK-19) measures twice, before and after."""
+
+    requested: Window  # the standard window asked for, ending on the latest common date
+    window: Window | None  # the effective one; None when the histories don't overlap
+    limited_by: tuple[str, ...]  # the holding(s) whose start shortened the window
+    decomposition: ExAnteDecomposition
+    constant_weight: SeriesFigures
+    # The constant-weight mix over the holdings' common span, daily and weekly; None when they
+    # don't overlap.
+    mix_daily: ReturnSeries | None
+    mix_weekly: ReturnSeries | None
+
+
+@dataclass(frozen=True)
 class ExAnteReport:
     requested: Window  # the standard window asked for, ending on the latest common date
     window: Window | None  # the effective one; None when the histories don't overlap
@@ -81,10 +99,47 @@ def ex_ante_report(
     first_published: date | None,
     correlation_daily: Mapping[str, ReturnSeries],
 ) -> ExAnteReport:
-    """`daily` is each holding's daily EUR returns, `weights` their normalised weights (each
-    above 0, summing to 1), `currencies` each one's FX currency. `rates` and `first_published`
+    """`daily` is each holding's daily EUR returns, `weights` their normalised weights (each 0
+    or more, summing to 1), `currencies` each one's FX currency. `rates` and `first_published`
     are None together when there's no risk-free series. `correlation_daily` is the matrix's
     daily series, keyed in display order."""
+    mix = mix_report(
+        daily, weights, label, currencies=currencies, rates=rates, first_published=first_published
+    )
+    correlation = pairwise_correlation(
+        {key: to_weekly(series) for key, series in correlation_daily.items()}, mix.requested
+    )
+    if mix.mix_daily is None:
+        rolling = RollingFigures((), ())
+    else:
+        rolling = rolling_weekly(
+            mix.mix_weekly,
+            monthly_windows(mix.mix_daily),
+            rates=rates,
+            first_published=first_published,
+        )
+    return ExAnteReport(
+        mix.requested,
+        mix.window,
+        mix.limited_by,
+        mix.decomposition,
+        mix.constant_weight,
+        correlation,
+        mix.mix_weekly,
+        rolling,
+    )
+
+
+def mix_report(
+    daily: Mapping[str, ReturnSeries],
+    weights: Mapping[str, float],
+    label: StandardWindow,
+    *,
+    currencies: Mapping[str, str],
+    rates: Sequence[RatePoint] | None,
+    first_published: date | None,
+) -> MixReport:
+    """`ex_ante_report` without the matrix and the rolling figures; the arguments are the same."""
     if not daily:
         raise ValueError("an ex-ante report needs at least one holding")
     end = latest_common_date(*daily.values())
@@ -93,20 +148,16 @@ def ex_ante_report(
 
     weekly = {key: to_weekly(series) for key, series in daily.items()}
     decomposition = decomposition_figures(weekly, weights, requested)
-    correlation = pairwise_correlation(
-        {key: to_weekly(series) for key, series in correlation_daily.items()}, requested
-    )
 
     if common_span(*daily.values()) is None:
-        return ExAnteReport(
+        return MixReport(
             requested,
             None,
             (),
             decomposition,
             greyed_series_figures(requested, NO_OVERLAP),
-            correlation,
             None,
-            RollingFigures((), ()),
+            None,
         )
 
     mix_daily = constant_weight_series(daily, weights)
@@ -125,16 +176,6 @@ def ex_ante_report(
         rates=rates,
         first_published=first_published,
     )
-    rolling = rolling_weekly(
-        mix_weekly, monthly_windows(mix_daily), rates=rates, first_published=first_published
-    )
-    return ExAnteReport(
-        requested,
-        window,
-        decomposition.limited_by,
-        decomposition,
-        figures,
-        correlation,
-        mix_weekly,
-        rolling,
+    return MixReport(
+        requested, window, decomposition.limited_by, decomposition, figures, mix_daily, mix_weekly
     )

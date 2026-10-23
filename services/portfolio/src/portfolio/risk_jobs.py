@@ -1,7 +1,7 @@
-"""Runnable units for the risk read endpoints: ex-post risk (RK-11), ex-ante risk (RK-17) and
-look-through exposures (RK-22). Split out of jobs.py, which had crossed 64 KB, with no change in
-behaviour: each is the same shape as a jobs.py job (settings, a data-store client, one flow, a
-payload of builtins), and api/routes.py calls them the same way.
+"""Runnable units for the risk read endpoints: ex-post risk (RK-11), ex-ante risk (RK-17), the
+candidate what-if (RK-19) and look-through exposures (RK-22). Split out of jobs.py, which had
+crossed 64 KB, with no change in behaviour: each is the same shape as a jobs.py job (settings,
+a data-store client, one flow, a payload of builtins), and api/routes.py calls them the same way.
 """
 
 import logging
@@ -18,6 +18,7 @@ from portfolio.risk import flows as risk_flows
 from portfolio.risk.ex_post import WindowFigures
 from portfolio.risk.rolling import CORRELATION_WINDOW, ROLLING_WINDOW, RollingFigures
 from portfolio.risk.types import RiskFigure
+from portfolio.risk.what_if import Funding, Row, WhatIfReport
 from portfolio.risk.windows import StandardWindow
 from portfolio.settings import Settings, load_settings
 from shared.db.connection import get_connection
@@ -257,6 +258,122 @@ def get_ex_ante_risk(
 
 # Every look-through weight is a share of the mix; 8 places is a millionth of a percent.
 _LOOK_THROUGH_PLACES = Decimal("0.00000001")
+
+
+def get_what_if(
+    *,
+    assets: list[tuple[str, Decimal]],
+    candidate: str,
+    weight: Decimal,
+    funding: Funding,
+    window: StandardWindow = StandardWindow.Y3,
+    exclude: Collection[str] = (),
+    settings: Settings | None = None,
+) -> dict:
+    """`assets` (ticker, weight) pairs before and after adding `candidate` at `weight` (a
+    fraction of the whole mix) under `funding` (see risk/flows.compute_what_if). Read-only and
+    per request, like ex-ante: no database connection and no user_id."""
+    configure_logging()
+    settings = settings or load_settings()
+    datastore_client = _require_datastore_client(settings, command="a what-if")
+    logger.info(
+        "get-what-if: comparing %d asset(s) before and after adding %s.", len(assets), candidate
+    )
+    result = risk_flows.compute_what_if(
+        datastore_client,
+        assets,
+        candidate,
+        float(weight),
+        funding,
+        window=window,
+        exclude=exclude,
+    )
+
+    report = result.report
+    included = sum(1 for s in result.statuses if s.status == risk_flows.INCLUDED)
+    if report is None:
+        if result.candidate.status != risk_flows.INCLUDED:
+            why = f"the candidate {candidate}: {result.candidate.reason}"
+        elif result.funding_reason is not None:
+            why = result.funding_reason
+        else:
+            why = "no holding could be included"
+        logger.warning(
+            "get-what-if: done, nothing to compare: %s (%d of %d asset(s) included).",
+            why,
+            included,
+            len(assets),
+        )
+    else:
+        logger.info(
+            "get-what-if: done, %d of %d asset(s) included, window %s, risk-free rate %s.",
+            included,
+            len(assets),
+            window,
+            "available" if result.rf_available else "unavailable",
+        )
+
+    payload = {
+        "label": result.label,
+        "rf_available": result.rf_available,
+        "statuses": [asdict(status) for status in result.statuses],
+        "candidate": {
+            **asdict(result.candidate),
+            "requested_weight": float(weight),
+            "weight": None if report is None else report.funded.candidate_weight,
+            "capped": None if report is None else report.funded.capped,
+            "survivorship": result.survivorship,
+        },
+        "funding": {
+            "rule": funding.rule,
+            "ticker": funding.ticker,
+            "reason": result.funding_reason,
+        },
+    }
+    if report is None:
+        return {**payload, **dict.fromkeys(("window", "weights", "rows", "threshold"))}
+    return {**payload, **_what_if_sections(report, result.weights)}
+
+
+def _what_if_sections(report: WhatIfReport, before: dict[str, float]) -> dict:
+    after = report.after
+    without = report.without_candidate
+    threshold = report.threshold
+    return {
+        "window": {
+            "label": str(after.requested.label),
+            "requested_start": after.requested.start,
+            "start": None if after.window is None else after.window.start,
+            "end": after.requested.end,
+            "limited_by": list(after.limited_by),
+            "shortened": report.shortened,
+            "start_without_candidate": None if without is None else without.start,
+            "end_without_candidate": None if without is None else without.end,
+        },
+        "weights": {"before": before, "after": report.funded.after},
+        "rows": {
+            "sigma_p": _what_if_row(report.sigma_p),
+            "diversification_ratio": _what_if_row(report.diversification_ratio),
+            "candidate_pcr": _what_if_row(report.candidate_pcr),
+            "candidate_correlation": _what_if_row(report.candidate_correlation),
+            "sharpe": {**_what_if_row(report.sharpe), "delta_se": report.sharpe.delta_se},
+            "max_drawdown": _what_if_row(report.max_drawdown),
+        },
+        "threshold": {
+            **asdict(threshold),
+            "candidate_sharpe": (
+                None if threshold.candidate_sharpe is None else _figure(threshold.candidate_sharpe)
+            ),
+        },
+    }
+
+
+def _what_if_row(row: Row) -> dict:
+    return {
+        "before": None if row.before is None else _figure(row.before),
+        "after": _figure(row.after),
+        "delta": row.delta,
+    }
 
 
 def get_look_through(

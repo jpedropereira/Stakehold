@@ -38,6 +38,7 @@ this file; references to sections that stayed in `architecture.md` name it.
 | Portfolio TWR | — (CLI has none) | `GET /returns/portfolio/twr?user_id=` | on demand (ex-post risk, RK-11) | `accounts` by `user_id`, then each account's full `return_snapshots` and latest `position_snapshots`; `data-store`'s `GET /tickers/{t}`, `GET /prices/{t}` and `GET /fx/EUR/{c}` per held ticker | — |
 | Ex-post risk | — (CLI has none) | `GET /risk/ex-post?user_id=&benchmark=` | on demand (web's `/risk` page, RK-12) | as for the portfolio TWR, plus `data-store`'s `GET /rates/risk-free`, and the benchmark's `GET /tickers/{t}`, `GET /prices/{t}` and, outside EUR, `GET /fx/EUR/{c}` (RK-13) | — |
 | Ex-ante risk | — (CLI has none) | `POST /risk/ex-ante` | on demand (web's `/risk` page, RK-18) | `data-store`'s `GET /tickers/{t}`, `GET /prices/{t}` and `GET /fx/EUR/{c}` per asset and for the benchmark, and `GET /rates/risk-free` (RK-17); no portfolio table: web sends the mix | — (read-only: nothing is stored) |
+| Candidate what-if | — (CLI has none) | `POST /risk/what-if` | on demand (web's `/risk` page, RK-20) | `data-store`'s `GET /tickers/{t}`, `GET /prices/{t}` and `GET /fx/EUR/{c}` per holding and for the candidate, and `GET /rates/risk-free` (RK-19); no portfolio table: web sends the mix | — (read-only: nothing is stored) |
 | Look-through exposures | — (CLI has none) | `POST /risk/look-through` | on demand (web's `/risk` page, RK-23) | `data-store`'s `GET /tickers/{t}` per asset, `GET /tracked-tickers?ticker=` and `GET /etf-holdings` once, and `GET /etf-holdings/{fund_key}/latest` per held fund (RK-22); no portfolio table: web sends the mix | — (read-only: nothing is stored) |
 | Labs backtest | — (CLI has none) | `POST /labs/backtest` | on demand (web's `/labs` page, LB-6) | `data-store`'s `GET /tickers/{t}`, `GET /prices/{t}` and `GET /fx/EUR/{c}` per asset and for the benchmark (RK-13); no portfolio table | — (read-only: nothing is stored) |
 
@@ -540,6 +541,10 @@ failed risk-free fetch isn't a 502 either: the figures that need the rate are gr
 `POST /risk/ex-ante` takes a mix, as the backtest does, and isolates failures the same way: each
 asset's status says why it was left out, and a failed risk-free or benchmark fetch greys the
 figures that need it. See [`risk-flows.md`](risk-flows.md)'s "Ex-ante risk".
+
+`POST /risk/what-if` takes the same mix plus a candidate and a funding rule. If the candidate,
+every holding, or the replaced holding can't be measured, the response is a 200 that says why,
+with no figures. See [`risk-flows.md`](risk-flows.md)'s "Candidate what-if".
 
 `POST /risk/look-through` takes a mix too. A failed ticker-info or snapshot call is isolated
 to its asset, but a failed fund list or tracked-ticker list is a 502: without them an ETF would

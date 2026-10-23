@@ -27,6 +27,7 @@ from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from datetime import date
 
+import numpy as np
 from portfolio.risk.drawdown import drawdown
 from portfolio.risk.history import HistoryCheck, Measure, check_minimum, frequency_of
 from portfolio.risk.measures import (
@@ -178,12 +179,7 @@ def weekly_figures(
     rate series does (R4)."""
     part = _weekly_slice(weekly, window)
     r = to_array(part.series)
-    x = r
-    rf_flags: frozenset[Flag] = frozenset()
-    if part.series.dates:
-        rf = risk_free_returns(rates, first_published, (part.series.base_date, *part.series.dates))
-        x = r - rf.values
-        rf_flags = frozenset({Flag.RF_PARTIAL} if rf.partial else ())
+    x, rf_flags = _excess(part, rates, first_published)
 
     vol_check = _check(Measure.VOLATILITY, part)
     if not vol_check.sufficient:
@@ -213,6 +209,24 @@ def weekly_figures(
             sortino_value, _check(Measure.SORTINO, part), reason=_NO_DOWNSIDE, flags=rf_flags
         ),
     )
+
+
+def weekly_excess(
+    weekly: ReturnSeries, window: Window, rates: Sequence[RatePoint], first_published: date
+) -> np.ndarray:
+    """The excess returns `weekly_figures` measures over `window`, NaN on a NULL week. The
+    what-if (RK-19) compares two mixes' Sharpes week by week on these."""
+    return _excess(_weekly_slice(weekly, window), rates, first_published)[0]
+
+
+def _excess(
+    part: _Slice, rates: Sequence[RatePoint], first_published: date
+) -> tuple[np.ndarray, frozenset[Flag]]:
+    r = to_array(part.series)
+    if not part.series.dates:
+        return r, frozenset()
+    rf = risk_free_returns(rates, first_published, (part.series.base_date, *part.series.dates))
+    return r - rf.values, frozenset({Flag.RF_PARTIAL} if rf.partial else ())
 
 
 def weekly_figures_without_rf(weekly: ReturnSeries, window: Window, reason: str) -> WeeklyFigures:

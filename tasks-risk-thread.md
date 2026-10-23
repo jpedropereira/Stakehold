@@ -94,8 +94,8 @@ Spec Phase 0's discovery (2026-10-17) and the finance review (2026-10-20) are in
 | RK-16 | [portfolio: correlation matrix](#rk-16-portfolio-correlation-matrix) | RK-6 | done |
 | RK-17 | [portfolio: ex-ante endpoint](#rk-17-portfolio-ex-ante-endpoint) | RK-4, RK-5, RK-13, RK-15, RK-16 | done |
 | RK-18 | [web: ex-ante summary, decomposition and heatmap](#rk-18-web-ex-ante-summary-decomposition-and-heatmap) | RK-12, RK-17 | done |
-| RK-19 | [portfolio: candidate what-if](#rk-19-portfolio-candidate-what-if) | RK-17 | ready |
-| RK-20 | [web: what-if form](#rk-20-web-what-if-form) | RK-18, RK-19 | blocked |
+| RK-19 | [portfolio: candidate what-if](#rk-19-portfolio-candidate-what-if) | RK-17 | done |
+| RK-20 | [web: what-if form](#rk-20-web-what-if-form) | RK-18, RK-19 | ready |
 | RK-21 | [data-store: ETF holdings endpoint](#rk-21-data-store-etf-holdings-endpoint) | RK-1 | done |
 | RK-22 | [portfolio: look-through exposures](#rk-22-portfolio-look-through-exposures) | RK-21 | done |
 | RK-23 | [web: concentration section](#rk-23-web-concentration-section) | RK-12, RK-22 | done |
@@ -779,7 +779,7 @@ Decisions (agreed):
 
 ### RK-19. portfolio: candidate what-if
 
-**Status:** ready
+**Status:** done
 
 - Extend the ex-ante endpoint, or add a sibling, with `candidate {ticker, weight}` and
   `funding: pro_rata | replace:<ticker>`. "From cash" is deferred.
@@ -795,6 +795,16 @@ Decisions (agreed):
 Tests: pro-rata and replace weights. The shortened window. The threshold on a constructed case,
 checked against a numerical derivative of the mix's Sharpe. No threshold under "replace". The
 flag.
+
+**As built:** `POST /risk/what-if`, a sibling of ex-ante (agreed): `risk/what_if.py`,
+`risk/flows.compute_what_if`. Reasoning in portfolio's `risk-flows.md`. Decisions:
+- **"Before" holds the candidate at weight 0** (agreed): one listwise panel for both mixes. A
+  0 weight is now allowed (RK-15 said > 0). Replace is capped at X's weight (`capped`).
+- **R14 CHECK:** `TickerInfo.status` is None for a ticker priced only through a fund.
+- **Nothing to compare is a 200** (agreed); the reason is in `candidate.status` or
+  `funding.reason`.
+- **For RK-20:** show `candidate.weight` when `capped`, R14's warning on `survivorship`, and
+  `threshold.reason` under replace.
 
 ### RK-20. web: what-if form
 
