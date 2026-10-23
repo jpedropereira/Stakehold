@@ -6,6 +6,8 @@ import httpx
 from web.portfolio_client.base import (
     BACKTEST_PERIODS,
     BACKTEST_RISK_WINDOWS,
+    LOOK_THROUGH_COVERAGE,
+    LOOK_THROUGH_DIMENSIONS,
     RELATIVE_FIGURE_KEYS,
     RISK_FIGURE_KEYS,
     RISK_WINDOWS,
@@ -36,6 +38,15 @@ from web.portfolio_client.base import (
     HoldingAccount,
     Holdings,
     HoldingsTotals,
+    LookThrough,
+    LookThroughAsset,
+    LookThroughBucket,
+    LookThroughConcentration,
+    LookThroughDimension,
+    LookThroughExposures,
+    LookThroughName,
+    LookThroughNames,
+    LookThroughSnapshot,
     PortfolioReturns,
     PortfolioSeriesPoint,
     Position,
@@ -685,6 +696,101 @@ def _ex_ante_risk(body: dict) -> ExAnteRisk:
         raise PortfolioUnavailable(f"malformed portfolio response: {exc}") from exc
 
 
+def _fixed(value, key: str) -> Decimal:
+    """A look-through weight: a fixed-point string, as portfolio serves shares (RK-22). A JSON
+    number would mean the contract changed to floats, which these sums mustn't round through."""
+    if not isinstance(value, str):
+        raise TypeError(f"{key} is not a fixed-point string")
+    return Decimal(value)
+
+
+def _opt_fixed(value, key: str) -> Decimal | None:
+    return None if value is None else _fixed(value, key)
+
+
+def _keyed(item: dict, keys: tuple[str, ...], what: str) -> None:
+    """Exactly these keys: a missing one would drop a table, and an unknown one would be
+    silently left out of the page."""
+    if not isinstance(item, dict) or set(item) != set(keys):
+        raise ValueError(f"{what} {sorted(item)}, expected {sorted(keys)}")
+
+
+def _concentration(item: dict) -> LookThroughConcentration:
+    return LookThroughConcentration(
+        top_shares={int(n): _fixed(v, "top_shares") for n, v in item["top_shares"].items()},
+        known_share=_fixed(item["known_share"], "known_share"),
+        herfindahl=_opt_fixed(item["herfindahl"], "herfindahl"),
+        effective_n=_opt_fixed(item["effective_n"], "effective_n"),
+        reason=item["reason"],
+    )
+
+
+def _dimension(item: dict) -> LookThroughDimension:
+    return LookThroughDimension(
+        label=item["label"],
+        buckets=tuple(
+            LookThroughBucket(b["label"], _fixed(b["weight"], "weight"), b["kind"])
+            for b in item["buckets"]
+        ),
+        concentration=_concentration(item["concentration"]),
+    )
+
+
+def _exposures(item: dict) -> LookThroughExposures:
+    coverage, dimensions, names = item["coverage"], item["dimensions"], item["names"]
+    _keyed(coverage, LOOK_THROUGH_COVERAGE, "coverage")
+    _keyed(dimensions, LOOK_THROUGH_DIMENSIONS, "dimensions")
+    return LookThroughExposures(
+        snapshots=tuple(
+            LookThroughSnapshot(
+                ticker=s["ticker"],
+                fund_key=s["fund_key"],
+                as_of_date=date.fromisoformat(s["as_of_date"]),
+                n_lines=_int(s, "n_lines"),
+                raw_weight_sum=_fixed(s["raw_weight_sum"], "raw_weight_sum"),
+            )
+            for s in item["snapshots"]
+        ),
+        coverage={key: _fixed(coverage[key], key) for key in LOOK_THROUGH_COVERAGE},
+        dimensions={key: _dimension(dimensions[key]) for key in LOOK_THROUGH_DIMENSIONS},
+        names=LookThroughNames(
+            top=tuple(
+                LookThroughName(
+                    issuer=n["issuer"],
+                    location=n["location"],
+                    weight=_fixed(n["weight"], "weight"),
+                    sources=_tickers(n, "sources"),
+                )
+                for n in names["top"]
+            ),
+            n_names=_int(names, "n_names"),
+            concentration=_concentration(names["concentration"]),
+        ),
+    )
+
+
+def _look_through(body: dict) -> LookThrough:
+    try:
+        exposures = body["exposures"]
+        return LookThrough(
+            assets=tuple(
+                LookThroughAsset(
+                    ticker=a["ticker"],
+                    status=a["status"],
+                    reason=a["reason"],
+                    kind=a["kind"],
+                    weight=_opt_fixed(a["weight"], "weight"),
+                    matched_in=a["matched_in"],
+                    note=a["note"],
+                )
+                for a in body["assets"]
+            ),
+            exposures=None if exposures is None else _exposures(exposures),
+        )
+    except (KeyError, TypeError, ValueError, InvalidOperation) as exc:
+        raise PortfolioUnavailable(f"malformed portfolio response: {exc}") from exc
+
+
 def _transaction(item: dict) -> Transaction:
     try:
         return Transaction(
@@ -996,6 +1102,25 @@ class HttpPortfolioClient:
                 f"unexpected portfolio response {response.status_code}: {_error_detail(response)}"
             )
         return _ex_ante_risk(_json_body(response))
+
+    async def look_through(self, *, assets: list[tuple[str, Decimal]]) -> LookThrough:
+        response = await self._request(
+            "POST",
+            "/risk/look-through",
+            json={
+                "assets": [
+                    {"ticker": ticker, "weight": _decimal_str(weight)} for ticker, weight in assets
+                ]
+            },
+        )
+        if response.status_code == 422:
+            raise InvalidPortfolioRequest(_error_detail(response))
+        if response.status_code != 200:
+            # Not _raise_for_status: its 404 means AccountNotFound, and this route has no account.
+            raise PortfolioUnavailable(
+                f"unexpected portfolio response {response.status_code}: {_error_detail(response)}"
+            )
+        return _look_through(_json_body(response))
 
     async def list_ticker_mappings(self) -> list[TickerMapping]:
         response = await self._request("GET", "/ticker-mappings")

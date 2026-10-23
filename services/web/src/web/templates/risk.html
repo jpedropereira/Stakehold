@@ -37,6 +37,70 @@
   {% endfor %}
 </tr>
 {%- endmacro %}
+{# RK-23: a weight and its bar, a share of the whole mix, on a fixed-width track beside the
+   figure, so the two stay together at every width. The bar's width is an SVG attribute, not a
+   style: the CSP has no 'unsafe-inline' for styles. #}
+{% macro share_cell(weight, bar, label, greyed=false) -%}
+<td class="num" role="cell" data-label="{{ label }}"><span class="lt-share">{% if bar is not none %}<svg class="lt-bar{% if greyed %} lt-bar-greyed{% endif %}" viewBox="0 0 100 4" preserveAspectRatio="none" aria-hidden="true" focusable="false"><rect class="lt-track" width="100" height="4"/><rect width="{{ bar }}" height="4"/></svg>{% endif %}<span class="mono">{{ weight | pct1 }}</span></span></td>
+{%- endmacro %}
+{% macro bucket_rows(table, rows) -%}
+<div class="table-scroll" tabindex="0" role="region" aria-label="{{ caller() }}">
+<table class="positions-table holdings-table lt-table stack-table" role="table">
+  <thead role="rowgroup">
+    <tr role="row">
+      <th role="columnheader" scope="col">{% if table.trading_label %}Currency{% else %}{{ table.label | capitalize }}{% endif %}</th>
+      <th class="num" role="columnheader" scope="col">{% if table.trading_label %}{{ table.label | capitalize }}{% else %}Share of the mix{% endif %}</th>
+      {% if table.trading_label %}<th class="num" role="columnheader" scope="col">{{ table.trading_label | capitalize }}</th>{% endif %}
+    </tr>
+  </thead>
+  <tbody role="rowgroup">
+    {% for row in rows %}
+    <tr role="row">
+      <th role="rowheader" scope="row">{% if row.greyed %}<span class="risk-greyed">{{ row.label }}</span>{% else %}{{ row.label }}{% endif %}</th>
+      {#- A stacked row's labels are short, to leave the bar room beside them on a phone. #}
+      {{ share_cell(row.weight, row.bar, "Listing currency" if table.trading_label else "Share of the mix", row.greyed) }}
+      {% if table.trading_label %}{{ share_cell(row.trading, none, "Trading currency") }}{% endif %}
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{%- endmacro %}
+{# A table's concentration over its known share (spec §8, as amended by RK-22): greyed with its
+   reason when nothing is known. #}
+{% macro concentration_line(c) -%}
+<p class="labs-note lt-concentration">{% if c.reason %}{{ term("Effective number", "herfindahl") }}: <span class="risk-greyed">{{ c.reason }}</span>{% else %}The heaviest is <span class="mono">{{ c.top_shares.get(1) | pct1 }}</span> of the mix, the 5 heaviest <span class="mono">{{ c.top_shares.get(5) | pct1 }}</span>, the 10 heaviest <span class="mono">{{ c.top_shares.get(10) | pct1 }}</span>. Over the <span class="mono">{{ c.known_share | pct1 }}</span> known: {{ term("effective number", "herfindahl") }} <span class="mono">{{ "%.1f" | format(c.effective_n) }}</span> (Herfindahl <span class="mono">{{ "%.3f" | format(c.herfindahl) }}</span>).{% endif %}</p>
+{%- endmacro %}
+{% macro exposure_table(table, aria) -%}
+{% call bucket_rows(table, table.rows) %}{{ aria }}{% endcall %}
+{% if table.more %}
+<details class="lt-more">
+  <summary>Show <span class="mono">{{ table.more | length }}</span> more</summary>
+  {% call bucket_rows(table, table.more) %}More {{ aria | lower }}{% endcall %}
+</details>
+{% endif %}
+{{ concentration_line(table.concentration) }}
+{%- endmacro %}
+{% macro names_table(rows, aria) -%}
+<div class="table-scroll" tabindex="0" role="region" aria-label="{{ aria }}">
+<table class="positions-table holdings-table lt-table stack-table" role="table">
+  <thead role="rowgroup">
+    <tr role="row">
+      <th role="columnheader" scope="col">Company</th>
+      <th class="num" role="columnheader" scope="col">Share of the mix</th>
+    </tr>
+  </thead>
+  <tbody role="rowgroup">
+    {% for row in rows %}
+    <tr role="row">
+      <th role="rowheader" scope="row">{{ row.issuer }}<span class="period-start">{% if row.location %}{{ row.location }} · {% endif %}via {% for source in row.sources %}<span class="mono">{{ source }}</span>{% if not loop.last %}, {% endif %}{% endfor %}</span></th>
+      {{ share_cell(row.weight, row.bar, "Share of the mix") }}
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{%- endmacro %}
 {% block content %}
 <section class="card card-wide">
   <h1>Risk</h1>
@@ -271,6 +335,66 @@
     </ul>
     <p class="labs-note">The other holdings' weights were scaled to 100%.</p>
     {% endif %}
+    {% endif %}
+  </section>
+  {# RK-23: where today's mix is concentrated, looked through the funds' holdings (spec §8).
+     risk_concentration_view.py decides what is shown. Always the whole mix: ?exclude= is
+     ex-ante's. #}
+  <section class="risk-section" aria-labelledby="risk-concentration-title" id="risk-concentration">
+    <h2 id="risk-concentration-title">Concentration · look-through</h2>
+    <p class="entry-subtitle">Where today's mix is concentrated, looking through each fund to
+      what it holds ({{ term("look-through", "look-through") }}). It uses each fund's latest
+      published holdings: a snapshot, not a history.</p>
+    {% if concentration_error %}
+    {% call banner("error") %}<strong>Couldn't load the concentration figures.</strong> {{ concentration_error }}{% endcall %}
+    {% elif concentration is none %}
+    <p class="entry-empty">Nothing to look through yet — concentration starts once a holding
+      has a price. <a href="/accounts">Add transactions to an account</a>.</p>
+    {% elif not concentration.measured %}
+    <p class="entry-empty">Nothing could be looked through: every holding was left out.</p>
+    {% else %}
+    {% if concentration.snapshots %}
+    <p class="labs-note">{% for s in concentration.snapshots %}<span class="mono">{{ s.ticker }}</span>'s holdings as of <span class="mono">{{ s.as_of_date | date }}</span> (<span class="mono">{{ s.n_lines }}</span> lines){% if not loop.last %}; {% endif %}{% endfor %}.</p>
+    {% endif %}
+    {% if concentration.unmapped_share > 0 %}
+    <p class="risk-insight lt-unmapped"><span class="mono">{{ concentration.unmapped_share | pct1 }}</span> of the mix is in funds with no holdings data, so it can't be looked through: {% for fund in concentration.unmapped %}<span class="mono">{{ fund.ticker }}</span>{% if fund.note %} ({{ fund.note }}){% endif %}{% if not loop.last %}, {% endif %}{% endfor %}. Each table shows it as its own row.</p>
+    {% endif %}
+    <ul class="lt-coverage" aria-label="What could be looked through">
+      {% for share in concentration.coverage %}
+      <li>{{ share.label }} <span class="mono">{{ share.weight | pct1 }}</span></li>
+      {% endfor %}
+    </ul>
+
+    {% set currency = concentration.currency %}
+    <h3>By currency</h3>
+    <p class="labs-note">The {{ term("listing currency of holdings", "listing-currency") }} is what each company's shares trade in, a proxy for currency exposure, not where its revenue comes from. Beside it, the trading currency of what you hold.</p>
+    {{ exposure_table(currency, "Exposure by currency") }}
+    {% for table in concentration.dimensions %}
+    <h3>By {{ table.label }}</h3>
+    {{ exposure_table(table, "Exposure by " ~ table.label) }}
+    {% endfor %}
+
+    {% set names = concentration.names %}
+    <h3>Top look-through names</h3>
+    <p class="labs-note">Each company once, however it is held: directly and through a fund add up. <span class="mono">{{ names.n_names }}</span> names in all.</p>
+    {{ names_table(names.rows, "Top look-through names") }}
+    {% if names.more %}
+    <details class="lt-more">
+      <summary>Show <span class="mono">{{ names.more | length }}</span> more</summary>
+      {{ names_table(names.more, "More look-through names") }}
+    </details>
+    {% endif %}
+    {{ concentration_line(names.concentration) }}
+    {% endif %}
+
+    {% if concentration and concentration.left_out %}
+    <h3>Left out</h3>
+    <ul class="labs-unavailable">
+      {% for holding in concentration.left_out %}
+      <li><span class="mono">{{ holding.ticker }}</span> — {{ holding.reason }}</li>
+      {% endfor %}
+    </ul>
+    {% if concentration.measured %}<p class="labs-note">The other holdings' weights were scaled to 100%.</p>{% endif %}
     {% endif %}
   </section>
 </section>

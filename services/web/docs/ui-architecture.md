@@ -619,3 +619,44 @@ described here updates this file in the same change.
     - *Review tooling.* Chromium reports a `color-mix()` background as `color(srgb …)`, which
       `review_pages.py`'s contrast check didn't parse, so it measured the darkest squares
       against the card. It parses that form now.
+  - **Concentration · look-through (RK-23).** The third section: portfolio's look-through
+    (RK-22, spec §8) of the same default mix as ex-ante, built by `risk_concentration_view.py`.
+    Decisions (agreed):
+    - *The unmapped share comes first.* A fund with no holdings data can't be looked through,
+      and every table would otherwise sum to 100% as if complete. So when unmapped is above 0,
+      a note with the gold rule of RK-18's insight note (the accent's "look here") gives the
+      share and names each fund with portfolio's reason. Under it is the coverage split
+      (looked through, direct, commodity, unmapped), and each table has its unmapped funds as
+      rows of their own.
+    - *A table per dimension with an ink bar.* Each row's weight has a bar beside it, on a
+      fixed 96px track for 0–100% of the mix, so bars compare down a table and across tables,
+      and on a phone the figure and its bar stay together. The bar is inline SVG whose width is
+      the rect's attribute: the CSP has no `'unsafe-inline'` for styles, and RK-18's ten-step
+      classes would be too coarse here. The fill is a 45% ink tint (unknown and unmapped rows
+      20%, their labels in the caption tone), never gold, forest or oxblood: an exposure is
+      neither a gain nor a loss. The bar is `aria-hidden`, since the printed figure carries
+      the value. *Rejected: Chart.js bars*, which need JS, a no-JS fallback and their own size
+      checks; *tables only*, which make 67.8% USD read like any other row; *a bar spanning the
+      cell*, which the review screenshots showed sitting apart from its right-aligned figure.
+    - *One currency table, two columns (R16).* The rows are currencies. The columns are
+      portfolio's labels: "Listing currency of holdings" (the look-through, the headline, with
+      the bar) and "Trading currency of positions" (each held ticker's own). A currency only
+      one view has is `0.0%` in the other: a real 0% of the mix, not a gap. Put together, a
+      EUR investor sees that 67% USD exposure comes through 3% USD-traded positions.
+      *Rejected: two tables*, where the same currency sits in two places.
+    - *10 heaviest known buckets, the rest in "show all".* Unknown, unmapped and other buckets
+      are always shown, because they say what the table can't see. The remaining known
+      buckets, and names 11–25 of portfolio's top 25, are in a `<details>`, which needs no JS.
+      Each table's concentration line gives the top 1/5/10 shares of the mix, then the
+      effective number and Herfindahl over the known share (RK-22's rule), with that share
+      named. With nothing known, the line says why instead (R9).
+    - *Always the whole mix.* `?exclude=` exists to lengthen ex-ante's window (R12), and
+      concentration has no window, so it isn't sent. The section shows the snapshot date
+      ("IWDA.AS's holdings as of …", data-store's scrape date) because look-through is a
+      point-in-time view.
+    - *Glossary.* There are new entries for look-through, the listing currency of holdings
+      (a proxy, not revenue) and the effective number (Herfindahl). The last notes that, unlike
+      the effective number of holdings, it looks through the funds.
+    - *Review tooling.* The review holdings hold no fund to look through, so
+      `review_fakes.py` answers with data shaped like the RK-22 dev run instead. A
+      `risk-concentration-all` page opens every "show all".

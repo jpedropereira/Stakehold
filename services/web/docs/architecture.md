@@ -452,7 +452,12 @@ Every route `web` serves, with what it requires and which upstream calls it make
   `risk`. A relative figure is never null, though a backtest window's whole `relative` is when
   the window isn't covered. The benchmark's growth line must have one value per growth date and
   no null point (it is null as a whole, with `growth_reason`, never in part), and a growth line
-  with no growth series is a contract break.
+  with no growth series is a contract break. RK-23 added `look_through` (`POST
+  /risk/look-through`, RK-22) and its `LookThrough*` types. Its weights stay `Decimal` and must
+  be fixed-point strings, as portfolio serves shares: a JSON number would mean the contract
+  moved to floats. `coverage` and `dimensions` must carry exactly `LOOK_THROUGH_COVERAGE` and
+  `LOOK_THROUGH_DIMENSIONS`, so a missing dimension can't silently drop a table and a new one
+  can't silently go unshown.
 - `rebuild_outcome.py` (UI-7) — pure. Turns the two rebuild statuses into the confirmation
   banner's one sentence; see "Key decisions".
 - `portfolio_view.py` (task 12) — pure, I/O-free reshaping of what `routes.py` fetches for
@@ -512,14 +517,18 @@ Every route `web` serves, with what it requires and which upstream calls it make
   significant digits. RK-14 added the benchmark's line to it, or the reason it has none.
 - `api/risk.py` (RK-12) — `GET /risk`, the risk page, on its own router for the same file-size
   reason. The page is a stack of sections, each with its own loader returning its data or the
-  notice to show in its place, so one failing section never takes the page down. Two so far,
-  the ex-post summary and (RK-18) the ex-ante section, gathered concurrently since neither
-  needs the other's answer. The ex-ante loader makes two calls in order, as `/labs`'s default
-  mix does: `GET /holdings` (`labs_view.build_default_mix`, so the weights are worked out in one
-  place), then `POST /risk/ex-ante`. A stale or all-covering `?exclude=` is dropped in web and
-  logged, so an old link never becomes portfolio's 422. The concentration and what-if sections
-  (RK-23, RK-20) each add a loader. RK-14 added `?benchmark=` and the ticker list for its
-  field, fetched concurrently with the figures and failing on its own, as on `/labs`.
+  notice to show in its place, so one failing section never takes the page down. Three so far:
+  the ex-post summary, (RK-18) the ex-ante section and (RK-23) the concentration section. The
+  last two measure today's mix, so `_load_holdings_sections` makes one `GET /holdings`
+  (`labs_view.build_default_mix`, so the weights are worked out in one place), then calls
+  `POST /risk/ex-ante` and `POST /risk/look-through` concurrently, each failing on its own; a
+  failed holdings call shows its notice in both. *Rejected: a holdings call per section*, which
+  doubles the call and could show the two sections two different mixes. Ex-post runs
+  alongside, since it needs neither. A stale or all-covering `?exclude=` is dropped in web and
+  logged, so an old link never becomes portfolio's 422; it is ex-ante's only, and the
+  look-through always gets the whole mix. The what-if section (RK-20) adds a loader. RK-14
+  added `?benchmark=` and the ticker list for its field, fetched concurrently with the figures
+  and failing on its own, as on `/labs`.
 - `risk_view.py` (RK-12) — pure: `build_ex_post_table`, the ex-post summary table (measures as
   rows, windows as columns) with each figure's greyed reason, its metadata `title` and its flag
   markers, plus the legend of the flags present. The template only lays it out. RK-14 added
@@ -530,7 +539,13 @@ Every route `web` serves, with what it requires and which upstream calls it make
   constant-weight summary, the decomposition and its insight note, the € tail figures, the
   heatmap's squares and buckets, and the window, exclude and include links). Its own module
   because it has four parts of its own; it reuses `risk_view`'s cells so the two sections'
-  figures read alike. See "Risk page" in [`ui-architecture.md`](ui-architecture.md).
+  figures read alike. See "Risk page" in [`ui-architecture.md`](ui-architecture.md). RK-23
+  made the default mix's left-out wording public (`mix_left_out`) for the concentration section.
+- `risk_concentration_view.py` (RK-23) — pure: `build_concentration_section`, the concentration
+  section (the coverage split and the unmapped funds, the currency table's two views, sector,
+  country and asset class, the top names, each table's "show all" split and bars, and what was
+  left out). Its own module for the same reason as the ex-ante one; see "Risk page" in
+  [`ui-architecture.md`](ui-architecture.md).
 - `api/tickers.py` (TK-8) — the Tickers pages, on their own router for the same file-size
   reason, rendering through `routes.py`'s helpers so CSRF and cookie handling stay identical.
 - `ticker_status.py` (TK-8/TK-9) — how a tracked ticker's status reads (labels, a holding's
@@ -581,7 +596,8 @@ Every route `web` serves, with what it requires and which upstream calls it make
   entry point of the service. It screenshots every page against fake clients and checks
   contrast, focus, sideways scroll, tables overflowing their cards and chart sizing, at phone,
   tablet, desktop and wide widths; see [`ui-architecture.md`](ui-architecture.md).
-  Playwright comes from the workspace `dev` group.
+  Playwright comes from the workspace `dev` group. Its fake clients and their review data are
+  `scripts/review_fakes.py` (split out in RK-23, when the script reached 62 KB).
 
 ## Deployment
 
