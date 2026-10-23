@@ -20,8 +20,13 @@ from portfolio.datastore_client.base import (
     TickerInfo,
 )
 from portfolio.errors import DataStoreApiError
+from portfolio.eur_returns.calculator import eur_daily_returns
 from portfolio.risk import flows
+from portfolio.risk.ex_ante_report import NO_OVERLAP
 from portfolio.risk.ex_post import NO_RISK_FREE
+from portfolio.risk.rolling import rolling_correlation
+from portfolio.risk.types import Frequency, ReturnSeries
+from portfolio.risk.weekly import to_weekly
 from portfolio.risk.windows import StandardWindow
 
 FIRST = date(2018, 1, 5)
@@ -251,3 +256,102 @@ def test_logs_a_start_line_the_window_and_a_summary(caplog):
     assert "ex-ante-risk: window Max: requested 2018-01-05.." in caplog.text
     assert "limited by B" in caplog.text
     assert "ex-ante-risk: done, 2 holding(s) included, 0 left out" in caplog.text
+
+
+# --- rolling (RK-24) --------------------------------------------------------------------------
+
+
+def _weekly_eur(prices, fx=None):
+    """A ticker's weekly EUR returns, as the flow builds them from RK-5's r_eur."""
+    returns = eur_daily_returns(prices, fx)
+    daily = ReturnSeries(
+        Frequency.DAILY,
+        returns.anchor,
+        tuple(returns.dates),
+        tuple(None if r is None else float(r) for r in returns.r_eur),
+    )
+    return to_weekly(daily)
+
+
+def test_the_mix_has_rolling_volatility_and_sharpe_and_no_pair_unless_asked():
+    client = _FakeDataStoreClient({"A": (EUR, _prices(1)), "B": (EUR, _prices(2))})
+
+    result = _run(client, [("A", "1"), ("B", "1")])
+
+    assert result.report.rolling.volatility
+    assert all(f.value is not None for f in result.report.rolling.sharpe)
+    assert result.rolling_correlation is None
+
+
+@pytest.mark.parametrize("currency", ["eur", "local"])
+def test_a_rolling_pair_is_measured_in_eur_whatever_the_matrix_currency(currency, caplog):
+    fx = _fx(7)
+    client = _FakeDataStoreClient({"A": (EUR, _prices(1)), "U": (USD, _prices(2))}, fx={"USD": fx})
+
+    with caplog.at_level(logging.INFO, logger="portfolio.risk.flows"):
+        result = _run(client, [("A", "1"), ("U", "1")], currency=currency, rolling_pair=("A", "U"))
+
+    pair = result.rolling_correlation
+    assert (pair.a, pair.b, pair.reason) == ("A", "U", None)
+    assert pair.points == rolling_correlation(_weekly_eur(_prices(1)), _weekly_eur(_prices(2), fx))
+    assert pair.points
+    gaps = sum(1 for p in pair.points if p.value is None)
+    assert (
+        f"ex-ante-risk: rolling correlation A vs U: {len(pair.points)} weekly point(s), "
+        f"{gaps} greyed." in caplog.text
+    )
+
+
+def test_one_asset_against_the_portfolio_uses_the_constant_weight_mix():
+    client = _FakeDataStoreClient({"A": (EUR, _prices(1)), "B": (EUR, _prices(2))})
+
+    result = _run(client, [("A", "1"), ("B", "3")], rolling_pair=("A", None))
+
+    pair = result.rolling_correlation
+    assert (pair.a, pair.b) == ("A", flows.PORTFOLIO)
+    assert pair.points == rolling_correlation(_weekly_eur(_prices(1)), result.report.mix_weekly)
+
+
+def test_a_rolling_pair_can_name_the_benchmark():
+    client = _FakeDataStoreClient({"A": (EUR, _prices(1))})
+
+    result = _run(client, [("A", "1")], rolling_pair=("VWCE.DE", "A"))
+
+    assert result.rolling_correlation.points == rolling_correlation(
+        _weekly_eur(_prices(99)), _weekly_eur(_prices(1))
+    )
+
+
+def test_a_left_out_ticker_in_the_pair_says_why_and_has_no_points():
+    client = _FakeDataStoreClient({"A": (EUR, _prices(1)), "H": (NO_RETURNS, None)})
+
+    result = _run(client, [("A", "1"), ("H", "1")], rolling_pair=("A", "H"))
+
+    pair = result.rolling_correlation
+    assert pair.points == ()
+    assert pair.reason == "H not included: no history yet"
+
+
+def test_an_unavailable_benchmark_in_the_pair_says_why():
+    client = _FakeDataStoreClient({"A": (EUR, _prices(1))})
+
+    result = _run(client, [("A", "1")], benchmark="NOPE", rolling_pair=("A", "NOPE"))
+
+    assert result.rolling_correlation.points == ()
+    assert (
+        result.rolling_correlation.reason == "NOPE not included: benchmark unavailable: not tracked"
+    )
+
+
+def test_against_the_portfolio_when_the_holdings_do_not_overlap_says_why():
+    client = _FakeDataStoreClient(
+        {
+            "A": (EUR, _prices(1)[:300]),
+            "B": (EUR, _prices(2, first=date(2020, 6, 5))),
+        }
+    )
+
+    result = _run(client, [("A", "1"), ("B", "1")], rolling_pair=("B", None))
+
+    assert result.rolling_correlation.points == ()
+    assert result.rolling_correlation.reason == "portfolio not included: " + NO_OVERLAP

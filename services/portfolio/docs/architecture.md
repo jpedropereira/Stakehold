@@ -70,12 +70,12 @@ flowchart TD
     end
 
     subgraph orch["Orchestration"]
-        JOBS["jobs.py<br/><i>runnable units: config + connection + one flow</i>"]
+        JOBS["jobs.py · risk_jobs.py<br/><i>runnable units: config + connection + one flow</i>"]
         PIPE["pipeline.py<br/><i>the flows; broker-parser/cashflow-parser (entry-point discovered)<br/>and datastore-client registries</i>"]
         HFLOW["holdings/flows.py<br/><i>reads that span a user's accounts (PF-1, PF-5)</i>"]
         LFLOW["labs/flows.py<br/><i>backtest fetches, concurrent (LB-4);<br/>risk-free fetch (RK-8)</i>"]
         TFLOW["twr/flows.py<br/><i>portfolio TWR: rows + data-store fetch (RK-10)</i>"]
-        RFLOW["risk/flows.py<br/><i>ex-post risk: TWR + risk-free fetch (RK-11);<br/>ex-ante risk of a mix (RK-17)</i>"]
+        RFLOW["risk/flows.py<br/><i>ex-post risk: TWR + risk-free fetch (RK-11);<br/>ex-ante risk of a mix (RK-17);<br/>rolling windows on both (RK-24)</i>"]
         BFLOW["benchmark/flows.py<br/><i>the request's benchmark: fetch + wording (RK-13)</i>"]
         LTFLOW["look_through/flows.py<br/><i>classify holdings + fund snapshots (RK-22)</i>"]
     end
@@ -91,7 +91,7 @@ flowchart TD
         LABS["labs/<br/>calculator · risk<br/><i>backtests (LB-3); their risk table (RK-8)</i>"]
         TWR["twr/<br/>calculator<br/><i>holdings-based daily TWR (RK-10)</i>"]
         EURR["eur_returns/<br/>calculator · fetch · eligibility<br/><i>daily EUR returns, shared with risk (RK-5);<br/>data-store fan-out (RK-10);<br/>risk path's wording (RK-17)</i>"]
-        RISK["risk/<br/>types · weekly · quality · history<br/>windows · risk_free · var_mask<br/>measures · drawdown · tail · single_series<br/>covariance · listwise · ex_ante<br/>correlation · pairing · relative · ex_post<br/>ex_ante_report<br/><i>pure library (RK-6, RK-7, RK-15, RK-16, RK-11, RK-13, RK-17);<br/>first caller labs/risk (RK-8)</i>"]
+        RISK["risk/<br/>types · weekly · quality · history<br/>windows · risk_free · var_mask<br/>measures · drawdown · tail · single_series<br/>covariance · listwise · ex_ante<br/>correlation · pairing · relative · ex_post<br/>ex_ante_report · rolling<br/><i>pure library (RK-6, RK-7, RK-15, RK-16, RK-11, RK-13, RK-17, RK-24);<br/>first caller labs/risk (RK-8)</i>"]
         BENCH["benchmark/<br/>base<br/><i>the benchmark's return series and status (RK-13)</i>"]
         LT["look_through/<br/>calculator · issuer · instruments<br/><i>exposures and concentration of a mix (RK-22)</i>"]
     end
@@ -184,6 +184,14 @@ there is one complete operation — load settings, open a connection, run the fl
 connection, return a result. `cli.py` is argument parsing plus a call into it, and nothing else.
 `api/routes.py` (built at task 9) is a call into it and nothing else, too. Anything that lived in
 only one of those two would be, by construction, untested by the other.
+
+**The risk read jobs are `risk_jobs.py`**: `get_ex_post_risk`, `get_ex_ante_risk` and
+`get_look_through`, with the code that turns their results into builtins. They moved out of
+`jobs.py` when it crossed 64 KB, ahead of RK-24, with no change in behaviour. They are the
+same kind of unit and the same layer, called by `api/routes.py` the same way, and they reuse
+`jobs.py`'s data-store client check rather than keeping a copy. The split follows a subject
+(the risk endpoints) rather than a kind of job. Splitting reads from writes was rejected,
+because it would have cut through the rebuild-after-write helpers that the write jobs share.
 
 That result is a plain dict of builtins, built by portfolio's own `run_result.py` — following the
 same two-key `{"status", "rows_saved"}` plus per-flow named-counts contract as
@@ -533,6 +541,6 @@ data-store.
    `returns/calculator.py` next, since it's the one with an external dependency
    (`datastore_client`) deliberately kept out of the pure function itself.
 5. `jobs.py` — how configuration, a connection and a flow become one runnable operation, called by
-   both the CLI and the HTTP API.
+   both the CLI and the HTTP API. `risk_jobs.py` holds the risk endpoints' jobs, in the same shape.
 6. `api/routes.py` and `api/app.py` — the HTTP entry point; read after `jobs.py`, since a route is
    argument parsing plus one call into it and nothing else. See [`flows.md`](flows.md)'s "HTTP API".

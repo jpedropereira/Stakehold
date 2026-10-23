@@ -2,7 +2,7 @@
 
 The "Ex-post risk" and "Labs backtest" sections of [`flows.md`](flows.md), moved here verbatim to
 keep that file under the repo's 64KB limit (RK-13). Later risk flows belong here too: ex-ante
-risk (RK-17) and look-through exposures (RK-22) are, and the what-if and rolling windows will be. Their rows in the flow table, and the HTTP API's notes
+risk (RK-17), look-through exposures (RK-22) and rolling windows (RK-24) are, and the what-if will be. Their rows in the flow table, and the HTTP API's notes
 on them, stay in `flows.md`. "Above" and "below" in the sections here refer to this file;
 references to sections that stayed in `flows.md` link to it.
 
@@ -60,7 +60,9 @@ its last date and the benchmark up to that date, converts them to floats, and ha
                   "max_days_under_water", "calmar", "var_95", "cvar_95", "var_99", "cvar_99",
                   "relative"},
                  ...],
-     "n_excluded", "excluded": [{"ticker", "status", "reason"}, ...]}
+     "n_excluded", "excluded": [{"ticker", "status", "reason"}, ...],
+     "rolling": {"window": "1Y", "step": "monthly", "volatility": [figure, ...],
+                 "sharpe": [figure, ...]}}
 
 Each figure is `{value, window_start, window_end, frequency, q, n_obs, n_gaps, flags, reason,
 standard_error}`, the metadata spec §9 and §10 ask every number to carry.
@@ -79,6 +81,8 @@ standard_error}`, the metadata spec §9 and §10 ask every number to carry.
 - **`relative`** is the weekly TWR against the benchmark ("Relative to a benchmark" above). It
   is always there: in a window the portfolio doesn't cover, its figures are greyed with the same
   reason as the rest.
+- **`rolling`** (RK-24) is the TWR's rolling 1Y volatility and Sharpe, one figure per month end
+  ("Rolling windows" below). It is null exactly when there are no windows.
 
 With no TWR returns (no accounts, no rows, or every holding left out) the response has no
 windows, not a 404, and no risk-free or benchmark fetch is made: `benchmark` is
@@ -114,7 +118,10 @@ the weights over the included holdings and hands the daily EUR returns to
      "holdings": [{"ticker", "weight", "volatility", "mcr", "cr", "pcr",
                    "corr_with_portfolio"}, ...],
      "constant_weight": {the twelve ex-post figures and the max drawdown's dates},
-     "correlation": {"keys", "benchmark_key", "cells": [{"a", "b", "figure"}, ...]}}
+     "correlation": {"keys", "benchmark_key", "cells": [{"a", "b", "figure"}, ...]},
+     "rolling": {"window": "1Y", "step": "monthly", "volatility": [...], "sharpe": [...]},
+     "rolling_correlation": {"a", "b", "window": "52W", "step": "weekly", "reason",
+                             "points": [figure, ...]} or null}
 
 - **One requested window, three uses.** It ends on the holdings' latest common date, and Max
   starts on the *oldest* holding's first day. The decomposition runs on its listwise weekly
@@ -139,6 +146,18 @@ the weights over the included holdings and hands the daily EUR returns to
   downside deviation, Sharpe and Sortino. Holdings whose histories don't overlap grey them all,
   "the holdings' histories don't overlap", and `window.start` is null.
 - **The € tail figures are web's**: it knows the market value, and portfolio returns fractions.
+- **`rolling`** (RK-24) is the constant-weight mix's rolling 1Y volatility and Sharpe over the
+  mix's **whole common history, whatever `window` asks for**, since a rolling view is for
+  watching the figure move. The request's optional `rolling_correlation: {a, b}` asks for one
+  pair's rolling ρ: two tickers, each from the mix or the benchmark, or `a` against the
+  portfolio when `b` is null. A ticker that is in neither, a ticker `exclude` leaves out, or
+  a == b is a 422. The response's `b` is then `"portfolio"`. The pair is always in EUR,
+  whatever `currency` says, because "the portfolio" is the EUR constant-weight weekly mix (with
+  the asset in it, as `corr_with_portfolio` has it) and web has no currency toggle. A side that
+  passed validation but can't be measured gives empty `points` and a `reason`, never an error:
+  "<ticker> not included: <its status reason>", "<benchmark> not included: benchmark
+  unavailable: <reason>", or "portfolio not included: the holdings' histories don't overlap".
+  `rolling_correlation` is null when no pair was asked for.
 
 With nothing included (every asset excluded or left out), the response is a 200 with `statuses`
 and `benchmark` ("not fetched: nothing to measure") and every other section null. No risk-free
@@ -148,7 +167,44 @@ summary of how many figures and cells are greyed. The job logs a start line and 
 
 **Size and time, synthetic worst case** (every asset on 16.8 years of weekdays, half in USD,
 Max): 12 assets give 25 KB in 0.18 s; 50 assets give 294 KB in 1.1 s, almost all of it the
-1,326 correlation cells.
+1,326 correlation cells. RK-24 added 77 KB of `rolling` (191 monthly points of two figures)
+and, with a pair, 161 KB of `rolling_correlation` (823 weekly points). Re-measured with both:
+12 assets give 267 KB in 0.31 s, and 50 give 564 KB in 1.3 s. Every point carries its full
+figure metadata, as every other figure does. If the size starts to matter for web, the
+repeated `frequency` and `q` are the first thing to hoist out.
+
+### Rolling windows
+
+RK-24, spec §4.5 and §7.1, computed by the pure `risk/rolling.py` and served on the two
+endpoints above. Nothing new is fetched: ex-post reuses the TWR, ex-ante the mix, and both reuse
+their risk-free and benchmark fetches.
+
+- **Rolling 1Y volatility and Sharpe, stepped monthly.** Each window ends on the last date the
+  series has in a calendar month and starts one calendar year earlier (29 February clamps to
+  the 28th). The windows are drawn from the daily series, the TWR or the daily mix, and measured
+  on its weekly form. The last one ends on the series' last date, even mid-month, so it **is**
+  the 1Y window and its figures equal the 1Y ones (tested on both endpoints). The first is the
+  first full year. Months before that have no point at all, because they have no 1Y window,
+  only a shorter window that the 1Y label would misdescribe. Each point is
+  `single_series.weekly_figures` over its window, so whole weeks, risk-free, flags and greying
+  are the standard figure's by construction, not a second copy. With no risk-free series,
+  Sharpe is greyed with "no risk-free rate data" and volatility is kept.
+- **Rolling correlation, 52 weeks stepped weekly.** One point per Friday both sides have, from
+  the first with 52 whole weeks of both, each `correlation.pair_cell` over `F − 52 weeks .. F`.
+  **Its minimum is 52 weeks** (agreed for RK-24; spec §4.5 "Amended (RK-24)"), not §4.5's 104
+  for correlation, under which every point of a 52-week window would be greyed. It is for
+  display, as a pairwise cell is (R13), and never feeds portfolio maths. *Rejected: a 104-week
+  rolling window*, which keeps §4.5's minimum but smooths away the short crisis spikes that
+  §7.1 says are the view's lesson. Its points are noisy, with an SE of about 0.14 at 52 obs.
+- **A window below its minimum is a gap, not a point** (RK-24): the figure is greyed with R9's
+  reason, `value: null`, and it keeps its place, so web breaks the line there instead of
+  joining across it. **Sharp edge:** a calendar year holds 52 or 53 whole weeks and the weekly
+  minimum is 52, so a single NULL week (a TWR date out of the market, or a holding's NULL day)
+  can turn a 1Y point into a gap. The standard 1Y window has the same edge. Lowering the
+  minimum to fit was rejected, as it was for RK-7: it would bend the spec to the data.
+- **Logging:** each flow logs one rolling line, the monthly point count and how many volatility
+  and Sharpe points are greyed, or "no point, the history is under a year". Ex-ante also logs
+  the pair's weekly point count and gaps, or why it has none.
 
 ### Look-through exposures
 

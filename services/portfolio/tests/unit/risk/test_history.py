@@ -26,6 +26,9 @@ _OBS_MINIMUMS = [
     # ratio its Sharpe, so they take those minimums, not beta's.
     (Measure.TRACKING_ERROR, 52),
     (Measure.INFORMATION_RATIO, 52),
+    # Agreed for RK-24: the rolling correlation's window is §7.1's 52 weeks, so under §4.5's
+    # 104 every point would be a gap.
+    (Measure.ROLLING_CORRELATION, 52),
 ]
 
 
@@ -107,6 +110,7 @@ def test_a_span_under_three_years_is_a_short_window(measure, start, flags):
         (Measure.COVARIANCE, Frequency.WEEKLY),
         (Measure.TRACKING_ERROR, Frequency.WEEKLY),
         (Measure.INFORMATION_RATIO, Frequency.WEEKLY),
+        (Measure.ROLLING_CORRELATION, Frequency.WEEKLY),
         (Measure.MAX_DRAWDOWN, Frequency.DAILY),
         (Measure.CAGR, Frequency.DAILY),
         (Measure.CALMAR, Frequency.DAILY),

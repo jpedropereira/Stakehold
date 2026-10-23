@@ -1,5 +1,6 @@
-"""jobs.get_ex_ante_risk (RK-17): builds the data-store client, runs risk/flows.compute_ex_ante,
-logs its start and summary, and returns plain builtins the API's ExAnteRiskResponse accepts. The
+"""risk_jobs.get_ex_ante_risk (RK-17): builds the data-store client, runs
+risk/flows.compute_ex_ante, logs its start and summary, and returns plain builtins the API's
+ExAnteRiskResponse accepts. The
 flow is tested in tests/unit/risk/test_flows_ex_ante.py; this runs it for real on a fake client
 to check the shape. Small helpers are repeated per file (no shared test modules).
 
@@ -13,7 +14,7 @@ from decimal import Decimal
 
 import numpy as np
 import pytest
-from portfolio import jobs
+from portfolio import risk_jobs
 from portfolio.api.models import ExAnteRiskResponse
 from portfolio.datastore_client.base import (
     PricePoint,
@@ -78,13 +79,13 @@ class _FakeDataStoreClient:
 @pytest.fixture
 def fake_client(monkeypatch):
     client = _FakeDataStoreClient()
-    monkeypatch.setattr(jobs, "load_settings", _settings)
-    monkeypatch.setattr(jobs, "_require_datastore_client", lambda settings, command: client)
+    monkeypatch.setattr(risk_jobs, "load_settings", _settings)
+    monkeypatch.setattr(risk_jobs, "_require_datastore_client", lambda settings, command: client)
     return client
 
 
 def _get(assets, **kw):
-    return jobs.get_ex_ante_risk(assets=[(t, Decimal(w)) for t, w in assets], **kw)
+    return risk_jobs.get_ex_ante_risk(assets=[(t, Decimal(w)) for t, w in assets], **kw)
 
 
 def test_get_ex_ante_risk_returns_builtins_the_response_model_accepts(fake_client):
@@ -127,10 +128,32 @@ def test_get_ex_ante_risk_returns_builtins_the_response_model_accepts(fake_clien
         ("VWCE.DE", "VWCE.DE"),
     ]
     assert result["benchmark"]["first_date"] == FIRST
+    rolling = result["rolling"]
+    assert (rolling["window"], rolling["step"]) == ("1Y", "monthly")
+    assert len(rolling["volatility"]) == len(rolling["sharpe"]) > 0
+    assert rolling["volatility"][-1]["frequency"] == "weekly"
+    assert isinstance(rolling["volatility"][-1]["flags"], list)
+    assert result["rolling_correlation"] is None
+
+
+def test_get_ex_ante_risk_returns_a_requested_rolling_pair(fake_client):
+    result = _get([("A", "3"), ("B", "1")], rolling_pair=("A", None))
+
+    ExAnteRiskResponse.model_validate(result)
+    pair = result["rolling_correlation"]
+    assert {k: pair[k] for k in ("a", "b", "window", "step", "reason")} == {
+        "a": "A",
+        "b": "portfolio",
+        "window": "52W",
+        "step": "weekly",
+        "reason": None,
+    }
+    assert pair["points"] and all(p["n_obs"] <= 52 for p in pair["points"])
+    assert pair["points"][0]["frequency"] == "weekly"
 
 
 def test_get_ex_ante_risk_with_nothing_included_has_only_statuses(fake_client):
-    result = _get([("A", "1"), ("X", "1")], exclude={"A"})
+    result = _get([("A", "1"), ("X", "1")], exclude={"A"}, rolling_pair=("X", None))
 
     ExAnteRiskResponse.model_validate(result)
     assert [s["status"] for s in result["statuses"]] == ["excluded", "not_tracked"]
@@ -142,13 +165,15 @@ def test_get_ex_ante_risk_with_nothing_included_has_only_statuses(fake_client):
         "holdings",
         "constant_weight",
         "correlation",
+        "rolling",
+        "rolling_correlation",
     ):
         assert result[key] is None
     assert result["benchmark"]["available"] is False
 
 
 def test_get_ex_ante_risk_logs_a_start_line_and_a_summary(fake_client, caplog):
-    with caplog.at_level(logging.INFO, logger="portfolio.jobs"):
+    with caplog.at_level(logging.INFO, logger="portfolio.risk_jobs"):
         _get([("A", "1"), ("X", "1")])
 
     assert "get-ex-ante-risk: measuring ex-ante risk of 2 asset(s)." in caplog.text
@@ -156,7 +181,7 @@ def test_get_ex_ante_risk_logs_a_start_line_and_a_summary(fake_client, caplog):
 
 
 def test_get_ex_ante_risk_warns_when_no_asset_could_be_included(fake_client, caplog):
-    with caplog.at_level(logging.INFO, logger="portfolio.jobs"):
+    with caplog.at_level(logging.INFO, logger="portfolio.risk_jobs"):
         _get([("X", "1")])
 
     warning = next(r for r in caplog.records if "get-ex-ante-risk: done" in r.getMessage())
@@ -165,7 +190,7 @@ def test_get_ex_ante_risk_warns_when_no_asset_could_be_included(fake_client, cap
 
 
 def test_get_ex_ante_risk_needs_data_store_settings(monkeypatch):
-    monkeypatch.setattr(jobs, "load_settings", lambda: _settings(datastore_api_url=None))
+    monkeypatch.setattr(risk_jobs, "load_settings", lambda: _settings(datastore_api_url=None))
 
     with pytest.raises(SettingsError, match="ex-ante risk"):
         _get([("A", "1")])

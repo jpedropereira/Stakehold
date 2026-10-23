@@ -31,7 +31,7 @@ from fastapi import (
     UploadFile,
     status,
 )
-from portfolio import jobs
+from portfolio import jobs, risk_jobs
 from portfolio.api.models import (
     AccountCreateRequest,
     AccountDeleteResponse,
@@ -520,7 +520,7 @@ def get_ex_post_risk(
     benchmark: str = Query(default=DEFAULT_BENCHMARK, min_length=1, max_length=20),
     settings: Settings = Depends(get_settings),
 ) -> dict:
-    return jobs.get_ex_post_risk(user_id=user_id, benchmark=benchmark, settings=settings)
+    return risk_jobs.get_ex_post_risk(user_id=user_id, benchmark=benchmark, settings=settings)
 
 
 @router.post("/risk/ex-ante", response_model=ExAnteRiskResponse)
@@ -528,12 +528,17 @@ def get_ex_ante_risk(body: ExAnteRiskRequest, settings: Settings = Depends(get_s
     """A POST because the mix is a structured body, as for a backtest: nothing is stored, so it
     answers 200. The mix holds no user data, so there is no user_id; web builds it from the
     holdings. An asset data-store can't serve is reported in `statuses`, not as an error."""
-    return jobs.get_ex_ante_risk(
+    return risk_jobs.get_ex_ante_risk(
         assets=[(asset.ticker, asset.weight) for asset in body.assets],
         window=body.window,
         benchmark=body.benchmark,
         currency=body.currency,
         exclude=body.exclude,
+        rolling_pair=(
+            None
+            if body.rolling_correlation is None
+            else (body.rolling_correlation.a, body.rolling_correlation.b)
+        ),
         settings=settings,
     )
 
@@ -542,7 +547,7 @@ def get_ex_ante_risk(body: ExAnteRiskRequest, settings: Settings = Depends(get_s
 def get_look_through(body: LookThroughRequest, settings: Settings = Depends(get_settings)) -> dict:
     """Concentration by look-through (RK-22). A POST for the same reason as ex-ante: the mix is a
     structured body, nothing is stored, and web builds the mix from the holdings."""
-    return jobs.get_look_through(
+    return risk_jobs.get_look_through(
         assets=[(asset.ticker, asset.weight) for asset in body.assets], settings=settings
     )
 

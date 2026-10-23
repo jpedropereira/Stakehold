@@ -17,10 +17,13 @@ from datetime import date, timedelta
 
 import numpy as np
 import pytest
+from portfolio.risk.ex_ante import constant_weight_series
 from portfolio.risk.ex_ante_report import NO_OVERLAP, ex_ante_report
 from portfolio.risk.ex_post import NO_RISK_FREE
 from portfolio.risk.risk_free import RatePoint
+from portfolio.risk.rolling import RollingFigures, monthly_windows, rolling_weekly
 from portfolio.risk.types import Flag, Frequency, ReturnSeries
+from portfolio.risk.weekly import to_weekly
 from portfolio.risk.windows import StandardWindow, years_before
 
 FRIDAY = date(2015, 1, 2)
@@ -152,6 +155,44 @@ def test_histories_that_do_not_overlap_grey_the_constant_weight_figures_without_
     assert cw.returns.cagr.reason == NO_OVERLAP
     assert cw.tail.var_95.reason == NO_OVERLAP
     assert report.decomposition.sigma_p.value is None
+    assert report.mix_weekly is None
+    assert report.rolling == RollingFigures((), ())
+
+
+# --- rolling (RK-24) --------------------------------------------------------------------------
+
+
+def test_rolling_runs_on_the_weekly_mix_over_its_whole_history_whatever_the_window():
+    late = date(2017, 3, 6)
+    daily = _pair(b_base=late)
+    weekly = {key: to_weekly(series) for key, series in daily.items()}
+
+    report = _report(daily, WEIGHTS, StandardWindow.Y3, rates=ZERO_RATES)
+
+    assert report.mix_weekly == constant_weight_series(weekly, WEIGHTS)
+    expected = rolling_weekly(
+        report.mix_weekly,
+        monthly_windows(constant_weight_series(daily, WEIGHTS)),
+        rates=ZERO_RATES,
+        first_published=ZERO_RATES[0].date,
+    )
+    assert report.rolling == expected
+    # From the first full year of the mix, which starts with its youngest holding.
+    assert report.rolling.volatility[0].window_start >= late
+    assert report.rolling.volatility[0].window_start < years_before(END, 3)
+    assert _report(daily, WEIGHTS, StandardWindow.MAX, rates=ZERO_RATES).rolling == expected
+
+
+def test_the_last_rolling_volatility_is_the_1y_constant_weight_volatility():
+    report = _report(_pair(), WEIGHTS, StandardWindow.Y1, rates=ZERO_RATES)
+
+    last = report.rolling.volatility[-1]
+    one_year = report.constant_weight.weekly.volatility
+    assert (last.window_start, last.window_end) == (one_year.window_start, one_year.window_end)
+    assert last.value == pytest.approx(one_year.value)
+    assert report.rolling.sharpe[-1].value == pytest.approx(
+        report.constant_weight.weekly.sharpe.value
+    )
 
 
 @pytest.mark.parametrize(
