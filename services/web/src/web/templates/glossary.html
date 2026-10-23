@@ -203,6 +203,26 @@
       pair is measured over the weeks both have prices, so a young holding's squares cover
       less time than the others. In euros, two dollar assets share the dollar's moves, which
       raises their correlation: that is real risk for a euro investor.</dd>
+
+    <dt id="look-through">Look-through</dt>
+    <dd>Your exposure counted through each fund to what it holds: 70% in a world fund that is
+      70% American companies is 49% of your mix in American companies. It uses each fund's
+      latest published holdings, as of the date shown, so it is a snapshot, not a history. A
+      fund with no holdings data can't be looked through; it is shown as "unmapped" rather
+      than guessed. A company held directly and through a fund is one name.</dd>
+
+    <dt id="listing-currency">Listing currency of holdings</dt>
+    <dd>The currency each company's shares trade in, counted through the funds. A world fund
+      bought in euros is mostly dollar shares, so most of its currency exposure is the dollar,
+      not the euro. It is a proxy: a company listed in dollars may earn its revenue anywhere.
+      The trading currency beside it is what you pay in for what you hold.</dd>
+
+    <dt id="herfindahl">Effective number (Herfindahl)</dt>
+    <dd>How many equal-sized exposures a table amounts to: 1 ÷ the Herfindahl index, the sum of
+      the squared shares. Ten countries at 10% each give 10; one at 70% and the rest small give
+      about 2. It counts only the known share: an unmapped fund or an unknown sector isn't
+      counted as one large exposure, so the known share is shown beside it. Unlike the
+      effective number of holdings, it looks through the funds.</dd>
   </dl>
 </section>
 {% endblock %}

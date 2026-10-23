@@ -585,6 +585,101 @@ class ExAnteRisk:
     correlation: CorrelationMatrix | None
 
 
+# The look-through's dimensions and coverage shares (RK-22), as portfolio names them. Every
+# response has each, so the section can lay out a table per dimension in a fixed place.
+LOOK_THROUGH_DIMENSIONS = ("currency", "trading_currency", "sector", "country", "asset_class")
+LOOK_THROUGH_COVERAGE = (
+    "look_through",
+    "direct_matched",
+    "direct_unmatched",
+    "commodity",
+    "unmapped",
+)
+
+
+@dataclass(frozen=True)
+class LookThroughAsset:
+    """One requested asset, in request order. `kind` is look_through, direct, commodity or
+    unmapped, and None, like `weight`, when it was left out (status not_tracked or failed)."""
+
+    ticker: str
+    status: str
+    reason: str | None
+    kind: str | None
+    weight: Decimal | None  # normalised over the included assets
+    matched_in: str | None  # a direct stock: the fund whose line describes it
+    note: str | None  # an unmapped asset: why it isn't looked through
+
+
+@dataclass(frozen=True)
+class LookThroughSnapshot:
+    ticker: str
+    fund_key: str
+    as_of_date: date  # data-store's scrape date, not the fund's own
+    n_lines: int
+    raw_weight_sum: Decimal  # as stored, in percent; the look-through rescales it to 100
+
+
+@dataclass(frozen=True)
+class LookThroughBucket:
+    label: str
+    weight: Decimal
+    kind: str  # known, unknown, unmapped or other; only known ones are in the concentration
+
+
+@dataclass(frozen=True)
+class LookThroughConcentration:
+    """Over the known share rescaled to 1 (spec §8, amended by RK-22). `herfindahl` and
+    `effective_n` are None, with a reason, when nothing is known. `top_shares` (the 1, 5 and
+    10 heaviest known buckets) are shares of the whole mix."""
+
+    top_shares: dict[int, Decimal]
+    known_share: Decimal
+    herfindahl: Decimal | None
+    effective_n: Decimal | None
+    reason: str | None
+
+
+@dataclass(frozen=True)
+class LookThroughDimension:
+    label: str  # what to call it: currency's is R16's "listing currency of holdings"
+    buckets: tuple[LookThroughBucket, ...]  # heaviest first
+    concentration: LookThroughConcentration
+
+
+@dataclass(frozen=True)
+class LookThroughName:
+    issuer: str
+    location: str | None
+    weight: Decimal
+    sources: tuple[str, ...]  # the held tickers it comes through
+
+
+@dataclass(frozen=True)
+class LookThroughNames:
+    top: tuple[LookThroughName, ...]  # the 25 heaviest
+    n_names: int
+    concentration: LookThroughConcentration  # over every name, not only the top
+
+
+@dataclass(frozen=True)
+class LookThroughExposures:
+    snapshots: tuple[LookThroughSnapshot, ...]
+    coverage: dict[str, Decimal]  # LOOK_THROUGH_COVERAGE's keys, summing to 1
+    dimensions: dict[str, LookThroughDimension]  # LOOK_THROUGH_DIMENSIONS' keys, in order
+    names: LookThroughNames
+
+
+@dataclass(frozen=True)
+class LookThrough:
+    """portfolio's LookThroughResponse (RK-22): where a mix is concentrated, by currency,
+    sector, country, asset class and single name, through the funds' holdings. Weights are
+    fractions of the mix. `exposures` is None exactly when no asset was included."""
+
+    assets: tuple[LookThroughAsset, ...]
+    exposures: LookThroughExposures | None
+
+
 class PortfolioClient(Protocol):
     async def list_accounts(self, *, user_id: str) -> list[Account]: ...
 
@@ -684,6 +779,11 @@ class PortfolioClient(Protocol):
         benchmark: str,
         exclude: list[str],
     ) -> ExAnteRisk: ...
+
+    # The look-through exposures of (ticker, weight) pairs (RK-22): by currency, sector,
+    # country, asset class and single name. Read-only despite the POST. An asset portfolio
+    # can't place is a status in the result; InvalidPortfolioRequest means the mix was rejected.
+    async def look_through(self, *, assets: list[tuple[str, Decimal]]) -> LookThrough: ...
 
     async def list_ticker_mappings(self) -> list[TickerMapping]: ...
 

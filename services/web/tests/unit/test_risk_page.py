@@ -34,6 +34,7 @@ from web.portfolio_client.base import (
     ExPostWindow,
     Holding,
     Holdings,
+    LookThrough,
     RiskFigure,
     SeriesRisk,
 )
@@ -213,6 +214,10 @@ class FakePortfolioClient:
         if self.ex_ante_error:
             raise self.ex_ante_error
         return self.ex_ante
+
+    async def look_through(self, *, assets):
+        # The concentration section's own tests are test_risk_concentration_page.py.
+        return LookThrough(assets=(), exposures=None)
 
 
 def _settings() -> Settings:

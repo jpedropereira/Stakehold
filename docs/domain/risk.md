@@ -8,7 +8,7 @@ marked **CHECK** must be verified against the codebase before implementing. Anyt
 **DECISION** is a default the owner can override.
 
 Phase 0 (discovery) found that some premises below were false. Each such place carries an
-**Amended (RK-0)** note. The discovery findings are in the task thread's "Discovery" section.
+**Amended (RK-0)** note. The discovery findings are in [`risk-findings.md`](risk-findings.md).
 
 A domain review on 2026-10-20 revised several rules in place: the frequency split, the
 benchmark, VaR days, the what-if threshold and a few smaller points. §13 lists each change and

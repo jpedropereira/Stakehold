@@ -2,16 +2,18 @@
 
 The page is built of sections, each loaded on its own and failing on its own, as /labs's
 holdings and backtest do. A section that can't load shows its notice in its place; the others,
-and the page around them, still render. Two so far, gathered concurrently, since neither needs
-the other's answer:
+and the page around them, still render. Three so far, gathered concurrently where neither
+needs the other's answer:
 - the ex-post summary: portfolio's GET /risk/ex-post, the standard windows' figures measured on
   the TWR of invested positions (RK-11);
 - the ex-ante section (RK-18): portfolio's POST /risk/ex-ante on today's holdings at their
-  weights. It takes two calls in order, as /labs's default mix does: GET /holdings
-  (labs_view.build_default_mix), then the figures. `?ex_ante_window=` picks the window (3Y by
-  default) and `?exclude=` (repeatable) leaves holdings out, typically the one that limits the
-  window (R12).
-Later sections (concentration, the what-if) add a loader each.
+  weights. `?ex_ante_window=` picks the window (3Y by default) and `?exclude=` (repeatable)
+  leaves holdings out, typically the one that limits the window (R12);
+- the concentration section (RK-23): portfolio's POST /risk/look-through on the same mix,
+  always whole: `?exclude=` is ex-ante's, and concentration has no window.
+The last two measure today's mix, so they share one GET /holdings (labs_view.build_default_mix),
+then call portfolio concurrently. A failed holdings call shows its notice in both. Later
+sections (the what-if) add a loader each.
 
 `?benchmark=` (RK-14) picks what the summary's relative figures measure against, portfolio's
 VWCE.DE by default (benchmark_param.py has the rule). The field suggests the tracked tickers,
@@ -31,9 +33,14 @@ from web.api.deps import get_portfolio_client, get_settings, get_templates, requ
 from web.api.routes import _load_tickers, _render
 from web.auth_client.base import AuthUser
 from web.benchmark_param import chosen_benchmark
-from web.labs_view import MAX_BACKTEST_ASSETS, build_default_mix
-from web.portfolio_client.base import PortfolioClient
+from web.formatting import pct1
+from web.labs_view import MAX_BACKTEST_ASSETS, DefaultMix, build_default_mix
+from web.portfolio_client.base import Holding, LookThrough, PortfolioClient
 from web.portfolio_client.errors import PortfolioClientError
+from web.risk_concentration_view import (
+    ConcentrationSection,
+    build_concentration_section,
+)
 from web.risk_ex_ante_view import (
     ExAnteSection,
     build_ex_ante_section,
@@ -87,28 +94,46 @@ async def _load_ex_post(
     return table, None
 
 
-async def _load_ex_ante(
+async def _load_holdings_sections(
     portfolio_client: PortfolioClient,
     user_id: str,
     benchmark: str,
     window: str,
     exclude: list[str],
     params: list[tuple[str, str]],
-) -> tuple[ExAnteSection | None, str | None]:
-    """The ex-ante section and None, or None and the message to show in its place. Both None:
-    no holding to measure yet."""
+) -> tuple[tuple[ExAnteSection | None, str | None], tuple[ConcentrationSection | None, str | None]]:
+    """The ex-ante and concentration sections, each as (section, None) or (None, the message to
+    show in its place). (None, None): no holding to measure yet."""
     try:
         holdings = await portfolio_client.list_holdings(user_id=user_id)
     except PortfolioClientError:
-        logger.exception("risk: portfolio service unavailable listing holdings for ex-ante.")
-        return None, _UNAVAILABLE
+        logger.exception("risk: portfolio service unavailable listing holdings.")
+        return (None, _UNAVAILABLE), (None, _UNAVAILABLE)
     mix = build_default_mix(holdings.holdings)
     if not mix.assets:
         logger.info(
-            "risk: ex-ante has nothing to measure, %d holdings, none priced and worth something.",
+            "risk: ex-ante and look-through have nothing to measure, %d holdings, none priced "
+            "and worth something.",
             len(holdings.holdings),
         )
-        return None, None
+        return (None, None), (None, None)
+    ex_ante, concentration = await asyncio.gather(
+        _load_ex_ante(portfolio_client, mix, holdings.holdings, benchmark, window, exclude, params),
+        _load_concentration(portfolio_client, mix),
+    )
+    return ex_ante, concentration
+
+
+async def _load_ex_ante(
+    portfolio_client: PortfolioClient,
+    mix: DefaultMix,
+    holdings: tuple[Holding, ...],
+    benchmark: str,
+    window: str,
+    exclude: list[str],
+    params: list[tuple[str, str]],
+) -> tuple[ExAnteSection | None, str | None]:
+    """The ex-ante section and None, or None and the message to show in its place."""
     tickers = [ticker for ticker, _ in mix.assets]
     stale = [ticker for ticker in exclude if ticker not in tickers]
     if stale:
@@ -137,9 +162,46 @@ async def _load_ex_ante(
     except PortfolioClientError:
         logger.exception("risk: portfolio service unavailable loading the ex-ante figures.")
         return None, _UNAVAILABLE
-    section = build_ex_ante_section(risk, mix, holdings.holdings, params)
+    section = build_ex_ante_section(risk, mix, holdings, params)
     _log_ex_ante(risk, section)
     return section, None
+
+
+async def _load_concentration(
+    portfolio_client: PortfolioClient, mix: DefaultMix
+) -> tuple[ConcentrationSection | None, str | None]:
+    """The concentration section and None, or None and the message to show in its place."""
+    logger.info("risk: loading the look-through for %d holdings.", len(mix.assets))
+    try:
+        lt = await portfolio_client.look_through(assets=list(mix.assets))
+    except PortfolioClientError:
+        logger.exception("risk: portfolio service unavailable loading the look-through.")
+        return None, _UNAVAILABLE
+    section = build_concentration_section(lt, mix)
+    _log_concentration(lt, section)
+    return section, None
+
+
+def _log_concentration(lt: LookThrough, section: ConcentrationSection) -> None:
+    left_out = ", ".join(f"{h.ticker} ({h.reason})" for h in section.left_out) or "none"
+    exposures = lt.exposures
+    if exposures is None:
+        logger.info("risk: look-through included nothing, left out: %s.", left_out)
+        return
+    share = exposures.coverage
+    logger.info(
+        "risk: look-through: %s looked through, %s direct (%s matched), %s commodity, "
+        "%s unmapped (%s), snapshots %s, %d names, left out %s.",
+        pct1(share["look_through"]),
+        pct1(share["direct_matched"] + share["direct_unmatched"]),
+        pct1(share["direct_matched"]),
+        pct1(share["commodity"]),
+        pct1(share["unmapped"]),
+        ", ".join(fund.ticker for fund in section.unmapped) or "none",
+        ", ".join(f"{s.ticker} {s.as_of_date.isoformat()}" for s in exposures.snapshots) or "none",
+        exposures.names.n_names,
+        left_out,
+    )
 
 
 def _log_ex_ante(risk, section: ExAnteSection) -> None:
@@ -194,12 +256,14 @@ async def risk(
     if ex_ante_window is not None and window != ex_ante_window:
         logger.info("risk: unknown ex-ante window %r, showing %s.", ex_ante_window, window)
     params = request.query_params.multi_items()
-    (ex_post, ex_post_error), (ex_ante, ex_ante_error), (tickers, tickers_notice) = (
-        await asyncio.gather(
-            _load_ex_post(portfolio_client, user.user_id, benchmark),
-            _load_ex_ante(portfolio_client, user.user_id, benchmark, window, exclude, params),
-            _load_tickers(portfolio_client),
-        )
+    (
+        (ex_post, ex_post_error),
+        ((ex_ante, ex_ante_error), (concentration, concentration_error)),
+        (tickers, tickers_notice),
+    ) = await asyncio.gather(
+        _load_ex_post(portfolio_client, user.user_id, benchmark),
+        _load_holdings_sections(portfolio_client, user.user_id, benchmark, window, exclude, params),
+        _load_tickers(portfolio_client),
     )
     return _render(
         request,
@@ -215,6 +279,8 @@ async def risk(
             "ex_ante": ex_ante,
             "ex_ante_error": ex_ante_error,
             "ex_ante_window": window,
+            "concentration": concentration,
+            "concentration_error": concentration_error,
             # The benchmark form re-sends these, so comparing changes nothing else (RK-14).
             "benchmark_kept": [(k, v) for k, v in params if k in ("ex_ante_window", "exclude")],
             "benchmark": benchmark,
