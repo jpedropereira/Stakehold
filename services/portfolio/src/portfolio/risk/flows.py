@@ -19,6 +19,8 @@ them to risk/ex_post.py.
   one greys the relative figures with its reason; everything else is still measured.
 - **Nothing to measure is said so.** With no TWR returns (no rows yet, or every holding left
   out), there are no windows, no risk-free fetch and no benchmark fetch.
+- **Rolling 1Y volatility and Sharpe (RK-24)** run on the TWR's weekly returns, monthly, over its
+  whole history (risk/rolling.py), from the same risk-free fetch.
 
 Ex-ante risk (spec §6.2-6.3, §7.1) is measured on a mix the caller passes, as Labs' backtest
 is: web builds it from the holdings (`labs_view.build_default_mix`), so the weights are worked
@@ -35,6 +37,11 @@ out in one place. No user data is read and nothing is stored.
   ticker's local-currency returns (§7.1's toggle). σ_p and the decomposition are always EUR. A
   benchmark that is also a holding isn't repeated; an unavailable one is left out of the matrix,
   and the response says why.
+- **A rolling correlation (RK-24) is asked for by pair**: two tickers from the mix or the
+  benchmark, or one ticker against the portfolio, which is the constant-weight weekly mix. It is
+  always in EUR, whatever the matrix's currency, because the portfolio is EUR. A ticker that
+  can't be measured (left out, excluded, or an unavailable benchmark) gives no points and says
+  why. It never fails the request.
 
 The what-if (spec §7.2) takes the same mix plus a candidate, a weight and a funding rule, and
 hands them to risk/what_if.py. No benchmark and no matrix: its rows don't use them.
@@ -73,11 +80,18 @@ from portfolio.datastore_client.base import DataStoreClient
 from portfolio.eur_returns.calculator import EurReturns, eur_daily_returns
 from portfolio.eur_returns.eligibility import fetch_eur_returns
 from portfolio.risk.ex_ante_report import LABEL as EX_ANTE_LABEL
-from portfolio.risk.ex_ante_report import ExAnteReport, ex_ante_report
+from portfolio.risk.ex_ante_report import NO_OVERLAP, ExAnteReport, ex_ante_report
 from portfolio.risk.ex_post import SeriesFigures, WindowFigures, ex_post_figures
 from portfolio.risk.relative import BenchmarkReturns
 from portfolio.risk.risk_free import RatePoint
+from portfolio.risk.rolling import (
+    RollingFigures,
+    monthly_windows,
+    rolling_correlation,
+    rolling_weekly,
+)
 from portfolio.risk.types import Flag, Frequency, ReturnSeries, RiskFigure
+from portfolio.risk.weekly import to_weekly
 from portfolio.risk.what_if import PRO_RATA_RULE, Funding, WhatIfReport, what_if_report
 from portfolio.risk.windows import StandardWindow
 from portfolio.twr import flows as twr_flows
@@ -93,6 +107,7 @@ EXCLUDED = "excluded"
 EXCLUDED_REASON = "excluded by request"
 EUR_RETURNS = "eur"
 LOCAL_RETURNS = "local"
+PORTFOLIO = "portfolio"  # a rolling pair's other side when it is the constant-weight mix
 _NOTHING_TO_MEASURE = "not fetched: nothing to measure"
 
 
@@ -105,6 +120,7 @@ class ExPostRisk:
     benchmark: BenchmarkStatus
     windows: tuple[WindowFigures, ...]
     excluded: list[ExcludedHolding]  # from the TWR: by ticker, their weight went to the rest
+    rolling: RollingFigures | None = None  # None exactly when there's nothing to measure
 
 
 def compute_ex_post(
@@ -156,6 +172,10 @@ def compute_ex_post(
     )
     for window in windows:
         _log_window(window, benchmark)
+    rolling = rolling_weekly(
+        to_weekly(daily), monthly_windows(daily), rates=rates, first_published=first_published
+    )
+    _log_rolling(rolling, context="ex-post-risk")
     return ExPostRisk(
         label=LABEL,
         base_date=daily.base_date,
@@ -164,6 +184,7 @@ def compute_ex_post(
         benchmark=status_of(fetched),
         windows=windows,
         excluded=twr.excluded,
+        rolling=rolling,
     )
 
 
@@ -172,6 +193,17 @@ class AssetStatus:
     ticker: str
     status: str  # included, excluded, not_tracked, no_history, no_fx_rate or failed
     reason: str | None  # None when included
+
+
+@dataclass(frozen=True)
+class RollingCorrelation:
+    """A requested pair's rolling 52-week correlation. `points` is empty exactly when `reason`
+    says why one side can't be measured."""
+
+    a: str
+    b: str  # a ticker, or PORTFOLIO
+    points: tuple[RiskFigure, ...]
+    reason: str | None
 
 
 @dataclass(frozen=True)
@@ -184,6 +216,8 @@ class ExAnteRisk:
     statuses: list[AssetStatus]  # every requested asset, in input order
     weights: dict[str, float]  # the included holdings', normalised
     report: ExAnteReport | None  # None exactly when no holding is included
+    # None when no pair was asked for, or no holding is included.
+    rolling_correlation: RollingCorrelation | None = None
 
 
 def compute_ex_ante(
@@ -194,12 +228,14 @@ def compute_ex_ante(
     benchmark: str = DEFAULT_BENCHMARK,
     currency: str = EUR_RETURNS,
     exclude: Collection[str] = (),
+    rolling_pair: tuple[str, str | None] | None = None,
     today: date | None = None,
 ) -> ExAnteRisk:
     """Ex-ante risk of `mix` (ticker, weight) pairs over `window`, without the tickers in
-    `exclude`, with the correlation matrix in `currency` against `benchmark`. The mix is assumed
-    valid (non-empty, unique tickers, positive weights, `exclude` a strict subset): the API
-    checks that first."""
+    `exclude`, with the correlation matrix in `currency` against `benchmark`. `rolling_pair` asks
+    for a rolling correlation of two tickers, or of one against the portfolio (None). The mix is
+    assumed valid (non-empty, unique tickers, positive weights, `exclude` a strict subset, the
+    pair's tickers in the mix or the benchmark): the API checks that first."""
     today = today or date.today()
     excluded = set(exclude)
     logger.info(
@@ -259,6 +295,17 @@ def compute_ex_ante(
         correlation_daily=correlation_daily,
     )
     _log_ex_ante(report, len(included), len(left_out))
+    _log_rolling(report.rolling, context="ex-ante-risk")
+    pair = None
+    if rolling_pair is not None:
+        pair = _rolling_pair(
+            rolling_pair,
+            daily=daily,
+            statuses=statuses,
+            benchmark=fetched,
+            mix_weekly=report.mix_weekly,
+        )
+        _log_rolling_pair(pair)
     return ExAnteRisk(
         label=EX_ANTE_LABEL,
         currency=currency,
@@ -268,7 +315,51 @@ def compute_ex_ante(
         statuses=statuses,
         weights=weights,
         report=report,
+        rolling_correlation=pair,
     )
+
+
+def _rolling_pair(
+    pair: tuple[str, str | None],
+    *,
+    daily: dict[str, ReturnSeries],
+    statuses: list[AssetStatus],
+    benchmark: Benchmark | BenchmarkUnavailable,
+    mix_weekly: ReturnSeries | None,
+) -> RollingCorrelation:
+    a, b = pair
+    sides = [
+        _pair_side(key, daily=daily, statuses=statuses, benchmark=benchmark, mix_weekly=mix_weekly)
+        for key in (a, b)
+    ]
+    label = PORTFOLIO if b is None else b
+    reasons = [side for side in sides if isinstance(side, str)]
+    if reasons:
+        return RollingCorrelation(a, label, (), reasons[0])
+    return RollingCorrelation(a, label, rolling_correlation(*sides), None)
+
+
+def _pair_side(
+    key: str | None,
+    *,
+    daily: dict[str, ReturnSeries],
+    statuses: list[AssetStatus],
+    benchmark: Benchmark | BenchmarkUnavailable,
+    mix_weekly: ReturnSeries | None,
+) -> ReturnSeries | str:
+    """One side's weekly EUR returns, or why it has none."""
+    if key is None:
+        return mix_weekly if mix_weekly is not None else f"{PORTFOLIO} not included: {NO_OVERLAP}"
+    if key in daily:
+        return to_weekly(daily[key])
+    if key == benchmark.ticker:
+        if isinstance(benchmark, BenchmarkUnavailable):
+            return f"{key} not included: {unavailable_reason(benchmark)}"
+        return benchmark.weekly
+    status = next((s for s in statuses if s.ticker == key), None)
+    if status is None:
+        raise ValueError(f"{key} is neither in the mix nor the benchmark")
+    return f"{key} not included: {status.reason}"
 
 
 @dataclass(frozen=True)
@@ -555,6 +646,37 @@ def _risk_free(
         return None, None
     rates = [RatePoint(point.date, float(point.rate)) for point in series.points]
     return rates, series.first_date
+
+
+def _log_rolling(rolling: RollingFigures, *, context: str) -> None:
+    n = len(rolling.volatility)
+    if not n:
+        logger.info("%s: rolling 1Y: no point, the history is under a year.", context)
+        return
+    logger.info(
+        "%s: rolling 1Y: %d monthly point(s); %d of %d volatility and %d of %d Sharpe greyed.",
+        context,
+        n,
+        sum(1 for f in rolling.volatility if f.value is None),
+        n,
+        sum(1 for f in rolling.sharpe if f.value is None),
+        n,
+    )
+
+
+def _log_rolling_pair(pair: RollingCorrelation) -> None:
+    if pair.reason is not None:
+        logger.info(
+            "ex-ante-risk: rolling correlation %s vs %s: no point, %s.", pair.a, pair.b, pair.reason
+        )
+        return
+    logger.info(
+        "ex-ante-risk: rolling correlation %s vs %s: %d weekly point(s), %d greyed.",
+        pair.a,
+        pair.b,
+        len(pair.points),
+        sum(1 for p in pair.points if p.value is None),
+    )
 
 
 def _log_window(window: WindowFigures, benchmark: str) -> None:

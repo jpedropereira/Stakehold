@@ -1,8 +1,7 @@
-"""The read-only analytics jobs: Labs' backtest, ex-post and ex-ante risk, and the look-through.
-Each builds a data-store client, runs one flow, logs its summary and returns builtins for the
-route. They are jobs.py's kind of runnable unit and follow its conventions (an optional
-`settings`, `configure_logging()` first). They live apart because jobs.py crossed the 64 KB file
-limit, and these share no helpers with its write jobs except `require_datastore_client`.
+"""Runnable units for the risk read endpoints: ex-post risk (RK-11), ex-ante risk (RK-17), the
+candidate what-if (RK-19) and look-through exposures (RK-22). Split out of jobs.py, which had
+crossed 64 KB, with no change in behaviour: each is the same shape as a jobs.py job (settings,
+a data-store client, one flow, a payload of builtins), and api/routes.py calls them the same way.
 """
 
 import logging
@@ -12,13 +11,12 @@ from decimal import Decimal
 from uuid import UUID
 
 from portfolio.benchmark.base import DEFAULT_BENCHMARK
-from portfolio.jobs import require_datastore_client
-from portfolio.labs import flows as labs_flows
-from portfolio.labs.calculator import BacktestResult, Period
+from portfolio.jobs import _require_datastore_client
 from portfolio.look_through import flows as look_through_flows
 from portfolio.look_through.calculator import DIMENSION_LABELS, Concentration, Dimension
 from portfolio.risk import flows as risk_flows
 from portfolio.risk.ex_post import WindowFigures
+from portfolio.risk.rolling import CORRELATION_WINDOW, ROLLING_WINDOW, RollingFigures
 from portfolio.risk.types import RiskFigure
 from portfolio.risk.what_if import Funding, Row, WhatIfReport
 from portfolio.risk.windows import StandardWindow
@@ -37,7 +35,7 @@ def get_ex_post_risk(
     rebuild."""
     configure_logging()
     settings = settings or load_settings()
-    datastore_client = require_datastore_client(settings, command="ex-post risk")
+    datastore_client = _require_datastore_client(settings, command="ex-post risk")
     conn = get_connection(settings.database_url)
     try:
         logger.info("get-ex-post-risk: measuring ex-post risk for user %s.", user_id)
@@ -84,6 +82,7 @@ def get_ex_post_risk(
         "windows": [_ex_post_window(window) for window in result.windows],
         "n_excluded": len(result.excluded),
         "excluded": [asdict(holding) for holding in result.excluded],
+        "rolling": None if result.rolling is None else _rolling(result.rolling),
     }
 
 
@@ -115,6 +114,28 @@ def _series_figures(figures) -> dict:
     }
 
 
+def _rolling(rolling: RollingFigures) -> dict:
+    return {
+        "window": ROLLING_WINDOW,
+        "step": "monthly",
+        "volatility": [_figure(figure) for figure in rolling.volatility],
+        "sharpe": [_figure(figure) for figure in rolling.sharpe],
+    }
+
+
+def _rolling_correlation(pair: risk_flows.RollingCorrelation | None) -> dict | None:
+    if pair is None:
+        return None
+    return {
+        "a": pair.a,
+        "b": pair.b,
+        "window": CORRELATION_WINDOW,
+        "step": "weekly",
+        "reason": pair.reason,
+        "points": [_figure(figure) for figure in pair.points],
+    }
+
+
 def _figure(figure: RiskFigure) -> dict:
     return {
         **asdict(figure),
@@ -130,6 +151,7 @@ def get_ex_ante_risk(
     benchmark: str = DEFAULT_BENCHMARK,
     currency: str = risk_flows.EUR_RETURNS,
     exclude: Collection[str] = (),
+    rolling_pair: tuple[str, str | None] | None = None,
     settings: Settings | None = None,
 ) -> dict:
     """Ex-ante risk of `assets` (ticker, weight) pairs held at constant weights, over `window`
@@ -137,7 +159,7 @@ def get_ex_ante_risk(
     is read, so there is no database connection and no user_id."""
     configure_logging()
     settings = settings or load_settings()
-    datastore_client = require_datastore_client(settings, command="ex-ante risk")
+    datastore_client = _require_datastore_client(settings, command="ex-ante risk")
     logger.info("get-ex-ante-risk: measuring ex-ante risk of %d asset(s).", len(assets))
     result = risk_flows.compute_ex_ante(
         datastore_client,
@@ -146,6 +168,7 @@ def get_ex_ante_risk(
         benchmark=benchmark,
         currency=currency,
         exclude=exclude,
+        rolling_pair=rolling_pair,
     )
 
     included = sum(1 for s in result.statuses if s.status == risk_flows.INCLUDED)
@@ -189,6 +212,8 @@ def get_ex_ante_risk(
                     "holdings",
                     "constant_weight",
                     "correlation",
+                    "rolling",
+                    "rolling_correlation",
                 )
             ),
         }
@@ -226,7 +251,13 @@ def get_ex_ante_risk(
                 for a, b, figure in risk_flows.correlation_cells(report)
             ],
         },
+        "rolling": _rolling(report.rolling),
+        "rolling_correlation": _rolling_correlation(result.rolling_correlation),
     }
+
+
+# Every look-through weight is a share of the mix; 8 places is a millionth of a percent.
+_LOOK_THROUGH_PLACES = Decimal("0.00000001")
 
 
 def get_what_if(
@@ -244,7 +275,7 @@ def get_what_if(
     per request, like ex-ante: no database connection and no user_id."""
     configure_logging()
     settings = settings or load_settings()
-    datastore_client = require_datastore_client(settings, command="a what-if")
+    datastore_client = _require_datastore_client(settings, command="a what-if")
     logger.info(
         "get-what-if: comparing %d asset(s) before and after adding %s.", len(assets), candidate
     )
@@ -345,78 +376,6 @@ def _what_if_row(row: Row) -> dict:
     }
 
 
-def get_backtest(
-    *,
-    assets: list[tuple[str, Decimal]],
-    period: Period,
-    benchmark: str = DEFAULT_BENCHMARK,
-    settings: Settings | None = None,
-) -> dict:
-    """A Labs backtest of `assets` (ticker, weight) pairs: every period's return for the mix and
-    each asset, the growth series for `period`, and a status for every asset (see
-    labs/flows.run_backtest). Read-only and per request: nothing is stored, and no user data is
-    read, so there is no database connection and no user_id."""
-    configure_logging()
-    settings = settings or load_settings()
-    datastore_client = require_datastore_client(settings, command="a backtest")
-    logger.info(
-        "backtest: %d asset(s), growth series for %s, against %s.", len(assets), period, benchmark
-    )
-    outcome = labs_flows.run_backtest(datastore_client, assets, period, benchmark=benchmark)
-
-    _log_mix_left_out(outcome.result)
-    included = sum(1 for s in outcome.statuses if s.status == labs_flows.INCLUDED)
-    left_out = len(outcome.statuses) - included
-    if included:
-        logger.info(
-            "backtest: done, %d included, %d left out, ending %s.",
-            included,
-            left_out,
-            outcome.result.end_date,
-        )
-    else:
-        logger.warning(
-            "backtest: done, no asset could be included (%d left out), so there are no figures.",
-            left_out,
-        )
-    result = asdict(outcome.result)
-    del result["unavailable"]  # `statuses` covers every asset left out, with its reason
-    risk = None if outcome.risk is None else _sorted_flags(asdict(outcome.risk))
-    return {**result, "statuses": [asdict(s) for s in outcome.statuses], "risk": risk}
-
-
-def _sorted_flags(value):
-    """asdict keeps a RiskFigure's flags as a frozenset; the response lists them in a stable
-    order."""
-    if isinstance(value, dict):
-        return {key: _sorted_flags(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_sorted_flags(item) for item in value]
-    if isinstance(value, frozenset):
-        return sorted(value)
-    return value
-
-
-def _log_mix_left_out(result: BacktestResult) -> None:
-    """One line per included asset the mix left out of any period for not covering it."""
-    if result.mix is None:
-        return
-    periods_by_ticker: dict[str, list[str]] = {}
-    for period, figure in result.mix.periods.items():
-        for ticker in figure.left_out:
-            periods_by_ticker.setdefault(ticker, []).append(period)
-    for ticker, periods in periods_by_ticker.items():
-        logger.info(
-            "backtest: the mix leaves out %s for %s: not enough history.",
-            ticker,
-            ", ".join(periods),
-        )
-
-
-# Every look-through weight is a share of the mix; 8 places is a millionth of a percent.
-_LOOK_THROUGH_PLACES = Decimal("0.00000001")
-
-
 def get_look_through(
     *, assets: list[tuple[str, Decimal]], settings: Settings | None = None
 ) -> dict:
@@ -425,7 +384,7 @@ def get_look_through(
     is read, so there is no database connection and no user_id."""
     configure_logging()
     settings = settings or load_settings()
-    datastore_client = require_datastore_client(settings, command="look-through")
+    datastore_client = _require_datastore_client(settings, command="look-through")
     run = look_through_flows.look_through_mix(datastore_client, assets)
 
     left_out = sum(1 for a in run.assets if a.status != look_through_flows.INCLUDED)

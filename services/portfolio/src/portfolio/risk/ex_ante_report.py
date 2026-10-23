@@ -24,8 +24,13 @@ holdings, converts them to daily EUR returns and normalises the weights.
   cells. The caller picks its series, EUR or local currency, with or without the benchmark.
 - **Histories that don't overlap** grey the constant-weight figures with `NO_OVERLAP` (Labs'
   wording) rather than raise; σ_p and the decomposition grey through their own minimums.
-- **`mix_report` is the report without the matrix**, which the what-if (RK-19) measures twice,
-  before and after; `ex_ante_report` is `mix_report` plus the matrix.
+- **Rolling 1Y volatility and Sharpe (RK-24)** run on the same weekly mix, over its whole
+  common history whatever the requested window, because a rolling view is for watching a figure
+  move through time. Its monthly windows come from the daily mix, as ex-post's come from the
+  daily TWR, so the last point is the 1Y constant-weight figure. `mix_weekly` is that weekly
+  mix, which a rolling correlation against "the portfolio" uses.
+- **`mix_report` is the report without the matrix and the rolling figures**, which the what-if
+  (RK-19) measures twice, before and after; `ex_ante_report` is `mix_report` plus both.
 """
 
 from collections.abc import Mapping, Sequence
@@ -40,6 +45,7 @@ from portfolio.risk.ex_ante import (
 )
 from portfolio.risk.ex_post import SeriesFigures, greyed_series_figures, series_figures
 from portfolio.risk.risk_free import RatePoint
+from portfolio.risk.rolling import RollingFigures, monthly_windows, rolling_weekly
 from portfolio.risk.types import ReturnSeries, Window
 from portfolio.risk.weekly import to_weekly
 from portfolio.risk.windows import (
@@ -56,14 +62,18 @@ _EUR = "EUR"
 
 @dataclass(frozen=True)
 class MixReport:
-    """One mix's ex-ante figures without the correlation matrix: what the what-if (RK-19)
-    measures twice, before and after."""
+    """One mix's ex-ante figures without the correlation matrix or the rolling figures: what the
+    what-if (RK-19) measures twice, before and after."""
 
     requested: Window  # the standard window asked for, ending on the latest common date
     window: Window | None  # the effective one; None when the histories don't overlap
     limited_by: tuple[str, ...]  # the holding(s) whose start shortened the window
     decomposition: ExAnteDecomposition
     constant_weight: SeriesFigures
+    # The constant-weight mix over the holdings' common span, daily and weekly; None when they
+    # don't overlap.
+    mix_daily: ReturnSeries | None
+    mix_weekly: ReturnSeries | None
 
 
 @dataclass(frozen=True)
@@ -74,6 +84,9 @@ class ExAnteReport:
     decomposition: ExAnteDecomposition
     constant_weight: SeriesFigures
     correlation: PairwiseCorrelation
+    # The constant-weight weekly mix over the holdings' common span; None when they don't overlap.
+    mix_weekly: ReturnSeries | None
+    rolling: RollingFigures  # over the mix's whole history; empty when they don't overlap
 
 
 def ex_ante_report(
@@ -96,6 +109,15 @@ def ex_ante_report(
     correlation = pairwise_correlation(
         {key: to_weekly(series) for key, series in correlation_daily.items()}, mix.requested
     )
+    if mix.mix_daily is None:
+        rolling = RollingFigures((), ())
+    else:
+        rolling = rolling_weekly(
+            mix.mix_weekly,
+            monthly_windows(mix.mix_daily),
+            rates=rates,
+            first_published=first_published,
+        )
     return ExAnteReport(
         mix.requested,
         mix.window,
@@ -103,6 +125,8 @@ def ex_ante_report(
         mix.decomposition,
         mix.constant_weight,
         correlation,
+        mix.mix_weekly,
+        rolling,
     )
 
 
@@ -115,7 +139,7 @@ def mix_report(
     rates: Sequence[RatePoint] | None,
     first_published: date | None,
 ) -> MixReport:
-    """`ex_ante_report` without the correlation matrix; the arguments are the same."""
+    """`ex_ante_report` without the matrix and the rolling figures; the arguments are the same."""
     if not daily:
         raise ValueError("an ex-ante report needs at least one holding")
     end = latest_common_date(*daily.values())
@@ -127,7 +151,13 @@ def mix_report(
 
     if common_span(*daily.values()) is None:
         return MixReport(
-            requested, None, (), decomposition, greyed_series_figures(requested, NO_OVERLAP)
+            requested,
+            None,
+            (),
+            decomposition,
+            greyed_series_figures(requested, NO_OVERLAP),
+            None,
+            None,
         )
 
     mix_daily = constant_weight_series(daily, weights)
@@ -135,14 +165,17 @@ def mix_report(
     # before the mix does.
     start = max(decomposition.sigma_p.window_start, mix_daily.base_date)
     window = Window(label, start, end)
+    mix_weekly = constant_weight_series(weekly, weights)
     nonsync = not (len(daily) == 1 and currencies.get(next(iter(daily))) == _EUR)
     figures = series_figures(
         mix_daily,
-        constant_weight_series(weekly, weights),
+        mix_weekly,
         window,
         trading_days=[set(series.dates) for series in daily.values()],
         nonsync=nonsync,
         rates=rates,
         first_published=first_published,
     )
-    return MixReport(requested, window, decomposition.limited_by, decomposition, figures)
+    return MixReport(
+        requested, window, decomposition.limited_by, decomposition, figures, mix_daily, mix_weekly
+    )

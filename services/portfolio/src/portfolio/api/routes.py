@@ -31,7 +31,7 @@ from fastapi import (
     UploadFile,
     status,
 )
-from portfolio import analytics_jobs, jobs
+from portfolio import jobs, risk_jobs
 from portfolio.api.models import (
     AccountCreateRequest,
     AccountDeleteResponse,
@@ -523,7 +523,7 @@ def get_ex_post_risk(
     benchmark: str = Query(default=DEFAULT_BENCHMARK, min_length=1, max_length=20),
     settings: Settings = Depends(get_settings),
 ) -> dict:
-    return analytics_jobs.get_ex_post_risk(user_id=user_id, benchmark=benchmark, settings=settings)
+    return risk_jobs.get_ex_post_risk(user_id=user_id, benchmark=benchmark, settings=settings)
 
 
 @router.post("/risk/ex-ante", response_model=ExAnteRiskResponse)
@@ -531,12 +531,17 @@ def get_ex_ante_risk(body: ExAnteRiskRequest, settings: Settings = Depends(get_s
     """A POST because the mix is a structured body, as for a backtest: nothing is stored, so it
     answers 200. The mix holds no user data, so there is no user_id; web builds it from the
     holdings. An asset data-store can't serve is reported in `statuses`, not as an error."""
-    return analytics_jobs.get_ex_ante_risk(
+    return risk_jobs.get_ex_ante_risk(
         assets=[(asset.ticker, asset.weight) for asset in body.assets],
         window=body.window,
         benchmark=body.benchmark,
         currency=body.currency,
         exclude=body.exclude,
+        rolling_pair=(
+            None
+            if body.rolling_correlation is None
+            else (body.rolling_correlation.a, body.rolling_correlation.b)
+        ),
         settings=settings,
     )
 
@@ -546,7 +551,7 @@ def get_what_if(body: WhatIfRequest, settings: Settings = Depends(get_settings))
     """A candidate added to the mix, before and after (RK-19). A POST, no user_id and a 200 for
     the same reasons as ex-ante: a candidate or holding data-store can't serve is reported in
     the response, not as an error."""
-    return analytics_jobs.get_what_if(
+    return risk_jobs.get_what_if(
         assets=[(asset.ticker, asset.weight) for asset in body.assets],
         candidate=body.candidate.ticker,
         weight=body.candidate.weight,
@@ -561,7 +566,7 @@ def get_what_if(body: WhatIfRequest, settings: Settings = Depends(get_settings))
 def get_look_through(body: LookThroughRequest, settings: Settings = Depends(get_settings)) -> dict:
     """Concentration by look-through (RK-22). A POST for the same reason as ex-ante: the mix is a
     structured body, nothing is stored, and web builds the mix from the holdings."""
-    return analytics_jobs.get_look_through(
+    return risk_jobs.get_look_through(
         assets=[(asset.ticker, asset.weight) for asset in body.assets], settings=settings
     )
 
@@ -586,7 +591,7 @@ def backtest(body: BacktestRequest, settings: Settings = Depends(get_settings)) 
     stored, so it answers 200, never _write_status_code's 201. The mix holds no user data, so
     there is no user_id; the internal secret is checked like every other route here. An asset
     data-store can't serve is reported in `statuses`, not as an error status."""
-    return analytics_jobs.get_backtest(
+    return jobs.get_backtest(
         assets=[(asset.ticker, asset.weight) for asset in body.assets],
         period=body.period,
         benchmark=body.benchmark,

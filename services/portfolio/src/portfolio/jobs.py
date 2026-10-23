@@ -20,8 +20,11 @@ from uuid import UUID
 
 from portfolio import pipeline
 from portfolio.accounts.repository import Account
+from portfolio.benchmark.base import DEFAULT_BENCHMARK
 from portfolio.datastore_client.http_client import HttpDataStoreClient
 from portfolio.holdings import flows as holdings_flows
+from portfolio.labs import flows as labs_flows
+from portfolio.labs.calculator import BacktestResult, Period
 from portfolio.run_result import build_run_result
 from portfolio.settings import Settings, SettingsError, load_settings
 from portfolio.ticker_mapping.repository import TickerMappingRow
@@ -204,7 +207,7 @@ def run_list_available_brokers() -> dict[str, int | str]:
     return result
 
 
-def require_datastore_client(settings: Settings, *, command: str) -> HttpDataStoreClient:
+def _require_datastore_client(settings: Settings, *, command: str) -> HttpDataStoreClient:
     """A data-store client for a command that can't run without one, or SettingsError naming
     the command. Checked per command rather than in settings.py, since most commands -- and
     manual entry of anything but a TICKER -- never touch data-store."""
@@ -365,7 +368,7 @@ def run_add_transaction(
     configure_logging()
     settings = settings or load_settings()
     datastore_client = (
-        require_datastore_client(settings, command="add-transaction with a TICKER instrument")
+        _require_datastore_client(settings, command="add-transaction with a TICKER instrument")
         if instrument_identifier_kind == "TICKER"
         else None
     )
@@ -819,7 +822,7 @@ def run_set_ticker_mapping(
     the ticker exists."""
     configure_logging()
     settings = settings or load_settings()
-    datastore_client = require_datastore_client(settings, command="ticker-mapping set")
+    datastore_client = _require_datastore_client(settings, command="ticker-mapping set")
     conn = get_connection(settings.database_url)
     try:
         logger.info(
@@ -940,7 +943,7 @@ def run_rebuild_returns_all(*, settings: Settings | None = None) -> dict[str, in
     settings = settings or load_settings()
     # Checked up front, not per user: without data-store every user's rebuild would fail the
     # same way, and one SettingsError says so more plainly than N tracebacks.
-    require_datastore_client(settings, command="rebuild-returns --all")
+    _require_datastore_client(settings, command="rebuild-returns --all")
     conn = get_connection(settings.database_url)
     try:
         user_ids = pipeline.list_user_ids(conn)
@@ -1003,7 +1006,7 @@ def run_refresh_ready_tickers(
     """
     configure_logging()
     settings = settings or load_settings()
-    client = require_datastore_client(settings, command="refresh-ready-tickers")
+    client = _require_datastore_client(settings, command="refresh-ready-tickers")
     now = now or datetime.now(UTC)
     since = now - timedelta(minutes=window_minutes)
 
@@ -1069,7 +1072,7 @@ def get_tickers(*, settings: Settings | None = None) -> list[str]:
     `get_*` here: returns data, not a run result."""
     configure_logging()
     settings = settings or load_settings()
-    datastore_client = require_datastore_client(settings, command="the ticker list")
+    datastore_client = _require_datastore_client(settings, command="the ticker list")
     logger.info("get-tickers: listing data-store's tickers.")
     tickers = pipeline.list_tickers(datastore_client=datastore_client)
     logger.info("get-tickers: done, %d ticker(s) found.", len(tickers))
@@ -1087,7 +1090,7 @@ def get_ticker_lookup(*, ticker: str, settings: Settings | None = None) -> dict:
     """What adding `ticker` would do -- already tracked, available, or why not."""
     configure_logging()
     settings = settings or load_settings()
-    client = require_datastore_client(settings, command="a ticker lookup")
+    client = _require_datastore_client(settings, command="a ticker lookup")
     result = asdict(client.lookup_ticker(ticker))
     logger.info("ticker lookup: %r -> %s.", ticker, result["outcome"])
     return result
@@ -1099,7 +1102,7 @@ def run_add_tracked_ticker(
     """Ask data-store to add `ticker` for onboarding. Returns the row plus `created`."""
     configure_logging()
     settings = settings or load_settings()
-    client = require_datastore_client(settings, command="adding a ticker")
+    client = _require_datastore_client(settings, command="adding a ticker")
     logger.info(
         "add-ticker: %r for user %s (limit %s).",
         ticker,
@@ -1125,7 +1128,7 @@ def get_tracked_tickers(
     """data-store's tracked tickers, narrowed by any filters given."""
     configure_logging()
     settings = settings or load_settings()
-    client = require_datastore_client(settings, command="the tracked-ticker list")
+    client = _require_datastore_client(settings, command="the tracked-ticker list")
     rows = client.list_tracked_tickers(
         requested_by=requested_by, statuses=statuses, tickers=tickers
     )
@@ -1138,7 +1141,7 @@ def run_update_tracked_ticker(
     """An admin's change to one tracked ticker (the admin check is web's)."""
     configure_logging()
     settings = settings or load_settings()
-    client = require_datastore_client(settings, command="changing a tracked ticker")
+    client = _require_datastore_client(settings, command="changing a tracked ticker")
     logger.info("update-ticker: %s enabled=%s retry=%s.", ticker, enabled, retry)
     return asdict(client.update_tracked_ticker(ticker, enabled=enabled, retry=retry))
 
@@ -1312,7 +1315,7 @@ def get_portfolio_twr(*, user_id: UUID, settings: Settings | None = None) -> dic
     out of it (see twr/flows.compute_portfolio_twr). Read-only: never triggers a rebuild."""
     configure_logging()
     settings = settings or load_settings()
-    datastore_client = require_datastore_client(settings, command="the portfolio TWR")
+    datastore_client = _require_datastore_client(settings, command="the portfolio TWR")
     conn = get_connection(settings.database_url)
     try:
         logger.info("get-portfolio-twr: computing the TWR across accounts for user %s.", user_id)
@@ -1343,3 +1346,71 @@ def get_portfolio_twr(*, user_id: UUID, settings: Settings | None = None) -> dic
     # Ex-post risk's inputs, not part of the TWR route's payload.
     del payload["days"], payload["currencies"]
     return {**payload, "n_excluded": len(result.excluded)}
+
+
+def get_backtest(
+    *,
+    assets: list[tuple[str, Decimal]],
+    period: Period,
+    benchmark: str = DEFAULT_BENCHMARK,
+    settings: Settings | None = None,
+) -> dict:
+    """A Labs backtest of `assets` (ticker, weight) pairs: every period's return for the mix and
+    each asset, the growth series for `period`, and a status for every asset (see
+    labs/flows.run_backtest). Read-only and per request: nothing is stored, and no user data is
+    read, so there is no database connection and no user_id."""
+    configure_logging()
+    settings = settings or load_settings()
+    datastore_client = _require_datastore_client(settings, command="a backtest")
+    logger.info(
+        "backtest: %d asset(s), growth series for %s, against %s.", len(assets), period, benchmark
+    )
+    outcome = labs_flows.run_backtest(datastore_client, assets, period, benchmark=benchmark)
+
+    _log_mix_left_out(outcome.result)
+    included = sum(1 for s in outcome.statuses if s.status == labs_flows.INCLUDED)
+    left_out = len(outcome.statuses) - included
+    if included:
+        logger.info(
+            "backtest: done, %d included, %d left out, ending %s.",
+            included,
+            left_out,
+            outcome.result.end_date,
+        )
+    else:
+        logger.warning(
+            "backtest: done, no asset could be included (%d left out), so there are no figures.",
+            left_out,
+        )
+    result = asdict(outcome.result)
+    del result["unavailable"]  # `statuses` covers every asset left out, with its reason
+    risk = None if outcome.risk is None else _sorted_flags(asdict(outcome.risk))
+    return {**result, "statuses": [asdict(s) for s in outcome.statuses], "risk": risk}
+
+
+def _sorted_flags(value):
+    """asdict keeps a RiskFigure's flags as a frozenset; the response lists them in a stable
+    order."""
+    if isinstance(value, dict):
+        return {key: _sorted_flags(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_sorted_flags(item) for item in value]
+    if isinstance(value, frozenset):
+        return sorted(value)
+    return value
+
+
+def _log_mix_left_out(result: BacktestResult) -> None:
+    """One line per included asset the mix left out of any period for not covering it."""
+    if result.mix is None:
+        return
+    periods_by_ticker: dict[str, list[str]] = {}
+    for period, figure in result.mix.periods.items():
+        for ticker in figure.left_out:
+            periods_by_ticker.setdefault(ticker, []).append(period)
+    for ticker, periods in periods_by_ticker.items():
+        logger.info(
+            "backtest: the mix leaves out %s for %s: not enough history.",
+            ticker,
+            ", ".join(periods),
+        )

@@ -1,4 +1,4 @@
-"""analytics_jobs.get_what_if (RK-19): builds the data-store client, runs
+"""risk_jobs.get_what_if (RK-19): builds the data-store client, runs
 risk/flows.compute_what_if, logs its start and summary, and returns plain builtins the API's
 WhatIfResponse accepts. The flow is tested in tests/unit/risk/test_flows_what_if.py and the
 figures in test_what_if.py; this runs it for real on a fake client to check the shape. Small
@@ -15,7 +15,7 @@ from decimal import Decimal
 
 import numpy as np
 import pytest
-from portfolio import analytics_jobs
+from portfolio import risk_jobs
 from portfolio.api.models import WhatIfResponse
 from portfolio.datastore_client.base import (
     PricePoint,
@@ -84,16 +84,14 @@ class _FakeDataStoreClient:
 @pytest.fixture
 def fake_client(monkeypatch):
     client = _FakeDataStoreClient()
-    monkeypatch.setattr(analytics_jobs, "load_settings", _settings)
-    monkeypatch.setattr(
-        analytics_jobs, "require_datastore_client", lambda settings, command: client
-    )
+    monkeypatch.setattr(risk_jobs, "load_settings", _settings)
+    monkeypatch.setattr(risk_jobs, "_require_datastore_client", lambda settings, command: client)
     return client
 
 
 def _get(assets=(("A", "3"), ("B", "1")), candidate="C", weight="0.2", funding=PRO_RATA, **kw):
     kw.setdefault("window", StandardWindow.Y3)
-    return analytics_jobs.get_what_if(
+    return risk_jobs.get_what_if(
         assets=[(t, Decimal(w)) for t, w in assets],
         candidate=candidate,
         weight=Decimal(weight),
@@ -199,7 +197,7 @@ def test_get_what_if_with_an_unmeasurable_replaced_holding_says_why(fake_client)
 
 
 def test_get_what_if_logs_a_start_line_and_a_summary(fake_client, caplog):
-    with caplog.at_level(logging.INFO, logger="portfolio.analytics_jobs"):
+    with caplog.at_level(logging.INFO, logger="portfolio.risk_jobs"):
         _get()
 
     assert "get-what-if: comparing 2 asset(s) before and after adding C." in caplog.text
@@ -209,7 +207,7 @@ def test_get_what_if_logs_a_start_line_and_a_summary(fake_client, caplog):
 
 
 def test_get_what_if_warns_when_there_is_nothing_to_compare(fake_client, caplog):
-    with caplog.at_level(logging.INFO, logger="portfolio.analytics_jobs"):
+    with caplog.at_level(logging.INFO, logger="portfolio.risk_jobs"):
         _get(candidate="X")
 
     warning = next(r for r in caplog.records if "get-what-if: done" in r.getMessage())
@@ -218,7 +216,7 @@ def test_get_what_if_warns_when_there_is_nothing_to_compare(fake_client, caplog)
 
 
 def test_get_what_if_needs_data_store_settings(monkeypatch):
-    monkeypatch.setattr(analytics_jobs, "load_settings", lambda: _settings(datastore_api_url=None))
+    monkeypatch.setattr(risk_jobs, "load_settings", lambda: _settings(datastore_api_url=None))
 
     with pytest.raises(SettingsError, match="a what-if"):
         _get()

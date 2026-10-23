@@ -99,8 +99,8 @@ Spec Phase 0's discovery (2026-10-17) and the finance review (2026-10-20) are in
 | RK-21 | [data-store: ETF holdings endpoint](#rk-21-data-store-etf-holdings-endpoint) | RK-1 | done |
 | RK-22 | [portfolio: look-through exposures](#rk-22-portfolio-look-through-exposures) | RK-21 | done |
 | RK-23 | [web: concentration section](#rk-23-web-concentration-section) | RK-12, RK-22 | done |
-| RK-24 | [portfolio: rolling windows](#rk-24-portfolio-rolling-windows) | RK-11, RK-16, RK-17 | ready |
-| RK-25 | [web: rolling charts](#rk-25-web-rolling-charts) | RK-18, RK-24 | blocked |
+| RK-24 | [portfolio: rolling windows](#rk-24-portfolio-rolling-windows) | RK-11, RK-16, RK-17 | done |
+| RK-25 | [web: rolling charts](#rk-25-web-rolling-charts) | RK-18, RK-24 | ready |
 | RK-26 | [FX decomposition (portfolio and web)](#rk-26-fx-decomposition-portfolio-and-web) | RK-18 | ready |
 | RK-27 | [data-store: regimes endpoint](#rk-27-data-store-regimes-endpoint) | RK-1 | done |
 | RK-28 | [Regime view (portfolio and web)](#rk-28-regime-view-portfolio-and-web) | RK-14, RK-27 | ready |
@@ -796,20 +796,15 @@ Tests: pro-rata and replace weights. The shortened window. The threshold on a co
 checked against a numerical derivative of the mix's Sharpe. No threshold under "replace". The
 flag.
 
-**As built:** `POST /risk/what-if` (a sibling of ex-ante, agreed), in the new pure
-`risk/what_if.py` and `risk/flows.compute_what_if`. `jobs.py` had crossed 64 KB, so the read-only
-jobs moved to `analytics_jobs.py` first. portfolio's `risk-flows.md` holds the reasoning.
-Decisions:
-- **"Before" holds the candidate at weight 0** (agreed), so both mixes share one listwise
-  panel. A late candidate sets `shortened` and `limited_by`. RK-15's rule now allows a 0 weight.
-- **Replace is capped** at X's weight (`capped`). **ρ in the threshold** comes from the panel's
-  weekly excess returns, so the derivative identity is exact.
-- **The R14 CHECK:** `TickerInfo.status` is None when data-store prices a ticker only through
-  a fund's holdings.
-- **Nothing to compare is a 200** (agreed), with the reason in `candidate.status` or
-  `funding.reason`, and null figures.
-- **For RK-20:** fractions, `rows` in §7.2's order. Show `candidate.weight` when `capped`,
-  R14's warning when `candidate.survivorship`, and `threshold.reason` under replace.
+**As built:** `POST /risk/what-if`, a sibling of ex-ante (agreed): `risk/what_if.py`,
+`risk/flows.compute_what_if`. Reasoning in portfolio's `risk-flows.md`. Decisions:
+- **"Before" holds the candidate at weight 0** (agreed): one listwise panel for both mixes. A
+  0 weight is now allowed (RK-15 said > 0). Replace is capped at X's weight (`capped`).
+- **R14 CHECK:** `TickerInfo.status` is None for a ticker priced only through a fund.
+- **Nothing to compare is a 200** (agreed); the reason is in `candidate.status` or
+  `funding.reason`.
+- **For RK-20:** show `candidate.weight` when `capped`, R14's warning on `survivorship`, and
+  `threshold.reason` under replace.
 
 ### RK-20. web: what-if form
 
@@ -926,15 +921,46 @@ web's `ui-architecture.md` holds the reasoning. Agreed:
 
 ### RK-24. portfolio: rolling windows
 
-**Status:** ready
+**Status:** done
 
 - Rolling 1Y volatility and Sharpe, stepped monthly (ex-post and ex-ante).
 - Rolling 52-week correlation, stepped weekly, for a pair or for an asset against the portfolio.
 - A window below its minimum yields a gap, not a point.
 
+**As built:** a new pure `risk/rolling.py`, served on the existing endpoints. `GET /risk/ex-post`
+and `POST /risk/ex-ante` each gain `rolling`, and the ex-ante request takes an optional
+`rolling_correlation: {a, b}`. `jobs.py` (68.5 KB) was split first: the risk read jobs are now
+`risk_jobs.py`. portfolio's `risk-flows.md` ("Rolling windows") holds the reasoning. Decisions:
+- **The rolling correlation takes 52 weeks with a minimum of 52** (agreed), §7.1 as written.
+  Under §4.5's 104 every point would be a gap. The spec's §4.5 has an "Amended (RK-24)" note.
+  *Rejected: a 104-week window*, which hides the crisis spikes the view is for.
+- **The existing endpoints are extended** (agreed), as RK-8 extended the backtest, so there is one
+  fetch per section and nothing new is fetched.
+- **"The portfolio" is the ex-ante constant-weight weekly mix** (agreed), with the asset in it,
+  as `corr_with_portfolio` has it. `b: null` asks for it, and the response names it
+  `"portfolio"`.
+- **Monthly windows end on each month's last series date** and start a calendar year earlier.
+  They begin at the first full year, and the last one is the 1Y window, so its point equals the
+  1Y figure (tested for both).
+- **Ex-ante rolling covers the mix's whole history**, whatever `window` asks for.
+- **Rolling correlation is always EUR**, whatever `currency` says. A pair ticker in neither the
+  mix nor the benchmark, a ticker `exclude` leaves out, or a == b is a 422. A ticker that is
+  left out or an unavailable benchmark gives empty `points` and a `reason`, never an error.
+- **Every point is a full `RiskFigure`**, and a gap is greyed in place. **Sharp edge:** one NULL
+  week can turn a 1Y point into a gap (a year is 52 or 53 weeks, and the minimum is 52), as on
+  the standard 1Y window.
+- **Size and time, synthetic worst case** (RK-17's: 16.8 years, half USD, Max, with a pair):
+  `rolling` is 77 KB (191 points), and the pair 161 KB (823 points). The ex-ante response is 267
+  KB in 0.31 s for 12 assets (25 KB before RK-24) and 564 KB in 1.3 s for 50. Not measured
+  against the dev data-store: the dev `portfolio-api` image predates the change.
+- **For RK-25:** values are fractions, and each point is a figure. Plot it at `window_end`, and
+  break the line at `value: null` (show its `reason`). Rolling ρ carries an SE of about 0.14,
+  and its axis is ρ, not a gain or a loss, so no forest or oxblood. Web picks the default pair
+  (it sends none today).
+
 ### RK-25. web: rolling charts
 
-**Status:** blocked
+**Status:** ready
 
 Charts for RK-24, on `/risk`.
 

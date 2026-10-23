@@ -67,7 +67,7 @@ def pairwise_correlation(series: Mapping[str, ReturnSeries], window: Window) -> 
     cells = {}
     for i, a in enumerate(keys):
         for b in keys[i:]:
-            cells[(a, b)] = _pair_cell(series[a], series[b], window)
+            cells[(a, b)] = pair_cell(series[a], series[b], window)
     return PairwiseCorrelation(keys, cells)
 
 
@@ -100,9 +100,13 @@ def listwise_correlation(panel: ListwiseReturns) -> ListwiseCorrelation:
     )
 
 
-def _pair_cell(a: ReturnSeries, b: ReturnSeries, window: Window) -> RiskFigure:
+def pair_cell(
+    a: ReturnSeries, b: ReturnSeries, window: Window, measure: Measure = Measure.CORRELATION
+) -> RiskFigure:
+    """One pairwise cell over the weeks `a` and `b` share inside `window`, greyed below
+    `measure`'s minimum: §4.5's 104 for the matrix, 52 for a rolling point (RK-24)."""
     pair = paired_weeks(a, b, window)
-    check = check_minimum(Measure.CORRELATION, pair.n_obs, pair.start, pair.end)
+    check = check_minimum(measure, pair.n_obs, pair.start, pair.end)
     value, reason = None, check.reason
     if check.sufficient:
         if np.all(pair.x == pair.x[0]) or np.all(pair.y == pair.y[0]):

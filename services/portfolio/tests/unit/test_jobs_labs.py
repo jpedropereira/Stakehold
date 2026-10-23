@@ -1,14 +1,13 @@
-"""analytics_jobs.get_backtest: builds the data-store client, runs labs/flows.py, logs its start
-and summary, and returns plain builtins the API's BacktestResponse accepts. Kept out of
-test_jobs.py, which is near the 64KB limit, so its small helpers are repeated here rather than
-shared."""
+"""jobs.get_backtest: builds the data-store client, runs labs/flows.py, logs its start and summary,
+and returns plain builtins the API's BacktestResponse accepts. Kept out of test_jobs.py, which is
+near the 64KB limit, so its small helpers are repeated here rather than shared."""
 
 import logging
 from datetime import date
 from decimal import Decimal
 
 import pytest
-from portfolio import analytics_jobs
+from portfolio import jobs
 from portfolio.api.models import BacktestResponse
 from portfolio.datastore_client.base import (
     PricePoint,
@@ -71,17 +70,13 @@ _client = _FakeDataStoreClient()
 
 @pytest.fixture
 def fake_client(monkeypatch):
-    monkeypatch.setattr(analytics_jobs, "load_settings", _settings)
-    monkeypatch.setattr(
-        analytics_jobs, "require_datastore_client", lambda settings, command: _client
-    )
+    monkeypatch.setattr(jobs, "load_settings", _settings)
+    monkeypatch.setattr(jobs, "_require_datastore_client", lambda settings, command: _client)
     return _client
 
 
 def test_get_backtest_returns_builtins_the_response_model_accepts(fake_client):
-    result = analytics_jobs.get_backtest(
-        assets=[("A", Decimal("1")), ("X", Decimal("1"))], period=Period.MAX
-    )
+    result = jobs.get_backtest(assets=[("A", Decimal("1")), ("X", Decimal("1"))], period=Period.MAX)
 
     response = BacktestResponse.model_validate(result)
     assert response.end_date == date(2026, 1, 7)
@@ -102,9 +97,7 @@ def test_get_backtest_returns_builtins_the_response_model_accepts(fake_client):
 
 
 def test_get_backtest_measures_against_the_named_benchmark(fake_client):
-    result = analytics_jobs.get_backtest(
-        assets=[("A", Decimal("1"))], period=Period.MAX, benchmark="A"
-    )
+    result = jobs.get_backtest(assets=[("A", Decimal("1"))], period=Period.MAX, benchmark="A")
 
     benchmark = BacktestResponse.model_validate(result).risk.benchmark
     assert (benchmark.ticker, benchmark.available, benchmark.first_date) == (
@@ -117,7 +110,7 @@ def test_get_backtest_measures_against_the_named_benchmark(fake_client):
 
 
 def test_get_backtest_sorts_each_figures_flags(fake_client):
-    result = analytics_jobs.get_backtest(assets=[("A", Decimal("1"))], period=Period.MAX)
+    result = jobs.get_backtest(assets=[("A", Decimal("1"))], period=Period.MAX)
 
     flags = result["risk"]["mix"]["windows"]["Max"]["max_drawdown"]["flags"]
     assert flags == sorted(flags)
@@ -125,10 +118,8 @@ def test_get_backtest_sorts_each_figures_flags(fake_client):
 
 
 def test_get_backtest_logs_a_start_line_and_a_summary(fake_client, caplog):
-    with caplog.at_level(logging.INFO, logger="portfolio.analytics_jobs"):
-        analytics_jobs.get_backtest(
-            assets=[("A", Decimal("1")), ("X", Decimal("1"))], period=Period.Y1
-        )
+    with caplog.at_level(logging.INFO, logger="portfolio.jobs"):
+        jobs.get_backtest(assets=[("A", Decimal("1")), ("X", Decimal("1"))], period=Period.Y1)
 
     messages = [r.getMessage() for r in caplog.records]
     assert any("2 asset(s)" in m and "1Y" in m and "against VWCE.DE" in m for m in messages)
@@ -136,10 +127,8 @@ def test_get_backtest_logs_a_start_line_and_a_summary(fake_client, caplog):
 
 
 def test_get_backtest_logs_each_asset_the_mix_left_out_and_for_which_periods(fake_client, caplog):
-    with caplog.at_level(logging.INFO, logger="portfolio.analytics_jobs"):
-        analytics_jobs.get_backtest(
-            assets=[("A", Decimal("1")), ("S", Decimal("1"))], period=Period.Y1
-        )
+    with caplog.at_level(logging.INFO, logger="portfolio.jobs"):
+        jobs.get_backtest(assets=[("A", Decimal("1")), ("S", Decimal("1"))], period=Period.Y1)
 
     messages = [r.getMessage() for r in caplog.records]
     assert "backtest: the mix leaves out A for 2Y, 5Y: not enough history." in messages
@@ -149,8 +138,8 @@ def test_get_backtest_logs_each_asset_the_mix_left_out_and_for_which_periods(fak
 
 
 def test_get_backtest_says_so_when_no_asset_could_be_included(fake_client, caplog):
-    with caplog.at_level(logging.INFO, logger="portfolio.analytics_jobs"):
-        result = analytics_jobs.get_backtest(assets=[("X", Decimal("1"))], period=Period.MAX)
+    with caplog.at_level(logging.INFO, logger="portfolio.jobs"):
+        result = jobs.get_backtest(assets=[("X", Decimal("1"))], period=Period.MAX)
 
     assert result["end_date"] is None
     assert result["risk"] is None
@@ -158,7 +147,7 @@ def test_get_backtest_says_so_when_no_asset_could_be_included(fake_client, caplo
 
 
 def test_get_backtest_needs_data_store_settings(monkeypatch):
-    monkeypatch.setattr(analytics_jobs, "load_settings", lambda: _settings(datastore_api_url=None))
+    monkeypatch.setattr(jobs, "load_settings", lambda: _settings(datastore_api_url=None))
 
     with pytest.raises(SettingsError, match="a backtest"):
-        analytics_jobs.get_backtest(assets=[("A", Decimal("1"))], period=Period.MAX)
+        jobs.get_backtest(assets=[("A", Decimal("1"))], period=Period.MAX)

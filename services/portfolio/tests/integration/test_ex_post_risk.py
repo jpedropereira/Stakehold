@@ -221,6 +221,8 @@ def test_get_risk_ex_post_serves_every_window(client):
     }
     assert max_window["relative"]["beta"]["reason"] == "insufficient history (have 0, need 104)"
     assert max_window["relative"]["tracking_error"]["frequency"] == "weekly"
+    # Two days of history: no full year, so no rolling point (RK-24).
+    assert body["rolling"] == {"window": "1Y", "step": "monthly", "volatility": [], "sharpe": []}
 
 
 def test_get_risk_ex_post_for_a_user_with_no_accounts_has_no_windows(client):
@@ -247,6 +249,7 @@ def test_get_risk_ex_post_for_a_user_with_no_accounts_has_no_windows(client):
         "windows": [],
         "n_excluded": 0,
         "excluded": [],
+        "rolling": None,
     }
 
 

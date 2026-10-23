@@ -594,6 +594,17 @@ class SeriesRiskResponse(BaseModel):
     cvar_99: RiskFigureResponse
 
 
+class RollingRiskResponse(BaseModel):
+    """Rolling 1Y volatility and Sharpe, stepped monthly (RK-24, spec §4.5): one figure per
+    month end, in date order, from the first full year. A window below its minimum is a gap, a
+    greyed figure with its reason, kept in place. The last point is the 1Y window's figure."""
+
+    window: str  # "1Y"
+    step: str  # "monthly"
+    volatility: list[RiskFigureResponse]
+    sharpe: list[RiskFigureResponse]
+
+
 class ExPostWindowResponse(SeriesRiskResponse):
     """One standard window (1Y, 3Y, 5Y, 10Y, Max), all ending at end_date. covered is false when
     the history starts after the window does: every figure is then greyed."""
@@ -620,6 +631,7 @@ class ExPostRiskResponse(BaseModel):
     n_excluded: int
     # Held tickers left out of the TWR, by ticker; the rest were renormalised to 100%.
     excluded: list[ExcludedHoldingResponse]
+    rolling: RollingRiskResponse | None  # on the TWR; null exactly when there are no windows
 
 
 # --- ex-ante risk (RK-17) ---
@@ -628,6 +640,14 @@ class ExPostRiskResponse(BaseModel):
 # The correlation matrix's returns: EUR (the default, a EUR investor's risk) or each ticker's
 # own currency (spec §7.1's toggle). σ_p and the decomposition are always EUR.
 CorrelationCurrency = Literal["eur", "local"]
+
+
+class RollingCorrelationRequest(BaseModel):
+    """A pair for the rolling 52-week correlation (RK-24, spec §7.1): two tickers from the mix
+    or the benchmark, or `a` against the portfolio (the constant-weight mix) when `b` is null."""
+
+    a: BenchmarkTicker
+    b: BenchmarkTicker | None = None
 
 
 class ExAnteRiskRequest(BaseModel):
@@ -640,10 +660,14 @@ class ExAnteRiskRequest(BaseModel):
     # Holdings to leave out, typically the one that limits the window (R12); the rest are
     # renormalised.
     exclude: list[str] = Field(default_factory=list, max_length=MAX_BACKTEST_ASSETS)
+    rolling_correlation: RollingCorrelationRequest | None = None
 
     @model_validator(mode="after")
     def _a_valid_mix(self):
-        _check_exclude([asset.ticker for asset in self.assets], self.exclude)
+        tickers = [asset.ticker for asset in self.assets]
+        _check_exclude(tickers, self.exclude)
+        if self.rolling_correlation is not None:
+            _check_rolling_pair(self.rolling_correlation, tickers, self.benchmark, self.exclude)
         return self
 
 
@@ -654,6 +678,22 @@ def _check_exclude(tickers: list[str], exclude: list[str]) -> None:
         raise ValueError(f"exclude names tickers not in the mix: {', '.join(unknown)}")
     if set(tickers) <= set(exclude):
         raise ValueError("exclude leaves nothing in the mix")
+
+
+def _check_rolling_pair(
+    pair: RollingCorrelationRequest, tickers: list[str], benchmark: str, exclude: list[str]
+) -> None:
+    if pair.a == pair.b:
+        raise ValueError("rolling_correlation needs two different tickers")
+    for ticker in (pair.a, pair.b):
+        if ticker is None:
+            continue
+        if ticker not in tickers and ticker != benchmark:
+            raise ValueError(
+                f"rolling_correlation names {ticker}, which is neither in the mix nor the benchmark"
+            )
+        if ticker in exclude and ticker != benchmark:
+            raise ValueError(f"rolling_correlation names {ticker}, which exclude leaves out")
 
 
 class ExAnteWindowResponse(BaseModel):
@@ -697,6 +737,20 @@ class CorrelationMatrixResponse(BaseModel):
     cells: list[CorrelationCellResponse]
 
 
+class RollingCorrelationResponse(BaseModel):
+    """The requested pair's rolling ρ, 52 weeks stepped weekly, always in EUR (RK-24). One
+    figure per Friday both sides have, from the first with 52 weeks of both. A window under 52
+    weeks is a gap kept in place. `points` is empty exactly when `reason` says why one side
+    can't be measured (left out, or an unavailable benchmark)."""
+
+    a: str
+    b: str  # a ticker, or "portfolio" (the constant-weight mix)
+    window: str  # "52W"
+    step: str  # "weekly"
+    reason: str | None
+    points: list[RiskFigureResponse]
+
+
 class ExAnteRiskResponse(BaseModel):
     """Ex-ante risk of a mix held at constant weights (RK-17, spec §6.2-6.3, §7.1). Every section
     but `statuses` and `benchmark` is null exactly when no asset could be included."""
@@ -714,6 +768,9 @@ class ExAnteRiskResponse(BaseModel):
     # "Today's mix" through history over the measured window; its volatility is σ_p.
     constant_weight: SeriesRiskResponse | None
     correlation: CorrelationMatrixResponse | None
+    # The constant-weight mix over its whole history, whatever `window` is (RK-24).
+    rolling: RollingRiskResponse | None
+    rolling_correlation: RollingCorrelationResponse | None  # null when no pair was asked for
 
 
 # --- what-if (RK-19) ---

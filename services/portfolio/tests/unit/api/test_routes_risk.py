@@ -7,7 +7,7 @@ import uuid
 from decimal import Decimal
 
 import pytest
-from portfolio import analytics_jobs
+from portfolio import risk_jobs
 from portfolio.risk.what_if import PRO_RATA, Funding
 from portfolio.risk.windows import StandardWindow
 
@@ -78,6 +78,19 @@ _EX_POST = {
     ],
     "n_excluded": 1,
     "excluded": [{"ticker": "U", "status": "no_fx_rate", "reason": "no FX series for HKD"}],
+    # RK-24: one figure per month end, a gap greyed in place.
+    "rolling": {
+        "window": "1Y",
+        "step": "monthly",
+        "volatility": [
+            _figure(None, "weekly", reason="insufficient history (have 51, need 52)"),
+            _figure(0.2, "weekly"),
+        ],
+        "sharpe": [
+            _figure(None, "weekly", reason="insufficient history (have 51, need 52)"),
+            _figure(0.5, "weekly", standard_error=0.9),
+        ],
+    },
 }
 
 
@@ -88,7 +101,7 @@ def test_ex_post_passes_the_user_through_and_returns_the_jobs_own_dict(monkeypat
         captured.update(kw)
         return _EX_POST
 
-    monkeypatch.setattr(analytics_jobs, "get_ex_post_risk", fake_get_ex_post_risk)
+    monkeypatch.setattr(risk_jobs, "get_ex_post_risk", fake_get_ex_post_risk)
     user_id = uuid.uuid4()
 
     response = client.get("/risk/ex-post", params={"user_id": str(user_id)})
@@ -101,9 +114,7 @@ def test_ex_post_passes_the_user_through_and_returns_the_jobs_own_dict(monkeypat
 
 def test_ex_post_passes_a_named_benchmark_through(monkeypatch, client):
     captured = {}
-    monkeypatch.setattr(
-        analytics_jobs, "get_ex_post_risk", lambda **kw: captured.update(kw) or _EX_POST
-    )
+    monkeypatch.setattr(risk_jobs, "get_ex_post_risk", lambda **kw: captured.update(kw) or _EX_POST)
 
     response = client.get(
         "/risk/ex-post", params={"user_id": str(uuid.uuid4()), "benchmark": "VWRL.AS"}
@@ -114,9 +125,7 @@ def test_ex_post_passes_a_named_benchmark_through(monkeypatch, client):
 
 
 def test_ex_post_rejects_an_empty_or_too_long_benchmark(monkeypatch, client):
-    monkeypatch.setattr(
-        analytics_jobs, "get_ex_post_risk", lambda **kw: pytest.fail("job must not run")
-    )
+    monkeypatch.setattr(risk_jobs, "get_ex_post_risk", lambda **kw: pytest.fail("job must not run"))
 
     for benchmark in ("", "B" * 21):
         response = client.get(
@@ -140,8 +149,9 @@ def test_ex_post_with_nothing_to_measure_has_no_windows(monkeypatch, client):
         "windows": [],
         "n_excluded": 0,
         "excluded": [],
+        "rolling": None,
     }
-    monkeypatch.setattr(analytics_jobs, "get_ex_post_risk", lambda **kw: empty)
+    monkeypatch.setattr(risk_jobs, "get_ex_post_risk", lambda **kw: empty)
 
     response = client.get("/risk/ex-post", params={"user_id": str(uuid.uuid4())})
 
@@ -218,6 +228,23 @@ _EX_ANTE = {
             {"a": "VWCE.DE", "b": "VWCE.DE", "figure": _figure(1.0, "weekly")},
         ],
     },
+    "rolling": {
+        "window": "1Y",
+        "step": "monthly",
+        "volatility": [_figure(0.14, "weekly")],
+        "sharpe": [_figure(0.6, "weekly", standard_error=0.9)],
+    },
+    "rolling_correlation": {
+        "a": "A",
+        "b": "portfolio",
+        "window": "52W",
+        "step": "weekly",
+        "reason": None,
+        "points": [
+            _figure(0.9, "weekly"),
+            _figure(None, "weekly", reason="no variation in returns"),
+        ],
+    },
 }
 
 
@@ -236,9 +263,7 @@ def test_ex_ante_parses_the_mix_with_its_defaults_and_returns_the_jobs_own_dict(
     monkeypatch, client
 ):
     captured = {}
-    monkeypatch.setattr(
-        analytics_jobs, "get_ex_ante_risk", lambda **kw: captured.update(kw) or _EX_ANTE
-    )
+    monkeypatch.setattr(risk_jobs, "get_ex_ante_risk", lambda **kw: captured.update(kw) or _EX_ANTE)
 
     response = client.post("/risk/ex-ante", json=_ex_ante_body())
 
@@ -249,13 +274,12 @@ def test_ex_ante_parses_the_mix_with_its_defaults_and_returns_the_jobs_own_dict(
     assert captured["benchmark"] == "VWCE.DE"
     assert captured["currency"] == "eur"
     assert captured["exclude"] == []
+    assert captured["rolling_pair"] is None
 
 
 def test_ex_ante_passes_its_options_through(monkeypatch, client):
     captured = {}
-    monkeypatch.setattr(
-        analytics_jobs, "get_ex_ante_risk", lambda **kw: captured.update(kw) or _EX_ANTE
-    )
+    monkeypatch.setattr(risk_jobs, "get_ex_ante_risk", lambda **kw: captured.update(kw) or _EX_ANTE)
 
     response = client.post(
         "/risk/ex-ante",
@@ -270,6 +294,26 @@ def test_ex_ante_passes_its_options_through(monkeypatch, client):
 
 
 @pytest.mark.parametrize(
+    "pair, expected",
+    [
+        ({"a": "A"}, ("A", None)),
+        ({"a": "A", "b": None}, ("A", None)),
+        ({"a": "B", "b": "A"}, ("B", "A")),
+        ({"a": "A", "b": "VWCE.DE"}, ("A", "VWCE.DE")),
+    ],
+    ids=["against the portfolio", "explicit null", "two holdings", "the benchmark"],
+)
+def test_ex_ante_passes_a_rolling_pair_through(monkeypatch, client, pair, expected):
+    captured = {}
+    monkeypatch.setattr(risk_jobs, "get_ex_ante_risk", lambda **kw: captured.update(kw) or _EX_ANTE)
+
+    response = client.post("/risk/ex-ante", json=_ex_ante_body(rolling_correlation=pair))
+
+    assert response.status_code == 200
+    assert captured["rolling_pair"] == expected
+
+
+@pytest.mark.parametrize(
     "body",
     [
         {"assets": []},
@@ -280,6 +324,12 @@ def test_ex_ante_passes_its_options_through(monkeypatch, client):
         _ex_ante_body(window="2Y"),
         _ex_ante_body(currency="usd"),
         _ex_ante_body(benchmark=""),
+        _ex_ante_body(rolling_correlation={"a": "Z"}),
+        _ex_ante_body(rolling_correlation={"a": "A", "b": "Z"}),
+        _ex_ante_body(exclude=["C"], rolling_correlation={"a": "C"}),
+        _ex_ante_body(rolling_correlation={"a": "A", "b": "A"}),
+        _ex_ante_body(rolling_correlation={"b": "A"}),
+        _ex_ante_body(rolling_correlation={"a": ""}),
     ],
     ids=[
         "no assets",
@@ -290,12 +340,16 @@ def test_ex_ante_passes_its_options_through(monkeypatch, client):
         "unknown window",
         "unknown currency",
         "empty benchmark",
+        "pair ticker not in the mix",
+        "pair's other ticker not in the mix",
+        "pair ticker excluded",
+        "pair of one ticker",
+        "pair without a",
+        "empty pair ticker",
     ],
 )
 def test_ex_ante_rejects_an_invalid_request(monkeypatch, client, body):
-    monkeypatch.setattr(
-        analytics_jobs, "get_ex_ante_risk", lambda **kw: pytest.fail("job must not run")
-    )
+    monkeypatch.setattr(risk_jobs, "get_ex_ante_risk", lambda **kw: pytest.fail("job must not run"))
 
     assert client.post("/risk/ex-ante", json=body).status_code == 422
 
@@ -375,7 +429,7 @@ def test_what_if_parses_the_request_with_its_defaults_and_returns_the_jobs_own_d
     monkeypatch, client
 ):
     captured = {}
-    monkeypatch.setattr(analytics_jobs, "get_what_if", lambda **kw: captured.update(kw) or _WHAT_IF)
+    monkeypatch.setattr(risk_jobs, "get_what_if", lambda **kw: captured.update(kw) or _WHAT_IF)
 
     response = client.post("/risk/what-if", json=_what_if_body())
 
@@ -390,7 +444,7 @@ def test_what_if_parses_the_request_with_its_defaults_and_returns_the_jobs_own_d
 
 def test_what_if_passes_replace_funding_and_its_options_through(monkeypatch, client):
     captured = {}
-    monkeypatch.setattr(analytics_jobs, "get_what_if", lambda **kw: captured.update(kw) or _WHAT_IF)
+    monkeypatch.setattr(risk_jobs, "get_what_if", lambda **kw: captured.update(kw) or _WHAT_IF)
     body = _what_if_body(
         assets=[
             {"ticker": "A", "weight": "60"},
@@ -421,7 +475,7 @@ def test_what_if_with_no_report_validates_with_null_sections(monkeypatch, client
         },
         **dict.fromkeys(("window", "weights", "rows", "threshold")),
     }
-    monkeypatch.setattr(analytics_jobs, "get_what_if", lambda **kw: nothing)
+    monkeypatch.setattr(risk_jobs, "get_what_if", lambda **kw: nothing)
 
     response = client.post("/risk/what-if", json=_what_if_body())
 
@@ -465,6 +519,6 @@ def test_what_if_with_no_report_validates_with_null_sections(monkeypatch, client
     ],
 )
 def test_what_if_rejects_an_invalid_request(monkeypatch, client, body):
-    monkeypatch.setattr(analytics_jobs, "get_what_if", lambda **kw: pytest.fail("job must not run"))
+    monkeypatch.setattr(risk_jobs, "get_what_if", lambda **kw: pytest.fail("job must not run"))
 
     assert client.post("/risk/what-if", json=body).status_code == 422
