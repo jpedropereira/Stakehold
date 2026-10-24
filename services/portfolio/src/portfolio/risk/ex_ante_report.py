@@ -47,12 +47,12 @@ from portfolio.risk.ex_ante import (
     constant_weight_series,
     decomposition_figures,
 )
+from portfolio.risk.ex_post import SeriesFigures, greyed_series_figures, series_figures
 from portfolio.risk.fx_decomposition import (
     FxComponents,
     FxDecompositionRow,
     fx_decomposition,
 )
-from portfolio.risk.ex_post import SeriesFigures, greyed_series_figures, series_figures
 from portfolio.risk.risk_free import RatePoint
 from portfolio.risk.rolling import RollingFigures, monthly_windows, rolling_weekly
 from portfolio.risk.types import ReturnSeries, Window

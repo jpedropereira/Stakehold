@@ -286,9 +286,7 @@ def _usd_parts(seed=7, base=FRIDAY):
     """A USD holding's daily (local, fx) and the EUR series they compound to."""
     local = _daily(base, END, seed)
     fx = _daily(base, END, seed + 100, scale=0.005)
-    eur = tuple(
-        (1 + l) * (1 + f) - 1 for l, f in zip(local.values, fx.values)  # noqa: E741
-    )
+    eur = tuple((1 + l) * (1 + f) - 1 for l, f in zip(local.values, fx.values))  # noqa: E741
     return (local, fx), ReturnSeries(Frequency.DAILY, base, local.dates, eur)
 
 

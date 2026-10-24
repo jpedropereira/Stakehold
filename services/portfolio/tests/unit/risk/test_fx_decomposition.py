@@ -134,9 +134,7 @@ def test_rows_follow_the_panels_order():
     weekly = {"B": to_weekly(second[2]), "EU": to_weekly(_eur()), "A": to_weekly(first[2])}
     panel = listwise(weekly, _window())
 
-    rows = fx_decomposition(
-        panel, {"A": _components(first, "GBP"), "B": _components(second)}
-    )
+    rows = fx_decomposition(panel, {"A": _components(first, "GBP"), "B": _components(second)})
 
     assert [(r.ticker, r.currency) for r in rows] == [("B", "USD"), ("A", "GBP")]
 
