@@ -64,7 +64,8 @@ calls [`portfolio`](../../portfolio/docs/architecture.md), `data-store`, and
 
 Presentation decisions (theme, chart, display formatting, the app shell, form scripts, and
 feedback and error states) are in [`ui-architecture.md`](ui-architecture.md), split out of
-this file for size, and `/labs`'s in [`labs-ui.md`](labs-ui.md), split out of that one. Both
+this file for size, and `/labs`'s and `/risk`'s in [`labs-ui.md`](labs-ui.md) and
+[`risk-ui.md`](risk-ui.md), split out of that one. All three
 count as part of this document under `.claude/rules/architecture.md`.
 
 - **Server-rendered, not an SPA; `auth`'s session cookie is proxied, not reissued.** `auth` sets
@@ -539,13 +540,13 @@ Every route `web` serves, with what it requires and which upstream calls it make
   constant-weight summary, the decomposition and its insight note, the € tail figures, the
   heatmap's squares and buckets, and the window, exclude and include links). Its own module
   because it has four parts of its own; it reuses `risk_view`'s cells so the two sections'
-  figures read alike. See "Risk page" in [`ui-architecture.md`](ui-architecture.md). RK-23
+  figures read alike. See [`risk-ui.md`](risk-ui.md). RK-23
   made the default mix's left-out wording public (`mix_left_out`) for the concentration section.
 - `risk_concentration_view.py` (RK-23) — pure: `build_concentration_section`, the concentration
   section (the coverage split and the unmapped funds, the currency table's two views, sector,
   country and asset class, the top names, each table's "show all" split and bars, and what was
-  left out). Its own module for the same reason as the ex-ante one; see "Risk page" in
-  [`ui-architecture.md`](ui-architecture.md).
+  left out). Its own module for the same reason as the ex-ante one; see
+  [`risk-ui.md`](risk-ui.md).
 - `api/tickers.py` (TK-8) — the Tickers pages, on their own router for the same file-size
   reason, rendering through `routes.py`'s helpers so CSRF and cookie handling stay identical.
 - `ticker_status.py` (TK-8/TK-9) — how a tracked ticker's status reads (labels, a holding's
