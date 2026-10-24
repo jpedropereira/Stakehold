@@ -60,6 +60,8 @@ def fakes():
         Return,
         RiskFigure,
         RiskFreeStatus,
+        RollingCorrelation,
+        RollingRisk,
         SeriesRisk,
         TickerLookup,
         TickerMapping,
@@ -108,6 +110,70 @@ def fakes():
             "tracking_error": figure(0.0412 * scale, 52, reason),
             "information_ratio": figure(-0.18 * scale, 52, reason),
         }
+
+    def rolling_figure(value, end, n_obs=52, reason=None, standard_error=None):
+        return RiskFigure(
+            value=None if reason else value,
+            window_start=end - timedelta(weeks=52) if n_obs else end,
+            window_end=end,
+            frequency="weekly",
+            q=52.0,
+            n_obs=n_obs,
+            n_gaps=0,
+            flags=("insufficient_history",) if reason and "history" in reason else (),
+            reason=reason,
+            standard_error=None if reason else standard_error,
+        )
+
+    def review_rolling(first, *, phase, gaps=(), no_rf=False):
+        """RK-24's rolling 1Y volatility and Sharpe from the first full year after `first`:
+        one point per month end, the last at `today`. The months indexed by `gaps` are one NULL
+        week short, so both are greyed there; `no_rf` greys every Sharpe, as portfolio does
+        without a risk-free series. The values swing on a sine, so the charts have shape."""
+        ends, year, month = [], first.year + 1, first.month
+        while (year, month) < (today.year, today.month):
+            nxt = date(year + month // 12, month % 12 + 1, 1)
+            ends.append(nxt - timedelta(days=1))
+            year, month = nxt.year, nxt.month
+        ends.append(today)
+        volatility, sharpe = [], []
+        for i, end in enumerate(ends):
+            gap = "insufficient history (have 51, need 52)" if i in gaps else None
+            n_obs = 51 if gap else 52
+            vol = 0.14 + 0.045 * math.sin(i / 4 + phase)
+            ratio = 0.55 + 0.75 * math.sin(i / 5 + phase)
+            volatility.append(rolling_figure(vol, end, n_obs, gap))
+            sharpe.append(
+                rolling_figure(
+                    ratio,
+                    end,
+                    n_obs,
+                    gap or ("no risk-free rate data" if no_rf else None),
+                    math.sqrt(1 + ratio * ratio / 2),
+                )
+            )
+        return RollingRisk("1Y", "monthly", tuple(volatility), tuple(sharpe))
+
+    def review_rolling_pair(pair, tickers, benchmark, first):
+        """RK-24's rolling 52-week ρ of `pair`, weekly from 52 weeks after `first`. A side that
+        is the review's untracked benchmark has no points, only portfolio's reason."""
+        a, b = pair
+        label = "portfolio" if b is None else b
+        for side in (a, b):
+            if side is not None and side not in tickers and side not in benchmark_firsts:
+                reason = "benchmark unavailable: not tracked"
+                return RollingCorrelation(a, label, "52W", "weekly", reason, ())
+        level = 0.88 if b is None else 0.7
+        end = first + timedelta(weeks=52)
+        points, end, i = [], end + timedelta(days=(4 - end.weekday()) % 7), 0  # a Friday
+        while end <= today:
+            rho = min(0.99, level + 0.2 * math.sin(i / 11) * (1 - level + 0.1))
+            # A crisis-like spike, the lesson §7.1 names, and one week a NULL makes a gap.
+            rho = min(0.99, rho + 0.12) if 30 <= i % 150 < 40 else rho
+            gap = "insufficient history (have 51, need 52)" if i % 150 == 60 else None
+            points.append(rolling_figure(rho, end, 51 if gap else 52, gap))
+            end, i = end + timedelta(weeks=1), i + 1
+        return RollingCorrelation(a, label, "52W", "weekly", None, tuple(points))
 
     def review_benchmark(benchmark, days, mix_values):
         """The backtest's benchmark (RK-13): its growth line follows the mix's a little lower,
@@ -762,13 +828,18 @@ def fakes():
                 ),
                 windows=tuple(window(label) for label in RISK_WINDOWS),
                 excluded=(ExcludedHolding("7203.T", "no_fx_rate", "no FX series for JPY"),),
+                # RK-25: from 2024-04, with two months a NULL week short.
+                rolling=review_rolling(base, phase=0.0, gaps=(6, 7)),
             )
 
-        async def ex_ante_risk(self, *, assets, window, benchmark, exclude):
+        async def ex_ante_risk(self, *, assets, window, benchmark, exclude, rolling_pair=None):
             """The review mix at constant weights (RK-18). AAPL's history starts in 2015, so it
             limits Max; 1Y has too few weeks for the decomposition and the squares; 10Y fails.
             AAPL is the one USD holding, so it has the FX decomposition's row (RK-26), its
-            correlation greyed with the squares; without it the mix is all EUR."""
+            correlation greyed with the squares; without it the mix is all EUR.
+            Its rolling figures (RK-24) cover the mix's whole history, whatever the window; 5Y
+            answers as if there were no risk-free series, so its rolling Sharpe is greyed
+            throughout."""
             if window == "10Y":
                 raise PortfolioUnavailable("review: 10Y fails on purpose")
             years = {"1Y": 1, "3Y": 3, "5Y": 5, "Max": 17}[window]
@@ -779,6 +850,12 @@ def fakes():
             start = max(start, date(2015, 3, 6)) if "AAPL" in tickers else start
             weeks = (today - start).days // 7
             short = weeks < 104
+            # The mix's whole history, which the rolling figures cover: its youngest holding's.
+            history = max(
+                [date(2019, 7, 29)] * ("VWCE.DE" in tickers)
+                + [date(2015, 3, 6)] * ("AAPL" in tickers)
+                or [date(2012, 1, 2)]
+            )
 
             def figure(value, daily=False, reason=None):
                 return RiskFigure(
@@ -887,6 +964,12 @@ def fakes():
                     )
                     for t in tickers
                     if t == "AAPL"
+                ),
+                rolling=review_rolling(history, phase=1.3, no_rf=window == "5Y"),
+                rolling_correlation=(
+                    None
+                    if rolling_pair is None
+                    else review_rolling_pair(rolling_pair, tickers, benchmark, history)
                 ),
             )
 

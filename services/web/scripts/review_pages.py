@@ -135,6 +135,24 @@ PAGES = [
     Page("risk-ex-ante-excluded", "/risk?ex_ante_window=Max&exclude=AAPL#risk-ex-ante", "user"),
     Page("risk-ex-ante-benchmark", "/risk?benchmark=IWDA.AS#risk-ex-ante", "user"),
     Page("risk-ex-ante-unavailable", "/risk?ex_ante_window=10Y#risk-ex-ante", "user"),
+    # RK-25: the rolling charts. Ex-post's with two greyed months; ex-ante's with the default
+    # pair (the heaviest holding against the portfolio); a pair against a ticker; a pair whose
+    # benchmark side isn't tracked (its reason, no chart); a stale link whose holding is
+    # excluded (the default, and a note); and 5Y's rolling Sharpe greyed throughout.
+    Page("risk-rolling", "/risk#risk-ex-post-rolling", "user"),
+    Page("risk-rolling-ex-ante", "/risk#risk-ex-ante-rolling", "user"),
+    Page("risk-rolling-pair", "/risk?corr_a=AAPL&corr_b=VWCE.DE#risk-rolling-correlation", "user"),
+    Page(
+        "risk-rolling-pair-unavailable",
+        "/risk?benchmark=NOPE.XX&corr_a=AAPL&corr_b=NOPE.XX#risk-rolling-correlation",
+        "user",
+    ),
+    Page(
+        "risk-rolling-stale-pair",
+        "/risk?ex_ante_window=Max&exclude=AAPL&corr_a=AAPL#risk-rolling-correlation",
+        "user",
+    ),
+    Page("risk-rolling-no-rf", "/risk?ex_ante_window=5Y#risk-ex-ante-rolling", "user"),
     # RK-23: the concentration section, with the unmapped note, the currency table's two views
     # and greyed buckets; then with every "show all" open.
     Page("risk-concentration", "/risk#risk-concentration", "user"),

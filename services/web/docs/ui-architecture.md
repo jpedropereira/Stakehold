@@ -527,6 +527,5 @@ described here updates this file in the same change.
   zeros past the second decimal (`112.34 USD`, `0.1235 USD`). RK-9 added the risk figures'
   `pct1`, `signed_pct1` and `ratio` (spec §10; see [`labs-ui.md`](labs-ui.md)). `/risk` (RK-12)
   uses the same three, so a measure reads the same on both pages.
-- **Risk page (RK-12, RK-14, RK-18, RK-23)** has its own file, [`risk-ui.md`](risk-ui.md):
-  the ex-post summary, the benchmark form, the ex-ante section and its heatmap, and the
-  concentration section.
+- **Risk (RK-12, RK-14, RK-18, RK-23, RK-25)** has its own file, [`risk-ui.md`](risk-ui.md): the
+  section tables, the heatmap, the concentration tables and the rolling charts.
