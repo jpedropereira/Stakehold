@@ -585,6 +585,95 @@ class ExAnteRisk:
     correlation: CorrelationMatrix | None
 
 
+# The what-if's rows (RK-19, spec §7.2), as portfolio names and orders them: the risk deltas
+# first, ΔSharpe (with its s.e.) after them.
+WHAT_IF_ROW_KEYS = (
+    "sigma_p",
+    "diversification_ratio",
+    "candidate_pcr",
+    "candidate_correlation",
+    "sharpe",
+    "max_drawdown",
+)
+
+
+@dataclass(frozen=True)
+class WhatIfCandidate:
+    """The candidate (RK-19). `status` is a holding's ("included", "no_fx_rate", ...).
+    `weight` is after funding: the replaced holding's own weight when the request exceeded it
+    (`capped`). Both are None when there's nothing to compare. `survivorship` is R14: it's
+    priced only through a fund's holdings, so its history comes from today's index members."""
+
+    ticker: str
+    status: str
+    reason: str | None
+    requested_weight: float
+    weight: float | None
+    capped: bool | None
+    survivorship: bool
+
+
+@dataclass(frozen=True)
+class WhatIfFunding:
+    rule: str  # "pro_rata" or "replace"
+    ticker: str | None  # the replaced holding
+    reason: str | None  # why it can't fund the candidate: it can't be measured
+
+
+@dataclass(frozen=True)
+class WhatIfWindow(ExAnteWindow):
+    """Before and after share one listwise window (R12). `shortened`: the candidate's history
+    made it start later than the holdings alone would (the `_without_candidate` dates)."""
+
+    shortened: bool
+    start_without_candidate: date | None
+    end_without_candidate: date | None
+
+
+@dataclass(frozen=True)
+class WhatIfRow:
+    """One row of the before/after table. `before` is None on the candidate's own rows, and
+    `delta` (after − before) when either side is greyed or there's no before. `delta_se` is
+    ΔSharpe's 1 s.e. (Memmel), None on every other row."""
+
+    before: RiskFigure | None
+    after: RiskFigure
+    delta: float | None
+    delta_se: float | None
+
+
+@dataclass(frozen=True)
+class WhatIfThreshold:
+    """A small amount of the candidate raises the historical Sharpe if SR_c > ρ(c, p) × SR_p
+    (spec §7.2). Not `applicable` under replace funding; applicable but greyed (figures None,
+    `reason` says why) without overlap, a risk-free rate or 104 weeks."""
+
+    applicable: bool
+    reason: str | None
+    candidate_sharpe: RiskFigure | None
+    correlation: float | None
+    portfolio_sharpe: float | None
+    threshold: float | None  # ρ(c, p) × SR_p
+    improves: bool | None
+
+
+@dataclass(frozen=True)
+class WhatIf:
+    """portfolio's WhatIfResponse (RK-19): today's mix before and after adding a candidate.
+    `window`, `rows` and `threshold` are None exactly when there's nothing to compare: see
+    `candidate`, `funding.reason` or `statuses`. The before/after weights aren't parsed: the
+    page shows only the candidate's own."""
+
+    label: str  # "ex-ante · constant weights"
+    rf_available: bool
+    statuses: tuple[BacktestAssetStatus, ...]  # every requested holding, in request order
+    candidate: WhatIfCandidate
+    funding: WhatIfFunding
+    window: WhatIfWindow | None
+    rows: dict[str, WhatIfRow] | None  # every WHAT_IF_ROW_KEYS key, in that order
+    threshold: WhatIfThreshold | None
+
+
 # The look-through's dimensions and coverage shares (RK-22), as portfolio names them. Every
 # response has each, so the section can lay out a table per dimension in a fixed place.
 LOOK_THROUGH_DIMENSIONS = ("currency", "trading_currency", "sector", "country", "asset_class")
@@ -784,6 +873,20 @@ class PortfolioClient(Protocol):
     # country, asset class and single name. Read-only despite the POST. An asset portfolio
     # can't place is a status in the result; InvalidPortfolioRequest means the mix was rejected.
     async def look_through(self, *, assets: list[tuple[str, Decimal]]) -> LookThrough: ...
+
+    # The mix before and after adding `candidate` (ticker, weight as a fraction of the mix after
+    # it) (RK-19), funded by `funding` ("pro_rata" or "replace:<ticker>"), over one standard
+    # window with `exclude` left out. Read-only despite the POST. A candidate that can't be
+    # measured is in the result; InvalidPortfolioRequest means the request was rejected.
+    async def what_if(
+        self,
+        *,
+        assets: list[tuple[str, Decimal]],
+        candidate: tuple[str, Decimal],
+        funding: str,
+        window: str,
+        exclude: list[str],
+    ) -> WhatIf: ...
 
     async def list_ticker_mappings(self) -> list[TickerMapping]: ...
 
