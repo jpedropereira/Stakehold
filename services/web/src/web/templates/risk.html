@@ -342,6 +342,148 @@
     {% endif %}
     {% endif %}
   </section>
+  {# RK-20: today's mix before and after adding a candidate (spec §7.2), from a GET form, so it
+     works without JS. risk_what_if_view.py checks the form and decides what is shown. The window
+     and exclusions are ex-ante's, above; the form re-sends them and the benchmark. #}
+  <section class="risk-section" aria-labelledby="risk-what-if-title" id="risk-what-if">
+    <h2 id="risk-what-if-title">What if · adding a candidate</h2>
+    <p class="entry-subtitle">How today's mix would have behaved with a candidate added, against
+      the mix as it is, both held at constant weights over the ex-ante window above: historical
+      figures, not a forecast.</p>
+    {% if what_if_form is none %}
+    {% if what_if_error %}
+    {% call banner("error") %}<strong>Couldn't load your holdings to compare against.</strong> {{ what_if_error }}{% endcall %}
+    {% else %}
+    <p class="entry-empty">Nothing to compare against yet — the what-if starts once a holding has
+      a price. <a href="/accounts">Add transactions to an account</a>.</p>
+    {% endif %}
+    {% else %}
+    {% set form = what_if_form %}
+    <form method="get" action="/risk#risk-what-if" class="what-if-form" id="risk-what-if-form">
+      {% for name, value in what_if_kept %}
+      <input type="hidden" name="{{ name }}" value="{{ value }}">
+      {% endfor %}
+      <div class="what-if-fields">
+        <div class="field">
+          <label for="risk-what-if-candidate">Candidate</label>
+          <input type="text" id="risk-what-if-candidate" name="candidate" value="{{ form.ticker }}" list="risk-what-if-options" autocomplete="off" spellcheck="false" class="mono"{% if form.errors.ticker %} aria-invalid="true" aria-describedby="risk-what-if-candidate-error"{% endif %}>
+        </div>
+        <div class="field">
+          <label for="risk-what-if-weight">Weight, % of the mix after</label>
+          <input type="text" id="risk-what-if-weight" name="candidate_weight" value="{{ form.weight }}" inputmode="decimal" autocomplete="off" class="mono"{% if form.errors.weight %} aria-invalid="true" aria-describedby="risk-what-if-weight-error"{% endif %}>
+        </div>
+        <div class="field">
+          <label for="risk-what-if-funding">Funded by</label>
+          <select id="risk-what-if-funding" name="funding"{% if form.errors.funding %} aria-invalid="true" aria-describedby="risk-what-if-funding-error"{% endif %}>
+            {% for value, label in form.funding_options %}
+            <option value="{{ value }}"{% if value == form.funding %} selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <button type="submit" class="btn btn-secondary">Compare</button>
+      </div>
+      <datalist id="risk-what-if-options">
+        {% for ticker in tickers %}
+        <option value="{{ ticker }}">
+        {% endfor %}
+      </datalist>
+      {% if form.errors.ticker %}<p class="form-row-error" id="risk-what-if-candidate-error"><strong>Candidate:</strong> {{ form.errors.ticker }}</p>{% endif %}
+      {% if form.errors.weight %}<p class="form-row-error" id="risk-what-if-weight-error"><strong>Weight:</strong> {{ form.errors.weight }}</p>{% endif %}
+      {% if form.errors.funding %}<p class="form-row-error" id="risk-what-if-funding-error"><strong>Funded by:</strong> {{ form.errors.funding }}</p>{% endif %}
+      <p class="field-hint">Pro-rata scales every holding down to make room; replacing one takes the weight from it alone. Not saved.</p>
+      {% if tickers_notice %}<p class="field-hint">{{ tickers_notice }}</p>{% endif %}
+    </form>
+    {% if what_if_error %}
+    {% call banner("error") %}<strong>Couldn't compare.</strong> {{ what_if_error }}{% endcall %}
+    {% elif what_if %}
+    {% set wi = what_if %}
+    {% if wi.nothing %}
+    <p class="entry-empty">Nothing to compare: {{ wi.nothing }}</p>
+    {% else %}
+    {% set c = wi.candidate.ticker %}
+    {% if wi.survivorship %}
+    {% call banner("warning") %}<strong>Survivorship.</strong> Historical figures come from today's index members and overstate what an investor could have achieved.{% endcall %}
+    {% endif %}
+    {% if not wi.rf_available %}
+    {% call banner("warning") %}<strong>No risk-free rate.</strong> Without it, the Sharpe ratio can't be measured, so it's greyed.{% endcall %}
+    {% endif %}
+    {% set window = wi.window %}
+    <p class="as-of">{% if window.start %}Measured from <span class="mono">{{ window.start | date }}</span> to <span class="mono">{{ window.end | date }}</span>{% if window.shortened %}: <span class="mono">{{ c }}</span>'s history starts later than the holdings' (<span class="mono">{{ window.start_without_candidate | date }}</span>), so before is measured over the same shorter window{% endif %}.{% else %}<span class="mono">{{ c }}</span>'s and the holdings' histories don't overlap, so nothing could be measured over {{ window.label }}.{% endif %}
+      Hover a figure for its window and number of returns.</p>
+    {% if wi.candidate.capped %}
+    <p class="labs-note">Replacing <span class="mono">{{ wi.funding.ticker }}</span> can fund at most its own weight, so <span class="mono">{{ c }}</span> enters at <span class="mono">{{ wi.candidate.weight | pct1 }}</span>, not <span class="mono">{{ wi.candidate.requested_weight | pct1 }}</span>.</p>
+    {% endif %}
+    {# Before, after and the change, risk first (spec §7.2). Stacks at phone width, each figure
+       labelled with its column. No delta is coloured: none is a gain or a loss. #}
+    <div class="table-scroll" tabindex="0" role="region" aria-label="What-if figures">
+    <table class="positions-table holdings-table risk-table stack-table" role="table">
+      <thead role="rowgroup">
+        <tr role="row">
+          <th role="columnheader" scope="col">Measure</th>
+          <th class="num" role="columnheader" scope="col">Before</th>
+          <th class="num" role="columnheader" scope="col">After, with <span class="mono">{{ c }}</span></th>
+          <th class="num" role="columnheader" scope="col">Change</th>
+        </tr>
+      </thead>
+      <tbody role="rowgroup">
+        {% for line in wi.lines %}
+        <tr role="row">
+          <th role="rowheader" scope="row">{{ term(line.label, line.anchor) }}<span class="period-start">{{ line.frequency }}{% if line.key == "sharpe" %} · ± 1 s.e.{% endif %}</span></th>
+          {% for cell, column in [(line.before, "Before"), (line.after, "After")] %}
+          {% if cell is none %}
+          <td class="num" role="cell" data-label="{{ column }}"><span class="mono">—</span></td>
+          {% else %}
+          <td class="num" role="cell" data-label="{{ column }}" title="{{ cell.title }}"><span class="risk-value">
+            {%- if cell.value is not none -%}
+            {{ figure(cell.value, line.kind) }}
+            {%- if cell.standard_error is not none %} <span class="risk-se">± <span class="mono">{{ cell.standard_error | ratio }}</span></span>{% endif -%}
+            {%- else -%}
+            <span class="risk-greyed">{{ cell.reason }}</span>
+            {%- endif -%}
+            {%- if cell.markers %}<sup class="risk-flag">{{ cell.markers | join(", ") }}</sup>{% endif -%}
+          </span></td>
+          {% endif %}
+          {% endfor %}
+          <td class="num" role="cell" data-label="Change"><span class="risk-value">
+            {%- if line.kind == "pct1" -%}<span class="mono">{{ line.delta | signed_points1 }}</span>
+            {%- else -%}<span class="mono">{{ line.delta | signed_ratio }}</span>{%- endif -%}
+            {%- if line.delta is not none and line.delta_se is not none %} <span class="risk-se">± <span class="mono">{{ line.delta_se | ratio }}</span></span>{% endif -%}
+          </span></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    {% if wi.legend %}
+    <ol class="risk-legend">
+      {% for note in wi.legend %}
+      <li><sup class="risk-flag">{{ note.marker }}</sup> {{ note.text }}</li>
+      {% endfor %}
+    </ol>
+    {% endif %}
+    {# The threshold (spec §7.2): pro-rata only, from the Sharpe's slope at zero weight. #}
+    {% set t = wi.threshold %}
+    {% set sr_c = wi.threshold_cell %}
+    {% if t and t.applicable and sr_c and sr_c.value is not none and t.improves is not none %}
+    <p class="labs-note" title="{{ sr_c.title }}">A small amount of <span class="mono">{{ c }}</span> raises the mix's historical {{ term("Sharpe ratio", "sharpe") }} if its own Sharpe ratio is above its correlation with the mix times the mix's: <span class="mono">{{ sr_c.value | ratio }}</span> ± <span class="mono">{{ sr_c.standard_error | ratio }}</span>{% if sr_c.markers %}<sup class="risk-flag">{{ sr_c.markers | join(", ") }}</sup>{% endif %} against <span class="mono">{{ t.correlation | ratio }}</span> × <span class="mono">{{ t.portfolio_sharpe | ratio }}</span> = <span class="mono">{{ t.threshold | ratio }}</span>. {% if t.improves %}It is, so a small amount of <span class="mono">{{ c }}</span> would have raised it.{% else %}It isn't, so a small amount of <span class="mono">{{ c }}</span> wouldn't have raised it.{% endif %}</p>
+    {% elif t and t.applicable %}
+    <p class="labs-note">The Sharpe threshold can't be shown: {{ t.reason or (sr_c and sr_c.reason) }}.</p>
+    {% elif t %}
+    <p class="labs-note">The Sharpe threshold is {{ t.reason }}.</p>
+    {% endif %}
+    {% endif %}
+    {% if wi.left_out %}
+    <h3>Left out</h3>
+    <ul class="labs-unavailable">
+      {% for holding in wi.left_out %}
+      <li><span class="mono">{{ holding.ticker }}</span> — {{ holding.reason }}</li>
+      {% endfor %}
+    </ul>
+    <p class="labs-note">The other holdings' weights were scaled to 100%.</p>
+    {% endif %}
+    {% endif %}
+    {% endif %}
+  </section>
   {# RK-23: where today's mix is concentrated, looked through the funds' holdings (spec §8).
      risk_concentration_view.py decides what is shown. Always the whole mix: ?exclude= is
      ex-ante's. #}

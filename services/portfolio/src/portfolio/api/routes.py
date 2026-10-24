@@ -24,13 +24,7 @@ from fastapi import (
     HTTPException,
 )
 from fastapi import Path as PathParam
-from fastapi import (
-    Query,
-    Request,
-    Response,
-    UploadFile,
-    status,
-)
+from fastapi import Query, Request, Response, UploadFile, status
 from portfolio import jobs, risk_jobs
 from portfolio.api.models import (
     AccountCreateRequest,

@@ -458,7 +458,12 @@ Every route `web` serves, with what it requires and which upstream calls it make
   be fixed-point strings, as portfolio serves shares: a JSON number would mean the contract
   moved to floats. `coverage` and `dimensions` must carry exactly `LOOK_THROUGH_COVERAGE` and
   `LOOK_THROUGH_DIMENSIONS`, so a missing dimension can't silently drop a table and a new one
-  can't silently go unshown.
+  can't silently go unshown. RK-20 added `what_if` (`POST /risk/what-if`, RK-19) and its
+  `WhatIf*` types. `rows` must carry every `WHAT_IF_ROW_KEYS` key and each row an "after"
+  figure, so a row can't go missing or show a blank. The flags (`capped`, `survivorship`,
+  `shortened`, `improves`) must be real booleans, since a misread `survivorship` would drop
+  R14's warning. The before/after weights aren't parsed: the page shows only the candidate's,
+  and what isn't read can't break.
 - `rebuild_outcome.py` (UI-7) — pure. Turns the two rebuild statuses into the confirmation
   banner's one sentence; see "Key decisions".
 - `portfolio_view.py` (task 12) — pure, I/O-free reshaping of what `routes.py` fetches for
@@ -470,8 +475,9 @@ Every route `web` serves, with what it requires and which upstream calls it make
   `build_portfolio_chart_payload`, for `GET /portfolio`. No FastAPI/httpx dependency, tested in isolation, mirroring how `portfolio`'s own
   `returns/calculator.py` is a pure function.
 - `formatting.py` (UI-5) — pure display formatters (`money`, `signed_money`, `qty`, `pct`,
-  `date`, UI-6's `share` and `delta_class`, UI-8's `native_money`, and RK-9's `pct1`,
-  `signed_pct1` and `ratio` for risk figures, spec §10's one decimal and two) plus the `FILTERS` mapping `app.py` registers as Jinja filters; see [`ui-architecture.md`](ui-architecture.md).
+  `date`, UI-6's `share` and `delta_class`, UI-8's `native_money`, RK-9's `pct1`,
+  `signed_pct1` and `ratio` for risk figures, spec §10's one decimal and two, and RK-20's
+  `signed_points1` and `signed_ratio` for the what-if's changes) plus the `FILTERS` mapping `app.py` registers as Jinja filters; see [`ui-architecture.md`](ui-architecture.md).
 - `api/overview.py` (UI-11) — `GET /`, on its own router (like `api/theme.py`) because
   `routes.py` is near the 64KB file limit. It renders through `routes._render`, so the
   `_finish` header merge stays in one place.
@@ -527,7 +533,12 @@ Every route `web` serves, with what it requires and which upstream calls it make
   doubles the call and could show the two sections two different mixes. Ex-post runs
   alongside, since it needs neither. A stale or all-covering `?exclude=` is dropped in web and
   logged, so an old link never becomes portfolio's 422; it is ex-ante's only, and the
-  look-through always gets the whole mix. The what-if section (RK-20) adds a loader. RK-14
+  look-through always gets the whole mix. RK-20's what-if is a third loader on the same
+  holdings call and mix, beside ex-ante and the look-through. It shares ex-ante's window and
+  exclusions, which are resolved once (`_sent_exclusions`) for both, so "before" is the mix the
+  ex-ante section shows. The form is checked first (`risk_what_if_view.parse_what_if`), and
+  an empty form or one with errors makes no call: a 422 would show as a failed section, not as
+  the field to fix. RK-14
   added `?benchmark=` and the ticker list for its field, fetched concurrently with the figures
   and failing on its own, as on `/labs`.
 - `risk_view.py` (RK-12) — pure: `build_ex_post_table`, the ex-post summary table (measures as
@@ -552,6 +563,11 @@ Every route `web` serves, with what it requires and which upstream calls it make
   (each chart's data island, its summary in words and its gap notes, and the pair picker). Its
   own module, not part of the ex-ante one, because ex-post draws the same charts. See "Risk
   page" in [`risk-ui.md`](risk-ui.md).
+- `risk_what_if_view.py` (RK-20) — pure: `parse_what_if`, the form's checks and the request
+  it makes, and `build_what_if_section`, the before/after table, the threshold and why there's
+  nothing to compare. It reuses `risk_view`'s cells and legend, and `labs_mix.parse_weight`
+  (public for it) so a weight is read one way on both pages. See "Risk page" in
+  [`risk-ui.md`](risk-ui.md).
 - `api/tickers.py` (TK-8) — the Tickers pages, on their own router for the same file-size
   reason, rendering through `routes.py`'s helpers so CSRF and cookie handling stay identical.
 - `ticker_status.py` (TK-8/TK-9) — how a tracked ticker's status reads (labels, a holding's

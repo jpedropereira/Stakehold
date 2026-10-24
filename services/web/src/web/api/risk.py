@@ -10,10 +10,14 @@ needs the other's answer:
   weights. `?ex_ante_window=` picks the window (3Y by default) and `?exclude=` (repeatable)
   leaves holdings out, typically the one that limits the window (R12);
 - the concentration section (RK-23): portfolio's POST /risk/look-through on the same mix,
-  always whole: `?exclude=` is ex-ante's, and concentration has no window.
-The last two measure today's mix, so they share one GET /holdings (labs_view.build_default_mix),
-then call portfolio concurrently. A failed holdings call shows its notice in both. Later
-sections (the what-if) add a loader each.
+  always whole: `?exclude=` is ex-ante's, and concentration has no window;
+- the what-if section (RK-20): portfolio's POST /risk/what-if on the same mix, with the
+  candidate, weight and funding from its GET form (`?candidate=`, `?candidate_weight=`,
+  `?funding=`; risk_what_if_view.py checks them). Its window and exclusions are ex-ante's, so
+  "before" is the mix that section measures. An empty form or one with errors sends nothing.
+The last three measure today's mix, so they share one GET /holdings
+(labs_view.build_default_mix), then call portfolio concurrently. A failed holdings call shows
+its notice in all three.
 
 The rolling charts (RK-25) come with the first two sections' own calls, so nothing more is
 fetched and each section's charts fail with it: ex-post's and ex-ante's rolling 1Y volatility
@@ -62,11 +66,29 @@ from web.risk_rolling_view import (
     chosen_pair,
 )
 from web.risk_view import ExPostTable, build_ex_post_table
+from web.risk_what_if_view import (
+    WhatIfForm,
+    WhatIfSection,
+    build_what_if_section,
+    parse_what_if,
+)
 from web.settings import Settings
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# The query each GET form re-sends as hidden inputs: every other control's (RK-14, RK-20,
+# and RK-25's rolling pair).
+_BENCHMARK_KEPT = (
+    "candidate",
+    "candidate_weight",
+    "funding",
+    "ex_ante_window",
+    "exclude",
+    *PAIR_PARAMS,
+)
+_WHAT_IF_KEPT = ("benchmark", "ex_ante_window", "exclude", *PAIR_PARAMS)
 
 _UNAVAILABLE = "Can't reach the portfolio service right now, so it can't be shown."
 
@@ -141,6 +163,23 @@ async def _load_ex_post(
     return table, None, _Rolling(charts=rolling)
 
 
+@dataclass(frozen=True)
+class _WhatIfParts:
+    """The what-if section's form, and the section or the message to show in its place. No
+    form: there's no mix to compare against (no holding yet, or holdings couldn't load)."""
+
+    form: WhatIfForm | None = None
+    section: WhatIfSection | None = None
+    error: str | None = None
+
+
+@dataclass(frozen=True)
+class _WhatIfAsk:
+    candidate: str | None
+    weight: str | None
+    funding: str | None
+
+
 async def _load_holdings_sections(
     portfolio_client: PortfolioClient,
     user_id: str,
@@ -148,44 +187,44 @@ async def _load_holdings_sections(
     window: str,
     exclude: list[str],
     params: list[tuple[str, str]],
+    ask: _WhatIfAsk,
 ) -> tuple[
     tuple[ExAnteSection | None, str | None, _Rolling],
     tuple[ConcentrationSection | None, str | None],
+    _WhatIfParts,
 ]:
     """The ex-ante and concentration sections, each as (section, None) or (None, the message to
-    show in its place), ex-ante's with its rolling charts. (None, None): no holding to measure
-    yet."""
+    show in its place), ex-ante's with its rolling charts, and the what-if's parts. (None,
+    None): no holding to measure yet."""
     try:
         holdings = await portfolio_client.list_holdings(user_id=user_id)
     except PortfolioClientError:
         logger.exception("risk: portfolio service unavailable listing holdings.")
-        return (None, _UNAVAILABLE, _Rolling()), (None, _UNAVAILABLE)
+        return (
+            (None, _UNAVAILABLE, _Rolling()),
+            (None, _UNAVAILABLE),
+            _WhatIfParts(error=_UNAVAILABLE),
+        )
     mix = build_default_mix(holdings.holdings)
     if not mix.assets:
         logger.info(
-            "risk: ex-ante and look-through have nothing to measure, %d holdings, none priced "
-            "and worth something.",
+            "risk: ex-ante, look-through and what-if have nothing to measure, %d holdings, none "
+            "priced and worth something.",
             len(holdings.holdings),
         )
-        return (None, None, _Rolling()), (None, None)
-    ex_ante, concentration = await asyncio.gather(
-        _load_ex_ante(portfolio_client, mix, holdings.holdings, benchmark, window, exclude, params),
+        return (None, None, _Rolling()), (None, None), _WhatIfParts()
+    sent = _sent_exclusions(mix, exclude)
+    form = parse_what_if(ask.candidate, ask.weight, ask.funding, mix, sent)
+    ex_ante, concentration, what_if = await asyncio.gather(
+        _load_ex_ante(portfolio_client, mix, holdings.holdings, benchmark, window, sent, params),
         _load_concentration(portfolio_client, mix),
+        _load_what_if(portfolio_client, mix, window, sent, form),
     )
-    return ex_ante, concentration
+    return ex_ante, concentration, what_if
 
 
-async def _load_ex_ante(
-    portfolio_client: PortfolioClient,
-    mix: DefaultMix,
-    holdings: tuple[Holding, ...],
-    benchmark: str,
-    window: str,
-    exclude: list[str],
-    params: list[tuple[str, str]],
-) -> tuple[ExAnteSection | None, str | None, _Rolling]:
-    """The ex-ante section and None, or None and the message to show in its place, then its
-    rolling charts."""
+def _sent_exclusions(mix: DefaultMix, exclude: list[str]) -> list[str]:
+    """`?exclude=` as ex-ante and the what-if send it: in the mix, once each, never all of it."""
     tickers = [ticker for ticker, _ in mix.assets]
     stale = [ticker for ticker in exclude if ticker not in tickers]
     if stale:
@@ -195,7 +234,21 @@ async def _load_ex_ante(
     if set(tickers) <= set(sent):
         logger.info("risk: ex-ante exclusions would leave nothing, measuring the whole mix.")
         sent = []
-    measured = [ticker for ticker in tickers if ticker not in sent]
+    return sent
+
+
+async def _load_ex_ante(
+    portfolio_client: PortfolioClient,
+    mix: DefaultMix,
+    holdings: tuple[Holding, ...],
+    benchmark: str,
+    window: str,
+    sent: list[str],
+    params: list[tuple[str, str]],
+) -> tuple[ExAnteSection | None, str | None, _Rolling]:
+    """The ex-ante section and None, or None and the message to show in its place, then its
+    rolling charts."""
+    measured = [ticker for ticker, _ in mix.assets if ticker not in sent]
     raw = dict((k, v) for k, v in params if k in PAIR_PARAMS)
     pair = chosen_pair(raw.get("corr_a"), raw.get("corr_b"), measured, benchmark)
     if pair.dropped:
@@ -257,6 +310,77 @@ def _log_rolling_pair(chart: CorrelationChart | None) -> None:
         chart.b_label,
         _n_points(chart.series),
         sum(g.count for g in chart.series.gaps),
+    )
+
+
+async def _load_what_if(
+    portfolio_client: PortfolioClient,
+    mix: DefaultMix,
+    window: str,
+    sent: list[str],
+    form: WhatIfForm,
+) -> _WhatIfParts:
+    request = form.request
+    if request is None:
+        if form.errors:
+            logger.info("risk: what-if form has errors (%s), nothing sent.", ", ".join(form.errors))
+        else:
+            logger.info("risk: what-if form empty, nothing sent.")
+        return _WhatIfParts(form=form)
+    logger.info(
+        "risk: loading the what-if for %s at %s%% of the mix, funding %s, over %s, %d holdings, "
+        "excluding %s.",
+        request.ticker,
+        f"{(request.weight * 100).normalize():f}",
+        request.funding,
+        window,
+        len(mix.assets),
+        ", ".join(sent) or "none",
+    )
+    try:
+        what_if = await portfolio_client.what_if(
+            assets=list(mix.assets),
+            candidate=(request.ticker, request.weight),
+            funding=request.funding,
+            window=window,
+            exclude=sent,
+        )
+    except PortfolioClientError:
+        # A 422 included: the form checks what portfolio rejects, so one means they disagree.
+        logger.exception("risk: portfolio service unavailable loading the what-if.")
+        return _WhatIfParts(form=form, error=_UNAVAILABLE)
+    section = build_what_if_section(what_if)
+    _log_what_if(section)
+    return _WhatIfParts(form=form, section=section)
+
+
+def _log_what_if(section: WhatIfSection) -> None:
+    if section.nothing:
+        logger.info("risk: what-if had nothing to compare: %s", section.nothing)
+        return
+    window, candidate, threshold = section.window, section.candidate, section.threshold
+    cells = [c for line in section.lines for c in (line.before, line.after) if c is not None]
+    if threshold is None or not threshold.applicable:
+        verdict = "not shown"
+    elif threshold.improves is None:
+        verdict = f"greyed ({threshold.reason})"
+    else:
+        verdict = "met" if threshold.improves else "not met"
+    left_out = ", ".join(f"{h.ticker} ({h.reason})" for h in section.left_out) or "none"
+    logger.info(
+        "risk: what-if %s over %s, %s to %s, %s, %s, survivorship %s, %d of %d figures greyed, "
+        "threshold %s, left out %s.",
+        candidate.ticker,
+        window.label,
+        window.start or "no overlap",
+        window.end,
+        f"shortened by {', '.join(window.limited_by)}" if window.shortened else "not shortened",
+        f"capped at {pct1(candidate.weight)}" if candidate.capped else "not capped",
+        "flagged" if section.survivorship else "not flagged",
+        sum(1 for cell in cells if cell.value is None),
+        len(cells),
+        verdict,
+        left_out,
     )
 
 
@@ -339,6 +463,9 @@ async def risk(
     benchmark: str | None = None,
     ex_ante_window: str | None = None,
     exclude: list[str] = Query(default=[]),
+    candidate: str | None = None,
+    candidate_weight: str | None = None,
+    funding: str | None = None,
 ):
     # The header's logout and theme forms need the token, as on every other page.
     csrf_token = ensure_csrf_cookie(request, response, cookie_secure=settings.cookie_secure)
@@ -351,11 +478,23 @@ async def risk(
     params = request.query_params.multi_items()
     (
         (ex_post, ex_post_error, ex_post_rolling),
-        ((ex_ante, ex_ante_error, ex_ante_rolling), (concentration, concentration_error)),
+        (
+            (ex_ante, ex_ante_error, ex_ante_rolling),
+            (concentration, concentration_error),
+            what_if,
+        ),
         (tickers, tickers_notice),
     ) = await asyncio.gather(
         _load_ex_post(portfolio_client, user.user_id, benchmark),
-        _load_holdings_sections(portfolio_client, user.user_id, benchmark, window, exclude, params),
+        _load_holdings_sections(
+            portfolio_client,
+            user.user_id,
+            benchmark,
+            window,
+            exclude,
+            params,
+            _WhatIfAsk(candidate, candidate_weight, funding),
+        ),
         _load_tickers(portfolio_client),
     )
     return _render(
@@ -376,10 +515,12 @@ async def risk(
             "ex_ante_rolling": ex_ante_rolling,
             "concentration": concentration,
             "concentration_error": concentration_error,
-            # The benchmark form re-sends these, so comparing changes nothing else (RK-14).
-            "benchmark_kept": [
-                (k, v) for k, v in params if k in ("ex_ante_window", "exclude", *PAIR_PARAMS)
-            ],
+            "what_if_form": what_if.form,
+            "what_if": what_if.section,
+            "what_if_error": what_if.error,
+            # Each form re-sends the others' fields, so submitting one changes nothing else.
+            "benchmark_kept": [(k, v) for k, v in params if k in _BENCHMARK_KEPT],
+            "what_if_kept": [(k, v) for k, v in params if k in _WHAT_IF_KEPT],
             "benchmark": benchmark,
             "benchmark_error": benchmark_error,
             "tickers": tickers,

@@ -219,6 +219,11 @@ class FakePortfolioClient:
         # The concentration section's own tests are test_risk_concentration_page.py.
         return LookThrough(assets=(), exposures=None)
 
+    async def what_if(self, *, assets, candidate, funding, window, exclude):
+        # The what-if section's own tests are test_risk_what_if_page.py.
+        self.calls.append(("what_if", candidate))
+        raise PortfolioUnavailable("not under test here")
+
 
 def _settings() -> Settings:
     return Settings(
@@ -1063,6 +1068,27 @@ def test_the_benchmark_form_keeps_the_ex_ante_choices(client):
     form = _benchmark_form(html)
     assert '<input type="hidden" name="ex_ante_window" value="5Y">' in form
     assert '<input type="hidden" name="exclude" value="TSLA">' in form
+
+
+def test_the_benchmark_form_and_ex_ante_links_keep_the_what_if(client):
+    test_client, fake_auth, _ = client
+    _logged_in(test_client, fake_auth)
+
+    html = test_client.get("/risk?candidate=EGLN.L&candidate_weight=10&funding=pro_rata").text
+
+    assert _hidden(_benchmark_form(html)) == [
+        ("candidate", "EGLN.L"),
+        ("candidate_weight", "10"),
+        ("funding", "pro_rata"),
+    ]
+    assert (
+        'href="/risk?candidate=EGLN.L&amp;candidate_weight=10&amp;funding=pro_rata'
+        '&amp;ex_ante_window=5Y#risk-ex-ante"' in html
+    )
+
+
+def _hidden(form):
+    return re.findall(r'<input type="hidden" name="([^"]+)" value="([^"]*)">', form)
 
 
 def test_ex_ante_left_out_holdings_are_named(client):
