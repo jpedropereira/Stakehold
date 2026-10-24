@@ -101,7 +101,7 @@ Spec Phase 0's discovery (2026-10-17) and the finance review (2026-10-20) are in
 | RK-23 | [web: concentration section](#rk-23-web-concentration-section) | RK-12, RK-22 | done |
 | RK-24 | [portfolio: rolling windows](#rk-24-portfolio-rolling-windows) | RK-11, RK-16, RK-17 | done |
 | RK-25 | [web: rolling charts](#rk-25-web-rolling-charts) | RK-18, RK-24 | ready |
-| RK-26 | [FX decomposition (portfolio and web)](#rk-26-fx-decomposition-portfolio-and-web) | RK-18 | ready |
+| RK-26 | [FX decomposition (portfolio and web)](#rk-26-fx-decomposition-portfolio-and-web) | RK-18 | done |
 | RK-27 | [data-store: regimes endpoint](#rk-27-data-store-regimes-endpoint) | RK-1 | done |
 | RK-28 | [Regime view (portfolio and web)](#rk-28-regime-view-portfolio-and-web) | RK-14, RK-27 | ready |
 | RK-29 | [Candidate ranking mode](#rk-29-candidate-ranking-mode) | RK-20 | blocked |
@@ -966,10 +966,28 @@ Charts for RK-24, on `/risk`.
 
 ### RK-26. FX decomposition (portfolio and web)
 
-**Status:** ready
+**Status:** done
 
 §6.4 for each non-EUR holding, on weekly returns: local volatility, FX volatility,
 corr(r_local, r_fx), and EUR volatility. It reuses RK-5's `r_local` and `r_fx`.
+
+**As built:** a new pure `risk/fx_decomposition.py`, served as `fx_decomposition` on
+`POST /risk/ex-ante`, and a table under the decomposition on `/risk`. web's
+`ui-architecture.md` (58.2 KB) was split first: `/risk`'s decisions are now `risk-ui.md`.
+Reasoning is in portfolio's `risk-flows.md` and web's `risk-ui.md`. The spec's §6.4 has an
+"Amended (RK-26)" note. Decisions (agreed):
+- **The rows run on the decomposition's listwise panel** (R12), which `ExAnteDecomposition`
+  now carries. So a row's EUR volatility is the holding's volatility in the decomposition
+  table (tested), and a late holding shortens both. *Rejected: each holding over its own
+  weeks*, as a heatmap cell is, which would show two volatilities for one holding.
+- **Served on the ex-ante endpoint**, as RK-24 served `rolling`: nothing more is fetched.
+- **Weekly components compound exactly:** (1 + l)(1 + f) = 1 + e per week, as per day.
+- **Minimums:** 52 weeks for the volatilities, 104 for the correlation, so 1Y greys the
+  correlation. Between 52 and 104 weeks the EUR volatility shows while the decomposition's is
+  null. A pegged currency greys the correlation.
+- **EUR holdings and the benchmark get no row.** An all-EUR mix gives `[]`, and web says so.
+- **web shows the four figures and a fixed note, in ink.** *Rejected: a derived "currency
+  share of risk"*, which doesn't add up because of the correlation and cross terms.
 
 ### RK-27. data-store: regimes endpoint
 

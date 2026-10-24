@@ -1,7 +1,7 @@
 """The /risk page's ex-ante section (RK-18): today's mix held at constant weights through the
 window, labelled "ex-ante · constant weights" beside the ex-post summary (R2).
 
-Pure, like risk_view.py: the router fetches, this decides what is shown. Four parts:
+Pure, like risk_view.py: the router fetches, this decides what is shown. Five parts:
 - the summary: the constant-weight figures over the measured window, with σ_p as their
   volatility (they are equal by §6.2's check, so the page shows one), the diversification ratio
   and the effective number of holdings. Cells reuse risk_view's: title metadata, greyed reasons,
@@ -17,7 +17,12 @@ Pure, like risk_view.py: the router fetches, this decides what is shown. Four pa
   an ink ramp on ρ from 0 to 1 (`bucket`). ρ at or below 0 is unfilled: dark means "moves
   together", and a negative ρ is a diversifier, not a darker version of a positive one. The
   printed number carries the sign. Forest and oxblood are for gains and losses, and gold is the
-  accent, so neither colours a correlation.
+  accent, so neither colours a correlation;
+- the FX decomposition (§6.4, RK-26): for each non-EUR holding, its local, currency and EUR
+  volatilities and the correlation of local and currency returns, on the decomposition's weeks.
+  All four are in ink, since none is a gain or a loss. Their flags share the summary's legend.
+  There's no derived "currency share of risk": the EUR variance has a correlation and a cross
+  term, so no split into shares adds up (agreed).
 
 The window (`?ex_ante_window=`, 3Y by default, §7.1) and the exclusions (`?exclude=`, R12) are
 the query string: the section's links change one and keep the rest.
@@ -35,6 +40,7 @@ from web.portfolio_client.base import (
     ExAnteHolding,
     ExAnteRisk,
     ExAnteWindow,
+    FxDecompositionRow,
     Holding,
     RiskFigure,
 )
@@ -138,6 +144,37 @@ class Heatmap:
 
 
 @dataclass(frozen=True)
+class FxColumn:
+    key: str  # FxDecompositionRow's field
+    label: str
+    note: str  # under the label, as a summary row's frequency
+    kind: str  # "pct1" or "ratio", as risk_view.Row's
+
+
+# Spec §6.4's four figures, in its order: the holding's own market, its currency, how the two
+# moved together, and what a EUR investor got.
+FX_COLUMNS = (
+    FxColumn("local_volatility", "Local volatility", "in its own currency", "pct1"),
+    FxColumn("fx_volatility", "Currency volatility", "against the euro", "pct1"),
+    FxColumn("correlation", "Correlation", "local and currency", "ratio"),
+    FxColumn("eur_volatility", "Euro volatility", "what you held", "pct1"),
+)
+
+
+@dataclass(frozen=True)
+class FxRow:
+    ticker: str
+    currency: str
+    cells: tuple[Cell, ...]  # one per FX_COLUMNS entry
+
+
+@dataclass(frozen=True)
+class FxDecomposition:
+    rows: tuple[FxRow, ...]  # empty when every included holding is in EUR
+    columns: tuple[FxColumn, ...] = FX_COLUMNS
+
+
+@dataclass(frozen=True)
 class LeftOut:
     ticker: str
     reason: str
@@ -158,6 +195,7 @@ class ExAnteSection:
     measured_value: Decimal  # the included holdings' market value, the € figures' base
     tail_euros: tuple[TailEuro, ...]
     heatmap: Heatmap | None
+    fx_decomposition: FxDecomposition | None  # None when nothing could be measured
     excluded: tuple[str, ...]  # left out by request, each with an "include it again" link
     left_out: tuple[LeftOut, ...]  # left out for any other reason
     window_links: dict[str, str]
@@ -244,6 +282,7 @@ def build_ex_ante_section(
             decomposition=None,
             tail_euros=(),
             heatmap=None,
+            fx_decomposition=None,
         )
     figures = {
         **risk.constant_weight.figures,
@@ -258,7 +297,9 @@ def build_ex_ante_section(
         covered=covered,
         reason=None if covered else risk.sigma_p.reason,
     )
-    legend = legend_for(figures.values()) if covered else ()
+    fx_rows = risk.fx_decomposition or ()
+    fx_figures = [getattr(row, column.key) for row in fx_rows for column in FX_COLUMNS]
+    legend = legend_for([*figures.values(), *fx_figures]) if covered else ()
     markers = {note.flag: note.marker for note in legend}
     return ExAnteSection(
         **common,
@@ -270,6 +311,13 @@ def build_ex_ante_section(
             _tail(level, odds, figures[key], measured_value) for level, key, odds in _TAILS
         ),
         heatmap=None if risk.correlation is None else _heatmap(risk),
+        fx_decomposition=(
+            None
+            if risk.fx_decomposition is None
+            else FxDecomposition(
+                tuple(_fx_row(row, window.label, risk.label, markers) for row in fx_rows)
+            )
+        ),
     )
 
 
@@ -329,6 +377,19 @@ def _decomposition_row(holding: ExAnteHolding) -> DecompositionRow:
         corr_with_portfolio=holding.corr_with_portfolio,
         outsized=outsized,
         hedge=pcr is not None and pcr < 0,
+    )
+
+
+def _fx_row(
+    row: FxDecompositionRow, window_label: str, label: str, markers: dict[str, str]
+) -> FxRow:
+    return FxRow(
+        ticker=row.ticker,
+        currency=row.currency,
+        cells=tuple(
+            figure_cell(getattr(row, column.key), window_label, label, markers)
+            for column in FX_COLUMNS
+        ),
     )
 
 

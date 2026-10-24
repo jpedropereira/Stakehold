@@ -538,8 +538,8 @@ Every route `web` serves, with what it requires and which upstream calls it make
   `SUMMARY_ROWS`) for the ex-ante section, rather than keeping a second copy.
 - `risk_ex_ante_view.py` (RK-18) — pure: `build_ex_ante_section`, the ex-ante section (the
   constant-weight summary, the decomposition and its insight note, the € tail figures, the
-  heatmap's squares and buckets, and the window, exclude and include links). Its own module
-  because it has four parts of its own; it reuses `risk_view`'s cells so the two sections'
+  heatmap's squares and buckets, RK-26's FX decomposition table, and the window, exclude and
+  include links). Its own module because it has five parts of its own; it reuses `risk_view`'s cells so the two sections'
   figures read alike. See "Risk page" in [`risk-ui.md`](risk-ui.md). RK-23
   made the default mix's left-out wording public (`mix_left_out`) for the concentration section.
 - `risk_concentration_view.py` (RK-23) — pure: `build_concentration_section`, the concentration

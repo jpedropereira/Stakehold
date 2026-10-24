@@ -566,6 +566,22 @@ class CorrelationMatrix:
 
 
 @dataclass(frozen=True)
+class FxDecompositionRow:
+    """One non-EUR holding's FX decomposition (RK-26, spec §6.4): the weekly volatility of its
+    local-currency returns, of its currency against the EUR, their correlation, and its EUR
+    volatility. All four are on the decomposition's weeks, so `eur_volatility` is its
+    `ExAnteHolding.volatility` whenever both are shown. None is ever None: a figure is greyed
+    with a reason instead."""
+
+    ticker: str
+    currency: str  # e.g. "USD"
+    local_volatility: RiskFigure
+    fx_volatility: RiskFigure
+    correlation: RiskFigure  # corr(r_local, r_fx)
+    eur_volatility: RiskFigure
+
+
+@dataclass(frozen=True)
 class ExAnteRisk:
     """portfolio's ExAnteRiskResponse (RK-17): a mix held at constant weights through history.
     Every section but `statuses` and `benchmark` is None exactly when no asset was included.
@@ -583,6 +599,8 @@ class ExAnteRisk:
     holdings: tuple[ExAnteHolding, ...] | None
     constant_weight: SeriesRisk | None  # its weekly volatility is σ_p
     correlation: CorrelationMatrix | None
+    # Each included non-EUR holding, in request order; () when every one is EUR (RK-26).
+    fx_decomposition: tuple[FxDecompositionRow, ...] | None
 
 
 # The look-through's dimensions and coverage shares (RK-22), as portfolio names them. Every

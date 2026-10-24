@@ -32,6 +32,7 @@ from web.portfolio_client.base import (
     ExcludedHolding,
     ExPostRisk,
     ExPostWindow,
+    FxDecompositionRow,
     Holding,
     Holdings,
     LookThrough,
@@ -133,6 +134,27 @@ _RHO = {
 }
 
 
+# AAPL and TSLA are USD: one distinct figure each, so a test can find them in the table.
+_FX_ROWS = (
+    FxDecompositionRow(
+        "AAPL",
+        "USD",
+        _ex_ante_figure(0.2611),
+        _ex_ante_figure(0.0812),
+        _ex_ante_figure(-0.1873),
+        _ex_ante_figure(0.25),
+    ),
+    FxDecompositionRow(
+        "TSLA",
+        "USD",
+        _ex_ante_figure(0.5734),
+        _ex_ante_figure(0.0812),
+        _ex_ante_figure(-0.0921),
+        _ex_ante_figure(0.55),
+    ),
+)
+
+
 def _ex_ante(**changes) -> ExAnteRisk:
     figures = {
         name: _ex_ante_figure(_VALUES[name] / 2, "weekly" if name in _WEEKLY else "daily")
@@ -166,6 +188,7 @@ def _ex_ante(**changes) -> ExAnteRisk:
                 for b in _EX_ANTE_KEYS[i:]
             ),
         ),
+        fx_decomposition=_FX_ROWS,
     )
     return replace(risk, **changes)
 
@@ -1143,6 +1166,59 @@ def test_logs_the_ex_ante_outcome(client, caplog):
     ), messages
 
 
+def _fx_html(section):
+    return re.search(r'aria-label="FX decomposition".*?</table>', section, re.S).group(0)
+
+
+def test_the_fx_decomposition_shows_each_usd_holdings_four_figures(client):
+    test_client, fake_auth, _ = client
+    _logged_in(test_client, fake_auth)
+
+    section = _ex_ante_html(_page(test_client))
+
+    table = _fx_html(section)
+    aapl = re.search(r"<tr[^>]*>(?:(?!</tr>).)*AAPL.*?</tr>", table, re.S).group(0)
+    for printed in ("USD", "26.1%", "8.1%", "−0.19", "25.0%"):
+        assert printed in aapl, printed
+    assert "IWDA.AS" not in table  # a EUR holding has no currency risk to split out
+    assert "historically" in section
+
+
+def test_a_greyed_fx_correlation_shows_its_reason(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    reason = "insufficient history (have 52, need 104)"
+    row = replace(_FX_ROWS[0], correlation=_ex_ante_figure(None, reason=reason))
+    fake_portfolio.ex_ante = _ex_ante(fx_decomposition=(row,))
+
+    assert reason in _fx_html(_ex_ante_html(_page(test_client)))
+
+
+def test_an_all_eur_mix_says_there_is_no_currency_risk(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.ex_ante = _ex_ante(fx_decomposition=())
+
+    section = _ex_ante_html(_page(test_client))
+
+    assert 'aria-label="FX decomposition"' not in section
+    assert "Every holding measured is in euros" in section
+
+
+def test_logs_the_fx_decomposition_count(client, caplog):
+    test_client, fake_auth, _ = client
+    _logged_in(test_client, fake_auth)
+
+    with caplog.at_level(logging.INFO, logger="web.api.risk"):
+        test_client.get("/risk")
+
+    messages = _messages(caplog)
+    assert any(
+        "ex-ante" in m and "FX decomposition 2 holdings, 0 of 8 figures greyed" in m
+        for m in messages
+    ), messages
+
+
 def test_the_ex_ante_terms_link_to_the_glossary(client):
     test_client, fake_auth, _ = client
     _logged_in(test_client, fake_auth)
@@ -1155,4 +1231,5 @@ def test_the_ex_ante_terms_link_to_the_glossary(client):
         "effective-n",
         "share-of-risk",
         "correlation-matrix",
+        "fx-decomposition",
     } <= anchors

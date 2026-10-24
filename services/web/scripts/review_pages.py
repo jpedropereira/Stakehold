@@ -127,7 +127,9 @@ PAGES = [
     Page("risk-benchmark-too-long", "/risk?benchmark=ABCDEFGHIJKLMNOPQRSTU", "user"),
     # RK-18: the ex-ante section. 3Y (the default) names AAPL as outsized; 1Y greys the
     # decomposition and the squares; Max is limited by AAPL, and excluding it offers it back;
-    # IWDA.AS adds the benchmark as its own row; 10Y is the fake's failure.
+    # IWDA.AS adds the benchmark as its own row; 10Y is the fake's failure. RK-26's FX table
+    # has AAPL's row on 3Y, its correlation greyed on 1Y, and the all-EUR note once AAPL is
+    # excluded.
     Page("risk-ex-ante-1y", "/risk?ex_ante_window=1Y#risk-ex-ante", "user"),
     Page("risk-ex-ante-max", "/risk?ex_ante_window=Max#risk-ex-ante", "user"),
     Page("risk-ex-ante-excluded", "/risk?ex_ante_window=Max&exclude=AAPL#risk-ex-ante", "user"),

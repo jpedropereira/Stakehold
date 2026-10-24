@@ -208,7 +208,7 @@ class FakePortfolioClient:
             None,
             BENCHMARK,
             statuses,
-            *(None,) * 6,
+            *(None,) * 7,
         )
 
     async def look_through(self, *, assets):
