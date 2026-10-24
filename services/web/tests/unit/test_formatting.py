@@ -15,13 +15,28 @@ from web.formatting import (
     share,
     signed_money,
     signed_pct1,
+    signed_points1,
+    signed_ratio,
 )
 
 MINUS = "−"
 
 
 @pytest.mark.parametrize(
-    "fmt", [money, signed_money, qty, pct, share, date_, pct1, signed_pct1, ratio]
+    "fmt",
+    [
+        money,
+        signed_money,
+        qty,
+        pct,
+        share,
+        date_,
+        pct1,
+        signed_pct1,
+        ratio,
+        signed_points1,
+        signed_ratio,
+    ],
 )
 def test_none_renders_em_dash(fmt):
     assert fmt(None) == "—"
@@ -40,6 +55,8 @@ def test_filters_registry_names_every_filter():
         "pct1": pct1,
         "signed_pct1": signed_pct1,
         "ratio": ratio,
+        "signed_points1": signed_points1,
+        "signed_ratio": signed_ratio,
     }
 
 
@@ -278,3 +295,30 @@ def test_signed_pct1_carries_its_sign(value, expected):
 def test_ratio_has_two_places_and_no_plus(value, expected):
     # A ratio isn't a gain or a loss, so it gets no "+"; a negative one keeps its "−".
     assert ratio(value) == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (-0.002, f"{MINUS}0.2 pts"),
+        (0.0123, "+1.2 pts"),
+        (0.0005, "+0.1 pts"),  # half-up
+        (-0.0004, "0.0 pts"),  # rounds to zero, so no sign
+    ],
+)
+def test_signed_points1_is_a_change_in_percentage_points(value, expected):
+    # A what-if's Δ volatility (RK-20): "−0.2 pts", not "−0.2%", which reads as a relative change.
+    assert signed_points1(value) == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (0.09, "+0.09"),
+        (-0.124, f"{MINUS}0.12"),
+        (0.005, "+0.01"),  # half-up
+        (-0.004, "0.00"),  # rounds to zero, so no sign
+    ],
+)
+def test_signed_ratio_carries_its_sign(value, expected):
+    assert signed_ratio(value) == expected

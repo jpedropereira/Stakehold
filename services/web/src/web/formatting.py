@@ -126,6 +126,24 @@ def ratio(value: Decimal | int | float | None) -> str:
     return f"{MINUS if sign == MINUS else ''}{magnitude}"
 
 
+def signed_points1(value: Decimal | int | float | None) -> str:
+    """A change between two percentages, in points to one decimal, signed: `-0.002` →
+    `−0.2 pts`. For a what-if's Δ volatility or Δ drawdown (RK-20), where `−0.2%` would read as
+    a relative change."""
+    if value is None:
+        return MISSING
+    sign, magnitude = _places(_to_decimal(value) * 100, 1)
+    return f"{sign}{magnitude} pts"
+
+
+def signed_ratio(value: Decimal | int | float | None) -> str:
+    """As `ratio`, with an explicit `+` or `−`: for a change in a ratio (RK-20)."""
+    if value is None:
+        return MISSING
+    sign, magnitude = _places(_to_decimal(value), 2)
+    return f"{sign}{magnitude}"
+
+
 # The display each delta kind is colored to match: (scale, places).
 _DELTA_KINDS = {"money": (1, 2), "pct": (100, 2), "pct1": (100, 1)}
 
@@ -167,4 +185,6 @@ FILTERS: dict[str, Callable[..., str]] = {
     "pct1": pct1,
     "signed_pct1": signed_pct1,
     "ratio": ratio,
+    "signed_points1": signed_points1,
+    "signed_ratio": signed_ratio,
 }

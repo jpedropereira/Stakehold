@@ -141,8 +141,9 @@ def default_rows(mix: DefaultMix) -> tuple[MixRow, ...]:
     return tuple(MixRow(ticker, _percent_text(weight * _HUNDRED)) for ticker, weight in mix.assets)
 
 
-def _weight(text: str) -> Decimal | None:
-    """A positive, finite percentage, or None. Takes a trailing `%` and a decimal comma."""
+def parse_weight(text: str) -> Decimal | None:
+    """A positive, finite percentage, or None. Takes a trailing `%` and a decimal comma. Also
+    the what-if's candidate weight (risk_what_if_view.py)."""
     text = text.removesuffix("%").strip().replace(",", ".")
     try:
         value = Decimal(text)
@@ -173,7 +174,7 @@ def check_mix(rows: Sequence[MixRow], known_tickers: Sequence[str] | None) -> Ch
             if ticker in seen:
                 ticker_error = "Already in the mix above."
             seen.add(ticker)
-        weight = _weight(row.weight)
+        weight = parse_weight(row.weight)
         if not row.weight:
             weight_error = "Enter a weight."
         elif weight is None:

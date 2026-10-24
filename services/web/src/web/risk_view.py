@@ -82,8 +82,10 @@ FLAG_NOTES = {
         "of the window."
     ),
     "short_window": "Under 3 years of history, so this figure can move a lot as time passes.",
+    # Set only on a what-if candidate's "after" figures (RK-19): spec R14's warning.
     "survivorship": (
-        "This asset isn't tracked, so its history may leave out funds that closed along the way."
+        "The candidate is priced only through a fund's holdings, so its history comes from "
+        "today's index members and overstates what an investor could have achieved."
     ),
     "tail_unstable": (
         "Fewer than 1,000 days, so the 99% figures rest on only a handful of the worst days."
