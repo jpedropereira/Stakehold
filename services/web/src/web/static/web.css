@@ -1380,7 +1380,8 @@ img.logo-on-dark {
 }
 
 .labs-row input[aria-invalid="true"],
-.benchmark-form input[aria-invalid="true"] {
+.benchmark-form input[aria-invalid="true"],
+.what-if-form :is(input, select)[aria-invalid="true"] {
   border-color: var(--text);
   box-shadow: inset 0 0 0 1px var(--text);
 }
@@ -1668,39 +1669,42 @@ img.logo-on-dark {
 
 /* ---- benchmark (RK-14) ---- */
 
-/* The benchmark field and its button on one line, the button level with the input. */
-.benchmark-form {
+/* The benchmark field and its button on one line, the button level with the input. The
+   what-if form (RK-20) lays out its three fields and button the same way, wrapping on a
+   narrow screen. */
+.benchmark-form,
+.what-if-form {
   margin: var(--space-3) 0;
 }
 
-.benchmark-row {
+.benchmark-row,
+.what-if-fields {
   display: flex;
   flex-wrap: wrap;
   align-items: end;
   gap: var(--space-3);
 }
 
-.benchmark-row .field {
+:is(.benchmark-row, .what-if-fields) .field {
   margin-top: 0;
 }
 
-.benchmark-row input {
+:is(.benchmark-row, .what-if-fields) input {
   width: 14ch;
 }
 
-/* One height for both: the input is in the 15px figure font and the button in body text, so
+/* One height for all: the input is in the 15px figure font and the button in body text, so
    matching their padding alone leaves them a few pixels apart. */
-.benchmark-row input,
-.benchmark-row .btn {
+:is(.benchmark-row, .what-if-fields) :is(input, select, .btn) {
   box-sizing: border-box;
   height: 2.75rem;
 }
 
-.benchmark-row .btn {
+:is(.benchmark-row, .what-if-fields) .btn {
   padding-block: 0;
 }
 
-.benchmark-form .field-hint {
+:is(.benchmark-form, .what-if-form) .field-hint {
   margin-top: var(--space-1);
 }
 
