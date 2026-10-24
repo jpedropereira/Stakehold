@@ -547,6 +547,11 @@ Every route `web` serves, with what it requires and which upstream calls it make
   country and asset class, the top names, each table's "show all" split and bars, and what was
   left out). Its own module for the same reason as the ex-ante one; see "Risk page" in
   [`risk-ui.md`](risk-ui.md).
+- `risk_rolling_view.py` (RK-25) — pure: `chosen_pair` (the rolling correlation's pair from
+  `?corr_a=&corr_b=`, or the default), `build_rolling_charts` and `build_correlation_chart`
+  (each chart's data island, its summary in words and its gap notes, and the pair picker). Its
+  own module, not part of the ex-ante one, because ex-post draws the same charts. See "Risk
+  page" in [`risk-ui.md`](risk-ui.md).
 - `api/tickers.py` (TK-8) — the Tickers pages, on their own router for the same file-size
   reason, rendering through `routes.py`'s helpers so CSRF and cookie handling stay identical.
 - `ticker_status.py` (TK-8/TK-9) — how a tracked ticker's status reads (labels, a holding's
@@ -586,7 +591,8 @@ Every route `web` serves, with what it requires and which upstream calls it make
   `web.css` plus vendored `htmx.min.js`. Same-origin scripts: `htmx-error-swap.js` (also the
   generic failure banner, UI-12), `chart_theme.js` (LB-8, the theme colors and redraw both charts share), `portfolio_chart.js`,
   `labs_chart.js` (LB-8, the Labs growth chart), `labs_drawdown_chart.js` (RK-9, the mix's
-  drawdown under it; both take `formatPct` from `chart_theme.js`), `theme.js` (UI-3, applies a theme
+  drawdown under it; both take `formatPct` from `chart_theme.js`), `risk_rolling_chart.js`
+  (RK-25, every `/risk` rolling chart, from its data island), `theme.js` (UI-3, applies a theme
   switch in place), `transaction_form.js` (UI-9, shows the manual-entry fields the chosen type
   and currency need), `password_toggle.js` (UI-12), `confirm_dialog.js` (opens a delete's
   confirmation as a dialog in place of its page), and `holdings_breakdown.js` (shows and hides a

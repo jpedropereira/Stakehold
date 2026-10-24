@@ -65,7 +65,8 @@ Spec Phase 0's discovery (2026-10-17) and the finance review (2026-10-20) are in
   (including why one was left out), and a summary. data-store also follows its own
   `logging.md`.
 - **Docs change in the same change as the code.** That means each touched service's
-  `docs/architecture.md`, plus portfolio `flows.md` and web `ui-architecture.md`.
+  `docs/architecture.md`, plus portfolio `flows.md` and web `ui-architecture.md` (with its
+  split-outs `labs-ui.md` and `risk-ui.md`).
 - **Files stay under 64 KB.** If a doc would cross the limit, split it first, in a commit of its
   own (as LB-4 and LB-6 did).
 - **Visual review.** Every web task adds `review_pages.py` entries. It regenerates the
@@ -100,7 +101,7 @@ Spec Phase 0's discovery (2026-10-17) and the finance review (2026-10-20) are in
 | RK-22 | [portfolio: look-through exposures](#rk-22-portfolio-look-through-exposures) | RK-21 | done |
 | RK-23 | [web: concentration section](#rk-23-web-concentration-section) | RK-12, RK-22 | done |
 | RK-24 | [portfolio: rolling windows](#rk-24-portfolio-rolling-windows) | RK-11, RK-16, RK-17 | done |
-| RK-25 | [web: rolling charts](#rk-25-web-rolling-charts) | RK-18, RK-24 | ready |
+| RK-25 | [web: rolling charts](#rk-25-web-rolling-charts) | RK-18, RK-24 | done |
 | RK-26 | [FX decomposition (portfolio and web)](#rk-26-fx-decomposition-portfolio-and-web) | RK-18 | ready |
 | RK-27 | [data-store: regimes endpoint](#rk-27-data-store-regimes-endpoint) | RK-1 | done |
 | RK-28 | [Regime view (portfolio and web)](#rk-28-regime-view-portfolio-and-web) | RK-14, RK-27 | ready |
@@ -960,9 +961,22 @@ and `POST /risk/ex-ante` each gain `rolling`, and the ex-ante request takes an o
 
 ### RK-25. web: rolling charts
 
-**Status:** ready
+**Status:** done
 
 Charts for RK-24, on `/risk`.
+
+**As built:** `risk_rolling_view.py` (pure), `partials/_rolling_charts.html` and
+`static/risk_rolling_chart.js`. The client parses both rolling keys as required and sends
+`rolling_pair`. First, web's `ui-architecture.md` was split: Risk is now `docs/risk-ui.md`, which
+holds the reasoning. Agreed:
+- Each section draws its own charts: ex-post's under its table, ex-ante's after the heatmap,
+  with the pair.
+- Volatility and Sharpe are two stacked ink charts, Sharpe with a ± 1 s.e. band. ρ's axis is
+  fixed at −1..1.
+- The default pair is the heaviest holding against the portfolio (`?corr_a=&corr_b=`). A pair
+  portfolio would 422 falls back to it with a note.
+- Gaps break the line, and each run of them gets a note under the chart.
+- Not measured against the dev data, because its `portfolio-api` image predates RK-24.
 
 ### RK-26. FX decomposition (portfolio and web)
 
