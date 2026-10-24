@@ -65,7 +65,8 @@ Spec Phase 0's discovery (2026-10-17) and the finance review (2026-10-20) are in
   (including why one was left out), and a summary. data-store also follows its own
   `logging.md`.
 - **Docs change in the same change as the code.** That means each touched service's
-  `docs/architecture.md`, plus portfolio `flows.md` and web `ui-architecture.md`.
+  `docs/architecture.md`, plus portfolio `flows.md` and web `ui-architecture.md` (`/risk`'s notes
+  are in its `risk-ui.md`, split out before RK-20).
 - **Files stay under 64 KB.** If a doc would cross the limit, split it first, in a commit of its
   own (as LB-4 and LB-6 did).
 - **Visual review.** Every web task adds `review_pages.py` entries. It regenerates the
@@ -98,7 +99,7 @@ split out of this file for size; its row here links there.
 | RK-17 | [portfolio: ex-ante endpoint](tasks-risk-thread-done.md#rk-17-portfolio-ex-ante-endpoint) | RK-4, RK-5, RK-13, RK-15, RK-16 | done |
 | RK-18 | [web: ex-ante summary, decomposition and heatmap](tasks-risk-thread-done.md#rk-18-web-ex-ante-summary-decomposition-and-heatmap) | RK-12, RK-17 | done |
 | RK-19 | [portfolio: candidate what-if](tasks-risk-thread-done.md#rk-19-portfolio-candidate-what-if) | RK-17 | done |
-| RK-20 | [web: what-if form](#rk-20-web-what-if-form) | RK-18, RK-19 | ready |
+| RK-20 | [web: what-if form](tasks-risk-thread-done.md#rk-20-web-what-if-form) | RK-18, RK-19 | done |
 | RK-21 | [data-store: ETF holdings endpoint](tasks-risk-thread-done.md#rk-21-data-store-etf-holdings-endpoint) | RK-1 | done |
 | RK-22 | [portfolio: look-through exposures](tasks-risk-thread-done.md#rk-22-portfolio-look-through-exposures) | RK-21 | done |
 | RK-23 | [web: concentration section](tasks-risk-thread-done.md#rk-23-web-concentration-section) | RK-12, RK-22 | done |
@@ -107,18 +108,11 @@ split out of this file for size; its row here links there.
 | RK-26 | [FX decomposition (portfolio and web)](#rk-26-fx-decomposition-portfolio-and-web) | RK-18 | ready |
 | RK-27 | [data-store: regimes endpoint](tasks-risk-thread-done.md#rk-27-data-store-regimes-endpoint) | RK-1 | done |
 | RK-28 | [Regime view (portfolio and web)](#rk-28-regime-view-portfolio-and-web) | RK-14, RK-27 | ready |
-| RK-29 | [Candidate ranking mode](#rk-29-candidate-ranking-mode) | RK-20 | blocked |
+| RK-29 | [Candidate ranking mode](#rk-29-candidate-ranking-mode) | RK-20 | ready |
 | RK-30 | [Ledoit–Wolf shrinkage (optional)](#rk-30-ledoitwolf-shrinkage-optional) | RK-15 | ready |
 | RK-31 | [VaR day mask on traded volume](#rk-31-var-day-mask-on-traded-volume) | RK-1 | ready |
 
 ## Tasks
-
-### RK-20. web: what-if form
-
-**Status:** blocked
-
-A GET form on `/risk` (ticker, weight %, funding), working without JS as LB-7's does. It renders
-the before/after table, the threshold explanation and the survivorship warning.
 
 ### RK-25. web: rolling charts
 
@@ -142,7 +136,7 @@ it. This is descriptive only, so `known_from` isn't applied (§11 phase 5).
 
 ### RK-29. Candidate ranking mode
 
-**Status:** blocked
+**Status:** ready
 
 Score many candidates at a fixed weight on a common window, showing each candidate's history
 length, with R14's warning once at the top. Rank by Δσ_p and Δ diversification ratio. ΔSharpe

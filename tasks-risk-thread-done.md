@@ -704,6 +704,35 @@ flag.
 - **For RK-20:** show `candidate.weight` when `capped`, R14's warning on `survivorship`, and
   `threshold.reason` under replace.
 
+### RK-20. web: what-if form
+
+**Status:** done
+
+A GET form on `/risk` (ticker, weight %, funding), working without JS as LB-7's does. It renders
+the before/after table, the threshold explanation and the survivorship warning.
+
+**As built:** a `/risk` section after ex-ante, built by a new pure `risk_what_if_view.py` and
+loaded by `api/risk.py` as a third loader on the holdings call that ex-ante and look-through
+share. The client gained `what_if`. `ui-architecture.md`'s `/risk` notes moved verbatim to a new
+`risk-ui.md` first (58 KB), which holds the reasoning. Decisions:
+- **Funding is one select** (agreed): pro-rata, then "Replace X" per holding left in.
+- **The window and exclusions are ex-ante's** (agreed), resolved once for both, so "before" is
+  the mix that section measures.
+- **The ticker is checked for length only** (agreed); the tracked list is the datalist. The
+  form catches only what portfolio would 422, and a form with errors makes no call. A "replace
+  X" gone stale (X excluded since) is an inline error, not a switch to pro-rata.
+- **Weight is a % of the mix after the change**, portfolio's meaning, sent as a fraction.
+  `labs_mix.parse_weight` (made public) reads it.
+- **Changes are never coloured**: percentages in points (new `signed_points1` filter), ratios
+  signed (`signed_ratio`).
+- **RK-19's three asks:** a capped replace names the weight the candidate got; R14's warning is
+  a banner in the spec's words, with markers on every "after" figure; under replace the
+  threshold line gives `threshold.reason`. `FLAG_NOTES["survivorship"]` was reworded for
+  RK-19's meaning, since only the what-if sets it.
+- **The before/after weights aren't parsed or shown.**
+- **Not done here:** the dev-stack check RK-19 quoted (EGLN.L, MSFT, NVCR). The review fakes
+  mirror those cases.
+
 ### RK-21. data-store: ETF holdings endpoint
 
 **Status:** done
