@@ -65,6 +65,12 @@ def fakes():
         TrackedTicker,
         Transaction,
         UnmappedInstrument,
+        WhatIf,
+        WhatIfCandidate,
+        WhatIfFunding,
+        WhatIfRow,
+        WhatIfThreshold,
+        WhatIfWindow,
     )
     from web.portfolio_client.errors import PortfolioUnavailable
     from web.portfolio_view import aggregate_portfolio_returns
@@ -873,6 +879,126 @@ def fakes():
                         for b in keys[i:]
                     ),
                 ),
+            )
+
+        async def what_if(self, *, assets, candidate, funding, window, exclude):
+            """The what-if (RK-20), keyed by the candidate: EGLN.L is the dev run's pro-rata case
+            (RK-19); MSFT is priced only through a fund (R14) and its history shortens the
+            window; replacing a holding with more than it weighs is capped; 0700.HK can't be
+            measured, so there's nothing to compare; FAIL.XX fails."""
+            ticker, weight = candidate
+            if ticker == "FAIL.XX":
+                raise PortfolioUnavailable("review: FAIL.XX fails on purpose")
+            tickers = [t for t, _ in assets if t not in exclude]
+            total = sum(w for t, w in assets if t in tickers)
+            weights = {t: float(w / total) for t, w in assets if t in tickers}
+            rule, replaced = (
+                ("replace", funding.removeprefix("replace:"))
+                if funding.startswith("replace:")
+                else ("pro_rata", None)
+            )
+            capped = replaced is not None and float(weight) > weights[replaced]
+            weight_after = weights[replaced] if capped else float(weight)
+            survivorship = ticker == "MSFT"
+            statuses = tuple(
+                BacktestAssetStatus(t, "excluded" if t in exclude else "included", None)
+                for t, _ in assets
+            )
+            years = {"1Y": 1, "3Y": 3, "5Y": 5, "10Y": 10, "Max": 17}[window]
+            requested = date(today.year - years, today.month, today.day)
+            held_start = max(requested, date(2019, 7, 29))
+            start = max(held_start, date(2024, 6, 7)) if survivorship else held_start
+            weeks = (today - start).days // 7
+            if ticker == "0700.HK":
+                return WhatIf(
+                    "ex-ante · constant weights",
+                    True,
+                    statuses,
+                    WhatIfCandidate(
+                        ticker,
+                        "no_fx_rate",
+                        "no FX series for HKD",
+                        float(weight),
+                        None,
+                        None,
+                        False,
+                    ),
+                    WhatIfFunding(rule, replaced, None),
+                    None,
+                    None,
+                    None,
+                )
+
+            def figure(value, after=False, daily=False, se=None, reason=None):
+                flags = ("survivorship",) if after and survivorship else ()
+                if reason:
+                    flags = (*flags, "insufficient_history")
+                return RiskFigure(
+                    None if reason else value,
+                    start,
+                    today,
+                    "daily" if daily else "weekly",
+                    251.6 if daily else 52.0,
+                    weeks * (5 if daily else 1),
+                    0,
+                    tuple(sorted(flags)),
+                    reason,
+                    se,
+                )
+
+            grey = f"insufficient history (have {weeks}, need 104)" if weeks < 104 else None
+
+            def row(before, after, daily=False, se=None, delta_se=None, needs_104=False):
+                reason = grey if needs_104 else None
+                b = None if before is None else figure(before, daily=daily, se=se, reason=reason)
+                a = figure(after, after=True, daily=daily, se=se, reason=reason)
+                delta = None if b is None or b.value is None else a.value - b.value
+                return WhatIfRow(b, a, delta, delta_se if delta is not None else None)
+
+            rows = {
+                "sigma_p": row(0.1412, 0.1391),
+                "diversification_ratio": row(1.16, 1.25, needs_104=True),
+                "candidate_pcr": row(None, 0.0312, needs_104=True),
+                "candidate_correlation": row(None, 0.1234, needs_104=True),
+                "sharpe": row(0.8012, 0.8811, se=0.58, delta_se=0.1012),
+                "max_drawdown": row(-0.2345, -0.2212, daily=True),
+            }
+            if rule == "replace":
+                threshold = WhatIfThreshold(
+                    False, "shown under pro-rata funding only", None, None, None, None, None
+                )
+            elif grey:
+                threshold = WhatIfThreshold(True, grey, None, None, None, None, None)
+            else:
+                threshold = WhatIfThreshold(
+                    True,
+                    None,
+                    figure(0.5123, after=True, se=0.58),
+                    0.1234,
+                    0.8012,
+                    0.0989,
+                    True,
+                )
+            return WhatIf(
+                "ex-ante · constant weights",
+                True,
+                statuses,
+                WhatIfCandidate(
+                    ticker, "included", None, float(weight), weight_after, capped, survivorship
+                ),
+                WhatIfFunding(rule, replaced, None),
+                WhatIfWindow(
+                    window,
+                    requested,
+                    start,
+                    today,
+                    (ticker,) if survivorship else (),
+                    survivorship,
+                    held_start,
+                    today,
+                ),
+                rows,
+                threshold,
             )
 
         async def look_through(self, *, assets):
