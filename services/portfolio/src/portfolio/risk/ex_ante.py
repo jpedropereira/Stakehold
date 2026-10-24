@@ -29,7 +29,7 @@ constant-weight series the single-series measures run on.
 
 import math
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 from portfolio.risk.covariance import covariance_matrix, decompose, effective_n
@@ -61,6 +61,8 @@ class ExAnteDecomposition:
     effective_n: float
     holdings: tuple[HoldingRisk, ...]
     limited_by: tuple[str, ...]
+    # The weeks every figure above was measured on. Not compared: it holds an array.
+    panel: ListwiseReturns = field(compare=False, repr=False)
 
 
 def decomposition_figures(
@@ -71,10 +73,10 @@ def decomposition_figures(
     w = np.array([weights[key] for key in panel.keys], dtype=float)
     result = decompose(w, covariance_matrix(panel.returns, WEEKLY_Q)) if panel.n_obs >= 2 else None
 
-    vol_check = _check(Measure.VOLATILITY, panel)
-    cov_check = _check(Measure.COVARIANCE, panel)
-    sigma_p = _figure(panel, vol_check, None if result is None else result.sigma_p)
-    ratio = _figure(panel, cov_check, None if result is None else result.diversification_ratio)
+    vol_check = panel_check(Measure.VOLATILITY, panel)
+    cov_check = panel_check(Measure.COVARIANCE, panel)
+    sigma_p = panel_figure(panel, vol_check, None if result is None else result.sigma_p)
+    ratio = panel_figure(panel, cov_check, None if result is None else result.diversification_ratio)
 
     shown = cov_check.sufficient and result is not None
     holdings = tuple(
@@ -89,7 +91,7 @@ def decomposition_figures(
         )
         for i, key in enumerate(panel.keys)
     )
-    return ExAnteDecomposition(sigma_p, ratio, effective_n(w), holdings, panel.limited_by)
+    return ExAnteDecomposition(sigma_p, ratio, effective_n(w), holdings, panel.limited_by, panel)
 
 
 def constant_weight_series(
@@ -138,11 +140,16 @@ def _check_weights(series: Mapping[str, ReturnSeries], weights: Mapping[str, flo
         raise ValueError(f"weights must sum to 1, got {total}")
 
 
-def _check(measure: Measure, panel: ListwiseReturns) -> HistoryCheck:
+def panel_check(measure: Measure, panel: ListwiseReturns) -> HistoryCheck:
+    """`measure`'s §4.5 minimum on the panel's kept weeks."""
     return check_minimum(measure, panel.n_obs, panel.window.start, panel.window.end)
 
 
-def _figure(panel: ListwiseReturns, check: HistoryCheck, value: float | None) -> RiskFigure:
+def panel_figure(panel: ListwiseReturns, check: HistoryCheck, value: float | None) -> RiskFigure:
+    """A figure measured on the panel's weeks: its window, q = 52, n_obs and n_gaps, R8's
+    `data_gaps` and `has_suspect_rows`. Greyed with R9's reason below the minimum, or "no
+    variation in returns" when the value is undefined. The FX decomposition (RK-26) builds its
+    figures here too, so every figure on the panel reads the same."""
     flags = set(check.flags)
     if over_gap_budget(panel.n_obs, panel.n_gaps):
         flags.add(Flag.DATA_GAPS)

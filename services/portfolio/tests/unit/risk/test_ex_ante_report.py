@@ -45,7 +45,9 @@ def _daily(base, end, seed, nulls=(), scale=0.01):
     return ReturnSeries(Frequency.DAILY, base, tuple(dates), tuple(values))
 
 
-def _report(daily, weights, label=StandardWindow.Y3, *, currencies=EUR, rates=None, corr=None):
+def _report(
+    daily, weights, label=StandardWindow.Y3, *, currencies=EUR, rates=None, corr=None, fx=None
+):
     return ex_ante_report(
         daily,
         weights,
@@ -54,6 +56,7 @@ def _report(daily, weights, label=StandardWindow.Y3, *, currencies=EUR, rates=No
         rates=rates,
         first_published=None if rates is None else rates[0].date,
         correlation_daily=daily if corr is None else corr,
+        fx_daily={} if fx is None else fx,
     )
 
 
@@ -274,3 +277,60 @@ def test_mix_report_is_the_ex_ante_report_without_the_matrix(label):
     assert mix.decomposition == report.decomposition
     assert mix.constant_weight == report.constant_weight
     assert mix.mix_weekly == report.mix_weekly
+
+
+# --- FX decomposition (RK-26) --------------------------------------------------------------------
+
+
+def _usd_parts(seed=7, base=FRIDAY):
+    """A USD holding's daily (local, fx) and the EUR series they compound to."""
+    local = _daily(base, END, seed)
+    fx = _daily(base, END, seed + 100, scale=0.005)
+    eur = tuple(
+        (1 + l) * (1 + f) - 1 for l, f in zip(local.values, fx.values)  # noqa: E741
+    )
+    return (local, fx), ReturnSeries(Frequency.DAILY, base, local.dates, eur)
+
+
+def test_the_report_decomposes_each_non_eur_holding_on_the_decompositions_panel():
+    parts, usd = _usd_parts()
+    daily = {"A": _daily(FRIDAY, END, 1), "US": usd}
+    report = _report(
+        daily, {"A": 0.5, "US": 0.5}, currencies={"A": "EUR", "US": "USD"}, fx={"US": parts}
+    )
+
+    (row,) = report.fx_decomposition
+    us = next(h for h in report.decomposition.holdings if h.key == "US")
+    assert (row.ticker, row.currency) == ("US", "USD")
+    assert row.eur_volatility.value == pytest.approx(us.volatility, rel=1e-12)
+    assert row.eur_volatility.window_start == report.decomposition.sigma_p.window_start
+    assert row.local_volatility.value == pytest.approx(
+        np.std(
+            [v for d, v in zip(*_weekly(parts[0])) if d in report.decomposition.panel.dates],
+            ddof=1,
+        )
+        * np.sqrt(52)
+    )
+
+
+def _weekly(daily):
+    weekly = to_weekly(daily)
+    return weekly.dates, weekly.values
+
+
+def test_an_all_eur_mix_has_no_fx_rows():
+    report = _report(_pair(), WEIGHTS)
+
+    assert report.fx_decomposition == ()
+
+
+def test_histories_that_do_not_overlap_still_decompose_on_the_empty_panel():
+    parts, usd = _usd_parts(base=date(2021, 1, 1))
+    daily = {"A": _daily(FRIDAY, date(2020, 1, 1), 1), "US": usd}
+    report = _report(
+        daily, {"A": 0.5, "US": 0.5}, currencies={"A": "EUR", "US": "USD"}, fx={"US": parts}
+    )
+
+    (row,) = report.fx_decomposition
+    assert row.eur_volatility.value is None
+    assert row.eur_volatility.n_obs == 0

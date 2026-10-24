@@ -245,6 +245,16 @@ _EX_ANTE = {
             _figure(None, "weekly", reason="no variation in returns"),
         ],
     },
+    "fx_decomposition": [
+        {
+            "ticker": "B",
+            "currency": "USD",
+            "local_volatility": _figure(0.22, "weekly"),
+            "fx_volatility": _figure(0.08, "weekly"),
+            "correlation": _figure(None, "weekly", reason="insufficient history"),
+            "eur_volatility": _figure(0.2, "weekly"),
+        }
+    ],
 }
 
 

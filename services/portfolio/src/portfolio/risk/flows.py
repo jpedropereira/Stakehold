@@ -33,6 +33,9 @@ out in one place. No user data is read and nothing is stored.
   oldest one's first day.
 - **The risk-free fetch starts two weeks before the oldest holding's first day**, as ex-post's
   does before its base date: one call covers whichever window the report settles on.
+- **The FX decomposition (RK-26)** takes each included non-EUR holding's r_local and r_fx from
+  the same EurReturns as its EUR series, so nothing more is fetched; the library puts it on the
+  decomposition's listwise panel.
 - **The correlation matrix** is the holdings plus the benchmark, in EUR or, on request, each
   ticker's local-currency returns (§7.1's toggle). σ_p and the decomposition are always EUR. A
   benchmark that is also a holding isn't repeated; an unavailable one is left out of the matrix,
@@ -107,8 +110,10 @@ EXCLUDED = "excluded"
 EXCLUDED_REASON = "excluded by request"
 EUR_RETURNS = "eur"
 LOCAL_RETURNS = "local"
+FX_RETURNS = "fx"  # an EurReturns' r_fx, for the FX decomposition (RK-26)
 PORTFOLIO = "portfolio"  # a rolling pair's other side when it is the constant-weight mix
 _NOTHING_TO_MEASURE = "not fetched: nothing to measure"
+_EUR = "EUR"
 
 
 @dataclass(frozen=True)
@@ -269,7 +274,7 @@ def compute_ex_ante(
     included = [(ticker, weight) for ticker, weight in mix if ticker in eligible.returns]
     total = sum(weight for _, weight in included)
     weights = {ticker: float(weight / total) for ticker, weight in included}
-    daily = {ticker: _series(eligible.returns[ticker], local=False) for ticker, _ in included}
+    daily = {ticker: _series(eligible.returns[ticker], EUR_RETURNS) for ticker, _ in included}
 
     oldest = min(series.base_date for series in daily.values())
     end = min(series.last_date for series in daily.values())
@@ -278,13 +283,21 @@ def compute_ex_ante(
 
     local = currency == LOCAL_RETURNS
     correlation_daily = (
-        {ticker: _series(eligible.returns[ticker], local=True) for ticker, _ in included}
+        {ticker: _series(eligible.returns[ticker], LOCAL_RETURNS) for ticker, _ in included}
         if local
         else dict(daily)
     )
     if not isinstance(fetched, BenchmarkUnavailable) and benchmark not in correlation_daily:
         correlation_daily[benchmark] = _benchmark_series(fetched, local=local)
 
+    fx_daily = {
+        ticker: (
+            _series(eligible.returns[ticker], LOCAL_RETURNS),
+            _series(eligible.returns[ticker], FX_RETURNS),
+        )
+        for ticker, _ in included
+        if eligible.currencies[ticker] != _EUR
+    }
     report = ex_ante_report(
         daily,
         weights,
@@ -293,8 +306,10 @@ def compute_ex_ante(
         rates=rates,
         first_published=first_published,
         correlation_daily=correlation_daily,
+        fx_daily=fx_daily,
     )
     _log_ex_ante(report, len(included), len(left_out))
+    _log_fx_decomposition(report)
     _log_rolling(report.rolling, context="ex-ante-risk")
     pair = None
     if rolling_pair is not None:
@@ -451,7 +466,7 @@ def compute_what_if(
     total = sum(w for _, w in included)
     weights = {ticker: float(w / total) for ticker, w in included}
     daily = {
-        ticker: _series(eligible.returns[ticker], local=False) for ticker in [*weights, candidate]
+        ticker: _series(eligible.returns[ticker], EUR_RETURNS) for ticker in [*weights, candidate]
     }
     oldest = min(series.base_date for series in daily.values())
     end = min(series.last_date for series in daily.values())
@@ -542,8 +557,11 @@ def correlation_cells(report: ExAnteReport) -> list[tuple[str, str, RiskFigure]]
     return [(a, b, report.correlation.cell(a, b)) for i, a in enumerate(keys) for b in keys[i:]]
 
 
-def _series(returns: EurReturns, *, local: bool) -> ReturnSeries:
-    values = returns.r_local if local else returns.r_eur
+def _series(returns: EurReturns, component: str) -> ReturnSeries:
+    """One of RK-5's daily components: EUR_RETURNS, LOCAL_RETURNS or FX_RETURNS."""
+    values = {EUR_RETURNS: returns.r_eur, LOCAL_RETURNS: returns.r_local, FX_RETURNS: returns.r_fx}[
+        component
+    ]
     return ReturnSeries(
         Frequency.DAILY,
         returns.anchor,
@@ -557,7 +575,7 @@ def _benchmark_series(benchmark: Benchmark, *, local: bool) -> ReturnSeries:
         return benchmark.daily
     # build_benchmark already converted these once, so they're eligible.
     returns = eur_daily_returns(benchmark.fetched.prices, benchmark.fetched.fx)
-    return _series(returns, local=True)
+    return _series(returns, LOCAL_RETURNS)
 
 
 def _log_ex_ante(report: ExAnteReport, n_included: int, n_left_out: int) -> None:
@@ -590,6 +608,24 @@ def _log_ex_ante(report: ExAnteReport, n_included: int, n_left_out: int) -> None
         len(figures),
         sum(1 for _, _, figure in cells if figure.value is None),
         len(cells),
+    )
+
+
+def _log_fx_decomposition(report: ExAnteReport) -> None:
+    rows = report.fx_decomposition
+    if not rows:
+        logger.info("ex-ante-risk: no FX decomposition, every included holding is in EUR.")
+        return
+    figures = [
+        figure
+        for row in rows
+        for figure in (row.local_volatility, row.fx_volatility, row.correlation, row.eur_volatility)
+    ]
+    logger.info(
+        "ex-ante-risk: FX decomposition of %d non-EUR holding(s), %d of %d figure(s) greyed.",
+        len(rows),
+        sum(1 for figure in figures if figure.value is None),
+        len(figures),
     )
 
 

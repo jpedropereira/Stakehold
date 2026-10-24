@@ -91,7 +91,7 @@ flowchart TD
         LABS["labs/<br/>calculator · risk<br/><i>backtests (LB-3); their risk table (RK-8)</i>"]
         TWR["twr/<br/>calculator<br/><i>holdings-based daily TWR (RK-10)</i>"]
         EURR["eur_returns/<br/>calculator · fetch · eligibility<br/><i>daily EUR returns, shared with risk (RK-5);<br/>data-store fan-out (RK-10);<br/>risk path's wording (RK-17)</i>"]
-        RISK["risk/<br/>types · weekly · quality · history<br/>windows · risk_free · var_mask<br/>measures · drawdown · tail · single_series<br/>covariance · listwise · ex_ante<br/>correlation · pairing · relative · ex_post<br/>ex_ante_report · rolling · what_if<br/><i>pure library (RK-6, RK-7, RK-15, RK-16, RK-11, RK-13, RK-17, RK-24, RK-19);<br/>first caller labs/risk (RK-8)</i>"]
+        RISK["risk/<br/>types · weekly · quality · history<br/>windows · risk_free · var_mask<br/>measures · drawdown · tail · single_series<br/>covariance · listwise · ex_ante<br/>correlation · pairing · relative · ex_post<br/>ex_ante_report · rolling · what_if<br/>fx_decomposition<br/><i>pure library (RK-6, RK-7, RK-15, RK-16, RK-11, RK-13, RK-17, RK-24, RK-19, RK-26);<br/>first caller labs/risk (RK-8)</i>"]
         BENCH["benchmark/<br/>base<br/><i>the benchmark's return series and status (RK-13)</i>"]
         LT["look_through/<br/>calculator · issuer · instruments<br/><i>exposures and concentration of a mix (RK-22)</i>"]
     end
