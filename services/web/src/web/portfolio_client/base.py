@@ -492,6 +492,34 @@ class ExcludedHolding:
 
 
 @dataclass(frozen=True)
+class RollingRisk:
+    """Rolling 1Y volatility and Sharpe, stepped monthly (RK-24, spec §4.5): one figure per
+    month end, in date order, from the first full year, the two of the same length and on the
+    same windows. A window below its minimum is a gap: a greyed figure with its reason, kept in
+    place, so a chart breaks its line there. The last point is the 1Y figure. Both empty: the
+    history is under a year."""
+
+    window: str  # "1Y"
+    step: str  # "monthly"
+    volatility: tuple[RiskFigure, ...]
+    sharpe: tuple[RiskFigure, ...]
+
+
+@dataclass(frozen=True)
+class RollingCorrelation:
+    """A pair's rolling 52-week correlation (RK-24, spec §7.1), stepped weekly, always EUR. `b`
+    is "portfolio" for the constant-weight mix. `points` is empty exactly when `reason` says
+    why (a side left out, an unavailable benchmark); a greyed point keeps its place."""
+
+    a: str
+    b: str
+    window: str  # "52W"
+    step: str  # "weekly"
+    reason: str | None
+    points: tuple[RiskFigure, ...]
+
+
+@dataclass(frozen=True)
 class ExPostRisk:
     """portfolio's ExPostRiskResponse (RK-11), measured on the TWR of invested positions. With
     nothing to measure, the dates are None and `windows` is empty; otherwise it holds every
@@ -505,6 +533,7 @@ class ExPostRisk:
     benchmark: BenchmarkStatus  # not fetched when there's nothing to measure: not available
     windows: tuple[ExPostWindow, ...]
     excluded: tuple[ExcludedHolding, ...]
+    rolling: RollingRisk | None = None  # on the TWR (RK-24); None exactly when there are no windows
 
 
 @dataclass(frozen=True)
@@ -583,6 +612,9 @@ class ExAnteRisk:
     holdings: tuple[ExAnteHolding, ...] | None
     constant_weight: SeriesRisk | None  # its weekly volatility is σ_p
     correlation: CorrelationMatrix | None
+    # RK-24: over the mix's whole history, whatever `window` is; the pair only when one was sent.
+    rolling: RollingRisk | None = None
+    rolling_correlation: RollingCorrelation | None = None
 
 
 # The look-through's dimensions and coverage shares (RK-22), as portfolio names them. Every
@@ -771,6 +803,8 @@ class PortfolioClient(Protocol):
     # The ex-ante risk of (ticker, weight) pairs held at constant weights (RK-17), over one
     # standard window, with `exclude` left out of the mix. Read-only despite the POST; the
     # matrix is in EUR. InvalidPortfolioRequest means the mix itself was rejected.
+    # `rolling_pair` (RK-24) asks for the rolling correlation of two tickers from the mix or the
+    # benchmark, or of one against the portfolio (None); a pair portfolio rejects is a 422 too.
     async def ex_ante_risk(
         self,
         *,
@@ -778,6 +812,7 @@ class PortfolioClient(Protocol):
         window: str,
         benchmark: str,
         exclude: list[str],
+        rolling_pair: tuple[str, str | None] | None = None,
     ) -> ExAnteRisk: ...
 
     # The look-through exposures of (ticker, weight) pairs (RK-22): by currency, sector,

@@ -26,6 +26,18 @@ window.StakeholdChartTheme = {
     return `${sign}${magnitude}%`;
   },
 
+  // `color` at `alpha`, for a soft fill (the drawdown's area, a rolling Sharpe's ± 1 s.e.
+  // band). A token can be written as hex or rgb(), so a canvas normalizes it first: its
+  // fillStyle reads back as #rrggbb for any opaque color.
+  translucent(color, alpha) {
+    const probe = document.createElement("canvas").getContext("2d");
+    probe.fillStyle = color;
+    const hex = probe.fillStyle;
+    if (!/^#[0-9a-f]{6}$/i.test(hex)) return color;
+    const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  },
+
   // A canvas doesn't restyle itself, so `redraw` runs when the OS switches scheme (only
   // visible with no manual choice, but harmless otherwise) or on the header toggle
   // (static/theme.js).

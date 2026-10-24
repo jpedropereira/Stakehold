@@ -2,6 +2,7 @@
 {% from "partials/_banner.html" import banner %}
 {% from "partials/_term.html" import term %}
 {% from "partials/_benchmark_field.html" import benchmark_form %}
+{% from "partials/_rolling_charts.html" import rolling_block, pair_block %}
 {% block title %}Risk — Stakehold{% endblock %}
 {# One figure, formatted by its row's kind (risk_view.SUMMARY_ROWS): only a return is coloured as a gain
    or a loss, to 1 decimal like the Labs risk panel's CAGR (RK-9). #}
@@ -163,6 +164,7 @@
       {% endfor %}
     </ol>
     {% endif %}
+    {{ rolling_block(ex_post_rolling.charts, "your invested holdings", "risk-ex-post-rolling") }}
     {% if ex_post.excluded %}
     <h3>Left out</h3>
     <ul class="labs-unavailable">
@@ -326,6 +328,9 @@
     {% endif %}
     {% endif %}
 
+    {{ rolling_block(ex_ante_rolling.charts, "today's mix", "risk-ex-ante-rolling") }}
+    {{ pair_block(ex_ante_rolling.correlation) }}
+
     {% if ex_ante.left_out %}
     <h3>Left out</h3>
     <ul class="labs-unavailable">
@@ -397,5 +402,11 @@
     {% if concentration.measured %}<p class="labs-note">The other holdings' weights were scaled to 100%.</p>{% endif %}
     {% endif %}
   </section>
+  {# RK-25's charts, drawn from their data islands: loaded once for every rolling canvas. #}
+  {% if ex_post_rolling.charts or ex_ante_rolling.charts or ex_ante_rolling.correlation %}
+  <script src="{{ asset_url('/static/vendor/chart.min.js') }}" defer></script>
+  <script src="{{ asset_url('/static/chart_theme.js') }}" defer></script>
+  <script src="{{ asset_url('/static/risk_rolling_chart.js') }}" defer></script>
+  {% endif %}
 </section>
 {% endblock %}

@@ -15,6 +15,11 @@ The last two measure today's mix, so they share one GET /holdings (labs_view.bui
 then call portfolio concurrently. A failed holdings call shows its notice in both. Later
 sections (the what-if) add a loader each.
 
+The rolling charts (RK-25) come with the first two sections' own calls, so nothing more is
+fetched and each section's charts fail with it: ex-post's and ex-ante's rolling 1Y volatility
+and Sharpe, and ex-ante's rolling correlation of the pair `?corr_a=&corr_b=` names (the heaviest
+holding against the portfolio by default; risk_rolling_view.chosen_pair has the rule).
+
 `?benchmark=` (RK-14) picks what the summary's relative figures measure against, portfolio's
 VWCE.DE by default (benchmark_param.py has the rule). The field suggests the tracked tickers,
 fetched alongside the figures; a failed list leaves the field usable, as on /labs.
@@ -26,6 +31,7 @@ response.
 
 import asyncio
 import logging
+from dataclasses import dataclass
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 from web.api.csrf import ensure_csrf_cookie
@@ -46,6 +52,15 @@ from web.risk_ex_ante_view import (
     build_ex_ante_section,
     chosen_ex_ante_window,
 )
+from web.risk_rolling_view import (
+    PAIR_PARAMS,
+    CorrelationChart,
+    RollingCharts,
+    RollingSeries,
+    build_correlation_chart,
+    build_rolling_charts,
+    chosen_pair,
+)
 from web.risk_view import ExPostTable, build_ex_post_table
 from web.settings import Settings
 
@@ -56,21 +71,51 @@ router = APIRouter()
 _UNAVAILABLE = "Can't reach the portfolio service right now, so it can't be shown."
 
 
+@dataclass(frozen=True)
+class _Rolling:
+    """A section's rolling charts: None where portfolio had nothing to measure."""
+
+    charts: RollingCharts | None = None
+    correlation: CorrelationChart | None = None
+
+
+def _n_points(series: RollingSeries) -> int:
+    """Every point, greyed ones included: a series greyed throughout has no payload."""
+    return len(series.payload["dates"]) if series.payload else sum(g.count for g in series.gaps)
+
+
+def _log_rolling(section: str, charts: RollingCharts | None) -> None:
+    if charts is None:
+        return
+    if not charts.series:
+        logger.info("risk: %s rolling: no point, the history is under a year.", section)
+        return
+    logger.info(
+        "risk: %s rolling 1Y: %d monthly point(s), %s.",
+        section,
+        _n_points(charts.series[0]),
+        ", ".join(
+            f"{sum(g.count for g in s.gaps)} {s.key} greyed" + ("" if s.payload else " (all)")
+            for s in charts.series
+        ),
+    )
+
+
 async def _load_ex_post(
     portfolio_client: PortfolioClient, user_id: str, benchmark: str
-) -> tuple[ExPostTable | None, str | None]:
-    """The ex-post summary and None, or None and the message to show in its place. Both None:
-    nothing to measure yet."""
+) -> tuple[ExPostTable | None, str | None, _Rolling]:
+    """The ex-post summary and None, or None and the message to show in its place, then its
+    rolling charts. Both None: nothing to measure yet."""
     logger.info("risk: loading the ex-post figures against %s.", benchmark)
     try:
         risk = await portfolio_client.ex_post_risk(user_id=user_id, benchmark=benchmark)
     except PortfolioClientError:
         logger.exception("risk: portfolio service unavailable loading the ex-post figures.")
-        return None, _UNAVAILABLE
+        return None, _UNAVAILABLE, _Rolling()
     table = build_ex_post_table(risk)
     if table is None:
         logger.info("risk: nothing to measure yet, no TWR returns.")
-        return None, None
+        return None, None, _Rolling()
     figures = [figure for window in risk.windows for figure in window.figures.values()]
     relative = [figure for window in risk.windows for figure in window.relative.values()]
     excluded = ", ".join(e.ticker for e in risk.excluded) or "none"
@@ -91,7 +136,9 @@ async def _load_ex_post(
         len(risk.excluded),
         excluded,
     )
-    return table, None
+    rolling = build_rolling_charts(risk.rolling, "ex-post")
+    _log_rolling("ex-post", rolling)
+    return table, None, _Rolling(charts=rolling)
 
 
 async def _load_holdings_sections(
@@ -101,14 +148,18 @@ async def _load_holdings_sections(
     window: str,
     exclude: list[str],
     params: list[tuple[str, str]],
-) -> tuple[tuple[ExAnteSection | None, str | None], tuple[ConcentrationSection | None, str | None]]:
+) -> tuple[
+    tuple[ExAnteSection | None, str | None, _Rolling],
+    tuple[ConcentrationSection | None, str | None],
+]:
     """The ex-ante and concentration sections, each as (section, None) or (None, the message to
-    show in its place). (None, None): no holding to measure yet."""
+    show in its place), ex-ante's with its rolling charts. (None, None): no holding to measure
+    yet."""
     try:
         holdings = await portfolio_client.list_holdings(user_id=user_id)
     except PortfolioClientError:
         logger.exception("risk: portfolio service unavailable listing holdings.")
-        return (None, _UNAVAILABLE), (None, _UNAVAILABLE)
+        return (None, _UNAVAILABLE, _Rolling()), (None, _UNAVAILABLE)
     mix = build_default_mix(holdings.holdings)
     if not mix.assets:
         logger.info(
@@ -116,7 +167,7 @@ async def _load_holdings_sections(
             "and worth something.",
             len(holdings.holdings),
         )
-        return (None, None), (None, None)
+        return (None, None, _Rolling()), (None, None)
     ex_ante, concentration = await asyncio.gather(
         _load_ex_ante(portfolio_client, mix, holdings.holdings, benchmark, window, exclude, params),
         _load_concentration(portfolio_client, mix),
@@ -132,8 +183,9 @@ async def _load_ex_ante(
     window: str,
     exclude: list[str],
     params: list[tuple[str, str]],
-) -> tuple[ExAnteSection | None, str | None]:
-    """The ex-ante section and None, or None and the message to show in its place."""
+) -> tuple[ExAnteSection | None, str | None, _Rolling]:
+    """The ex-ante section and None, or None and the message to show in its place, then its
+    rolling charts."""
     tickers = [ticker for ticker, _ in mix.assets]
     stale = [ticker for ticker in exclude if ticker not in tickers]
     if stale:
@@ -143,13 +195,22 @@ async def _load_ex_ante(
     if set(tickers) <= set(sent):
         logger.info("risk: ex-ante exclusions would leave nothing, measuring the whole mix.")
         sent = []
+    measured = [ticker for ticker in tickers if ticker not in sent]
+    raw = dict((k, v) for k, v in params if k in PAIR_PARAMS)
+    pair = chosen_pair(raw.get("corr_a"), raw.get("corr_b"), measured, benchmark)
+    if pair.dropped:
+        # A link from before a sale or an exclusion, or a hand-edited URL: portfolio would 422.
+        logger.info("risk: rolling pair dropped (%s), showing the default.", pair.dropped)
     logger.info(
-        "risk: loading the ex-ante figures for %d holdings over %s against %s, excluding %s; "
-        "%d unpriced, %d worth nothing, %d over the %d cap.",
+        "risk: loading the ex-ante figures for %d holdings over %s against %s, excluding %s, "
+        "rolling pair %s vs %s (%s); %d unpriced, %d worth nothing, %d over the %d cap.",
         len(mix.assets),
         window,
         benchmark,
         ", ".join(sent) or "none",
+        pair.a,
+        pair.b or "the portfolio",
+        "requested" if pair.requested else "default",
         len(mix.unpriced),
         len(mix.unweighted),
         len(mix.dropped),
@@ -157,14 +218,46 @@ async def _load_ex_ante(
     )
     try:
         risk = await portfolio_client.ex_ante_risk(
-            assets=list(mix.assets), window=window, benchmark=benchmark, exclude=sent
+            assets=list(mix.assets),
+            window=window,
+            benchmark=benchmark,
+            exclude=sent,
+            rolling_pair=(pair.a, pair.b),
         )
     except PortfolioClientError:
         logger.exception("risk: portfolio service unavailable loading the ex-ante figures.")
-        return None, _UNAVAILABLE
+        return None, _UNAVAILABLE, _Rolling()
     section = build_ex_ante_section(risk, mix, holdings, params)
     _log_ex_ante(risk, section)
-    return section, None
+    rolling = _Rolling(
+        charts=build_rolling_charts(risk.rolling, "ex-ante"),
+        correlation=build_correlation_chart(
+            risk.rolling_correlation, pair, measured, benchmark, params
+        ),
+    )
+    _log_rolling("ex-ante", rolling.charts)
+    _log_rolling_pair(rolling.correlation)
+    return section, None, rolling
+
+
+def _log_rolling_pair(chart: CorrelationChart | None) -> None:
+    if chart is None:
+        return
+    if chart.series is None:
+        logger.info(
+            "risk: rolling correlation %s vs %s: no point, %s.",
+            chart.a,
+            chart.b_label,
+            chart.reason,
+        )
+        return
+    logger.info(
+        "risk: rolling correlation %s vs %s: %d weekly point(s), %d greyed.",
+        chart.a,
+        chart.b_label,
+        _n_points(chart.series),
+        sum(g.count for g in chart.series.gaps),
+    )
 
 
 async def _load_concentration(
@@ -257,8 +350,8 @@ async def risk(
         logger.info("risk: unknown ex-ante window %r, showing %s.", ex_ante_window, window)
     params = request.query_params.multi_items()
     (
-        (ex_post, ex_post_error),
-        ((ex_ante, ex_ante_error), (concentration, concentration_error)),
+        (ex_post, ex_post_error, ex_post_rolling),
+        ((ex_ante, ex_ante_error, ex_ante_rolling), (concentration, concentration_error)),
         (tickers, tickers_notice),
     ) = await asyncio.gather(
         _load_ex_post(portfolio_client, user.user_id, benchmark),
@@ -276,13 +369,17 @@ async def risk(
             "nav_active": "risk",
             "ex_post": ex_post,
             "ex_post_error": ex_post_error,
+            "ex_post_rolling": ex_post_rolling,
             "ex_ante": ex_ante,
             "ex_ante_error": ex_ante_error,
             "ex_ante_window": window,
+            "ex_ante_rolling": ex_ante_rolling,
             "concentration": concentration,
             "concentration_error": concentration_error,
             # The benchmark form re-sends these, so comparing changes nothing else (RK-14).
-            "benchmark_kept": [(k, v) for k, v in params if k in ("ex_ante_window", "exclude")],
+            "benchmark_kept": [
+                (k, v) for k, v in params if k in ("ex_ante_window", "exclude", *PAIR_PARAMS)
+            ],
             "benchmark": benchmark,
             "benchmark_error": benchmark_error,
             "tickers": tickers,

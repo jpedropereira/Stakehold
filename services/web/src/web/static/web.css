@@ -1419,6 +1419,39 @@ img.logo-on-dark {
   margin-top: var(--space-6);
 }
 
+/* RK-25: each section's rolling charts, one per measure, stacked so their date axes line up. A
+   chart keeps the default .chart-frame, so its height stays inside review_pages.py's bounds. */
+.risk-rolling {
+  margin-top: var(--space-5);
+}
+
+.risk-rolling-series {
+  margin-top: var(--space-4);
+}
+
+.risk-rolling-series h4 {
+  font: var(--text-caption);
+  font-weight: 600;
+  margin: 0 0 var(--space-2);
+}
+
+.risk-rolling-series .chart-note {
+  margin: var(--space-2) 0 0;
+}
+
+.risk-rolling-gaps {
+  margin: var(--space-2) 0 0;
+  padding-left: var(--space-5);
+  font: var(--text-caption);
+  color: var(--text-muted);
+}
+
+/* The pair picker sits in the benchmark field's row; its selects take the input's height. */
+.rolling-pair select {
+  box-sizing: border-box;
+  height: 2.75rem;
+}
+
 /* Six columns of short figures, Labs' tighter cells and figure size. */
 .risk-table th,
 .risk-table td {

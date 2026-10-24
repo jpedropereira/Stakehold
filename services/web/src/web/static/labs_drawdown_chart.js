@@ -17,16 +17,6 @@ document.addEventListener("DOMContentLoaded", () => {
   // distance below the mix's last high, not a loss figure, and an all-oxblood chart would read
   // as alarm. Gold is out for the reason the growth chart gives (2.2:1 on parchment).
   const FILL_ALPHA = 0.16;
-  // The muted text color at FILL_ALPHA. A token can be written as hex or rgb(), so a canvas
-  // normalizes it first: its fillStyle reads back as #rrggbb for any opaque color.
-  const translucent = (color) => {
-    const probe = document.createElement("canvas").getContext("2d");
-    probe.fillStyle = color;
-    const hex = probe.fillStyle;
-    if (!/^#[0-9a-f]{6}$/i.test(hex)) return color;
-    const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
-    return `rgba(${r}, ${g}, ${b}, ${FILL_ALPHA})`;
-  };
 
   // As labs_chart.js: Chart.js sizes its date ticks against a width that leaves out the y
   // axis, so the count is capped by the plot's real width.
@@ -95,7 +85,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const render = () => {
     const [dataset] = chart.data.datasets;
     dataset.borderColor = colors.text;
-    dataset.backgroundColor = translucent(colors.muted);
+    dataset.backgroundColor = theme.translucent(colors.muted, FILL_ALPHA);
     chart.options.scales.x.ticks.maxTicksLimit = dateLimit(chart, chart.width);
     chart.options.scales.x.grid.color = colors.grid;
     for (const axis of [chart.options.scales.x, chart.options.scales.y]) {
