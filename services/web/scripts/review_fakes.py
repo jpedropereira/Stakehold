@@ -763,7 +763,7 @@ def fakes():
                 excluded=(ExcludedHolding("7203.T", "no_fx_rate", "no FX series for JPY"),),
             )
 
-        async def ex_ante_risk(self, *, assets, window, benchmark, exclude):
+        async def ex_ante_risk(self, *, assets, window, benchmark, exclude, rolling_pair=None):
             """The review mix at constant weights (RK-18). AAPL's history starts in 2015, so it
             limits Max; 1Y has too few weeks for the decomposition and the squares; 10Y fails."""
             if window == "10Y":
