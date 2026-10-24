@@ -526,6 +526,10 @@ described here updates this file in the same change.
   (`−` only) because it's a cash-flow direction, not a delta. Prices use `places=4` and trim
   zeros past the second decimal (`112.34 USD`, `0.1235 USD`). RK-9 added the risk figures'
   `pct1`, `signed_pct1` and `ratio` (spec §10; see [`labs-ui.md`](labs-ui.md)). `/risk` (RK-12)
-  uses the same three, so a measure reads the same on both pages.
+  uses the same three, so a measure reads the same on both pages. RK-20 added the what-if's
+  changes: `signed_points1` (`−0.2 pts`: a change of a percentage, which `−0.2%` would make
+  read as a relative one) and `signed_ratio` (`+0.09`). Both are signed, as a delta is, but
+  never coloured, since neither is a gain or a loss.
 - **Risk page (RK-12 onward)** has its own file, [`risk-ui.md`](risk-ui.md): the ex-post
-  summary, the benchmark form, the ex-ante section and its heatmap, and concentration.
+  summary, the benchmark form, the ex-ante section and its heatmap, concentration and the
+  what-if.
