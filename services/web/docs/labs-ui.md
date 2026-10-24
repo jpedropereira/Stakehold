@@ -183,8 +183,9 @@ upstream calls) is in [`architecture.md`](architecture.md) and [`endpoints.md`](
     and the max drawdown row, read as alarm, against chapter IV's "no panic on losses". The
     chart is a 2px `--text` line with a `--text-muted` fill from 0% down to it, and the 0%
     gridline is drawn in `--text-muted`, as the growth chart's is. The fill's 16% alpha is
-    applied in `labs_drawdown_chart.js` to the resolved token (a canvas normalizes it to hex
-    first), so no new token is added. *Rejected: gold*, for the growth chart's reason (2.2:1 on
+    applied to the resolved token by `chart_theme.js`'s `translucent` (a canvas normalizes it
+    to hex first; moved there from `labs_drawdown_chart.js` for RK-25's Sharpe band), so no new
+    token is added. *Rejected: gold*, for the growth chart's reason (2.2:1 on
     parchment). *Rejected: an oxblood line*, as above. *Rejected: no fill*, which leaves a
     shallow drawdown hard to read against the 0% line.
   - *The drawdown chart follows the growth chart.* It is under the asset boxes, in the same

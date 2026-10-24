@@ -1,11 +1,12 @@
-# web risk UI
+# web Risk UI
 
-The `/risk` page's design decisions: its sections, their tables, controls and charts. Split out
-of [`ui-architecture.md`](ui-architecture.md) for size before RK-20, verbatim apart from this
-header. It is part of the same document, so `.claude/rules/architecture.md` applies to it: a
-change to anything described here updates this file in the same change. The server side of
-`/risk` (its router, the upstream calls) is in [`architecture.md`](architecture.md) and
-[`endpoints.md`](endpoints.md).
+The `/risk` page's design decisions: its sections, their tables, the heatmap, the concentration
+tables, the rolling charts and the what-if. Split out of [`ui-architecture.md`](ui-architecture.md) for size
+before RK-25, verbatim apart from this header; RK-25's and RK-20's entries were added here. It is part of
+the same document, so
+`.claude/rules/architecture.md` applies to it: a change to anything described here updates this
+file in the same change. The server side of `/risk` (its router, the upstream calls) is in
+[`architecture.md`](architecture.md) and [`endpoints.md`](endpoints.md).
 
 ## Key decisions
 
@@ -142,6 +143,64 @@ change to anything described here updates this file in the same change. The serv
     - *Review tooling.* The review holdings hold no fund to look through, so
       `review_fakes.py` answers with data shaped like the RK-22 dev run instead. A
       `risk-concentration-all` page opens every "show all".
+  - **Rolling charts (RK-25).** RK-24's rolling figures, drawn in the sections they come from:
+    ex-post's rolling 1Y volatility and Sharpe under its table, measured on the TWR, and
+    ex-ante's on the constant-weight mix after the heatmap, followed by the rolling correlation
+    of a pair. `risk_rolling_view.py` decides what is shown, `partials/_rolling_charts.html`
+    lays it out, and `static/risk_rolling_chart.js` draws every canvas from its data island.
+    Decisions (agreed):
+    - *In each section, not a section of their own.* The charts come with each section's own
+      call, so a failed call takes only its own charts with it, and R2's two labels never
+      share a chart. *Rejected: a "Rolling" section*, which would put ex-post and ex-ante
+      figures side by side and lose half its content whenever ex-ante failed.
+    - *Two stacked charts, Sharpe with a ± 1 s.e. band.* Volatility is a percentage and Sharpe
+      a ratio, so each has its own chart and axis. Stacked, their date axes line up. The band
+      is each point's standard error around it, a 16% tint of `--text-muted` (the drawdown's
+      fill, through `chart_theme.js`'s `translucent`). A 1Y Sharpe's SE is about 1, so the
+      band shows how little one year's Sharpe says. *Rejected: one chart with two axes*,
+      which invites reading a crossing as meaningful. *Rejected: the SE in the tooltip only*,
+      where the noise is invisible.
+    - *Ink only, as RK-24 asked.* Every line is `--text`. A volatility, a Sharpe or a
+      correlation is not a gain or a loss, so there is no forest or oxblood, and gold stays out
+      for the growth chart's reason. The zero gridline is `--text-muted`. ρ's axis is fixed at
+      −1 to 1, so a move from 0.90 to 0.95 reads as small as it is. Volatility's axis starts
+      at 0.
+    - *A gap breaks the line, and its reason goes under the chart.* Each point is plotted at
+      its window's end. A greyed point stays in the series as a null (`spanGaps: false`), and
+      the canvas can't show why, so each run of greyed windows with one reason becomes one
+      note: "No point for the 2 windows ending … to …: insufficient history (have 51, need
+      52)." A series greyed throughout (Sharpe with no risk-free series) has its note and no
+      chart, and the intro drops its sentence about the band.
+    - *A summary in words* under each chart gives the latest measured window, the lowest and
+      the highest, each with its end date. It stands in for the chart with no JS or a screen
+      reader, and the canvas's `aria-label` names what is drawn.
+    - *The default pair is the heaviest holding against the portfolio* (spec §7.1's "one asset
+      against the portfolio"). It is defined whenever anything is measured, even with one
+      holding. A GET form (`?corr_a=&corr_b=`, anchored at the chart) picks a holding from the
+      mix as sent, or the benchmark, against the portfolio, another holding or the benchmark.
+      It re-sends the rest of the query, and the benchmark form and the window and exclude
+      links keep the pair. *Rejected: the heaviest holding against the benchmark*, which is
+      empty when the benchmark is unavailable. *Rejected: the two heaviest holdings*, which
+      needs two.
+    - *A pair portfolio would reject falls back to the default.* Portfolio 422s a pair naming a
+      ticker outside the mix and the benchmark, an excluded one, or the same ticker twice, and
+      a 422 would cost the whole ex-ante section. So `chosen_pair` applies portfolio's rule
+      first. A link from before a sale or an exclusion gets the default, a note saying which
+      pair wasn't used, and a log line, as a stale `?exclude=` does. A pair portfolio accepts
+      but can't measure (a side left out, an unavailable benchmark) shows portfolio's reason
+      in place of the chart, with the picker still there.
+    - *Sharp edges.* If the heaviest holding can't be measured (say, no FX series), the default
+      pair shows a reason rather than a chart: web can't know before the call, and the picker
+      is the way out. Ex-ante's rolling figures cover the mix's whole history, so
+      `?ex_ante_window=` doesn't change them, though `?exclude=` does.
+    - *Glossary.* There are new entries for the rolling window and the rolling correlation,
+      the latter with its noise (about ±0.14) and its lesson, that correlations rise in
+      sell-offs.
+    - *Review tooling.* `review_fakes.py` generates the rolling points in code: ex-post with
+      two greyed months, ex-ante over the mix's history, a weekly pair with crisis-like spikes
+      and a gap, and 5Y answering with no risk-free series. There are six `risk-rolling*`
+      pages, covering the default pair, a ticker pair, an untracked benchmark side and a stale
+      link.
   - **What if · adding a candidate (RK-20).** The section after ex-ante: today's mix before
     and after adding a candidate (spec §7.2), from portfolio's what-if (RK-19), built by
     `risk_what_if_view.py`. Decisions (agreed):

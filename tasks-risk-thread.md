@@ -65,8 +65,8 @@ Spec Phase 0's discovery (2026-10-17) and the finance review (2026-10-20) are in
   (including why one was left out), and a summary. data-store also follows its own
   `logging.md`.
 - **Docs change in the same change as the code.** That means each touched service's
-  `docs/architecture.md`, plus portfolio `flows.md` and web `ui-architecture.md` (`/risk`'s notes
-  are in its `risk-ui.md`, split out before RK-20).
+  `docs/architecture.md`, plus portfolio `flows.md` and web `ui-architecture.md` (with its
+  split-outs `labs-ui.md` and `risk-ui.md`).
 - **Files stay under 64 KB.** If a doc would cross the limit, split it first, in a commit of its
   own (as LB-4 and LB-6 did).
 - **Visual review.** Every web task adds `review_pages.py` entries. It regenerates the
@@ -104,7 +104,7 @@ split out of this file for size; its row here links there.
 | RK-22 | [portfolio: look-through exposures](tasks-risk-thread-done.md#rk-22-portfolio-look-through-exposures) | RK-21 | done |
 | RK-23 | [web: concentration section](tasks-risk-thread-done.md#rk-23-web-concentration-section) | RK-12, RK-22 | done |
 | RK-24 | [portfolio: rolling windows](tasks-risk-thread-done.md#rk-24-portfolio-rolling-windows) | RK-11, RK-16, RK-17 | done |
-| RK-25 | [web: rolling charts](#rk-25-web-rolling-charts) | RK-18, RK-24 | ready |
+| RK-25 | [web: rolling charts](tasks-risk-thread-done.md#rk-25-web-rolling-charts) | RK-18, RK-24 | done |
 | RK-26 | [FX decomposition (portfolio and web)](#rk-26-fx-decomposition-portfolio-and-web) | RK-18 | ready |
 | RK-27 | [data-store: regimes endpoint](tasks-risk-thread-done.md#rk-27-data-store-regimes-endpoint) | RK-1 | done |
 | RK-28 | [Regime view (portfolio and web)](#rk-28-regime-view-portfolio-and-web) | RK-14, RK-27 | ready |
@@ -113,12 +113,6 @@ split out of this file for size; its row here links there.
 | RK-31 | [VaR day mask on traded volume](#rk-31-var-day-mask-on-traded-volume) | RK-1 | ready |
 
 ## Tasks
-
-### RK-25. web: rolling charts
-
-**Status:** ready
-
-Charts for RK-24, on `/risk`.
 
 ### RK-26. FX decomposition (portfolio and web)
 

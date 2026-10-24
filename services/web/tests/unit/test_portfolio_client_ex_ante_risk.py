@@ -110,6 +110,8 @@ def _body(**changes):
                 for b in ["IWDA.AS", "AAPL", "VWCE.DE"][i:]
             ],
         },
+        "rolling": None,
+        "rolling_correlation": None,
         **changes,
     }
 

@@ -878,6 +878,25 @@ and `POST /risk/ex-ante` each gain `rolling`, and the ex-ante request takes an o
   and its axis is ρ, not a gain or a loss, so no forest or oxblood. Web picks the default pair
   (it sends none today).
 
+### RK-25. web: rolling charts
+
+**Status:** done
+
+Charts for RK-24, on `/risk`.
+
+**As built:** `risk_rolling_view.py` (pure), `partials/_rolling_charts.html` and
+`static/risk_rolling_chart.js`. The client parses both rolling keys as required and sends
+`rolling_pair`. First, web's `ui-architecture.md` was split: Risk is now `docs/risk-ui.md`, which
+holds the reasoning. Agreed:
+- Each section draws its own charts: ex-post's under its table, ex-ante's after the heatmap,
+  with the pair.
+- Volatility and Sharpe are two stacked ink charts, Sharpe with a ± 1 s.e. band. ρ's axis is
+  fixed at −1..1.
+- The default pair is the heaviest holding against the portfolio (`?corr_a=&corr_b=`). A pair
+  portfolio would 422 falls back to it with a note.
+- Gaps break the line, and each run of them gets a note under the chart.
+- Not measured against the dev data, because its `portfolio-api` image predates RK-24.
+
 ### RK-27. data-store: regimes endpoint
 
 **Status:** done

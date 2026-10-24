@@ -209,7 +209,7 @@ class FakePortfolioClient:
             raise self.holdings_error
         return self.holdings
 
-    async def ex_ante_risk(self, *, assets, window, benchmark, exclude):
+    async def ex_ante_risk(self, *, assets, window, benchmark, exclude, rolling_pair=None):
         self.calls.append(("ex_ante_risk", tuple(assets), window, benchmark, tuple(exclude)))
         if self.ex_ante_error:
             raise self.ex_ante_error

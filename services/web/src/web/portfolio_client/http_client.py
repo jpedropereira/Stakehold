@@ -54,6 +54,8 @@ from web.portfolio_client.base import (
     Return,
     RiskFigure,
     RiskFreeStatus,
+    RollingCorrelation,
+    RollingRisk,
     SeriesRisk,
     TickerLookup,
     TickerMapping,
@@ -606,6 +608,37 @@ def _ex_post_window(item: dict) -> ExPostWindow:
     )
 
 
+def _rolling_points(items: list, name: str) -> tuple[RiskFigure, ...]:
+    return tuple(_ex_post_figure({name: item}, name) for item in items)
+
+
+def _rolling(item: dict | None) -> RollingRisk | None:
+    """RK-24's rolling 1Y figures. A gap is a greyed figure, never a null point."""
+    if item is None:
+        return None
+    volatility = _rolling_points(item["volatility"], "volatility")
+    sharpe = _rolling_points(item["sharpe"], "sharpe")
+    if [f.window_end for f in volatility] != [f.window_end for f in sharpe]:
+        # Two charts over the same windows: a missing point would shift every later one.
+        raise ValueError("rolling volatility and Sharpe aren't on the same windows")
+    return RollingRisk(
+        window=item["window"], step=item["step"], volatility=volatility, sharpe=sharpe
+    )
+
+
+def _rolling_correlation(item: dict | None) -> RollingCorrelation | None:
+    if item is None:
+        return None
+    return RollingCorrelation(
+        a=item["a"],
+        b=item["b"],
+        window=item["window"],
+        step=item["step"],
+        reason=item["reason"],
+        points=_rolling_points(item["points"], "point"),
+    )
+
+
 def _ex_post_risk(body: dict) -> ExPostRisk:
     try:
         windows = tuple(_ex_post_window(item) for item in body["windows"])
@@ -625,6 +658,7 @@ def _ex_post_risk(body: dict) -> ExPostRisk:
                 ExcludedHolding(ticker=item["ticker"], status=item["status"], reason=item["reason"])
                 for item in body["excluded"]
             ),
+            rolling=_rolling(body["rolling"]),
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise PortfolioUnavailable(f"malformed portfolio response: {exc}") from exc
@@ -698,6 +732,8 @@ def _ex_ante_risk(body: dict) -> ExAnteRisk:
             holdings=None if holdings is None else tuple(_ex_ante_holding(h) for h in holdings),
             constant_weight=None if constant is None else _series_risk(constant),
             correlation=None if matrix is None else _correlation_matrix(matrix),
+            rolling=_rolling(body["rolling"]),
+            rolling_correlation=_rolling_correlation(body["rolling_correlation"]),
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise PortfolioUnavailable(f"malformed portfolio response: {exc}") from exc
@@ -1163,21 +1199,21 @@ class HttpPortfolioClient:
         window: str,
         benchmark: str,
         exclude: list[str],
+        rolling_pair: tuple[str, str | None] | None = None,
     ) -> ExAnteRisk:
-        response = await self._request(
-            "POST",
-            "/risk/ex-ante",
-            json={
-                "assets": [
-                    {"ticker": ticker, "weight": _decimal_str(weight)} for ticker, weight in assets
-                ],
-                "window": window,
-                "benchmark": benchmark,
-                # RK-18 shows the matrix in EUR only: a EUR investor's risk (spec §7.1).
-                "currency": "eur",
-                "exclude": exclude,
-            },
-        )
+        request = {
+            "assets": [
+                {"ticker": ticker, "weight": _decimal_str(weight)} for ticker, weight in assets
+            ],
+            "window": window,
+            "benchmark": benchmark,
+            # RK-18 shows the matrix in EUR only: a EUR investor's risk (spec §7.1).
+            "currency": "eur",
+            "exclude": exclude,
+        }
+        if rolling_pair is not None:
+            request["rolling_correlation"] = {"a": rolling_pair[0], "b": rolling_pair[1]}
+        response = await self._request("POST", "/risk/ex-ante", json=request)
         if response.status_code == 422:
             raise InvalidPortfolioRequest(_error_detail(response))
         if response.status_code != 200:

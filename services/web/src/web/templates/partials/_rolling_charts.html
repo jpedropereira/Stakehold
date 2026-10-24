@@ -1,0 +1,92 @@
+{% from "partials/_term.html" import term %}
+{# /risk's rolling charts (RK-25), built by risk_rolling_view.py and drawn by
+   static/risk_rolling_chart.js from each canvas's data island. Ink lines only: a volatility, a
+   Sharpe or a correlation isn't a gain or a loss. A gap's reason can't show on the canvas, so
+   each run of gaps is a note under its chart, and the summary says the chart in words for a
+   screen reader or with no JS. #}
+
+{% macro figure(value, kind, se=none) -%}
+<span class="mono">{% if kind == "pct1" %}{{ value | pct1 }}{% else %}{{ value | ratio }}{% if se is not none %} ± {{ se | ratio }}{% endif %}{% endif %}</span>
+{%- endmacro %}
+
+{% macro series_block(series, what, heading=true) -%}
+<div class="risk-rolling-series">
+  {% if heading %}<h4>{{ term(series.label, series.anchor) }}</h4>{% endif %}
+  {% if series.payload %}
+  <div class="chart-frame">
+    <canvas id="{{ series.canvas_id }}" data-rolling="{{ series.data_id }}" role="img" aria-label="Rolling {{ series.label | lower }} of {{ what }}"></canvas>
+  </div>
+  <script id="{{ series.data_id }}" type="application/json">{{ series.payload | tojson }}</script>
+  {% set s = series.summary %}
+  <p class="chart-note">Latest, to <span class="mono">{{ s.latest.end | date }}</span>: {{ figure(s.latest.value, series.kind, s.latest.standard_error) }}. Lowest {{ figure(s.low.value, series.kind) }} (to <span class="mono">{{ s.low.end | date }}</span>), highest {{ figure(s.high.value, series.kind) }} (to <span class="mono">{{ s.high.end | date }}</span>).</p>
+  {% endif %}
+  {% if series.gaps %}
+  <ul class="risk-rolling-gaps">
+    {% for gap in series.gaps %}
+    <li>{% if gap.count == 1 %}No point for the window ending <span class="mono">{{ gap.last_end | date }}</span>{% else %}No point for the <span class="mono">{{ gap.count }}</span> windows ending <span class="mono">{{ gap.first_end | date }}</span> to <span class="mono">{{ gap.last_end | date }}</span>{% endif %}: {{ gap.reason }}.</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</div>
+{%- endmacro %}
+
+{# Rolling 1Y volatility and Sharpe of one section. `what` names the series for the canvas's
+   label: "your invested holdings" or "today's mix"; `anchor` is the block's id. #}
+{% macro rolling_block(charts, what, anchor) -%}
+{% if charts %}
+<div class="risk-rolling" id="{{ anchor }}">
+  <h3>Over time</h3>
+  {% if charts.empty_reason %}
+  <p class="entry-empty">{{ charts.empty_reason }}</p>
+  {% else %}
+  <p class="labs-note">Each point is the {{ term("1-year window", "rolling-window") }} ending that month, measured on weekly returns: how {{ what }} behaved at different times, historically. A break in a line is a window with too few returns.{% if charts.series | selectattr("key", "equalto", "sharpe") | selectattr("payload") | list %} The shaded band around the Sharpe is ± 1 s.e.{% endif %}</p>
+  {% for series in charts.series %}
+  {{ series_block(series, what) }}
+  {% endfor %}
+  {% endif %}
+</div>
+{% endif %}
+{%- endmacro %}
+
+{# The rolling correlation of a pair, with the GET form that picks it. The form re-sends the
+   rest of the query, so changing the pair changes nothing else. #}
+{% macro pair_block(chart) -%}
+{% if chart %}
+<div class="risk-rolling" id="risk-rolling-correlation">
+  <h3>{{ term("Correlation over time", "rolling-correlation") }}</h3>
+  <p class="labs-note"><span class="mono">{{ chart.a }}</span> against {% if chart.b_label == "the portfolio" %}the portfolio{% else %}<span class="mono">{{ chart.b_label }}</span>{% endif %}, over the 52 weeks ending each Friday, in euros, historically. Over 52 weeks it is noisy, about ± <span class="mono">0.14</span> (1 s.e.); correlations tend to rise in sell-offs.</p>
+  {% if chart.dropped %}
+  <p class="labs-note">The pair in the link wasn't used: {{ chart.dropped }}, so this is the default.</p>
+  {% endif %}
+  <form method="get" action="/risk#risk-rolling-correlation" class="benchmark-form rolling-pair" id="risk-rolling-pair">
+    {% for name, value in chart.kept %}
+    <input type="hidden" name="{{ name }}" value="{{ value }}">
+    {% endfor %}
+    <div class="benchmark-row">
+      <div class="field">
+        <label for="risk-corr-a">Holding</label>
+        <select id="risk-corr-a" name="corr_a" class="mono">
+          {% for o in chart.options_a %}
+          <option value="{{ o.value }}"{% if o.selected %} selected{% endif %}>{{ o.label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label for="risk-corr-b">Against</label>
+        <select id="risk-corr-b" name="corr_b" class="mono">
+          {% for o in chart.options_b %}
+          <option value="{{ o.value }}"{% if o.selected %} selected{% endif %}>{{ o.label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <button type="submit" class="btn btn-secondary">Show</button>
+    </div>
+  </form>
+  {% if chart.series %}
+  {{ series_block(chart.series, chart.a ~ " against " ~ chart.b_label, heading=false) }}
+  {% else %}
+  <p class="entry-empty">No rolling correlation: {{ chart.reason }}.</p>
+  {% endif %}
+</div>
+{% endif %}
+{%- endmacro %}

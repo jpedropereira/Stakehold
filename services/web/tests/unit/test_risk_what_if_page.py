@@ -191,7 +191,7 @@ class FakePortfolioClient:
             raise self.holdings_error
         return self.holdings
 
-    async def ex_ante_risk(self, *, assets, window, benchmark, exclude):
+    async def ex_ante_risk(self, *, assets, window, benchmark, exclude, rolling_pair=None):
         self.calls.append(("ex_ante_risk", tuple(assets), window, tuple(exclude)))
         if self.ex_ante_error:
             raise self.ex_ante_error
@@ -368,12 +368,16 @@ def test_the_form_keeps_the_other_controls_fields(client):
     # The benchmark form keeping the what-if's is in test_risk_page.py, where ex-post renders it.
     test_client, _ = client
 
-    section = _get(test_client, f"{WHAT_IF_QUERY}&benchmark=IWDA.AS&ex_ante_window=5Y&exclude=TSLA")
+    section = _get(
+        test_client, f"{WHAT_IF_QUERY}&benchmark=IWDA.AS&ex_ante_window=5Y&exclude=TSLA&corr_a=AAPL"
+    )
 
     assert _hidden(_form(section, "risk-what-if-form")) == [
         ("benchmark", "IWDA.AS"),
         ("ex_ante_window", "5Y"),
         ("exclude", "TSLA"),
+        # RK-25's rolling pair.
+        ("corr_a", "AAPL"),
     ]
 
 
