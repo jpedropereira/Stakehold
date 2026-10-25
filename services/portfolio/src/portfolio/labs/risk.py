@@ -7,7 +7,7 @@ the bridge between Labs and the risk library: risk/ imports nothing from portfol
 that turns Labs' series into `ReturnSeries` lives here. The measures themselves are
 risk/single_series.py's.
 
-The rules, as agreed for RK-8 (tasks-risk-thread.md):
+The rules, as agreed for RK-8 (docs/roadmap-archive/risk.md):
 
 - **Windows** are the spec's 1Y, 3Y, 5Y, 10Y and Max (§4.5), not Labs' periods, so periods under
   a year never get risk figures. They all end on Labs' end date, the last day every asset has.
@@ -38,7 +38,8 @@ The rules, as agreed for RK-8 (tasks-risk-thread.md):
   dropped, leaving a one-year mix 51 weeks, under the 52-week minimum, beside assets with 52.
   Near the common start (Max) it is bought on the window's start, and its first week is dropped
   as any series' first partial week is.
-- **VaR (§5.5)** uses the days every asset has a price row (R7, var_mask.py), and carries
+- **VaR (§5.5)** uses the days every asset traded (R7, var_mask.py): a price row that isn't a
+  zero-volume, flat one (`eur_returns.traded_dates`, RK-31). It carries
   `nonsync_daily` when the row includes a non-EUR asset. `TickerInfo` has no exchange, so the
   rule is by currency: EUR-listed assets close at about the same time, and anything else is
   FX-converted at a time that matches neither close.
@@ -72,6 +73,7 @@ from decimal import Decimal
 
 import numpy as np
 from portfolio.benchmark.base import Benchmark, BenchmarkUnavailable, unavailable_reason
+from portfolio.eur_returns.calculator import traded_dates
 from portfolio.labs.calculator import (
     AssetInput,
     AssetSeries,
@@ -218,7 +220,7 @@ def compute_backtest_risk(
 
     total = sum(s.weight for s in series)
     weights = {s.ticker: float(s.weight / total) for s in series}
-    trading = {a.ticker: frozenset(p.date for p in a.prices) for a in assets}
+    trading = {a.ticker: traded_dates(a.prices) for a in assets}
     end = min(s.dates[-1] for s in series)
     common_start = max(s.dates[0] for s in series)
     limited_by = [s.ticker for s in series if s.dates[0] == common_start]

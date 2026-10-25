@@ -45,13 +45,27 @@ def _daily(base, end, seed, nulls=(), scale=0.01):
     return ReturnSeries(Frequency.DAILY, base, tuple(dates), tuple(values))
 
 
+def _rows(daily):
+    """VaR's trading days when every row traded: the pre-RK-31 rule, a row is a traded day."""
+    return {key: set(series.dates) for key, series in daily.items()}
+
+
 def _report(
-    daily, weights, label=StandardWindow.Y3, *, currencies=EUR, rates=None, corr=None, fx=None
+    daily,
+    weights,
+    label=StandardWindow.Y3,
+    *,
+    currencies=EUR,
+    rates=None,
+    corr=None,
+    fx=None,
+    trading_days=None,
 ):
     return ex_ante_report(
         daily,
         weights,
         label,
+        trading_days=_rows(daily) if trading_days is None else trading_days,
         currencies=currencies,
         rates=rates,
         first_published=None if rates is None else rates[0].date,
@@ -229,6 +243,26 @@ def test_var_keeps_only_the_days_every_holding_traded():
     assert cw.tail.var_95.n_obs < cw.drawdown.max_drawdown.n_obs
 
 
+def test_var_leaves_out_a_day_a_holding_has_a_row_for_but_did_not_trade():
+    # RK-31: B has a row every weekday, but its Mondays are zero-volume, flat holiday rows, so
+    # they're not in its trading days. They leave VaR's sample and nothing else.
+    daily = _pair()
+    mondays = {d for d in daily["B"].dates if d.weekday() == 0}
+    every_row = _report(daily, WEIGHTS).constant_weight
+    masked = _report(
+        daily,
+        WEIGHTS,
+        trading_days={"A": set(daily["A"].dates), "B": set(daily["B"].dates) - mondays},
+    ).constant_weight
+
+    window = _report(daily, WEIGHTS).window
+    dropped = sum(1 for d in mondays if window.start < d <= window.end)
+    assert dropped > 0
+    assert masked.tail.var_95.n_obs == every_row.tail.var_95.n_obs - dropped
+    assert masked.drawdown.max_drawdown == every_row.drawdown.max_drawdown
+    assert masked.weekly == every_row.weekly
+
+
 def test_without_a_risk_free_series_the_excess_return_figures_are_greyed_and_volatility_kept():
     without = _report(_pair(), WEIGHTS).constant_weight.weekly
     with_rf = _report(_pair(), WEIGHTS, rates=ZERO_RATES).constant_weight.weekly
@@ -264,6 +298,7 @@ def test_mix_report_is_the_ex_ante_report_without_the_matrix(label):
         daily,
         WEIGHTS,
         label,
+        trading_days=_rows(daily),
         currencies=EUR,
         rates=ZERO_RATES,
         first_published=ZERO_RATES[0].date,

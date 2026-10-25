@@ -26,9 +26,11 @@ Holdings-based, as agreed on 2026-10-20: r_t = sum_i w_(i,t-1) x r_eur,i,t.
 - **Exclusions.** A ticker with no entry in `returns` (no FX series, untracked, a failed fetch)
   is dropped, and the rest are renormalised to 100%. The caller names it.
 - **Days (RK-11).** Each point has a `TwrDay` naming the tickers weighted at t-1 and whether
-  every one of them traded on t: exactly one return in (t-1, t], dated t. Ex-post VaR keeps only
-  those days (R7, §5.5); a carry-forward 0% or a return compounded over several days fails it.
-  A NULL still traded: the exchange was open, the move was lost, and the measure drops it (R5).
+  every one of them traded on t: exactly one return in (t-1, t], dated t, and t one of the
+  ticker's `EurReturns.traded` days (RK-31). Ex-post VaR keeps only those days (R7, §5.5); a
+  carry-forward 0%, a return compounded over several days or a stale zero-volume holiday row
+  fails it. A NULL with volume still traded: the exchange was open, the move was lost, and the
+  measure drops it (R5).
 
 What the holdings-based form gives up: dividends count gross of withholding tax, fees and the
 gap between trade price and close are ignored, a position's first day counts from the next
@@ -64,7 +66,7 @@ class TwrPoint:
 class TwrDay:
     price_date: date
     tickers: frozenset[str]  # weighted at the previous date
-    traded: bool  # every one of them has its own return dated price_date
+    traded: bool  # every one of them has its own return dated price_date, on a traded day
 
 
 @dataclass(frozen=True)
@@ -83,12 +85,13 @@ class _Returns:
     def __init__(self, series: EurReturns):
         self._dates = series.dates
         self._values = series.r_eur
+        self._traded = series.traded
         self._index = 0
 
     def over(self, previous: date, current: date) -> tuple[Decimal | None, bool]:
         """Every return dated in (previous, current] compounded, 0 when there's none, and None
-        when any of them is a gap; and whether that was exactly one return, dated `current`.
-        Calls must move forward in time."""
+        when any of them is a gap; and whether that was exactly one return, dated `current`, on
+        a day the ticker traded. Calls must move forward in time."""
         while self._index < len(self._dates) and self._dates[self._index] <= previous:
             self._index += 1
         growth = _ONE
@@ -103,7 +106,7 @@ class _Returns:
                 growth = None
             elif growth is not None:
                 growth *= _ONE + value
-        traded = count == 1 and last == current
+        traded = count == 1 and last == current and current in self._traded
         return (None if growth is None else growth - _ONE), traded
 
 

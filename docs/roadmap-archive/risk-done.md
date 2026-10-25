@@ -1,7 +1,14 @@
+# Risk roadmap, done tasks (archived)
+
+The risk chunk's `tasks-risk-thread-done.md`, archived with [`risk.md`](risk.md), its thread
+file. The content is verbatim except for relative links, adjusted for the new location.
+
+---
+
 # Tasks: risk chunk, done
 
 The subsections of the risk chunk's done tasks, split out of
-[`tasks-risk-thread.md`](tasks-risk-thread.md) for size before RK-20 was marked done, verbatim
+[`tasks-risk-thread.md`](risk.md) for size before RK-20 was marked done, verbatim
 apart from this header. That file still holds the status table, the requirements and
 constraints every task follows, the open tasks and the Deferred list; it is the thread file
 `.claude/rules/tasks.md` means. A task's subsection moves here when it is marked done.

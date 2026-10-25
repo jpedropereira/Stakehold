@@ -620,7 +620,7 @@ portfolio's sides:
    `calculate-returns` run for it) blocks only that `(account, ticker)` pair — loudly, in the run's
    `blocked` list — rather than failing at the price-series fetch that follows it.
 
-**The risk-free series** (**RK-4**, tasks-risk-thread.md) is a fourth read, for the risk
+**The risk-free series** (**RK-4**, docs/roadmap-archive/risk.md) is a fourth read, for the risk
 measures rather than `returns/`: `GET /rates/risk-free`, data-store's €STR/EONIA splice (RK-3;
 its `read-api.md` owns the contract). `DataStoreClient.get_risk_free_series(start, end)` returns
 the published points (`RiskFreePoint`: date, `Decimal` rate in annualised %, the series it came

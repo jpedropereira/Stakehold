@@ -19,6 +19,10 @@ class PricePoint:
     # real flat day. HttpDataStoreClient always sets it; the default only spares callers that
     # don't read it (returns/calculator.py and its fakes).
     simple_return: Decimal | None = None
+    # raw_market_data.volume, for the VaR day mask (eur_returns.traded_dates). None is unknown,
+    # not zero, and counts as traded. HttpDataStoreClient always sets it; the default only spares
+    # fakes that don't model volume, which then keep the old "a row means traded" rule.
+    volume: int | None = None
 
 
 @dataclass(frozen=True)

@@ -34,6 +34,7 @@ risk/flows.py fetches the series and normalises the holdings' weights.
 
 import dataclasses
 from collections.abc import Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from datetime import date
 
@@ -145,6 +146,7 @@ def what_if_report(
     funding: Funding,
     label: StandardWindow,
     *,
+    trading_days: Mapping[str, AbstractSet[date]],
     currencies: Mapping[str, str],
     rates: Sequence[RatePoint] | None,
     first_published: date | None,
@@ -155,7 +157,12 @@ def what_if_report(
     no risk-free series. `survivorship` is R14's flag for the candidate."""
     funded = funded_weights(before_weights, candidate, weight, funding)
     zero = {**before_weights, candidate: 0.0}
-    measure = dict(currencies=currencies, rates=rates, first_published=first_published)
+    measure = dict(
+        trading_days=trading_days,
+        currencies=currencies,
+        rates=rates,
+        first_published=first_published,
+    )
     before = mix_report(daily, zero, label, **measure)
     after = mix_report(daily, funded.after, label, **measure)
     holdings = {key: series for key, series in daily.items() if key != candidate}

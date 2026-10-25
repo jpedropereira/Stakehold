@@ -305,7 +305,7 @@ def test_each_ticker_logs_its_outcome_and_a_failure_logs_its_exception(monkeypat
         flows.compute_portfolio_twr(object(), client, user_id=user_id, today=TODAY)
 
     assert "portfolio-twr: 3 ticker(s) held, rows from 2026-01-05 to 2026-01-06." in caplog.text
-    assert "portfolio-twr: A: included, 1 day(s) of EUR returns." in caplog.text
+    assert "portfolio-twr: A: included, 1 day(s) of EUR returns, 0 not traded." in caplog.text
     assert "portfolio-twr: U: left out, no FX series for USD." in caplog.text
     failure = next(r for r in caplog.records if "F: failed" in r.getMessage())
     assert failure.levelno == logging.ERROR

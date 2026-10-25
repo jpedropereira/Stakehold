@@ -17,7 +17,7 @@ call beyond one quick lookup.
 
 | Endpoint | Backed by | Notes |
 |---|---|---|
-| `GET /prices/{ticker}` | `market_returns` | Not `raw_market_data` — schema.md calls `market_returns` "the table a portfolio or chart should read"; serving raw OHLCV would push return computation onto every consumer. |
+| `GET /prices/{ticker}` | `market_returns` + `raw_market_data.volume` | Returns come from `market_returns`, not `raw_market_data`. schema.md calls `market_returns` "the table a portfolio or chart should read", and serving raw OHLCV would push return computation onto every consumer. The one raw column is each row's `volume` (RK-31), which portfolio's VaR day mask uses to tell a holiday's stale, flat row from a traded day. It's a LEFT JOIN, so `market_returns` still decides which rows exist. A row with no raw counterpart is served with a `null` volume, and `null` means unknown, never 0, as the returns suppression rule in schema.md also treats it. |
 | `GET /fx/{base}/{quote}` | `fx_rates` | See below — the endpoint derives pairs `fx_rates` never stores directly. |
 | `GET /rates/risk-free` | `risk_free_rates` | The risk measures' `rf_eur` (spec §4.1), spliced from €STR and EONIA on read. See below. |
 | `GET /regimes` | `regimes` | Every regime overlapping `[start, end]`, with the table's `total_regimes`. Built for the risk regime view (RK-28). See below. |

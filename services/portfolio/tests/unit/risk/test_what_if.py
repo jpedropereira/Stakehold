@@ -83,6 +83,7 @@ def _report(
         weight,
         funding,
         label,
+        trading_days={key: set(series.dates) for key, series in daily.items()},
         currencies=EUR,
         rates=rates,
         first_published=None if rates is None else FIRST_PUBLISHED,
@@ -91,10 +92,12 @@ def _report(
 
 
 def _holdings_alone(label=StandardWindow.Y3):
+    holdings = _holdings()
     return mix_report(
-        _holdings(),
+        holdings,
         BEFORE,
         label,
+        trading_days={key: set(series.dates) for key, series in holdings.items()},
         currencies=EUR,
         rates=RATES,
         first_published=FIRST_PUBLISHED,

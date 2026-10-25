@@ -163,6 +163,16 @@ def test_base_url_trailing_slash_is_stripped(monkeypatch):
 # --- get_price_series ---
 
 
+def _point(**overrides):
+    return {
+        "date": "2026-01-08",
+        "split_adjusted_close": "95.5000",
+        "simple_return": "0.01",
+        "volume": 1200,
+        **overrides,
+    }
+
+
 def test_get_price_series_returns_every_point(client, monkeypatch):
     captured = {}
 
@@ -178,11 +188,13 @@ def test_get_price_series_returns_every_point(client, monkeypatch):
                         "date": "2026-01-08",
                         "split_adjusted_close": "95.5000",
                         "simple_return": None,
+                        "volume": None,
                     },
                     {
                         "date": "2026-01-09",
                         "split_adjusted_close": "96.2500",
                         "simple_return": "0.007853",
+                        "volume": 1200,
                     },
                 ],
             },
@@ -194,12 +206,16 @@ def test_get_price_series_returns_every_point(client, monkeypatch):
 
     assert points == [
         PricePoint(
-            date=date(2026, 1, 8), split_adjusted_close=Decimal("95.5000"), simple_return=None
+            date=date(2026, 1, 8),
+            split_adjusted_close=Decimal("95.5000"),
+            simple_return=None,
+            volume=None,
         ),
         PricePoint(
             date=date(2026, 1, 9),
             split_adjusted_close=Decimal("96.2500"),
             simple_return=Decimal("0.007853"),
+            volume=1200,
         ),
     ]
     assert captured["url"] == "http://datastore:8000/prices/IWDA.AS"
@@ -246,7 +262,7 @@ def test_get_price_series_raises_on_a_point_missing_split_adjusted_close(client,
 
 
 def test_get_price_series_keeps_a_null_return_as_none_not_zero(client, monkeypatch):
-    point = {"date": "2026-01-08", "split_adjusted_close": "95.5000", "simple_return": None}
+    point = _point(simple_return=None)
     monkeypatch.setattr(requests, "get", lambda *a, **kw: FakeResponse(200, {"points": [point]}))
 
     [parsed] = client.get_price_series("IWDA.AS", date(2026, 1, 8), date(2026, 1, 8))
@@ -255,7 +271,7 @@ def test_get_price_series_keeps_a_null_return_as_none_not_zero(client, monkeypat
 
 
 def test_get_price_series_keeps_a_flat_day_as_zero(client, monkeypatch):
-    point = {"date": "2026-01-08", "split_adjusted_close": "95.5000", "simple_return": "0"}
+    point = _point(simple_return="0")
     monkeypatch.setattr(requests, "get", lambda *a, **kw: FakeResponse(200, {"points": [point]}))
 
     [parsed] = client.get_price_series("IWDA.AS", date(2026, 1, 8), date(2026, 1, 8))
@@ -265,7 +281,8 @@ def test_get_price_series_keeps_a_flat_day_as_zero(client, monkeypatch):
 
 def test_get_price_series_raises_on_a_point_missing_simple_return(client, monkeypatch):
     # A missing key must not read as a gap: that would hide a contract break behind wrong returns.
-    point = {"date": "2026-01-08", "split_adjusted_close": "95.5000"}
+    point = _point()
+    del point["simple_return"]
     monkeypatch.setattr(requests, "get", lambda *a, **kw: FakeResponse(200, {"points": [point]}))
 
     with pytest.raises(DataStoreApiError):
@@ -273,8 +290,49 @@ def test_get_price_series_raises_on_a_point_missing_simple_return(client, monkey
 
 
 def test_get_price_series_raises_on_an_unparseable_simple_return(client, monkeypatch):
-    point = {"date": "2026-01-08", "split_adjusted_close": "95.5000", "simple_return": "n/a"}
+    point = _point(simple_return="n/a")
     monkeypatch.setattr(requests, "get", lambda *a, **kw: FakeResponse(200, {"points": [point]}))
+
+    with pytest.raises(DataStoreApiError):
+        client.get_price_series("IWDA.AS", date(2026, 1, 8), date(2026, 1, 8))
+
+
+def test_get_price_series_keeps_a_zero_volume_as_zero(client, monkeypatch):
+    monkeypatch.setattr(
+        requests, "get", lambda *a, **kw: FakeResponse(200, {"points": [_point(volume=0)]})
+    )
+
+    [parsed] = client.get_price_series("IWDA.AS", date(2026, 1, 8), date(2026, 1, 8))
+
+    assert parsed.volume == 0
+
+
+def test_get_price_series_keeps_a_null_volume_as_none_not_zero(client, monkeypatch):
+    # NULL is data-store's "unknown"; the VaR day mask counts it as traded, unlike a 0.
+    monkeypatch.setattr(
+        requests, "get", lambda *a, **kw: FakeResponse(200, {"points": [_point(volume=None)]})
+    )
+
+    [parsed] = client.get_price_series("IWDA.AS", date(2026, 1, 8), date(2026, 1, 8))
+
+    assert parsed.volume is None
+
+
+def test_get_price_series_raises_on_a_point_missing_volume(client, monkeypatch):
+    # As with simple_return: defaulting a missing key would hide a contract break.
+    point = _point()
+    del point["volume"]
+    monkeypatch.setattr(requests, "get", lambda *a, **kw: FakeResponse(200, {"points": [point]}))
+
+    with pytest.raises(DataStoreApiError):
+        client.get_price_series("IWDA.AS", date(2026, 1, 8), date(2026, 1, 8))
+
+
+@pytest.mark.parametrize("volume", ["lots", 1.5, True])
+def test_get_price_series_raises_on_a_volume_that_is_not_an_integer(client, monkeypatch, volume):
+    monkeypatch.setattr(
+        requests, "get", lambda *a, **kw: FakeResponse(200, {"points": [_point(volume=volume)]})
+    )
 
     with pytest.raises(DataStoreApiError):
         client.get_price_series("IWDA.AS", date(2026, 1, 8), date(2026, 1, 8))

@@ -2,7 +2,7 @@
 
 Completed 2026-10, tasks LY-0 to LY-7. This is the screen-layout chunk's `tasks.md`, moved here
 when the next roadmap chunk (labs) started in
-[`tasks-labs-thread.md`](../../tasks-labs-thread.md). The content is verbatim except for relative
+[`tasks-labs-thread.md`](labs.md). The content is verbatim except for relative
 links, adjusted for the new location. Its Deferred list is carried forward into that file.
 
 ---

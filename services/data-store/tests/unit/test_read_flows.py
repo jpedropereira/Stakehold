@@ -68,7 +68,7 @@ def test_price_series_raises_ticker_not_found_when_ticker_never_ingested(monkeyp
 def test_price_series_returns_points_verbatim_including_nulls(monkeypatch):
     import data_store.read_flows as read_flows
 
-    row = (date(2024, 1, 2), Decimal("100.0"), Decimal("1.0"), None, None, None, None)
+    row = (date(2024, 1, 2), Decimal("100.0"), Decimal("1.0"), None, None, None, None, None)
     monkeypatch.setattr(
         read_flows, "returns_repository", FakeReturnsRepo(exists=True, series=[row])
     )
@@ -81,6 +81,20 @@ def test_price_series_returns_points_verbatim_including_nulls(monkeypatch):
     assert point["date"] == date(2024, 1, 2)
     assert point["split_adjusted_close"] == Decimal("100.0")
     assert point["price_return"] is None
+    assert point["volume"] is None
+
+
+def test_price_series_serves_each_rows_volume(monkeypatch):
+    import data_store.read_flows as read_flows
+
+    row = (date(2024, 1, 2), Decimal("100.0"), Decimal("1.0"), None, None, None, None, 0)
+    monkeypatch.setattr(
+        read_flows, "returns_repository", FakeReturnsRepo(exists=True, series=[row])
+    )
+
+    result = price_series(None, "AAPL", "yfinance", date(2024, 1, 1), date(2024, 1, 31))
+
+    assert result["points"][0]["volume"] == 0
 
 
 def test_price_series_empty_range_returns_empty_points_not_an_error(monkeypatch):

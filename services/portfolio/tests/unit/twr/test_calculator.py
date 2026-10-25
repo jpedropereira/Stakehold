@@ -428,3 +428,29 @@ def test_a_gap_day_still_traded():
     series = compute_twr(snapshots, returns, closed=set())
 
     assert _days(series) == [(D2, frozenset({"A"}), True), (D3, frozenset({"A"}), True)]
+
+
+def test_a_held_tickers_zero_volume_flat_day_did_not_trade():
+    # RK-31: U's D2 row is a closed exchange's stale holiday row (zero volume, 0%), so D2 fails
+    # the mask even though U has a row on it. A's own D2 is a normal day.
+    prices = [
+        PricePoint(D1, Decimal("100"), None, 1000),
+        PricePoint(D2, Decimal("100"), Decimal("0"), 0),
+        PricePoint(D3, Decimal("102"), Decimal("0.02"), 1000),
+    ]
+    snapshots = [
+        _row(D1, "500"),
+        _row(D2, "520"),
+        _row(D3, "520"),
+        _row(D1, "500", ticker="U"),
+        _row(D2, "500", ticker="U"),
+        _row(D3, "510", ticker="U"),
+    ]
+    returns = {"A": _eur(D1, (D2, "0.04"), (D3, "0")), "U": eur_daily_returns(prices, None)}
+
+    series = compute_twr(snapshots, returns, closed=set())
+
+    assert _days(series) == [
+        (D2, frozenset({"A", "U"}), False),
+        (D3, frozenset({"A", "U"}), True),
+    ]

@@ -1,3 +1,12 @@
+# Labs roadmap (archived)
+
+Completed 2026-10, tasks LB-0 to LB-10. This is the labs chunk's thread file,
+`tasks-labs-thread.md`, moved here once all of its tasks were done. The content is verbatim except
+for relative links, adjusted for the new location. No thread was open to take over its Deferred
+list, so it stays here, for the next thread to carry forward.
+
+---
+
 # Tasks
 
 Roadmap for the labs chunk: a new top-level section, **Labs**, for backtesting. It shows how the
@@ -7,12 +16,12 @@ each asset. The user can add or remove assets and change their weights to see ho
 returns. Only percentage returns matter here. The portfolio's value plays no part.
 Commit a726e51 removed "growth since inception" from the portfolio views so that this kind of
 analysis could live here instead.
-The previous chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archive/):
-[walking skeleton](docs/roadmap-archive/walking-skeleton.md),
-[UI/UX](docs/roadmap-archive/ui-ux.md),
-[ticker onboarding](docs/roadmap-archive/ticker-onboarding.md),
-[portfolio view](docs/roadmap-archive/portfolio-view.md) and
-[screen layout](docs/roadmap-archive/screen-layout.md).
+The previous chunks are archived in [`docs/roadmap-archive/`](./):
+[walking skeleton](walking-skeleton.md),
+[UI/UX](ui-ux.md),
+[ticker onboarding](ticker-onboarding.md),
+[portfolio view](portfolio-view.md) and
+[screen layout](screen-layout.md).
 
 **Task IDs are prefixed `LB-`** so they can't be confused with the walking-skeleton's bare
 "task N" references or the earlier chunks' `UI-N`, `TK-N`, `PF-N` and `LY-N`.
@@ -125,7 +134,7 @@ The previous chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archi
 **Status:** done
 
 The screen-layout chunk moved to
-[`docs/roadmap-archive/screen-layout.md`](docs/roadmap-archive/screen-layout.md). Its content is
+[`docs/roadmap-archive/screen-layout.md`](screen-layout.md). Its content is
 verbatim apart from relative links. This file was then started. The Deferred list is carried
 over whole.
 

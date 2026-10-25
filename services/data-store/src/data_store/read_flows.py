@@ -40,6 +40,7 @@ _PRICE_POINT_FIELDS = (
     "dividend_return",
     "simple_return",
     "log_return",
+    "volume",
 )
 
 

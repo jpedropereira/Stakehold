@@ -4,10 +4,11 @@ zeros crowd the centre of the distribution and shrink the tail quantile, so dail
 the days all assets share. A single asset keeps its own calendar. NULL returns are excluded
 separately, by the measure (R5): the exchange traded, but the move was lost.
 
-**An asset traded on a day if data-store has a price row for it** (agreed for RK-6). Known
-limitation: data-store keeps rows for some zero-volume holidays (e.g. UK bank holidays, see its
-docs/schema.md), so such a day can pass the mask. The fix is to expose `volume` on data-store's
-price endpoint and mask on volume > 0 (RK-31, tasks-risk-thread.md).
+**An asset traded on a day if data-store has a price row for it that isn't a stale one**: zero
+volume and no move (RK-31). data-store keeps such rows on some exchange holidays, and a row alone
+would let their 0% pass the mask. The rule is the caller's, applied once in
+`eur_returns.traded_dates`, since this library never sees prices or volume; it passes one set of
+trading days per asset.
 """
 
 from collections.abc import Sequence

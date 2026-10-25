@@ -6,6 +6,7 @@ Hand-checked values are worked out in the comment beside them. Long fixtures are
 weekdays with a fixed, repeating return pattern, so no test depends on randomness.
 """
 
+import dataclasses
 from datetime import date, timedelta
 from decimal import Decimal
 
@@ -287,6 +288,43 @@ def test_var_keeps_only_days_every_asset_traded():
     a_var = _row(risk, "A").windows[StandardWindow.Y1].var_95
     b_var = _row(risk, "B").windows[StandardWindow.Y1].var_95
     assert a_var.n_obs == b_var.n_obs + 4
+    assert mix_var.n_obs == b_var.n_obs
+
+
+def _with_volume(asset, volume, holidays=()):
+    """`asset` with every row's volume set: `volume` on most days, and a closed exchange's stale
+    row (zero volume, 0%) on `holidays`."""
+    prices = [
+        (
+            dataclasses.replace(p, simple_return=Decimal("0"), volume=0)
+            if p.date in holidays
+            else dataclasses.replace(p, volume=volume)
+        )
+        for p in asset.prices
+    ]
+    return dataclasses.replace(asset, prices=prices)
+
+
+@pytest.mark.parametrize(
+    ("volume", "dropped"),
+    [pytest.param(1000, 4, id="zero-volume-holidays-dropped"), pytest.param(None, 0, id="null")],
+)
+def test_var_leaves_out_a_zero_volume_flat_holiday_row(volume, dropped):
+    # RK-31: B has rows on the four holidays, but they're stale (zero volume, 0%), so they're not
+    # traded days, for B or for the mix. With a NULL volume every row still counts as traded.
+    end = date(2026, 6, 30)
+    holidays = {date(2025, 12, 25), date(2025, 12, 26), date(2026, 4, 3), date(2026, 4, 6)}
+    a = _long("A", "0.5", date(2024, 1, 2), end)
+    b = _long("B", "0.5", date(2024, 1, 2), end, offset=2)
+    if volume is not None:
+        b = _with_volume(b, volume, holidays)
+
+    _, risk = _run([a, b])
+
+    mix_var = risk.mix.windows[StandardWindow.Y1].var_95
+    a_var = _row(risk, "A").windows[StandardWindow.Y1].var_95
+    b_var = _row(risk, "B").windows[StandardWindow.Y1].var_95
+    assert b_var.n_obs == a_var.n_obs - dropped
     assert mix_var.n_obs == b_var.n_obs
 
 

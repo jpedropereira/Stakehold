@@ -16,8 +16,11 @@ holdings, converts them to daily EUR returns and normalises the weights.
   its weekly volatility is σ_p exactly (§6.2's check). The page never shows two volatilities for
   one mix. All 12 ex-post figures are measured (agreed for RK-17), through
   `ex_post.series_figures`.
-- **VaR's day mask** is the days every holding has a return row (R7, `var_mask.var_days`): on the
-  constant-weight daily union calendar a holding with no row is a closed exchange at 0%.
+- **VaR's day mask** is the days every holding traded (R7, `var_mask.var_days`): on the
+  constant-weight daily union calendar a holding with no row is a closed exchange at 0%, and so
+  is one with a stale zero-volume row. The caller passes each holding's `trading_days`
+  (`EurReturns.traded`, RK-31), since a return series alone can't tell a holiday row from a flat
+  day.
   `nonsync_daily` is set unless the mix is one EUR holding, as in ex-post.
 - **The correlation matrix keeps the requested window** (R13): it is for display, and each
   pairwise cell covers the weeks that pair shares, so a late holding doesn't shorten the others'
@@ -38,6 +41,7 @@ holdings, converts them to daily EUR returns and normalises the weights.
 """
 
 from collections.abc import Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from datetime import date
 
@@ -107,6 +111,7 @@ def ex_ante_report(
     weights: Mapping[str, float],
     label: StandardWindow,
     *,
+    trading_days: Mapping[str, AbstractSet[date]],
     currencies: Mapping[str, str],
     rates: Sequence[RatePoint] | None,
     first_published: date | None,
@@ -114,12 +119,19 @@ def ex_ante_report(
     fx_daily: Mapping[str, tuple[ReturnSeries, ReturnSeries]],
 ) -> ExAnteReport:
     """`daily` is each holding's daily EUR returns, `weights` their normalised weights (each 0
-    or more, summing to 1), `currencies` each one's FX currency. `rates` and `first_published`
+    or more, summing to 1), `trading_days` the days each one traded (VaR's day mask, at least
+    every key of `daily`), `currencies` each one's FX currency. `rates` and `first_published`
     are None together when there's no risk-free series. `correlation_daily` is the matrix's
     daily series, keyed in display order. `fx_daily` is each non-EUR holding's daily (r_local,
     r_fx), on the same dates as its EUR returns."""
     mix = mix_report(
-        daily, weights, label, currencies=currencies, rates=rates, first_published=first_published
+        daily,
+        weights,
+        label,
+        trading_days=trading_days,
+        currencies=currencies,
+        rates=rates,
+        first_published=first_published,
     )
     correlation = pairwise_correlation(
         {key: to_weekly(series) for key, series in correlation_daily.items()}, mix.requested
@@ -159,6 +171,7 @@ def mix_report(
     weights: Mapping[str, float],
     label: StandardWindow,
     *,
+    trading_days: Mapping[str, AbstractSet[date]],
     currencies: Mapping[str, str],
     rates: Sequence[RatePoint] | None,
     first_published: date | None,
@@ -195,7 +208,7 @@ def mix_report(
         mix_daily,
         mix_weekly,
         window,
-        trading_days=[set(series.dates) for series in daily.values()],
+        trading_days=[trading_days[key] for key in daily],
         nonsync=nonsync,
         rates=rates,
         first_published=first_published,

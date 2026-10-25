@@ -196,6 +196,43 @@ def test_get_return_series_preserves_null_returns_from_a_real_numeric_column():
     conn.close()
 
 
+def test_get_return_series_joins_each_rows_volume_and_keeps_rows_with_no_raw_row():
+    conn = _connect()
+    save_raw_market_data(
+        conn,
+        "yfinance",
+        "equity",
+        make_prices_df(
+            [
+                [TICKER, date(2024, 1, 2), 10.0, 10.0, 10.0, 10.0, 10.0, 0, 0.0, 0.0],
+                [TICKER, date(2024, 1, 3), 10.0, 10.0, 10.0, 10.0, 10.0, None, 0.0, 0.0],
+            ]
+        ),
+    )
+    save_market_returns(
+        conn,
+        "yfinance",
+        make_returns_df(
+            [
+                [TICKER, date(2024, 1, 2), 10.0, 1.0, None, None, None, None],
+                [TICKER, date(2024, 1, 3), 10.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+                [TICKER, date(2024, 1, 4), 10.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+            ]
+        ),
+    )
+
+    rows = get_return_series(conn, TICKER, "yfinance", date(2024, 1, 1), date(2024, 1, 31))
+
+    # Zero is a real zero, a stored NULL stays NULL, and a market_returns row with no
+    # raw_market_data row is still served, with a NULL volume.
+    assert [(row[0], row[7]) for row in rows] == [
+        (date(2024, 1, 2), 0),
+        (date(2024, 1, 3), None),
+        (date(2024, 1, 4), None),
+    ]
+    conn.close()
+
+
 def test_get_rate_series_and_get_dates_with_rate_against_a_real_schema():
     conn = _connect()
     # ZZZ, not a real quote currency: get_dates_with_rate matches on either side of the pair,
