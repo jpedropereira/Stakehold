@@ -8,7 +8,7 @@ plain data, the same split returns/calculator.py uses. Picking the FX pair (incl
 minor unit such as GBp to GBP, which data-store's TickerInfo.fx_currency already does) is the
 caller's job too, so this module never looks at a currency code.
 
-The rules, as agreed for the labs chunk (tasks-labs-thread.md):
+The rules, as agreed for the labs chunk (docs/roadmap-archive/labs.md):
 
 - **Total return in EUR.** The conversion is eur_returns/calculator.py's (RK-5), shared with
   the risk path so the two give the same numbers: an asset's native growth is its r_local

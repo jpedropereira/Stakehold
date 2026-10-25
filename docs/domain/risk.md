@@ -1,6 +1,6 @@
 # Domain spec: risk, risk-adjusted return and correlation
 
-*Stakehold · drafted 2026-10-17 · tasks: [`tasks-risk-thread.md`](../../tasks-risk-thread.md)*
+*Stakehold · drafted 2026-10-17 · tasks: [`docs/roadmap-archive/risk.md`](../roadmap-archive/risk.md)*
 
 This document defines **what** to compute and **which rules** apply. It does not prescribe code
 structure beyond a few boundaries (§9). Turn it into tasks using the phased plan in §11. Anything

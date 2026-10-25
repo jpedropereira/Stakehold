@@ -7,7 +7,7 @@ the bridge between Labs and the risk library: risk/ imports nothing from portfol
 that turns Labs' series into `ReturnSeries` lives here. The measures themselves are
 risk/single_series.py's.
 
-The rules, as agreed for RK-8 (tasks-risk-thread.md):
+The rules, as agreed for RK-8 (docs/roadmap-archive/risk.md):
 
 - **Windows** are the spec's 1Y, 3Y, 5Y, 10Y and Max (§4.5), not Labs' periods, so periods under
   a year never get risk figures. They all end on Labs' end date, the last day every asset has.

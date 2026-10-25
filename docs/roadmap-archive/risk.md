@@ -1,11 +1,21 @@
+# Risk roadmap (archived)
+
+Completed 2026-10, tasks RK-0 to RK-31 (RK-30 abandoned). This is the risk chunk's thread file,
+`tasks-risk-thread.md`, moved here once all of its tasks were done. Its done tasks' subsections
+are in [`risk-done.md`](risk-done.md), archived with it. The content is verbatim except for
+relative links, adjusted for the new location. No thread was open to take over its Deferred
+list, so it stays here, for the next thread to carry forward.
+
+---
+
 # Tasks
 
 Roadmap for the risk chunk: measure how risky a portfolio is and whether the risk was worth it,
 how its holdings move together, what adding a candidate would change, and where it is
 concentrated. The domain rules — formulas, windows, minimums, gap handling, labels — are in
-[`docs/domain/risk.md`](docs/domain/risk.md) (the spec), and this file cites them by section and
+[`docs/domain/risk.md`](../domain/risk.md) (the spec), and this file cites them by section and
 rule number (§5.4, R12). It doesn't restate them. The other open thread is
-[`tasks-labs-thread.md`](tasks-labs-thread.md). Its Deferred items "Annualized return (CAGR)",
+[`tasks-labs-thread.md`](labs.md). Its Deferred items "Annualized return (CAGR)",
 "A benchmark line" and "Risk figures: volatility and maximum drawdown" are delivered here
 (RK-9, RK-14).
 
@@ -21,7 +31,7 @@ rule number (§5.4, R12). It doesn't restate them. The other open thread is
 ## Discovery and domain review
 
 Spec Phase 0's discovery (2026-10-17) and the finance review (2026-10-20) are in
-[`docs/domain/risk-findings.md`](docs/domain/risk-findings.md). Tasks below cite them as
+[`docs/domain/risk-findings.md`](../domain/risk-findings.md). Tasks below cite them as
 "Discovery".
 
 ## Agreed requirements
@@ -75,41 +85,41 @@ Spec Phase 0's discovery (2026-10-17) and the finance review (2026-10-20) are in
 
 ## Status table
 
-A done task's subsection is in [`tasks-risk-thread-done.md`](tasks-risk-thread-done.md),
+A done task's subsection is in [`tasks-risk-thread-done.md`](risk-done.md),
 split out of this file for size; its row here links there.
 
 | ID | Task | Depends on | Status |
 |----|------|------------|--------|
-| RK-0 | [Roadmap housekeeping](tasks-risk-thread-done.md#rk-0-roadmap-housekeeping) | — | done |
-| RK-1 | [data-store: split `architecture.md`](tasks-risk-thread-done.md#rk-1-data-store-split-architecturemd) | — | done |
-| RK-2 | [data-store: risk-free rate ingestion (€STR + EONIA)](tasks-risk-thread-done.md#rk-2-data-store-risk-free-rate-ingestion-str--eonia) | RK-1 | done |
-| RK-3 | [data-store: risk-free endpoint](tasks-risk-thread-done.md#rk-3-data-store-risk-free-endpoint) | RK-2 | done |
-| RK-4 | [portfolio: client reads the risk-free series](tasks-risk-thread-done.md#rk-4-portfolio-client-reads-the-risk-free-series) | RK-3 | done |
-| RK-5 | [portfolio: shared EUR daily returns](tasks-risk-thread-done.md#rk-5-portfolio-shared-eur-daily-returns) | — | done |
-| RK-6 | [portfolio: risk library foundations](tasks-risk-thread-done.md#rk-6-portfolio-risk-library-foundations) | — | done |
-| RK-7 | [portfolio: single-series measures](tasks-risk-thread-done.md#rk-7-portfolio-single-series-measures) | RK-6 | done |
-| RK-8 | [portfolio: Labs risk in the backtest](tasks-risk-thread-done.md#rk-8-portfolio-labs-risk-in-the-backtest) | RK-4, RK-5, RK-7 | done |
-| RK-9 | [web: Labs risk panel and drawdown chart](tasks-risk-thread-done.md#rk-9-web-labs-risk-panel-and-drawdown-chart) | RK-8 | done |
-| RK-10 | [portfolio: daily TWR of invested positions](tasks-risk-thread-done.md#rk-10-portfolio-daily-twr-of-invested-positions) | RK-5 | done |
-| RK-11 | [portfolio: ex-post risk endpoint](tasks-risk-thread-done.md#rk-11-portfolio-ex-post-risk-endpoint) | RK-4, RK-7, RK-10 | done |
-| RK-12 | [web: `/risk` page with the ex-post summary](tasks-risk-thread-done.md#rk-12-web-risk-page-with-the-ex-post-summary) | RK-11 | done |
-| RK-13 | [portfolio: benchmark and relative measures](tasks-risk-thread-done.md#rk-13-portfolio-benchmark-and-relative-measures) | RK-8, RK-11 | done |
-| RK-14 | [web: benchmark selector, relative measures, benchmark line](tasks-risk-thread-done.md#rk-14-web-benchmark-selector-relative-measures-benchmark-line) | RK-9, RK-12, RK-13 | done |
-| RK-15 | [portfolio: ex-ante covariance and risk decomposition](tasks-risk-thread-done.md#rk-15-portfolio-ex-ante-covariance-and-risk-decomposition) | RK-6, RK-7 | done |
-| RK-16 | [portfolio: correlation matrix](tasks-risk-thread-done.md#rk-16-portfolio-correlation-matrix) | RK-6 | done |
-| RK-17 | [portfolio: ex-ante endpoint](tasks-risk-thread-done.md#rk-17-portfolio-ex-ante-endpoint) | RK-4, RK-5, RK-13, RK-15, RK-16 | done |
-| RK-18 | [web: ex-ante summary, decomposition and heatmap](tasks-risk-thread-done.md#rk-18-web-ex-ante-summary-decomposition-and-heatmap) | RK-12, RK-17 | done |
-| RK-19 | [portfolio: candidate what-if](tasks-risk-thread-done.md#rk-19-portfolio-candidate-what-if) | RK-17 | done |
-| RK-20 | [web: what-if form](tasks-risk-thread-done.md#rk-20-web-what-if-form) | RK-18, RK-19 | done |
-| RK-21 | [data-store: ETF holdings endpoint](tasks-risk-thread-done.md#rk-21-data-store-etf-holdings-endpoint) | RK-1 | done |
-| RK-22 | [portfolio: look-through exposures](tasks-risk-thread-done.md#rk-22-portfolio-look-through-exposures) | RK-21 | done |
-| RK-23 | [web: concentration section](tasks-risk-thread-done.md#rk-23-web-concentration-section) | RK-12, RK-22 | done |
-| RK-24 | [portfolio: rolling windows](tasks-risk-thread-done.md#rk-24-portfolio-rolling-windows) | RK-11, RK-16, RK-17 | done |
-| RK-25 | [web: rolling charts](tasks-risk-thread-done.md#rk-25-web-rolling-charts) | RK-18, RK-24 | done |
-| RK-26 | [FX decomposition (portfolio and web)](tasks-risk-thread-done.md#rk-26-fx-decomposition-portfolio-and-web) | RK-18 | done |
-| RK-27 | [data-store: regimes endpoint](tasks-risk-thread-done.md#rk-27-data-store-regimes-endpoint) | RK-1 | done |
-| RK-28 | [Regime view (portfolio and web)](tasks-risk-thread-done.md#rk-28-regime-view-portfolio-and-web) | RK-14, RK-27 | done |
-| RK-29 | [Candidate ranking mode](tasks-risk-thread-done.md#rk-29-candidate-ranking-mode) | RK-20 | done |
+| RK-0 | [Roadmap housekeeping](risk-done.md#rk-0-roadmap-housekeeping) | — | done |
+| RK-1 | [data-store: split `architecture.md`](risk-done.md#rk-1-data-store-split-architecturemd) | — | done |
+| RK-2 | [data-store: risk-free rate ingestion (€STR + EONIA)](risk-done.md#rk-2-data-store-risk-free-rate-ingestion-str--eonia) | RK-1 | done |
+| RK-3 | [data-store: risk-free endpoint](risk-done.md#rk-3-data-store-risk-free-endpoint) | RK-2 | done |
+| RK-4 | [portfolio: client reads the risk-free series](risk-done.md#rk-4-portfolio-client-reads-the-risk-free-series) | RK-3 | done |
+| RK-5 | [portfolio: shared EUR daily returns](risk-done.md#rk-5-portfolio-shared-eur-daily-returns) | — | done |
+| RK-6 | [portfolio: risk library foundations](risk-done.md#rk-6-portfolio-risk-library-foundations) | — | done |
+| RK-7 | [portfolio: single-series measures](risk-done.md#rk-7-portfolio-single-series-measures) | RK-6 | done |
+| RK-8 | [portfolio: Labs risk in the backtest](risk-done.md#rk-8-portfolio-labs-risk-in-the-backtest) | RK-4, RK-5, RK-7 | done |
+| RK-9 | [web: Labs risk panel and drawdown chart](risk-done.md#rk-9-web-labs-risk-panel-and-drawdown-chart) | RK-8 | done |
+| RK-10 | [portfolio: daily TWR of invested positions](risk-done.md#rk-10-portfolio-daily-twr-of-invested-positions) | RK-5 | done |
+| RK-11 | [portfolio: ex-post risk endpoint](risk-done.md#rk-11-portfolio-ex-post-risk-endpoint) | RK-4, RK-7, RK-10 | done |
+| RK-12 | [web: `/risk` page with the ex-post summary](risk-done.md#rk-12-web-risk-page-with-the-ex-post-summary) | RK-11 | done |
+| RK-13 | [portfolio: benchmark and relative measures](risk-done.md#rk-13-portfolio-benchmark-and-relative-measures) | RK-8, RK-11 | done |
+| RK-14 | [web: benchmark selector, relative measures, benchmark line](risk-done.md#rk-14-web-benchmark-selector-relative-measures-benchmark-line) | RK-9, RK-12, RK-13 | done |
+| RK-15 | [portfolio: ex-ante covariance and risk decomposition](risk-done.md#rk-15-portfolio-ex-ante-covariance-and-risk-decomposition) | RK-6, RK-7 | done |
+| RK-16 | [portfolio: correlation matrix](risk-done.md#rk-16-portfolio-correlation-matrix) | RK-6 | done |
+| RK-17 | [portfolio: ex-ante endpoint](risk-done.md#rk-17-portfolio-ex-ante-endpoint) | RK-4, RK-5, RK-13, RK-15, RK-16 | done |
+| RK-18 | [web: ex-ante summary, decomposition and heatmap](risk-done.md#rk-18-web-ex-ante-summary-decomposition-and-heatmap) | RK-12, RK-17 | done |
+| RK-19 | [portfolio: candidate what-if](risk-done.md#rk-19-portfolio-candidate-what-if) | RK-17 | done |
+| RK-20 | [web: what-if form](risk-done.md#rk-20-web-what-if-form) | RK-18, RK-19 | done |
+| RK-21 | [data-store: ETF holdings endpoint](risk-done.md#rk-21-data-store-etf-holdings-endpoint) | RK-1 | done |
+| RK-22 | [portfolio: look-through exposures](risk-done.md#rk-22-portfolio-look-through-exposures) | RK-21 | done |
+| RK-23 | [web: concentration section](risk-done.md#rk-23-web-concentration-section) | RK-12, RK-22 | done |
+| RK-24 | [portfolio: rolling windows](risk-done.md#rk-24-portfolio-rolling-windows) | RK-11, RK-16, RK-17 | done |
+| RK-25 | [web: rolling charts](risk-done.md#rk-25-web-rolling-charts) | RK-18, RK-24 | done |
+| RK-26 | [FX decomposition (portfolio and web)](risk-done.md#rk-26-fx-decomposition-portfolio-and-web) | RK-18 | done |
+| RK-27 | [data-store: regimes endpoint](risk-done.md#rk-27-data-store-regimes-endpoint) | RK-1 | done |
+| RK-28 | [Regime view (portfolio and web)](risk-done.md#rk-28-regime-view-portfolio-and-web) | RK-14, RK-27 | done |
+| RK-29 | [Candidate ranking mode](risk-done.md#rk-29-candidate-ranking-mode) | RK-20 | done |
 | RK-30 | [Ledoit–Wolf shrinkage (optional)](#rk-30-ledoitwolf-shrinkage-optional) | RK-15 | abandoned: not needed (see task) |
 | RK-31 | [VaR day mask on traded volume](#rk-31-var-day-mask-on-traded-volume) | RK-1 | done |
 

@@ -1,7 +1,7 @@
 # Risk findings
 
-*Moved verbatim from [`tasks-risk-thread.md`](../../tasks-risk-thread.md) to keep it under the
-repo's 64 KB file limit. These are the facts the risk spec ([`risk.md`](risk.md)) was checked
+*Moved verbatim from [`tasks-risk-thread.md`](../roadmap-archive/risk.md) (since archived) to
+keep it under the repo's 64 KB file limit. These are the facts the risk spec ([`risk.md`](risk.md)) was checked
 against: Phase 0's discovery, and the finance review's checks against the code and the dev DB.
 Tasks cite them as "Discovery".*
 
