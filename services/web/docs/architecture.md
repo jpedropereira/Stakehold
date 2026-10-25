@@ -392,7 +392,9 @@ Every route `web` serves, with what it requires and which upstream calls it make
   implementation, and one error hierarchy (`AuthClientError`) routes catch with a single `except`.
 - `portfolio_client/{base,http_client,errors}.py` (task 11, extended tasks 12 and 17) — the
   `PortfolioClient` Protocol, its real implementation, and one error hierarchy
-  (`PortfolioClientError`); see "Key decisions" for how and why it departs from `auth_client`'s
+  (`PortfolioClientError`). The Labs and risk response parsers moved verbatim to
+  `risk_parsing.py`, and the JSON primitives they share to `parsing.py`, when `http_client.py`
+  neared 64 KB (RK-29): a split by subject, as portfolio's `risk_jobs.py`; see "Key decisions" for how and why it departs from `auth_client`'s
   shape in a couple of places. Task 12 added `list_positions`/`list_returns` (plus `Position`/
   `Return` dataclasses) to the same trio rather than inventing new files — no new error types were
   needed, since `AccountNotFound`/`PortfolioUnavailable` already cover every failure mode these
@@ -463,7 +465,9 @@ Every route `web` serves, with what it requires and which upstream calls it make
   figure, so a row can't go missing or show a blank. The flags (`capped`, `survivorship`,
   `shortened`, `improves`) must be real booleans, since a misread `survivorship` would drop
   R14's warning. The before/after weights aren't parsed: the page shows only the candidate's,
-  and what isn't read can't break.
+  and what isn't read can't break. RK-29 added `rank_candidates` (`POST /risk/what-if/ranking`)
+  and `CandidateRanking`: each ranked row must carry exactly `RANKING_ROW_KEYS`, reusing the
+  what-if's row parser.
 - `rebuild_outcome.py` (UI-7) — pure. Turns the two rebuild statuses into the confirmation
   banner's one sentence; see "Key decisions".
 - `portfolio_view.py` (task 12) — pure, I/O-free reshaping of what `routes.py` fetches for
@@ -538,7 +542,9 @@ Every route `web` serves, with what it requires and which upstream calls it make
   exclusions, which are resolved once (`_sent_exclusions`) for both, so "before" is the mix the
   ex-ante section shows. The form is checked first (`risk_what_if_view.parse_what_if`), and
   an empty form or one with errors makes no call: a 422 would show as a failed section, not as
-  the field to fix. RK-14
+  the field to fix. RK-29's ranking is a fourth loader on the same holdings call, window and
+  exclusions, and runs only when its form is sent: it costs two data-store calls per tracked
+  ticker. RK-14
   added `?benchmark=` and the ticker list for its field, fetched concurrently with the figures
   and failing on its own, as on `/labs`.
 - `risk_view.py` (RK-12) — pure: `build_ex_post_table`, the ex-post summary table (measures as
@@ -568,6 +574,10 @@ Every route `web` serves, with what it requires and which upstream calls it make
   nothing to compare. It reuses `risk_view`'s cells and legend, and `labs_mix.parse_weight`
   (public for it) so a weight is read one way on both pages. See "Risk page" in
   [`risk-ui.md`](risk-ui.md).
+- `risk_ranking_view.py` (RK-29) — pure: `parse_ranking`, the form's weight, order and 1Y
+  check, and `build_ranking_section`, the numbered rows, greyed and unranked candidates and the
+  order links. It reuses `risk_view`'s cells and the what-if's change filters. See "Risk page"
+  in [`risk-ui.md`](risk-ui.md).
 - `api/tickers.py` (TK-8) — the Tickers pages, on their own router for the same file-size
   reason, rendering through `routes.py`'s helpers so CSRF and cookie handling stay identical.
 - `ticker_status.py` (TK-8/TK-9) — how a tracked ticker's status reads (labels, a holding's

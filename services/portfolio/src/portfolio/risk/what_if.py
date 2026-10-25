@@ -38,7 +38,7 @@ from dataclasses import dataclass
 from datetime import date
 
 import numpy as np
-from portfolio.risk.ex_ante import constant_weight_series
+from portfolio.risk.ex_ante import ExAnteDecomposition, constant_weight_series
 from portfolio.risk.ex_ante_report import MixReport, mix_report
 from portfolio.risk.ex_post import NO_RISK_FREE
 from portfolio.risk.measures import sharpe_difference_se
@@ -167,7 +167,7 @@ def what_if_report(
         return dataclasses.replace(figure, flags=figure.flags | {Flag.SURVIVORSHIP})
 
     def row(b: RiskFigure, a: RiskFigure) -> Row:
-        return Row(b, flagged(a), _delta(b, a))
+        return Row(b, flagged(a), delta(b, a))
 
     weekly = {key: to_weekly(series) for key, series in daily.items()}
     sharpe_before = before.constant_weight.weekly.sharpe
@@ -176,19 +176,10 @@ def what_if_report(
     if (
         after.window is not None
         and rates is not None
-        and _delta(sharpe_before, sharpe_after) is not None
+        and delta(sharpe_before, sharpe_after) is not None
     ):
-        delta_se = sharpe_difference_se(
-            weekly_excess(
-                constant_weight_series(weekly, zero), after.window, rates, first_published
-            ),
-            weekly_excess(
-                constant_weight_series(weekly, funded.after),
-                after.window,
-                rates,
-                first_published,
-            ),
-            WEEKLY_Q,
+        delta_se = sharpe_delta_se(
+            before.mix_weekly, after.mix_weekly, after.window, rates, first_published
         )
 
     return WhatIfReport(
@@ -203,14 +194,18 @@ def what_if_report(
         diversification_ratio=row(
             before.decomposition.diversification_ratio, after.decomposition.diversification_ratio
         ),
-        candidate_pcr=Row(None, flagged(_holding_figure(after, candidate, "pcr")), None),
+        candidate_pcr=Row(
+            None, flagged(holding_figure(after.decomposition, candidate, "pcr")), None
+        ),
         candidate_correlation=Row(
-            None, flagged(_holding_figure(before, candidate, "corr_with_portfolio")), None
+            None,
+            flagged(holding_figure(before.decomposition, candidate, "corr_with_portfolio")),
+            None,
         ),
         sharpe=SharpeRow(
             sharpe_before,
             flagged(sharpe_after),
-            _delta(sharpe_before, sharpe_after),
+            delta(sharpe_before, sharpe_after),
             delta_se,
         ),
         max_drawdown=row(
@@ -223,17 +218,34 @@ def what_if_report(
     )
 
 
-def _delta(before: RiskFigure, after: RiskFigure) -> float | None:
+def delta(before: RiskFigure, after: RiskFigure) -> float | None:
     if before.value is None or after.value is None:
         return None
     return after.value - before.value
 
 
-def _holding_figure(report: MixReport, key: str, field: str) -> RiskFigure:
+def sharpe_delta_se(
+    before_weekly: ReturnSeries,
+    after_weekly: ReturnSeries,
+    window: Window,
+    rates: Sequence[RatePoint],
+    first_published: date,
+) -> float:
+    """Memmel's SE of after's weekly Sharpe minus before's, both on their excess returns over
+    `window`'s weeks. Ranking (RK-29) gives each candidate's ΔSharpe this SE too."""
+    return sharpe_difference_se(
+        weekly_excess(before_weekly, window, rates, first_published),
+        weekly_excess(after_weekly, window, rates, first_published),
+        WEEKLY_Q,
+    )
+
+
+def holding_figure(decomposition: ExAnteDecomposition, key: str, field: str) -> RiskFigure:
     """One holding's decomposition value as a RiskFigure on the panel's metadata: the
-    diversification ratio's, which greys exactly when the holdings table does."""
-    ratio = report.decomposition.diversification_ratio
-    holding = next(h for h in report.decomposition.holdings if h.key == key)
+    diversification ratio's, which greys exactly when the holdings table does. Ranking (RK-29)
+    shows the candidate's rows this way too."""
+    ratio = decomposition.diversification_ratio
+    holding = next(h for h in decomposition.holdings if h.key == key)
     value = getattr(holding, field)
     if value is None:
         return dataclasses.replace(ratio, value=None)

@@ -724,6 +724,75 @@ class WhatIf:
     threshold: WhatIfThreshold | None
 
 
+# The ranking's rows per candidate (RK-29): the what-if's, without max drawdown, in portfolio's
+# order. Each is a WhatIfRow; only "sharpe" has a delta_se.
+RANKING_ROW_KEYS = (
+    "sigma_p",
+    "diversification_ratio",
+    "candidate_pcr",
+    "candidate_correlation",
+    "sharpe",
+)
+
+
+@dataclass(frozen=True)
+class RankingWindow:
+    """The holdings' own window, which every ranked candidate is measured on. `start` is None
+    when the holdings' histories don't overlap."""
+
+    label: str
+    requested_start: date
+    start: date | None
+    end: date
+
+
+@dataclass(frozen=True)
+class RankedCandidate:
+    """One tracked ticker's what-if (RK-19) at the ranking's weight, funded pro-rata."""
+
+    ticker: str
+    name: str  # its tracked display name
+    history_start: date
+    n_weeks: int  # weekly returns over its whole history
+    rows: dict[str, WhatIfRow]  # every RANKING_ROW_KEYS key, in that order
+
+
+@dataclass(frozen=True)
+class UnrankedCandidate:
+    """A tracked ticker that wasn't ranked: "short_history" (it doesn't cover the holdings'
+    window), or the fetch's status ("no_fx_rate", "failed", ...). The history is None when it
+    couldn't be fetched."""
+
+    ticker: str
+    name: str
+    status: str
+    reason: str
+    history_start: date | None
+    n_weeks: int | None
+
+
+@dataclass(frozen=True)
+class CandidateRanking:
+    """portfolio's RankingResponse (RK-29): the tracked tickers outside the mix, each scored as
+    a what-if candidate at one weight. `ranked` is in rank order (Δσ_p ascending or Δ
+    diversification ratio descending); never by Sharpe. `window`, `ranked` and `greyed` are
+    None exactly when `nothing` says why there's no ranking."""
+
+    label: str  # "ex-ante · constant weights"
+    rf_available: bool
+    statuses: tuple[BacktestAssetStatus, ...]  # every requested holding, in request order
+    nothing: str | None
+    universe: int  # tracked candidates outside the mix, before the cap
+    cap: int
+    over_cap: tuple[str, ...]  # past the cap: not scored
+    weight: float
+    rank_by: str  # "sigma_p" or "diversification_ratio"
+    window: RankingWindow | None
+    ranked: tuple[RankedCandidate, ...] | None
+    greyed: tuple[RankedCandidate, ...] | None  # a rank key greyed; by ticker
+    unranked: tuple[UnrankedCandidate, ...]  # by ticker
+
+
 # The look-through's dimensions and coverage shares (RK-22), as portfolio names them. Every
 # response has each, so the section can lay out a table per dimension in a fixed place.
 LOOK_THROUGH_DIMENSIONS = ("currency", "trading_currency", "sector", "country", "asset_class")
@@ -940,6 +1009,20 @@ class PortfolioClient(Protocol):
         window: str,
         exclude: list[str],
     ) -> WhatIf: ...
+
+    # Every tracked ticker outside the mix, scored as a pro-rata what-if candidate at `weight` (a
+    # fraction of the mix after it) (RK-29), over one standard window (3Y or more) with
+    # `exclude` left out, ranked by `rank_by` ("sigma_p" or "diversification_ratio"). Read-only
+    # despite the POST. InvalidPortfolioRequest means the request was rejected.
+    async def rank_candidates(
+        self,
+        *,
+        assets: list[tuple[str, Decimal]],
+        weight: Decimal,
+        window: str,
+        exclude: list[str],
+        rank_by: str,
+    ) -> CandidateRanking: ...
 
     async def list_ticker_mappings(self) -> list[TickerMapping]: ...
 
