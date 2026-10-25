@@ -178,17 +178,8 @@ def what_if_report(
         and rates is not None
         and delta(sharpe_before, sharpe_after) is not None
     ):
-        delta_se = sharpe_difference_se(
-            weekly_excess(
-                constant_weight_series(weekly, zero), after.window, rates, first_published
-            ),
-            weekly_excess(
-                constant_weight_series(weekly, funded.after),
-                after.window,
-                rates,
-                first_published,
-            ),
-            WEEKLY_Q,
+        delta_se = sharpe_delta_se(
+            before.mix_weekly, after.mix_weekly, after.window, rates, first_published
         )
 
     return WhatIfReport(
@@ -231,6 +222,22 @@ def delta(before: RiskFigure, after: RiskFigure) -> float | None:
     if before.value is None or after.value is None:
         return None
     return after.value - before.value
+
+
+def sharpe_delta_se(
+    before_weekly: ReturnSeries,
+    after_weekly: ReturnSeries,
+    window: Window,
+    rates: Sequence[RatePoint],
+    first_published: date,
+) -> float:
+    """Memmel's SE of after's weekly Sharpe minus before's, both on their excess returns over
+    `window`'s weeks. Ranking (RK-29) gives each candidate's ΔSharpe this SE too."""
+    return sharpe_difference_se(
+        weekly_excess(before_weekly, window, rates, first_published),
+        weekly_excess(after_weekly, window, rates, first_published),
+        WEEKLY_Q,
+    )
 
 
 def holding_figure(decomposition: ExAnteDecomposition, key: str, field: str) -> RiskFigure:
