@@ -1,7 +1,7 @@
-"""GET /risk/ex-post (RK-11), POST /risk/ex-ante (RK-17) and POST /risk/what-if (RK-19):
-argument coercion, request validation and the response models. The jobs are stubbed; they're
-tested in tests/unit/test_jobs_ex_post_risk.py, test_jobs_ex_ante_risk.py and
-test_jobs_what_if.py."""
+"""GET /risk/ex-post (RK-11), POST /risk/ex-ante (RK-17), POST /risk/what-if (RK-19) and POST
+/risk/what-if/ranking (RK-29): argument coercion, request validation and the response models.
+The jobs are stubbed; they're tested in tests/unit/test_jobs_ex_post_risk.py,
+test_jobs_ex_ante_risk.py, test_jobs_what_if.py and test_jobs_ranking.py."""
 
 import uuid
 from decimal import Decimal
@@ -532,3 +532,158 @@ def test_what_if_rejects_an_invalid_request(monkeypatch, client, body):
     monkeypatch.setattr(risk_jobs, "get_what_if", lambda **kw: pytest.fail("job must not run"))
 
     assert client.post("/risk/what-if", json=body).status_code == 422
+
+
+# --- POST /risk/what-if/ranking (RK-29) ----------------------------------------------------------
+
+
+def _ranked(ticker, delta_sigma):
+    return {
+        "ticker": ticker,
+        "name": f"{ticker} name",
+        "history_start": "2015-01-02",
+        "n_weeks": 560,
+        "sigma_p": _row(0.14, 0.14 + delta_sigma, delta_sigma),
+        "diversification_ratio": _row(1.16, 1.2, 0.04),
+        "candidate_pcr": _row(None, 0.03, None),
+        "candidate_correlation": _row(None, 0.4, None),
+        "sharpe": {**_row(0.8, 0.82, 0.02), "delta_se": 0.03},
+    }
+
+
+_RANKING = {
+    "label": "ex-ante · constant weights",
+    "rf_available": True,
+    "statuses": [
+        {"ticker": "A", "status": "included", "reason": None},
+        {"ticker": "B", "status": "included", "reason": None},
+    ],
+    "nothing": None,
+    "universe": 53,
+    "cap": 50,
+    "over_cap": ["X1", "X2", "X3"],
+    "weight": 0.05,
+    "rank_by": "sigma_p",
+    "window": {
+        "label": "3Y",
+        "requested_start": "2023-01-09",
+        "start": "2023-01-06",
+        "end": "2026-01-09",
+    },
+    "ranked": [_ranked("H", -0.01), _ranked("C", 0.002)],
+    "greyed": [],
+    "unranked": [
+        {
+            "ticker": "L",
+            "name": "L name",
+            "status": "short_history",
+            "reason": "insufficient history (have 80, need 156)",
+            "history_start": "2024-06-07",
+            "n_weeks": 80,
+        },
+        {
+            "ticker": "F",
+            "name": "F name",
+            "status": "failed",
+            "reason": "couldn't reach data-store",
+            "history_start": None,
+            "n_weeks": None,
+        },
+    ],
+}
+
+
+def _ranking_body(**kw):
+    return {
+        "assets": [{"ticker": "A", "weight": "60"}, {"ticker": "B", "weight": "40"}],
+        "weight": "0.05",
+        **kw,
+    }
+
+
+def test_ranking_parses_the_request_with_its_defaults_and_returns_the_jobs_own_dict(
+    monkeypatch, client
+):
+    captured = {}
+    monkeypatch.setattr(risk_jobs, "get_ranking", lambda **kw: captured.update(kw) or _RANKING)
+
+    response = client.post("/risk/what-if/ranking", json=_ranking_body())
+
+    assert response.status_code == 200
+    assert response.json() == _RANKING
+    assert captured["assets"] == [("A", Decimal("60")), ("B", Decimal("40"))]
+    assert captured["weight"] == Decimal("0.05")
+    assert captured["window"] is StandardWindow.Y3
+    assert captured["exclude"] == []
+    assert captured["rank_by"] == "sigma_p"
+
+
+def test_ranking_passes_its_options_through(monkeypatch, client):
+    captured = {}
+    monkeypatch.setattr(risk_jobs, "get_ranking", lambda **kw: captured.update(kw) or _RANKING)
+    body = _ranking_body(
+        assets=[
+            {"ticker": "A", "weight": "60"},
+            {"ticker": "B", "weight": "40"},
+            {"ticker": "D", "weight": "5"},
+        ],
+        window="Max",
+        exclude=["D"],
+        rank_by="diversification_ratio",
+    )
+
+    assert client.post("/risk/what-if/ranking", json=body).status_code == 200
+    assert captured["window"] is StandardWindow.MAX
+    assert captured["exclude"] == ["D"]
+    assert captured["rank_by"] == "diversification_ratio"
+
+
+def test_ranking_with_nothing_to_rank_validates_with_null_sections(monkeypatch, client):
+    nothing = {
+        **_RANKING,
+        "rf_available": False,
+        "nothing": "no tracked ticker outside the mix to rank",
+        "universe": 0,
+        "over_cap": [],
+        **dict.fromkeys(("window", "ranked", "greyed")),
+        "unranked": [],
+    }
+    monkeypatch.setattr(risk_jobs, "get_ranking", lambda **kw: nothing)
+
+    response = client.post("/risk/what-if/ranking", json=_ranking_body())
+
+    assert response.status_code == 200
+    assert response.json() == nothing
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        _ranking_body(weight="0"),
+        _ranking_body(weight="1"),
+        _ranking_body(weight="5"),
+        {"assets": [{"ticker": "A", "weight": "1"}]},
+        _ranking_body(window="1Y"),
+        _ranking_body(window="2Y"),
+        _ranking_body(rank_by="sharpe"),
+        _ranking_body(exclude=["Z"]),
+        _ranking_body(exclude=["A", "B"]),
+        _ranking_body(assets=[]),
+    ],
+    ids=[
+        "zero weight",
+        "whole weight",
+        "a percentage, not a fraction",
+        "no weight",
+        "one year: the diversification ratio needs two",
+        "unknown window",
+        "ranked by Sharpe",
+        "exclude not in the mix",
+        "exclude everything",
+        "no assets",
+    ],
+)
+def test_ranking_rejects_an_invalid_request(monkeypatch, client, body):
+    monkeypatch.setattr(risk_jobs, "get_ranking", lambda **kw: pytest.fail("job must not run"))
+
+    assert client.post("/risk/what-if/ranking", json=body).status_code == 422

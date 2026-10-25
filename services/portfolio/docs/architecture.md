@@ -75,7 +75,7 @@ flowchart TD
         HFLOW["holdings/flows.py<br/><i>reads that span a user's accounts (PF-1, PF-5)</i>"]
         LFLOW["labs/flows.py<br/><i>backtest fetches, concurrent (LB-4);<br/>risk-free fetch (RK-8)</i>"]
         TFLOW["twr/flows.py<br/><i>portfolio TWR: rows + data-store fetch (RK-10)</i>"]
-        RFLOW["risk/flows.py<br/><i>ex-post risk: TWR + risk-free fetch (RK-11);<br/>ex-ante risk of a mix (RK-17);<br/>rolling windows on both (RK-24);<br/>candidate what-if (RK-19)</i>"]
+        RFLOW["risk/flows.py<br/><i>ex-post risk: TWR + risk-free fetch (RK-11);<br/>ex-ante risk of a mix (RK-17);<br/>rolling windows on both (RK-24);<br/>candidate what-if (RK-19) and ranking (RK-29)</i>"]
         BFLOW["benchmark/flows.py<br/><i>the request's benchmark: fetch + wording (RK-13)</i>"]
         LTFLOW["look_through/flows.py<br/><i>classify holdings + fund snapshots (RK-22)</i>"]
     end
@@ -91,7 +91,7 @@ flowchart TD
         LABS["labs/<br/>calculator · risk<br/><i>backtests (LB-3); their risk table (RK-8)</i>"]
         TWR["twr/<br/>calculator<br/><i>holdings-based daily TWR (RK-10)</i>"]
         EURR["eur_returns/<br/>calculator · fetch · eligibility<br/><i>daily EUR returns, shared with risk (RK-5);<br/>data-store fan-out (RK-10);<br/>risk path's wording (RK-17)</i>"]
-        RISK["risk/<br/>types · weekly · quality · history<br/>windows · risk_free · var_mask<br/>measures · drawdown · tail · single_series<br/>covariance · listwise · ex_ante<br/>correlation · pairing · relative · ex_post<br/>ex_ante_report · rolling · what_if<br/>fx_decomposition<br/><i>pure library (RK-6, RK-7, RK-15, RK-16, RK-11, RK-13, RK-17, RK-24, RK-19, RK-26);<br/>first caller labs/risk (RK-8)</i>"]
+        RISK["risk/<br/>types · weekly · quality · history<br/>windows · risk_free · var_mask<br/>measures · drawdown · tail · single_series<br/>covariance · listwise · ex_ante<br/>correlation · pairing · relative · ex_post<br/>ex_ante_report · rolling · what_if<br/>ranking · fx_decomposition<br/><i>pure library (RK-6, RK-7, RK-15, RK-16, RK-11, RK-13, RK-17, RK-24, RK-19, RK-26, RK-29);<br/>first caller labs/risk (RK-8)</i>"]
         BENCH["benchmark/<br/>base<br/><i>the benchmark's return series and status (RK-13)</i>"]
         LT["look_through/<br/>calculator · issuer · instruments<br/><i>exposures and concentration of a mix (RK-22)</i>"]
     end
@@ -186,7 +186,7 @@ connection, return a result. `cli.py` is argument parsing plus a call into it, a
 only one of those two would be, by construction, untested by the other.
 
 **The risk read jobs are `risk_jobs.py`**: `get_ex_post_risk`, `get_ex_ante_risk`,
-`get_what_if` (RK-19) and `get_look_through`, with the code that turns their results into
+`get_what_if` (RK-19), `get_ranking` (RK-29) and `get_look_through`, with the code that turns their results into
 builtins. They moved out of `jobs.py` when it crossed 64 KB, ahead of RK-24, with no change in behaviour. They are the
 same kind of unit and the same layer, called by `api/routes.py` the same way, and they reuse
 `jobs.py`'s data-store client check rather than keeping a copy. The split follows a subject
