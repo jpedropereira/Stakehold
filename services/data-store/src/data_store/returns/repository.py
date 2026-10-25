@@ -159,17 +159,24 @@ def get_returns_date_range(conn, ticker: str, source: str) -> tuple:
 
 def get_return_series(conn, ticker: str, source: str, start, end) -> list[tuple]:
     """Raw rows (price_date, split_adjusted_close, future_split_factor, price_return,
-    dividend_return, simple_return, log_return) for one ticker over a date range, ordered by
-    date. The four return columns come back exactly as stored -- including NULL together on a
-    ticker's first date -- for the read API to serialize verbatim rather than coerce to 0."""
+    dividend_return, simple_return, log_return, volume) for one ticker over a date range, ordered
+    by date. The four return columns come back exactly as stored -- including NULL together on a
+    ticker's first date -- for the read API to serialize verbatim rather than coerce to 0.
+
+    `volume` is raw_market_data's, for portfolio's VaR day mask (RK-31). It is a LEFT JOIN, so
+    market_returns stays the authority on which rows exist: a row with no raw counterpart comes
+    back with a NULL volume rather than being dropped. A NULL is "unknown", never 0."""
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT price_date, split_adjusted_close, future_split_factor,
-                   price_return, dividend_return, simple_return, log_return
-            FROM market_returns
-            WHERE ticker = %s AND source = %s AND price_date BETWEEN %s AND %s
-            ORDER BY price_date
+            SELECT m.price_date, m.split_adjusted_close, m.future_split_factor,
+                   m.price_return, m.dividend_return, m.simple_return, m.log_return,
+                   r.volume
+            FROM market_returns m
+            LEFT JOIN raw_market_data r
+                ON r.ticker = m.ticker AND r.price_date = m.price_date AND r.source = m.source
+            WHERE m.ticker = %s AND m.source = %s AND m.price_date BETWEEN %s AND %s
+            ORDER BY m.price_date
             """,
             (ticker, source, start, end),
         )

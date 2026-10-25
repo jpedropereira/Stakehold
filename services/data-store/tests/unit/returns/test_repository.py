@@ -388,13 +388,17 @@ def test_get_return_series_query_shape():
 
     sql, params = conn._cursor.executed[0]
     assert "market_returns" in sql
+    # volume comes from raw_market_data; a LEFT JOIN keeps market_returns the authority on
+    # which rows exist, so a row with no raw counterpart is served with a NULL volume.
+    assert "LEFT JOIN raw_market_data" in sql
+    assert "volume" in sql
     assert "BETWEEN" in sql
-    assert "ORDER BY price_date" in sql
+    assert "ORDER BY m.price_date" in sql
     assert params == ("AAPL", "yfinance", date(2024, 1, 1), date(2024, 1, 31))
 
 
 def test_get_return_series_returns_rows_verbatim_including_nulls():
-    row = (date(2024, 1, 2), 100.0, 1.0, None, None, None, None)
+    row = (date(2024, 1, 2), 100.0, 1.0, None, None, None, None, None)
     conn = FakeConnection(fetch_results=[[row]])
 
     result = get_return_series(conn, "AAPL", "yfinance", date(2024, 1, 1), date(2024, 1, 31))

@@ -27,6 +27,9 @@ class PricePoint(BaseModel):
     dividend_return: Decimal | None
     simple_return: Decimal | None
     log_return: Decimal | None
+    # raw_market_data.volume. Zero is a real zero-volume day (a holiday row, or a thin listing's
+    # quote); NULL is unknown, never zero, as calculate-returns' suppression rule treats it.
+    volume: int | None
 
 
 class PriceSeries(BaseModel):

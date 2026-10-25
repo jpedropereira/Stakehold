@@ -22,6 +22,14 @@ The rules:
   gap as a flat day is Labs' rule, applied in labs/calculator.py, not here.
 - **Precision.** Decimal throughout, as the inputs are, so Labs' figures stay exact. The risk
   library works on floats and converts at its own boundary.
+- **Traded days** (RK-31), VaR's day mask input (spec R7): a price date is untraded when its
+  volume is 0 *and* its price didn't move (a 0 or NULL simple_return). That's a closed exchange's
+  stale row, which data-store keeps on some holidays (all of the LSE's on 2011-04-29, 59 of 62
+  of them flat). A zero-volume day that moved is a thin listing's quote and counts as traded: in
+  the dev data 8PSG.DE moved more than 0.1% on 921 of its 1,457 zero-volume days. A NULL volume
+  is unknown, not zero, and counts as traded. *Rejected: volume > 0*, which would drop those
+  quoted moves and, through the mask's intersection, most of a mix's VaR days whenever it holds
+  a thinly traded listing.
 """
 
 from bisect import bisect_left, bisect_right
@@ -63,11 +71,21 @@ class EurReturns:
     r_fx: list[Decimal]  # 0 for a EUR asset
     r_eur: list[Decimal | None]  # None exactly where r_local is
     fx: FxSeries | None  # None for a EUR asset
+    traded: frozenset[date]  # the dates on which the asset traded (traded_dates)
 
 
 @dataclass(frozen=True)
 class Ineligible:
     reason: str  # NO_HISTORY or NO_FX_SERIES
+
+
+def traded_dates(prices: Sequence[PricePoint]) -> frozenset[date]:
+    """The price dates on which the asset traded: all but those with zero volume and no move."""
+    return frozenset(
+        point.date
+        for point in prices
+        if not (point.volume == 0 and (point.simple_return is None or point.simple_return == 0))
+    )
 
 
 def eur_daily_returns(
@@ -104,5 +122,11 @@ def eur_daily_returns(
         else:
             r_eur.append((_ONE + point.simple_return) * fx_factor - _ONE)
     return EurReturns(
-        anchor=usable[0].date, dates=dates, r_local=r_local, r_fx=r_fx, r_eur=r_eur, fx=series
+        anchor=usable[0].date,
+        dates=dates,
+        r_local=r_local,
+        r_fx=r_fx,
+        r_eur=r_eur,
+        fx=series,
+        traded=traded_dates(usable[1:]),
     )

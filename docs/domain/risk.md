@@ -292,6 +292,12 @@ On the growth index with `G_0 = 1` prepended:
 - **Days used:** only days on which every included asset's exchange traded (R7), with NULLs
   excluded (R5). A single asset uses its own trading calendar. Carry-forward zero days would
   otherwise crowd the centre of the distribution and shrink the quantile.
+  - **Amended (RK-31):** an asset traded on a day when it has a price row that isn't zero
+    volume with no move (a 0% or NULL return). data-store keeps such stale rows on some exchange
+    holidays, and they are R7's zeros under another name. A zero-volume day that moved is a thin
+    listing's quote and counts. A NULL volume is unknown and counts too. "Volume > 0" was
+    rejected because it would drop those quotes, and through the intersection most of a mix's
+    days.
 - **Multi-market series** (a mix, the ex-post portfolio, a non-EUR asset in EUR) carry the
   `nonsync_daily` flag and a footnote that the daily figure understates the loss (§4.3).
 - Also express both in EUR on the current portfolio market value: "on a bad day (1 in 20) you'd

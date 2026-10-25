@@ -111,7 +111,7 @@ split out of this file for size; its row here links there.
 | RK-28 | [Regime view (portfolio and web)](tasks-risk-thread-done.md#rk-28-regime-view-portfolio-and-web) | RK-14, RK-27 | done |
 | RK-29 | [Candidate ranking mode](tasks-risk-thread-done.md#rk-29-candidate-ranking-mode) | RK-20 | done |
 | RK-30 | [Ledoit–Wolf shrinkage (optional)](#rk-30-ledoitwolf-shrinkage-optional) | RK-15 | abandoned: not needed (see task) |
-| RK-31 | [VaR day mask on traded volume](#rk-31-var-day-mask-on-traded-volume) | RK-1 | ready |
+| RK-31 | [VaR day mask on traded volume](#rk-31-var-day-mask-on-traded-volume) | RK-1 | done |
 
 ## Tasks
 
@@ -136,24 +136,30 @@ Build it only if RK-18's matrices show the need.
 
 ### RK-31. VaR day mask on traded volume
 
-**Status:** ready
+**Status:** done
 
-Surfaced by RK-6. The VaR day mask (R7, §5.5) counts a day as traded when data-store has a
-price row for it. data-store keeps rows for some zero-volume holidays, such as UK bank
-holidays, so such a day passes the mask, and its near-zero return crowds the distribution's
-centre.
-- **data-store:** the price endpoint adds each row's `volume`, joining `raw_market_data`
-  (`market_returns` doesn't carry it). A NULL volume stays NULL, as data-store's suppression
-  rule treats it: it is not zero. No schema change. The endpoint change is documented in
-  data-store's `docs/read-api.md` (RK-1).
-- **portfolio:** `PricePoint` gains `volume`, and the HTTP client and fakes parse it. A missing
-  key raises `DataStoreApiError`, as in LB-2. The trading days handed to `var_days` are those
-  with volume > 0. Decide here whether a NULL volume counts as traded.
-- Update `risk/var_mask.py`'s docstring and portfolio's `architecture.md`, both of which name
-  this as the known limitation.
+Surfaced by RK-6. The VaR day mask (R7, §5.5) counted a day as traded when data-store had a
+price row for it. data-store keeps rows for some zero-volume holidays, so such a day passed the
+mask, and its 0% return crowded the distribution's centre.
+- **data-store:** the price endpoint adds each row's `volume`, with a LEFT JOIN on
+  `raw_market_data` (`market_returns` doesn't carry it). A NULL volume stays NULL, as
+  data-store's suppression rule treats it: it is not zero. No schema change. The endpoint change
+  is documented in data-store's `docs/read-api.md`.
+- **portfolio:** `PricePoint` gains `volume`, and the HTTP client parses it. A missing key
+  raises `DataStoreApiError`, as in LB-2. `eur_returns.traded_dates` builds the trading days
+  handed to `var_days`, for Labs, ex-post (`TwrDay`), ex-ante and the what-if alike.
+- **Rule, agreed 2026-10-25; it replaces the planned "volume > 0":** a day is untraded when its
+  volume is 0 and its price didn't move, meaning a 0 or NULL `simple_return`. The dev DB showed
+  that zero volume on a thin listing is usually a quoted move: 8PSG.DE moved more than 0.1% on
+  921 of its 1,457 zero-volume days, and PPFD.SG has volume on only 115 of its 500 rows. The
+  holiday rows themselves are flat: on 2011-04-29, 59 of the 62 LSE rows were exactly 0%.
+- **A NULL volume counts as traded** (agreed). There are none in the dev DB today.
+- The reasoning is in `risk/var_mask.py`'s and `eur_returns/calculator.py`'s docstrings and
+  portfolio's `modules.md` (the limitation was there, not in `architecture.md`). The spec's
+  §5.5 has an RK-31 amendment.
 
-Tests: endpoint parsing with and without volume. A zero-volume holiday row left out of the
-mask. A NULL-volume day handled as agreed.
+Tests: endpoint parsing with and without volume, and a missing or non-integer volume. A
+zero-volume holiday row is left out of the mask in every path. A NULL-volume day is kept.
 
 ## Deferred
 

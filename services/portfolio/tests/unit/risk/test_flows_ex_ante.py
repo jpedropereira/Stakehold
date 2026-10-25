@@ -166,6 +166,41 @@ def test_every_requested_asset_gets_a_status_in_input_order(caplog):
     assert failure.levelno == logging.ERROR and failure.exc_info is not None
 
 
+def test_var_leaves_out_a_holdings_zero_volume_flat_days(caplog):
+    # RK-31: B's Mondays are stale holiday rows (zero volume, 0%). They stay in B's returns but
+    # leave VaR's sample; with real volume on them, they'd count. The per-ticker log says how
+    # many days each holding didn't trade.
+    def b_prices(holiday_volume):
+        return [
+            (
+                PricePoint(p.date, p.split_adjusted_close, Decimal("0"), holiday_volume)
+                if p.date.weekday() == 0 and p.date != FIRST
+                else PricePoint(p.date, p.split_adjusted_close, p.simple_return, 1000)
+            )
+            for p in _prices(2)
+        ]
+
+    def var(holiday_volume):
+        client = _FakeDataStoreClient(
+            {"A": (EUR, _prices(1)), "B": (EUR, b_prices(holiday_volume))}
+        )
+        report = _run(client, [("A", "1"), ("B", "1")]).report
+        return report.window, report.constant_weight.tail.var_95
+
+    window, traded = var(1000)
+    with caplog.at_level(logging.INFO, logger="portfolio.risk.flows"):
+        _, masked = var(0)
+    mondays = [d for d in _weekdays(FIRST) if d.weekday() == 0 and window.start < d <= window.end]
+    assert masked.n_obs == traded.n_obs - len(mondays)
+    all_mondays = sum(1 for d in _weekdays(FIRST) if d.weekday() == 0)
+    days = len(_weekdays(FIRST))
+    assert f"ex-ante-risk: A: included, {days} day(s) of EUR returns, 0 not traded." in caplog.text
+    assert (
+        f"ex-ante-risk: B: included, {days} day(s) of EUR returns, {all_mondays} not traded."
+        in caplog.text
+    )
+
+
 def test_the_weights_are_normalised_over_the_included_holdings():
     client = _FakeDataStoreClient({"A": (EUR, _prices(1)), "B": (EUR, _prices(2))})
 

@@ -112,14 +112,16 @@ class HttpDataStoreClient:
                 f"data-store returned a malformed response for prices/{ticker}: {exc}"
             ) from exc
 
-        # simple_return is required even though it's nullable: data-store always sends the key,
-        # and defaulting a missing one to None would turn a contract break into silent gaps.
+        # simple_return and volume are required even though they're nullable: data-store always
+        # sends both keys, and defaulting a missing one to None would turn a contract break into
+        # silent gaps, or into days the VaR mask wrongly counts as traded.
         try:
             return [
                 PricePoint(
                     date=date.fromisoformat(point["date"]),
                     split_adjusted_close=Decimal(point["split_adjusted_close"]),
                     simple_return=_optional_decimal(point["simple_return"]),
+                    volume=_optional_int(point["volume"]),
                 )
                 for point in points
             ]
@@ -470,6 +472,16 @@ class HttpDataStoreClient:
 def _optional_decimal(value) -> Decimal | None:
     """A nullable numeric field: None stays None (a gap), anything else must parse."""
     return None if value is None else Decimal(value)
+
+
+def _optional_int(value) -> int | None:
+    """A nullable integer field: None stays None (unknown), anything else must already be a JSON
+    integer. A float or a bool is refused rather than truncated or read as 0/1."""
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"expected an integer, got {value!r}")
+    return value
 
 
 def _optional_date(value) -> date | None:

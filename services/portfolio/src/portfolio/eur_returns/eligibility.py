@@ -84,7 +84,11 @@ def fetch_eur_returns(
         series = eur_daily_returns(outcome.prices, outcome.fx)
         if isinstance(series, EurReturns):
             logger.info(
-                "%s: %s: included, %d day(s) of EUR returns.", context, ticker, len(series.dates)
+                "%s: %s: included, %d day(s) of EUR returns, %d not traded.",
+                context,
+                ticker,
+                len(series.dates),
+                len(series.dates) - len(series.traded),
             )
             returns[ticker] = series
             currencies[ticker] = outcome.info.fx_currency

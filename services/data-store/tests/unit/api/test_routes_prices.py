@@ -20,6 +20,7 @@ def test_returns_points_with_nulls_preserved_as_json_null(monkeypatch, client):
                     "dividend_return": None,
                     "simple_return": None,
                     "log_return": None,
+                    "volume": None,
                 }
             ],
         },
@@ -33,6 +34,8 @@ def test_returns_points_with_nulls_preserved_as_json_null(monkeypatch, client):
     point = body["points"][0]
     assert point["price_return"] is None
     assert point["split_adjusted_close"] == "100.0000"
+    # NULL is "unknown", not zero volume: it must reach the client as null, not 0.
+    assert point["volume"] is None
 
 
 def test_preserves_decimal_precision_as_a_string_not_a_rounded_float(monkeypatch, client):
@@ -51,6 +54,7 @@ def test_preserves_decimal_precision_as_a_string_not_a_rounded_float(monkeypatch
                     "dividend_return": "0",
                     "simple_return": "0.01",
                     "log_return": "0.00995",
+                    "volume": 1200,
                 }
             ],
         },
@@ -59,6 +63,33 @@ def test_preserves_decimal_precision_as_a_string_not_a_rounded_float(monkeypatch
     response = client.get("/prices/PLS.AX?start=2024-01-01&end=2024-01-31")
 
     assert response.json()["points"][0]["split_adjusted_close"] == "0.0093"
+
+
+def test_serves_volume_as_an_integer(monkeypatch, client):
+    monkeypatch.setattr(
+        jobs,
+        "get_price_series",
+        lambda **kw: {
+            "ticker": "AAPL",
+            "source": "yfinance",
+            "points": [
+                {
+                    "date": date(2024, 1, 2),
+                    "split_adjusted_close": "100.0000",
+                    "future_split_factor": "1.000000000000000",
+                    "price_return": "0",
+                    "dividend_return": "0",
+                    "simple_return": "0",
+                    "log_return": "0",
+                    "volume": 0,
+                }
+            ],
+        },
+    )
+
+    response = client.get("/prices/AAPL?start=2024-01-01&end=2024-01-31")
+
+    assert response.json()["points"][0]["volume"] == 0
 
 
 def test_empty_range_returns_200_with_empty_points_not_an_error(monkeypatch, client):

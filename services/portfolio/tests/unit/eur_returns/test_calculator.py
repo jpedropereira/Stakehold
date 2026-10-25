@@ -17,6 +17,7 @@ from portfolio.eur_returns.calculator import (
     EurReturns,
     Ineligible,
     eur_daily_returns,
+    traded_dates,
 )
 from portfolio.labs.calculator import AssetInput, Period, compute_backtest
 
@@ -149,7 +150,9 @@ def test_a_null_return_stays_a_gap_and_its_fx_move_is_still_reported():
 def test_a_single_usable_price_has_no_returns_yet():
     result = eur_daily_returns(_prices([(D0, None)]), None)
 
-    assert result == EurReturns(anchor=D0, dates=[], r_local=[], r_fx=[], r_eur=[], fx=None)
+    assert result == EurReturns(
+        anchor=D0, dates=[], r_local=[], r_fx=[], r_eur=[], fx=None, traded=frozenset()
+    )
 
 
 def test_no_prices_is_ineligible_for_having_no_history():
@@ -203,3 +206,50 @@ def test_chained_eur_returns_equal_labs_growth(fx):
 
     assert labs.growth.dates == [result.anchor, *result.dates]
     assert labs.growth.assets["A"] == _chained(result)
+
+
+# --- traded days: the VaR day mask's input (RK-31, spec R7) ---
+#
+# A day is untraded when its volume is 0 and its price didn't move (a flat or NULL return): a
+# closed exchange's stale holiday row. A thin listing's zero-volume day that moved is a quoted
+# price, so it counts. A NULL volume is unknown, not zero, and counts as traded.
+
+
+def _point(day, simple_return, volume):
+    return PricePoint(
+        day, Decimal("100"), None if simple_return is None else Decimal(simple_return), volume
+    )
+
+
+@pytest.mark.parametrize(
+    ("simple_return", "volume", "traded"),
+    [
+        pytest.param("0.01", 1200, True, id="volume-and-a-move"),
+        pytest.param("0", 1200, True, id="volume-and-a-flat-day"),
+        pytest.param("0", 0, False, id="zero-volume-flat-holiday-row"),
+        pytest.param(None, 0, False, id="zero-volume-null-return"),
+        pytest.param("-0.009", 0, True, id="zero-volume-quoted-move"),
+        pytest.param("0", None, True, id="null-volume-counts-as-traded"),
+        pytest.param(None, None, True, id="null-volume-null-return"),
+    ],
+)
+def test_traded_dates_applies_the_mask_rule(simple_return, volume, traded):
+    assert traded_dates([_point(D1, simple_return, volume)]) == (
+        frozenset({D1}) if traded else frozenset()
+    )
+
+
+def test_eur_returns_carry_the_traded_days_among_their_own_dates():
+    # D2 is a UK-bank-holiday-style row: zero volume and flat. It's still a return date (the next
+    # day's return runs from it), but it isn't a traded day. The anchor isn't a return date.
+    prices = [
+        _point(D0, None, 1000),
+        _point(D1, "0.01", 1000),
+        _point(D2, "0", 0),
+        _point(D3, "0.02", 0),  # a thin listing's quoted move
+    ]
+
+    result = eur_daily_returns(prices, None)
+
+    assert result.dates == [D1, D2, D3]
+    assert result.traded == frozenset({D1, D3})

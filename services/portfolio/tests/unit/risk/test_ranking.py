@@ -118,13 +118,15 @@ def _tickers(rows):
 def test_a_ranked_row_is_the_what_if_for_that_candidate(label):
     report = _rank(label=label)
     for row in report.ranked:
+        daily = {**_holdings(), row.ticker: _candidates()[row.ticker]}
         what_if = what_if_report(
-            {**_holdings(), row.ticker: _candidates()[row.ticker]},
+            daily,
             BEFORE,
             row.ticker,
             0.05,
             PRO_RATA,
             label,
+            trading_days={key: set(series.dates) for key, series in daily.items()},
             currencies=_currencies("A", "B", row.ticker),
             rates=RATES,
             first_published=FIRST_PUBLISHED,
@@ -148,10 +150,12 @@ def test_every_ranked_row_carries_its_history():
 def test_the_report_names_the_request_and_the_holdings_own_window():
     report = _rank(weight=0.07, rank_by=DIVERSIFICATION_RATIO)
     assert (report.weight, report.rank_by) == (0.07, DIVERSIFICATION_RATIO)
+    holdings = _holdings()
     alone = mix_report(
-        _holdings(),
+        holdings,
         BEFORE,
         StandardWindow.Y3,
+        trading_days={key: set(series.dates) for key, series in holdings.items()},
         currencies=_currencies("A", "B"),
         rates=RATES,
         first_published=FIRST_PUBLISHED,

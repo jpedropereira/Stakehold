@@ -77,7 +77,9 @@ standard_error}`, the metadata spec §9 and §10 ask every number to carry.
 - **A greyed figure** has `value: null` and a `reason`: below its §4.5 minimum, an undefined
   ratio, an uncovered window, or "no risk-free rate data" when `rf_available` is false.
 - **VaR and CVaR** keep only the dates on which every ticker held the day before traded, and
-  carry `nonsync_daily` unless the window held exactly one EUR ticker.
+  carry `nonsync_daily` unless the window held exactly one EUR ticker. A ticker traded on a day
+  when it has a price row there that isn't zero-volume and flat (`eur_returns.traded_dates`,
+  RK-31); see `modules.md`'s `eur_returns/` row.
 - **`excluded`** is the TWR's, with the same statuses and wording.
 - **`relative`** is the weekly TWR against the benchmark ("Relative to a benchmark" above). It
   is always there: in a window the portfolio doesn't cover, its figures are greyed with the same
@@ -573,7 +575,7 @@ estimates, not ledger amounts. The rules, argued in `labs/risk.py`'s docstring:
   it as a flat day.
 - **Volatility, downside deviation, Sharpe and Sortino are weekly** (`frequency: "weekly"`, q =
   52, on the whole Friday-to-Friday weeks ending inside the window). Everything else is daily.
-  VaR counts only days every asset has a price, and carries `nonsync_daily` whenever the row includes a
+  VaR counts only days every asset traded (a price row that isn't zero-volume and flat, RK-31), and carries `nonsync_daily` whenever the row includes a
   non-EUR asset.
 - **`relative`** is each row against the benchmark ("Relative to a benchmark" above): the mix's
   weekly series re-based at the window's start, or the asset's own. It is null exactly when the

@@ -71,7 +71,7 @@ hands them to risk/what_if.py. No benchmark and no matrix: its rows don't use th
 """
 
 import logging
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
@@ -335,6 +335,7 @@ def compute_ex_ante(
         daily,
         weights,
         window,
+        trading_days=_traded(eligible.returns),
         currencies=eligible.currencies,
         rates=rates,
         first_published=first_published,
@@ -528,6 +529,7 @@ def compute_what_if(
         weight,
         funding,
         window,
+        trading_days=_traded(eligible.returns),
         currencies=eligible.currencies,
         rates=rates,
         first_published=first_published,
@@ -797,6 +799,12 @@ def correlation_cells(report: ExAnteReport) -> list[tuple[str, str, RiskFigure]]
     once."""
     keys = report.correlation.keys
     return [(a, b, report.correlation.cell(a, b)) for i, a in enumerate(keys) for b in keys[i:]]
+
+
+def _traded(returns: Mapping[str, EurReturns]) -> dict[str, frozenset[date]]:
+    """Each ticker's VaR trading days (RK-31): its own, not its return series' dates, which
+    include a closed exchange's stale zero-volume rows."""
+    return {ticker: series.traded for ticker, series in returns.items()}
 
 
 def _series(returns: EurReturns, component: str) -> ReturnSeries:
