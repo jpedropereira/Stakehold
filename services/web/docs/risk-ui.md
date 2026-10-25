@@ -1,8 +1,8 @@
 # web Risk UI
 
 The `/risk` page's design decisions: its sections, their tables, the heatmap, the concentration
-tables and the rolling charts. Split out of [`ui-architecture.md`](ui-architecture.md) for size
-before RK-25, verbatim apart from this header; RK-25's entry was added here. It is part of
+tables, the rolling charts and the what-if. Split out of [`ui-architecture.md`](ui-architecture.md) for size
+before RK-25, verbatim apart from this header; RK-25's and RK-20's entries were added here. It is part of
 the same document, so
 `.claude/rules/architecture.md` applies to it: a change to anything described here updates this
 file in the same change. The server side of `/risk` (its router, the upstream calls) is in
@@ -218,3 +218,48 @@ file in the same change. The server side of `/risk` (its router, the upstream ca
       and a gap, and 5Y answering with no risk-free series. There are six `risk-rolling*`
       pages, covering the default pair, a ticker pair, an untracked benchmark side and a stale
       link.
+  - **What if · adding a candidate (RK-20).** The section after ex-ante: today's mix before
+    and after adding a candidate (spec §7.2), from portfolio's what-if (RK-19), built by
+    `risk_what_if_view.py`. Decisions (agreed):
+    - *A GET form, as LB-7's is.* It has a candidate ticker, a weight and a funding `<select>`,
+      so it works without JS and its state is the URL. The weight is a % of the mix *after*
+      the change, as portfolio takes it; the label says so. Funding is one select: "Pro-rata
+      from every holding", then "Replace X" for each holding left in after the exclusions.
+      *Rejected: radios plus a holdings select*, where "replace" could be checked with no
+      holding chosen. Each form re-sends the others' fields, and the ex-ante window and
+      exclude links keep the what-if's, so changing one control changes nothing else.
+    - *Ex-ante's window and exclusions.* `?ex_ante_window=` and `?exclude=` are sent as
+      ex-ante sends them, so "before" is exactly the mix the section above measures. *Rejected:
+      a window of its own*, a second set of window links whose "before" could disagree with
+      the ex-ante figures beside it.
+    - *Checked for what portfolio would 422, and no more.* That means an empty or over-long
+      ticker, a ticker already in the mix, a weight outside (0%, 100%), and a funding holding
+      that isn't in the mix sent. A form with errors makes no call and shows each error inline
+      in the charter's ink style, as the benchmark field does. The tracked list is only the
+      datalist's suggestions: a candidate priced only through a fund's holdings is valid (R14),
+      and one portfolio can't measure gets a 200 that says why. A "replace X" choice made
+      before X was excluded is an error, not a silent switch to pro-rata, which would answer a
+      question the user didn't ask. Stale `?exclude=` values are dropped silently (RK-18), but
+      dropping one doesn't change what's being compared.
+    - *The table: Before, After, Change, risk first.* Rows come in portfolio's order:
+      volatility, diversification ratio, the candidate's share of risk and its correlation with
+      the mix (no before, so "—"), Sharpe ± 1 s.e., then max drawdown. Cells are the summary's
+      (`risk_view.figure_cell`), so greyed reasons, titles and markers read alike. A change is
+      in points for percentages (`signed_points1`, "−0.2 pts") and signed to 2 decimals for
+      ratios, never coloured: a lower volatility isn't a gain. ΔSharpe carries its own s.e.,
+      which is far smaller than either Sharpe's (RK-19).
+    - *The threshold is a sentence, not a row.* It gives SR_c ± s.e. against ρ × SR_p, then a
+      plain verdict ("would have raised it" / "wouldn't have"), with "historical" in the
+      copy (R15). When it's greyed, the sentence gives the reason. Under replace funding it
+      says it's shown under pro-rata only (portfolio's reason).
+    - *Notes above the table.* R14's warning is a warning banner, in the spec's words, and
+      every "after" figure carries the flag's marker. The flag's legend note was reworded for
+      this case: only the what-if sets it. A shortened window says that the candidate's
+      history set it and that "before" was measured over the same weeks. A capped replace
+      names the weight the candidate actually got.
+    - *States.* "Nothing to compare: …" gives portfolio's reason (the candidate, the holding to
+      replace, or no holding measured). A failed call keeps the form, with a notice under it,
+      so the user can retry. With no holdings, or a failed holdings call, the form isn't shown,
+      since there's no mix to compare against.
+    - *Not shown:* the before/after weights of every holding. Pro-rata scales them all evenly,
+      and the one surprise (a capped replace) has its note.

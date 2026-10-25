@@ -163,6 +163,37 @@ PAGES = [
         # Each click opens the first one still closed: currency, sector, country and names.
         click=(".lt-more:not([open]) > summary",) * 4,
     ),
+    # RK-20: the what-if. The empty form; EGLN.L pro-rata with its threshold; replacing AAPL
+    # with more than it weighs (capped, no threshold); MSFT, priced through a fund, which
+    # shortens the window (R14's warning and markers on every after figure); a candidate that
+    # can't be measured; inline errors on every field; and the fake's failure.
+    Page("risk-what-if-empty", "/risk#risk-what-if", "user"),
+    Page(
+        "risk-what-if-pro-rata",
+        "/risk?candidate=EGLN.L&candidate_weight=10&funding=pro_rata#risk-what-if",
+        "user",
+    ),
+    Page(
+        "risk-what-if-replace-capped",
+        "/risk?candidate=EGLN.L&candidate_weight=60&funding=replace:AAPL#risk-what-if",
+        "user",
+    ),
+    Page(
+        "risk-what-if-survivorship-shortened",
+        "/risk?candidate=MSFT&candidate_weight=5#risk-what-if",
+        "user",
+    ),
+    Page("risk-what-if-nothing", "/risk?candidate=0700.HK&candidate_weight=5#risk-what-if", "user"),
+    Page(
+        "risk-what-if-form-error",
+        "/risk?candidate=AAPL&candidate_weight=150&funding=replace:MSFT#risk-what-if",
+        "user",
+    ),
+    Page(
+        "risk-what-if-unavailable",
+        "/risk?candidate=FAIL.XX&candidate_weight=5#risk-what-if",
+        "user",
+    ),
     # RK-9: the risk comparison over 3Y (AAPL's volatility has a gap note), over 10Y (not
     # covered, so no table), a mix the fake answers with no risk-free data, and the drawdown
     # chart over Max.

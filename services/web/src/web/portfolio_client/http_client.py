@@ -11,6 +11,7 @@ from web.portfolio_client.base import (
     RELATIVE_FIGURE_KEYS,
     RISK_FIGURE_KEYS,
     RISK_WINDOWS,
+    WHAT_IF_ROW_KEYS,
     Account,
     AccountDeleteResult,
     AccountWriteResult,
@@ -66,6 +67,12 @@ from web.portfolio_client.base import (
     TransactionDeleteResult,
     TransactionWriteResult,
     UnmappedInstrument,
+    WhatIf,
+    WhatIfCandidate,
+    WhatIfFunding,
+    WhatIfRow,
+    WhatIfThreshold,
+    WhatIfWindow,
 )
 from web.portfolio_client.errors import (
     AccountLabelConflict,
@@ -748,6 +755,83 @@ def _ex_ante_risk(body: dict) -> ExAnteRisk:
         raise PortfolioUnavailable(f"malformed portfolio response: {exc}") from exc
 
 
+def _opt_bool(item: dict, key: str) -> bool | None:
+    return None if item[key] is None else _bool(item, key)
+
+
+def _what_if_row(item: dict) -> WhatIfRow:
+    after = _risk_figure(item["after"])
+    if after is None:
+        # An "after" figure is greyed with a reason, never null: a blank cell would read as 0.
+        raise ValueError("a what-if row has no after figure")
+    return WhatIfRow(
+        before=_risk_figure(item["before"]),
+        after=after,
+        delta=_opt_float(item["delta"], "delta"),
+        delta_se=_opt_float(item.get("delta_se"), "delta_se"),
+    )
+
+
+def _what_if_window(item: dict) -> WhatIfWindow:
+    return WhatIfWindow(
+        label=item["label"],
+        requested_start=date.fromisoformat(item["requested_start"]),
+        start=_opt_date(item["start"]),
+        end=date.fromisoformat(item["end"]),
+        limited_by=_tickers(item, "limited_by"),
+        shortened=_bool(item, "shortened"),
+        start_without_candidate=_opt_date(item["start_without_candidate"]),
+        end_without_candidate=_opt_date(item["end_without_candidate"]),
+    )
+
+
+def _what_if_threshold(item: dict) -> WhatIfThreshold:
+    return WhatIfThreshold(
+        applicable=_bool(item, "applicable"),
+        reason=item["reason"],
+        candidate_sharpe=_risk_figure(item["candidate_sharpe"]),
+        correlation=_opt_float(item["correlation"], "correlation"),
+        portfolio_sharpe=_opt_float(item["portfolio_sharpe"], "portfolio_sharpe"),
+        threshold=_opt_float(item["threshold"], "threshold"),
+        improves=_opt_bool(item, "improves"),
+    )
+
+
+def _what_if(body: dict) -> WhatIf:
+    try:
+        candidate, funding = body["candidate"], body["funding"]
+        window, rows, threshold = body["window"], body["rows"], body["threshold"]
+        return WhatIf(
+            label=body["label"],
+            rf_available=_bool(body, "rf_available"),
+            statuses=tuple(
+                BacktestAssetStatus(
+                    ticker=item["ticker"], status=item["status"], reason=item["reason"]
+                )
+                for item in body["statuses"]
+            ),
+            candidate=WhatIfCandidate(
+                ticker=candidate["ticker"],
+                status=candidate["status"],
+                reason=candidate["reason"],
+                requested_weight=_float(candidate["requested_weight"], "requested_weight"),
+                weight=_opt_float(candidate["weight"], "weight"),
+                capped=_opt_bool(candidate, "capped"),
+                survivorship=_bool(candidate, "survivorship"),
+            ),
+            funding=WhatIfFunding(
+                rule=funding["rule"], ticker=funding["ticker"], reason=funding["reason"]
+            ),
+            window=None if window is None else _what_if_window(window),
+            rows=(
+                None if rows is None else {key: _what_if_row(rows[key]) for key in WHAT_IF_ROW_KEYS}
+            ),
+            threshold=None if threshold is None else _what_if_threshold(threshold),
+        )
+    except (KeyError, TypeError, ValueError, AttributeError) as exc:
+        raise PortfolioUnavailable(f"malformed portfolio response: {exc}") from exc
+
+
 def _fixed(value, key: str) -> Decimal:
     """A look-through weight: a fixed-point string, as portfolio serves shares (RK-22). A JSON
     number would mean the contract changed to floats, which these sums mustn't round through."""
@@ -1154,6 +1238,41 @@ class HttpPortfolioClient:
                 f"unexpected portfolio response {response.status_code}: {_error_detail(response)}"
             )
         return _ex_ante_risk(_json_body(response))
+
+    async def what_if(
+        self,
+        *,
+        assets: list[tuple[str, Decimal]],
+        candidate: tuple[str, Decimal],
+        funding: str,
+        window: str,
+        exclude: list[str],
+    ) -> WhatIf:
+        candidate_ticker, candidate_weight = candidate
+        response = await self._request(
+            "POST",
+            "/risk/what-if",
+            json={
+                "assets": [
+                    {"ticker": ticker, "weight": _decimal_str(weight)} for ticker, weight in assets
+                ],
+                "candidate": {
+                    "ticker": candidate_ticker,
+                    "weight": _decimal_str(candidate_weight),
+                },
+                "funding": funding,
+                "window": window,
+                "exclude": exclude,
+            },
+        )
+        if response.status_code == 422:
+            raise InvalidPortfolioRequest(_error_detail(response))
+        if response.status_code != 200:
+            # Not _raise_for_status: its 404 means AccountNotFound, and this route has no account.
+            raise PortfolioUnavailable(
+                f"unexpected portfolio response {response.status_code}: {_error_detail(response)}"
+            )
+        return _what_if(_json_body(response))
 
     async def look_through(self, *, assets: list[tuple[str, Decimal]]) -> LookThrough:
         response = await self._request(
