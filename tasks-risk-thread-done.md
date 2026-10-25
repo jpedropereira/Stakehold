@@ -942,3 +942,35 @@ Decisions (agreed):
 - **For RK-28:** add `get_regimes` to the client Protocol, the HTTP client and the fakes, as in
   RK-4. Treat `total_regimes: 0` as "no regimes loaded", not as "none in this window". Clip each
   regime to the window, and filter by dimension or scope there.
+
+### RK-29. Candidate ranking mode
+
+**Status:** done
+
+Score many candidates at a fixed weight on a common window, showing each candidate's history
+length, with R14's warning once at the top. Rank by Δσ_p and Δ diversification ratio. ΔSharpe
+is shown with its SE but is never the ranking key, because picking the best of many noisy
+historical Sharpe deltas is data-mining (spec §7.2). Agree the candidate universe and a cap on it
+before building, since every candidate is a data-store fetch.
+
+**As built:** `POST /risk/what-if/ranking` (`risk/ranking.py`, `risk/flows.compute_ranking`) and
+a fifth `/risk` section (`risk_ranking_view.py`). portfolio's `risk-flows.md` and web's
+`risk-ui.md` hold the reasoning. Decisions (agreed):
+- **The universe is the tracked tickers**: enabled, `ready`, outside the mix (excluded
+  holdings included). R14 never applies. **The cap is 50**, alphabetically, and the ones past
+  it are named, not fetched.
+- **The window is the holdings'.** A candidate that doesn't cover it is listed unranked with
+  R9's reason in weeks rather than shortening it for the rest. The spec's R10 has an RK-29
+  amendment recording this.
+- **Order: Δσ_p ascending by default, Δ diversification ratio descending by link.** ΔSharpe ±
+  s.e. is shown in both and is never an order. A row missing either key is listed greyed,
+  unnumbered.
+- **Each row is the what-if's for that candidate** under pro-rata funding, on its own listwise
+  panel (a test pins it), measuring only the decomposition and weekly Sharpes. 1Y is a 422, and
+  web sends nothing on 1Y. The ranking runs only when its form is sent.
+- **Preparatory splits:** web's client parsers moved to `portfolio_client/risk_parsing.py` and
+  `parsing.py` (`http_client.py` was 57 KB). The review fake is in `scripts/review_ranking.py`
+  (`review_fakes.py` is 59 KB).
+- **Not done here:** the dev-stack check (timing at the real universe size, one row against
+  the what-if form). Synthetic worst case: 0.5 s at 3Y, 0.8 s at Max for 50 candidates and 12
+  holdings, before the fetches.
