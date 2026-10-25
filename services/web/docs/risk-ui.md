@@ -1,8 +1,8 @@
 # web Risk UI
 
 The `/risk` page's design decisions: its sections, their tables, the heatmap, the concentration
-tables, the rolling charts, the regime tables and the what-if. Split out of [`ui-architecture.md`](ui-architecture.md) for size
-before RK-25, verbatim apart from this header; RK-25's and RK-20's entries were added here. It is part of
+tables, the rolling charts, the regime tables, the what-if and the candidate ranking. Split out of [`ui-architecture.md`](ui-architecture.md) for size
+before RK-25, verbatim apart from this header; RK-25's, RK-20's, RK-28's and RK-29's entries were added here. It is part of
 the same document, so
 `.claude/rules/architecture.md` applies to it: a change to anything described here updates this
 file in the same change. The server side of `/risk` (its router, the upstream calls) is in
@@ -263,6 +263,34 @@ file in the same change. The server side of `/risk` (its router, the upstream ca
       since there's no mix to compare against.
     - *Not shown:* the before/after weights of every holding. Pro-rata scales them all evenly,
       and the one surprise (a capped replace) has its note.
+  - **What if · ranking the tracked tickers (RK-29).** The section after the what-if: every
+    tracked ticker the user doesn't hold, scored as a pro-rata what-if candidate at one weight
+    (portfolio's `POST /risk/what-if/ranking`), on the ex-ante window and exclusions, so each
+    candidate joins the mix that section measures.
+    - *On demand.* A GET form with one field, the weight (5% shown until it's sent). Nothing is
+      sent until it is, because the ranking costs about two data-store calls per tracked
+      ticker, up to 50. The field hint says it can take a few seconds. On a 1Y ex-ante window
+      the form says why it can't rank (the diversification ratio needs 104 weeks) and sends
+      nothing, rather than letting portfolio's 422 show as a failed section.
+    - *The order is a link, not a field.* Two links in the note above the table switch between
+      Δ volatility (the default) and Δ diversification ratio. The current one carries
+      `aria-current`. The note says why the Sharpe change is shown but never an order: the
+      best of many noisy Sharpe changes is mostly luck (spec §7.2). There is no Sharpe link to
+      tempt anyone.
+    - *One row per candidate, numbered in portfolio's order.* Columns: rank, ticker over its
+      tracked name, history (first day over its week count), Δ volatility, Δ diversification
+      ratio, share of risk, correlation with the mix, ΔSharpe ± 1 s.e. Changes use the
+      what-if's filters, never coloured. Each cell's `title` is its after figure's metadata.
+      Greyed rows (a key under its minimum because of missing weeks) follow, unnumbered, with
+      the reason in the greyed cells and a note under the table. *Rejected: a before column
+      per measure*, which would double the width for numbers the what-if already shows for any
+      one candidate.
+    - *What wasn't ranked is named.* A "Not ranked" list gives each candidate's reason (too
+      young for the window, with its history start, or the fetch's "no FX series for HKD"),
+      and a note names the tracked tickers past the cap. Nothing is dropped silently.
+    - *Every form keeps the others.* The ranking form re-sends every other control and its own
+      order. The benchmark and what-if forms re-send `rank_weight` and `rank_by`, and the
+      ex-ante links keep the whole query, so changing one section never clears the ranking.
 - **Regime tables (RK-28): one per section, grouped by dimension.** portfolio serves each
   section's `regimes`: ex-post's on the TWR and ex-ante's on today's mix over its whole history.
   `risk_regime_view.py` turns each into a "Market regimes" block, after ex-post's rolling charts

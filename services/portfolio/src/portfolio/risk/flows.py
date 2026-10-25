@@ -93,6 +93,7 @@ from portfolio.eur_returns.eligibility import fetch_eur_returns
 from portfolio.risk.ex_ante_report import LABEL as EX_ANTE_LABEL
 from portfolio.risk.ex_ante_report import NO_OVERLAP, ExAnteReport, ex_ante_report
 from portfolio.risk.ex_post import SeriesFigures, WindowFigures, ex_post_figures
+from portfolio.risk.ranking import SIGMA_P, RankingReport, rank_candidates
 from portfolio.risk.regimes import RegimePeriod, RegimeRow, regime_rows
 from portfolio.risk.relative import BenchmarkReturns
 from portfolio.risk.risk_free import RatePoint
@@ -125,6 +126,7 @@ _NOTHING_TO_MEASURE = "not fetched: nothing to measure"
 NO_REGIMES_LOADED = "no regimes loaded"
 REGIMES_UNAVAILABLE = "regimes unavailable: data-store call failed"
 _EUR = "EUR"
+_READY = "ready"  # a tracked ticker's onboarding status once it is priced
 
 
 @dataclass(frozen=True)
@@ -594,6 +596,199 @@ def _log_what_if(report: WhatIfReport, n_included: int, n_left_out: int) -> None
         "greyed" if sigma_p.delta is None else f"{sigma_p.delta * 100:+.2f} pt",
         threshold_text,
         "flagged" if Flag.SURVIVORSHIP in sigma_p.after.flags else "not flagged",
+    )
+
+
+RANKING_CAP = 50  # agreed for RK-29: each candidate costs about two data-store calls
+NOT_FETCHED = "not_fetched"  # a holding left unfetched when there is no candidate
+SHORT_HISTORY = "short_history"  # a candidate that doesn't cover the holdings' window
+NO_CANDIDATE = "no tracked ticker outside the mix to rank"
+NO_MEASURABLE_CANDIDATE = "no candidate could be measured"
+NO_HOLDING = "no holding could be included"
+
+
+@dataclass(frozen=True)
+class UnrankedCandidate:
+    ticker: str
+    status: str  # SHORT_HISTORY, or the fetch's: not_tracked, no_history, no_fx_rate or failed
+    reason: str
+    history_start: date | None  # None when it couldn't be fetched
+    n_weeks: int | None
+
+
+@dataclass(frozen=True)
+class RankingRisk:
+    label: str
+    rf_available: bool
+    statuses: list[AssetStatus]  # every requested holding, in input order
+    universe: int  # tracked candidates outside the mix, before the cap
+    over_cap: list[str]  # past the cap: not fetched
+    names: dict[str, str]  # each candidate's display name
+    unranked: list[UnrankedCandidate]  # left out by the fetch, then too short; by ticker
+    weights: dict[str, float]  # the included holdings', normalised
+    nothing: str | None  # why there's no report
+    report: RankingReport | None
+
+
+def compute_ranking(
+    datastore_client: DataStoreClient,
+    mix: Sequence[tuple[str, Decimal]],
+    weight: float,
+    *,
+    window: StandardWindow = StandardWindow.Y3,
+    exclude: Collection[str] = (),
+    rank_by: str = SIGMA_P,
+    today: date | None = None,
+) -> RankingRisk:
+    """Every enabled, ready tracked ticker outside `mix`, up to RANKING_CAP alphabetically,
+    scored at `weight` (a fraction of the whole mix), funded pro-rata, over `window`. The
+    request is assumed valid (`weight` in (0, 1), `window` not 1Y): the API checks that first.
+    A failing tracked-ticker list raises: there is nothing to rank without it."""
+    today = today or date.today()
+    excluded = set(exclude)
+    held = {ticker for ticker, _ in mix}
+    tracked = {
+        row.ticker: row.display_name
+        for row in datastore_client.list_tracked_tickers(statuses=[_READY])
+        if row.enabled and row.ticker not in held
+    }
+    universe = sorted(tracked)
+    candidates, over_cap = universe[:RANKING_CAP], universe[RANKING_CAP:]
+    names = {ticker: tracked[ticker] for ticker in candidates}
+    logger.info(
+        "ranking: %d holding(s), %d excluded by request, %d tracked candidate(s), %d past the "
+        "cap of %d, at %.1f%%, window %s, ranked by %s.",
+        len(mix),
+        len(excluded),
+        len(universe),
+        len(over_cap),
+        RANKING_CAP,
+        weight * 100,
+        window,
+        rank_by,
+    )
+    for ticker in over_cap:
+        logger.info("ranking: %s: not fetched, past the cap of %d.", ticker, RANKING_CAP)
+
+    def nothing(reason, statuses, unranked=(), rf_available=False) -> RankingRisk:
+        logger.warning("ranking: nothing to rank: %s.", reason)
+        return RankingRisk(
+            EX_ANTE_LABEL,
+            rf_available,
+            statuses,
+            len(universe),
+            over_cap,
+            names,
+            list(unranked),
+            {},
+            reason,
+            None,
+        )
+
+    if not candidates:
+        statuses = [
+            (
+                AssetStatus(t, EXCLUDED, EXCLUDED_REASON)
+                if t in excluded
+                else AssetStatus(t, NOT_FETCHED, _NOTHING_TO_MEASURE)
+            )
+            for t, _ in mix
+        ]
+        return nothing(NO_CANDIDATE, statuses)
+
+    for ticker, _ in mix:
+        if ticker in excluded:
+            logger.info("ranking: %s: %s.", ticker, EXCLUDED_REASON)
+    eligible = fetch_eur_returns(
+        datastore_client,
+        [ticker for ticker, _ in mix if ticker not in excluded] + candidates,
+        EPOCH,
+        today,
+        logger=logger,
+        context="ranking",
+    )
+    left_out = {holding.ticker: holding for holding in eligible.excluded}
+    statuses = [_status(ticker, excluded, left_out) for ticker, _ in mix]
+    unranked = [
+        UnrankedCandidate(ticker, left_out[ticker].status, left_out[ticker].reason, None, None)
+        for ticker in candidates
+        if ticker in left_out
+    ]
+    included = [(ticker, w) for ticker, w in mix if ticker in eligible.returns]
+    measurable = [ticker for ticker in candidates if ticker in eligible.returns]
+    if not included:
+        return nothing(NO_HOLDING, statuses, unranked)
+    if not measurable:
+        for row in unranked:
+            logger.info("ranking: %s: not ranked, %s.", row.ticker, row.reason)
+        return nothing(NO_MEASURABLE_CANDIDATE, statuses, unranked)
+
+    total = sum(w for _, w in included)
+    weights = {ticker: float(w / total) for ticker, w in included}
+    holdings = {t: _series(eligible.returns[t], EUR_RETURNS) for t in weights}
+    scored = {t: _series(eligible.returns[t], EUR_RETURNS) for t in measurable}
+    every = [*holdings.values(), *scored.values()]
+    oldest = min(series.base_date for series in every)
+    end = min(series.last_date for series in every)
+    rates, first_published = _risk_free(datastore_client, oldest, end, context="ranking")
+
+    report = rank_candidates(
+        holdings,
+        weights,
+        scored,
+        weight,
+        window,
+        rank_by,
+        rates=rates,
+        first_published=first_published,
+    )
+    unranked = sorted(
+        unranked
+        + [
+            UnrankedCandidate(u.ticker, SHORT_HISTORY, u.reason, u.history_start, u.n_weeks)
+            for u in report.unranked
+        ],
+        key=lambda row: row.ticker,
+    )
+    _log_ranking(report, unranked, len(over_cap))
+    return RankingRisk(
+        EX_ANTE_LABEL,
+        rates is not None,
+        statuses,
+        len(universe),
+        over_cap,
+        names,
+        unranked,
+        weights,
+        None,
+        report,
+    )
+
+
+def _log_ranking(report: RankingReport, unranked: list[UnrankedCandidate], n_over_cap: int):
+    window = report.window
+    if window is not None:
+        logger.info(
+            "ranking: window %s: measured %s..%s.", report.requested.label, window.start, window.end
+        )
+    for row in report.ranked + report.greyed:
+        sigma, ratio, sharpe = row.sigma_p, row.diversification_ratio, row.sharpe
+        logger.info(
+            "ranking: %s: delta sigma_p %s, delta diversification ratio %s, delta Sharpe %s%s.",
+            row.ticker,
+            "greyed" if sigma.delta is None else f"{sigma.delta * 100:+.2f} pt",
+            "greyed" if ratio.delta is None else f"{ratio.delta:+.3f}",
+            "greyed" if sharpe.delta is None else f"{sharpe.delta:+.2f}",
+            "" if sharpe.delta_se is None else f" (s.e. {sharpe.delta_se:.2f})",
+        )
+    for row in unranked:
+        logger.info("ranking: %s: not ranked, %s.", row.ticker, row.reason)
+    logger.info(
+        "ranking: done, %d ranked, %d greyed, %d not ranked, %d past the cap.",
+        len(report.ranked),
+        len(report.greyed),
+        len(unranked),
+        n_over_cap,
     )
 
 

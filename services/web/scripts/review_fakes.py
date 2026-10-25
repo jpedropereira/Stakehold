@@ -1105,6 +1105,18 @@ def fakes():
                 threshold,
             )
 
+        async def rank_candidates(self, *, assets, weight, window, exclude, rank_by):
+            from review_ranking import review_ranking  # RK-29, in its own file for size
+
+            return review_ranking(
+                today=today,
+                weight=weight,
+                window=window,
+                exclude=exclude,
+                assets=assets,
+                rank_by=rank_by,
+            )
+
         async def look_through(self, *, assets):
             """The concentration section (RK-23), shaped like the dev run (RK-22), not the
             review holdings: they hold no fund portfolio can look through. 70.7% through

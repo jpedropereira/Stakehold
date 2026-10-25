@@ -966,6 +966,88 @@ class WhatIfResponse(BaseModel):
     threshold: WhatIfThresholdResponse | None
 
 
+# --- ranking (RK-29) ---
+# The what-if's rows (WhatIfRowResponse), one set per candidate.
+
+RankBy = Literal["sigma_p", "diversification_ratio"]  # never Sharpe (spec §7.2)
+
+
+class RankingRequest(BaseModel):
+    # The mix as for ex-ante; the candidates are data-store's tracked tickers outside it.
+    assets: list[BacktestAssetRequest] = Field(min_length=1, max_length=MAX_BACKTEST_ASSETS)
+    # Every candidate's share of the whole mix after the change, funded pro-rata.
+    weight: Decimal = Field(gt=0, lt=1, allow_inf_nan=False)
+    window: StandardWindow = StandardWindow.Y3
+    exclude: list[str] = Field(default_factory=list, max_length=MAX_BACKTEST_ASSETS)
+    rank_by: RankBy = "sigma_p"
+
+    @model_validator(mode="after")
+    def _a_valid_ranking(self):
+        _check_exclude([asset.ticker for asset in self.assets], self.exclude)
+        if self.window is StandardWindow.Y1:
+            raise ValueError(
+                "ranking needs a window of 3Y or more: the diversification ratio " "needs 104 weeks"
+            )
+        return self
+
+
+class RankingWindowResponse(BaseModel):
+    """The holdings' own window: every ranked candidate is measured on it. `start` is null when
+    the holdings' histories don't overlap."""
+
+    label: StandardWindow
+    requested_start: date
+    start: date | None
+    end: date
+
+
+class RankedCandidateResponse(BaseModel):
+    """One candidate's what-if (RK-19) under pro-rata funding, on its own listwise panel over the
+    holdings' window: the same rows, without max drawdown and the threshold."""
+
+    ticker: str
+    name: str  # its tracked display name
+    history_start: date
+    n_weeks: int  # weekly returns over its whole history
+    sigma_p: WhatIfRowResponse
+    diversification_ratio: WhatIfRowResponse
+    candidate_pcr: WhatIfRowResponse
+    candidate_correlation: WhatIfRowResponse
+    sharpe: WhatIfSharpeRowResponse  # shown, never ranked on
+
+
+class UnrankedCandidateResponse(BaseModel):
+    ticker: str
+    name: str
+    # short_history (doesn't cover the holdings' window), or the fetch's: not_tracked,
+    # no_history, no_fx_rate or failed.
+    status: str
+    reason: str
+    history_start: date | None  # null when it couldn't be fetched
+    n_weeks: int | None
+
+
+class RankingResponse(BaseModel):
+    """Data-store's tracked tickers outside the mix, each scored at one weight (RK-29, spec §7.2).
+    `ranked` is in rank order: Δσ_p ascending or Δ diversification ratio descending, ties by
+    ticker. `window`, `ranked` and `greyed` are null exactly when `nothing` says why there's no
+    ranking."""
+
+    label: str  # "ex-ante · constant weights"
+    rf_available: bool
+    statuses: list[AssetStatusResponse]  # every requested holding, in request order
+    nothing: str | None
+    universe: int  # tracked candidates outside the mix, before the cap
+    cap: int
+    over_cap: list[str]  # past the cap, alphabetically: not scored
+    weight: float
+    rank_by: RankBy
+    window: RankingWindowResponse | None
+    ranked: list[RankedCandidateResponse] | None
+    greyed: list[RankedCandidateResponse] | None  # a rank key greyed (too many gaps); by ticker
+    unranked: list[UnrankedCandidateResponse]  # by ticker
+
+
 # --- look-through (RK-22) ---
 # Weights are fractions of the mix (0.10 is 10%), as fixed-point strings like the backtest's:
 # they are shares that sum to 1, not statistical estimates.

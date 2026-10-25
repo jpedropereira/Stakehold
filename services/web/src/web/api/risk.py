@@ -2,7 +2,7 @@
 
 The page is built of sections, each loaded on its own and failing on its own, as /labs's
 holdings and backtest do. A section that can't load shows its notice in its place; the others,
-and the page around them, still render. Three so far, gathered concurrently where neither
+and the page around them, still render. Five so far, gathered concurrently where neither
 needs the other's answer:
 - the ex-post summary: portfolio's GET /risk/ex-post, the standard windows' figures measured on
   the TWR of invested positions (RK-11);
@@ -14,10 +14,15 @@ needs the other's answer:
 - the what-if section (RK-20): portfolio's POST /risk/what-if on the same mix, with the
   candidate, weight and funding from its GET form (`?candidate=`, `?candidate_weight=`,
   `?funding=`; risk_what_if_view.py checks them). Its window and exclusions are ex-ante's, so
-  "before" is the mix that section measures. An empty form or one with errors sends nothing.
-The last three measure today's mix, so they share one GET /holdings
+  "before" is the mix that section measures. An empty form or one with errors sends nothing;
+- the candidate ranking (RK-29): portfolio's POST /risk/what-if/ranking on the same mix, every
+  tracked ticker scored at the weight its GET form sends (`?rank_weight=`), in the order its
+  links pick (`?rank_by=`; risk_ranking_view.py checks both). Its window and exclusions are
+  ex-ante's too. Only a sent form calls portfolio: the ranking costs about two data-store calls
+  per tracked ticker, so it isn't run on every view.
+The last four measure today's mix, so they share one GET /holdings
 (labs_view.build_default_mix), then call portfolio concurrently. A failed holdings call shows
-its notice in all three.
+its notice in all four.
 
 The rolling charts (RK-25) come with the first two sections' own calls, so nothing more is
 fetched and each section's charts fail with it: ex-post's and ex-ante's rolling 1Y volatility
@@ -58,6 +63,12 @@ from web.risk_ex_ante_view import (
     build_ex_ante_section,
     chosen_ex_ante_window,
 )
+from web.risk_ranking_view import (
+    RankingForm,
+    RankingSection,
+    build_ranking_section,
+    parse_ranking,
+)
 from web.risk_regime_view import RegimeSection, build_regime_section
 from web.risk_rolling_view import (
     PAIR_PARAMS,
@@ -82,7 +93,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # The query each GET form re-sends as hidden inputs: every other control's (RK-14, RK-20,
-# and RK-25's rolling pair).
+# RK-25's rolling pair and RK-29's ranking).
+_RANKING_PARAMS = ("rank_weight", "rank_by")
 _BENCHMARK_KEPT = (
     "candidate",
     "candidate_weight",
@@ -90,8 +102,20 @@ _BENCHMARK_KEPT = (
     "ex_ante_window",
     "exclude",
     *PAIR_PARAMS,
+    *_RANKING_PARAMS,
 )
-_WHAT_IF_KEPT = ("benchmark", "ex_ante_window", "exclude", *PAIR_PARAMS)
+_WHAT_IF_KEPT = ("benchmark", "ex_ante_window", "exclude", *PAIR_PARAMS, *_RANKING_PARAMS)
+# The ranking's own weight is its field; its order is kept, so a new weight keeps the order.
+_RANKING_KEPT = (
+    "benchmark",
+    "ex_ante_window",
+    "exclude",
+    *PAIR_PARAMS,
+    "candidate",
+    "candidate_weight",
+    "funding",
+    "rank_by",
+)
 
 _UNAVAILABLE = "Can't reach the portfolio service right now, so it can't be shown."
 
@@ -187,6 +211,22 @@ class _WhatIfAsk:
     funding: str | None
 
 
+@dataclass(frozen=True)
+class _RankingParts:
+    """The ranking's form, and the section or the message to show in its place. No form, as for
+    the what-if: there's no mix to rank against."""
+
+    form: RankingForm | None = None
+    section: RankingSection | None = None
+    error: str | None = None
+
+
+@dataclass(frozen=True)
+class _RankingAsk:
+    weight: str | None
+    rank_by: str | None
+
+
 async def _load_holdings_sections(
     portfolio_client: PortfolioClient,
     user_id: str,
@@ -195,15 +235,16 @@ async def _load_holdings_sections(
     exclude: list[str],
     params: list[tuple[str, str]],
     ask: _WhatIfAsk,
+    rank_ask: _RankingAsk,
 ) -> tuple[
     tuple[ExAnteSection | None, str | None, _Extras],
     tuple[ConcentrationSection | None, str | None],
     _WhatIfParts,
+    _RankingParts,
 ]:
     """The ex-ante and concentration sections, each as (section, None) or (None, the message to
     show in its place), ex-ante's with its rolling charts and regime table, and the what-if's
-    parts. (None,
-    None): no holding to measure yet."""
+    and the ranking's parts. (None, None): no holding to measure yet."""
     try:
         holdings = await portfolio_client.list_holdings(user_id=user_id)
     except PortfolioClientError:
@@ -212,23 +253,25 @@ async def _load_holdings_sections(
             (None, _UNAVAILABLE, _Extras()),
             (None, _UNAVAILABLE),
             _WhatIfParts(error=_UNAVAILABLE),
+            _RankingParts(error=_UNAVAILABLE),
         )
     mix = build_default_mix(holdings.holdings)
     if not mix.assets:
         logger.info(
-            "risk: ex-ante, look-through and what-if have nothing to measure, %d holdings, none "
-            "priced and worth something.",
+            "risk: ex-ante, look-through, what-if and ranking have nothing to measure, %d "
+            "holdings, none priced and worth something.",
             len(holdings.holdings),
         )
-        return (None, None, _Extras()), (None, None), _WhatIfParts()
+        return (None, None, _Extras()), (None, None), _WhatIfParts(), _RankingParts()
     sent = _sent_exclusions(mix, exclude)
     form = parse_what_if(ask.candidate, ask.weight, ask.funding, mix, sent)
-    ex_ante, concentration, what_if = await asyncio.gather(
+    rank_form = parse_ranking(rank_ask.weight, rank_ask.rank_by, window)
+    return await asyncio.gather(
         _load_ex_ante(portfolio_client, mix, holdings.holdings, benchmark, window, sent, params),
         _load_concentration(portfolio_client, mix),
         _load_what_if(portfolio_client, mix, window, sent, form),
+        _load_ranking(portfolio_client, mix, window, sent, rank_form, params),
     )
-    return ex_ante, concentration, what_if
 
 
 def _sent_exclusions(mix: DefaultMix, exclude: list[str]) -> list[str]:
@@ -410,6 +453,66 @@ def _log_what_if(section: WhatIfSection) -> None:
     )
 
 
+async def _load_ranking(
+    portfolio_client: PortfolioClient,
+    mix: DefaultMix,
+    window: str,
+    sent: list[str],
+    form: RankingForm,
+    params: list[tuple[str, str]],
+) -> _RankingParts:
+    request = form.request
+    if request is None:
+        if form.error:
+            logger.info("risk: ranking form has an error (%s), nothing sent.", form.error)
+        elif form.window_note:
+            logger.info("risk: ranking not sent over %s: it needs 3Y or more.", window)
+        else:
+            logger.info("risk: ranking not asked for, nothing sent.")
+        return _RankingParts(form=form)
+    logger.info(
+        "risk: loading the ranking at %s%% of the mix, ranked by %s, over %s, %d holdings, "
+        "excluding %s.",
+        f"{(request.weight * 100).normalize():f}",
+        request.rank_by,
+        window,
+        len(mix.assets),
+        ", ".join(sent) or "none",
+    )
+    try:
+        ranking = await portfolio_client.rank_candidates(
+            assets=list(mix.assets),
+            weight=request.weight,
+            window=window,
+            exclude=sent,
+            rank_by=request.rank_by,
+        )
+    except PortfolioClientError:
+        # A 422 included: the form checks what portfolio rejects, so one means they disagree.
+        logger.exception("risk: portfolio service unavailable loading the ranking.")
+        return _RankingParts(form=form, error=_UNAVAILABLE)
+    section = build_ranking_section(ranking, params)
+    _log_ranking(section)
+    return _RankingParts(form=form, section=section)
+
+
+def _log_ranking(section: RankingSection) -> None:
+    if section.nothing:
+        logger.info("risk: ranking had nothing to rank: %s", section.nothing)
+        return
+    logger.info(
+        "risk: ranking over %s, %d ranked, %d greyed, %d not ranked, %d past the cap of %d, "
+        "first %s.",
+        section.window.label,
+        len(section.lines),
+        len(section.greyed),
+        len(section.unranked),
+        len(section.over_cap),
+        section.cap,
+        section.lines[0].ticker if section.lines else "none",
+    )
+
+
 async def _load_concentration(
     portfolio_client: PortfolioClient, mix: DefaultMix
 ) -> tuple[ConcentrationSection | None, str | None]:
@@ -503,6 +606,8 @@ async def risk(
     candidate: str | None = None,
     candidate_weight: str | None = None,
     funding: str | None = None,
+    rank_weight: str | None = None,
+    rank_by: str | None = None,
 ):
     # The header's logout and theme forms need the token, as on every other page.
     csrf_token = ensure_csrf_cookie(request, response, cookie_secure=settings.cookie_secure)
@@ -519,6 +624,7 @@ async def risk(
             (ex_ante, ex_ante_error, ex_ante_extras),
             (concentration, concentration_error),
             what_if,
+            ranking,
         ),
         (tickers, tickers_notice),
     ) = await asyncio.gather(
@@ -531,6 +637,7 @@ async def risk(
             exclude,
             params,
             _WhatIfAsk(candidate, candidate_weight, funding),
+            _RankingAsk(rank_weight, rank_by),
         ),
         _load_tickers(portfolio_client),
     )
@@ -557,9 +664,13 @@ async def risk(
             "what_if_form": what_if.form,
             "what_if": what_if.section,
             "what_if_error": what_if.error,
+            "ranking_form": ranking.form,
+            "ranking": ranking.section,
+            "ranking_error": ranking.error,
             # Each form re-sends the others' fields, so submitting one changes nothing else.
             "benchmark_kept": [(k, v) for k, v in params if k in _BENCHMARK_KEPT],
             "what_if_kept": [(k, v) for k, v in params if k in _WHAT_IF_KEPT],
+            "ranking_kept": [(k, v) for k, v in params if k in _RANKING_KEPT],
             "benchmark": benchmark,
             "benchmark_error": benchmark_error,
             "tickers": tickers,

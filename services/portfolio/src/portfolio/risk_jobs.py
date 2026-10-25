@@ -16,6 +16,7 @@ from portfolio.look_through import flows as look_through_flows
 from portfolio.look_through.calculator import DIMENSION_LABELS, Concentration, Dimension
 from portfolio.risk import flows as risk_flows
 from portfolio.risk.ex_post import WindowFigures
+from portfolio.risk.ranking import SIGMA_P, CandidateScore
 from portfolio.risk.rolling import CORRELATION_WINDOW, ROLLING_WINDOW, RollingFigures
 from portfolio.risk.types import RiskFigure
 from portfolio.risk.what_if import Funding, Row, WhatIfReport
@@ -426,6 +427,101 @@ def _what_if_row(row: Row) -> dict:
         "before": None if row.before is None else _figure(row.before),
         "after": _figure(row.after),
         "delta": row.delta,
+    }
+
+
+def get_ranking(
+    *,
+    assets: list[tuple[str, Decimal]],
+    weight: Decimal,
+    window: StandardWindow = StandardWindow.Y3,
+    exclude: Collection[str] = (),
+    rank_by: str = SIGMA_P,
+    settings: Settings | None = None,
+) -> dict:
+    """The tracked tickers outside `assets` (ticker, weight) pairs, each scored as a what-if
+    candidate at `weight` (see risk/flows.compute_ranking). Read-only and per request, like the
+    what-if: no database connection and no user_id."""
+    configure_logging()
+    settings = settings or load_settings()
+    datastore_client = _require_datastore_client(settings, command="a ranking")
+    logger.info(
+        "get-ranking: ranking candidates against %d asset(s) at %.1f%%.",
+        len(assets),
+        float(weight) * 100,
+    )
+    result = risk_flows.compute_ranking(
+        datastore_client,
+        assets,
+        float(weight),
+        window=window,
+        exclude=exclude,
+        rank_by=rank_by,
+    )
+
+    report = result.report
+    included = sum(1 for s in result.statuses if s.status == risk_flows.INCLUDED)
+    if report is None:
+        logger.warning(
+            "get-ranking: done, nothing to rank: %s (%d of %d asset(s) included).",
+            result.nothing,
+            included,
+            len(assets),
+        )
+    else:
+        logger.info(
+            "get-ranking: done, %d of %d asset(s) included, %d ranked, %d greyed, %d not "
+            "ranked, %d past the cap, window %s, risk-free rate %s.",
+            included,
+            len(assets),
+            len(report.ranked),
+            len(report.greyed),
+            len(result.unranked),
+            len(result.over_cap),
+            window,
+            "available" if result.rf_available else "unavailable",
+        )
+
+    names = result.names
+    payload = {
+        "label": result.label,
+        "rf_available": result.rf_available,
+        "statuses": [asdict(status) for status in result.statuses],
+        "nothing": result.nothing,
+        "universe": result.universe,
+        "cap": risk_flows.RANKING_CAP,
+        "over_cap": result.over_cap,
+        "weight": float(weight),
+        "rank_by": rank_by,
+        "unranked": [{**asdict(row), "name": names[row.ticker]} for row in result.unranked],
+    }
+    if report is None:
+        return {**payload, **dict.fromkeys(("window", "ranked", "greyed"))}
+    measured = report.window
+    return {
+        **payload,
+        "window": {
+            "label": str(report.requested.label),
+            "requested_start": report.requested.start,
+            "start": None if measured is None else measured.start,
+            "end": report.requested.end,
+        },
+        "ranked": [_ranked(row, names) for row in report.ranked],
+        "greyed": [_ranked(row, names) for row in report.greyed],
+    }
+
+
+def _ranked(row: CandidateScore, names: dict[str, str]) -> dict:
+    return {
+        "ticker": row.ticker,
+        "name": names[row.ticker],
+        "history_start": row.history_start,
+        "n_weeks": row.n_weeks,
+        "sigma_p": _what_if_row(row.sigma_p),
+        "diversification_ratio": _what_if_row(row.diversification_ratio),
+        "candidate_pcr": _what_if_row(row.candidate_pcr),
+        "candidate_correlation": _what_if_row(row.candidate_correlation),
+        "sharpe": {**_what_if_row(row.sharpe), "delta_se": row.sharpe.delta_se},
     }
 
 

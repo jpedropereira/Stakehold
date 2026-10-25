@@ -222,6 +222,12 @@ Standard windows: **1Y, 3Y, 5Y, 10Y, Max**, ending at the latest common date. Ro
   default is a **common window**: the latest start date among them. The UI names the asset that
   limits the window. An "each over its own max history" view may exist, but must be labelled
   "not comparable".
+
+> **Amended (RK-29):** in ranking mode (§7.2) the common window is the holdings' requested one,
+> not the latest start among the candidates. A candidate that doesn't cover it is listed
+> unranked with R9's reason, in weeks, rather than shortening the window for the rest: one
+> young ticker in the tracked list would otherwise cut every candidate's 5Y ranking to its own
+> history. Among the ranked candidates the window is still common.
 - **R11. Sampling uncertainty.** Show Sharpe with an approximate standard error (§5.4). Short
   windows make Sharpe noisy: with 3 years of data the SE is roughly ±0.6, at any sampling
   frequency.
