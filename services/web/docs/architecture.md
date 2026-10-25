@@ -392,7 +392,9 @@ Every route `web` serves, with what it requires and which upstream calls it make
   implementation, and one error hierarchy (`AuthClientError`) routes catch with a single `except`.
 - `portfolio_client/{base,http_client,errors}.py` (task 11, extended tasks 12 and 17) — the
   `PortfolioClient` Protocol, its real implementation, and one error hierarchy
-  (`PortfolioClientError`); see "Key decisions" for how and why it departs from `auth_client`'s
+  (`PortfolioClientError`). The Labs and risk response parsers moved verbatim to
+  `risk_parsing.py`, and the JSON primitives they share to `parsing.py`, when `http_client.py`
+  neared 64 KB (RK-29): a split by subject, as portfolio's `risk_jobs.py`; see "Key decisions" for how and why it departs from `auth_client`'s
   shape in a couple of places. Task 12 added `list_positions`/`list_returns` (plus `Position`/
   `Return` dataclasses) to the same trio rather than inventing new files — no new error types were
   needed, since `AccountNotFound`/`PortfolioUnavailable` already cover every failure mode these

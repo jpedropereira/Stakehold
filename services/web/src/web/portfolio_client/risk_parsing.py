@@ -1,0 +1,592 @@
+"""Parsers for portfolio's Labs and risk responses: the backtest (LB-2 onwards), ex-post and
+ex-ante risk, the what-if and the look-through. Lifted verbatim out of
+http_client.py when it neared the repo's 64KB limit (RK-29); HttpPortfolioClient still owns the
+requests and calls these on their bodies. Each raises PortfolioUnavailable on a malformed
+body, as before."""
+
+from datetime import date
+from decimal import Decimal, InvalidOperation
+
+from web.portfolio_client.base import (
+    BACKTEST_PERIODS,
+    BACKTEST_RISK_WINDOWS,
+    LOOK_THROUGH_COVERAGE,
+    LOOK_THROUGH_DIMENSIONS,
+    RELATIVE_FIGURE_KEYS,
+    RISK_FIGURE_KEYS,
+    RISK_WINDOWS,
+    WHAT_IF_ROW_KEYS,
+    Backtest,
+    BacktestAssetStatus,
+    BacktestBenchmark,
+    BacktestGrowth,
+    BacktestPeriodReturn,
+    BacktestRisk,
+    BacktestRow,
+    BacktestRowRisk,
+    BacktestWindowRisk,
+    BenchmarkStatus,
+    CorrelationCell,
+    CorrelationMatrix,
+    DrawdownSeries,
+    ExAnteHolding,
+    ExAnteRisk,
+    ExAnteWindow,
+    ExcludedHolding,
+    ExPostRisk,
+    ExPostWindow,
+    FxDecompositionRow,
+    LookThrough,
+    LookThroughAsset,
+    LookThroughBucket,
+    LookThroughConcentration,
+    LookThroughDimension,
+    LookThroughExposures,
+    LookThroughName,
+    LookThroughNames,
+    LookThroughSnapshot,
+    RiskFigure,
+    RiskFreeStatus,
+    RollingCorrelation,
+    RollingRisk,
+    SeriesRisk,
+    WhatIf,
+    WhatIfCandidate,
+    WhatIfFunding,
+    WhatIfRow,
+    WhatIfThreshold,
+    WhatIfWindow,
+)
+from web.portfolio_client.errors import (
+    PortfolioUnavailable,
+)
+from web.portfolio_client.parsing import (
+    _bool,
+    _float,
+    _int,
+    _opt_bool,
+    _opt_date,
+    _opt_decimal,
+    _opt_float,
+    _tickers,
+)
+
+
+def _backtest_period(item: dict) -> BacktestPeriodReturn:
+    return BacktestPeriodReturn(
+        start=date.fromisoformat(item["start"]),
+        end=date.fromisoformat(item["end"]),
+        covered=_bool(item, "covered"),
+        return_pct=_opt_decimal(item["return_pct"]),
+        gaps=_int(item, "gaps"),
+        left_out=_tickers(item, "left_out"),
+    )
+
+
+def _backtest_row(item: dict) -> BacktestRow:
+    periods = item["periods"]
+    missing = [p for p in BACKTEST_PERIODS if p not in periods]
+    if missing:
+        # The table has a column per period, so a row without one can't be shown truthfully.
+        raise ValueError(f"backtest row missing period(s) {', '.join(missing)}")
+    return BacktestRow(
+        ticker=item["ticker"],
+        weight=Decimal(item["weight"]),
+        periods={p: _backtest_period(periods[p]) for p in BACKTEST_PERIODS},
+    )
+
+
+def _growth_line(values, length: int) -> tuple[Decimal | None, ...] | None:
+    if values is None:
+        return None
+    # A null point is a Max asset line before its first day (LB-9).
+    line = tuple(None if v is None else Decimal(v) for v in values)
+    if len(line) != length:
+        # One value per date, or the chart would draw each point against the wrong day.
+        raise ValueError(f"growth line has {len(line)} values for {length} dates")
+    return line
+
+
+def _backtest_growth(item: dict) -> BacktestGrowth:
+    dates = tuple(date.fromisoformat(d) for d in item["dates"])
+    return BacktestGrowth(
+        period=item["period"],
+        dates=dates,
+        mix=_growth_line(item["mix"], len(dates)),
+        assets={t: _growth_line(v, len(dates)) for t, v in item["assets"].items()},
+        left_out=_tickers(item, "left_out"),
+    )
+
+
+def _risk_figure(item: dict | None) -> RiskFigure | None:
+    if item is None:
+        return None
+    return RiskFigure(
+        value=_opt_float(item["value"], "value"),
+        window_start=date.fromisoformat(item["window_start"]),
+        window_end=date.fromisoformat(item["window_end"]),
+        frequency=item["frequency"],
+        q=_float(item["q"], "q"),
+        n_obs=_int(item, "n_obs"),
+        n_gaps=_int(item, "n_gaps"),
+        flags=_tickers(item, "flags"),
+        reason=item["reason"],
+        standard_error=_opt_float(item["standard_error"], "standard_error"),
+    )
+
+
+def _relative(item: dict) -> dict[str, RiskFigure]:
+    """A window's figures against the benchmark (RK-13). portfolio greys one with a reason
+    rather than leaving it out, so a null figure is a contract break."""
+    relative = {}
+    for key in RELATIVE_FIGURE_KEYS:
+        figure = _risk_figure(item[key])
+        if figure is None:
+            raise TypeError(f"relative {key} is null")
+        relative[key] = figure
+    return relative
+
+
+def _window_risk(item: dict) -> BacktestWindowRisk:
+    days, relative = item["max_days_under_water"], item["relative"]
+    return BacktestWindowRisk(
+        start=_opt_date(item["start"]),
+        end=date.fromisoformat(item["end"]),
+        covered=_bool(item, "covered"),
+        reason=item["reason"],
+        figures={key: _risk_figure(item[key]) for key in RISK_FIGURE_KEYS},
+        peak_date=_opt_date(item["peak_date"]),
+        trough_date=_opt_date(item["trough_date"]),
+        recovery_date=_opt_date(item["recovery_date"]),
+        max_days_under_water=None if days is None else _int(item, "max_days_under_water"),
+        relative=None if relative is None else _relative(relative),
+    )
+
+
+def _row_risk(item: dict) -> BacktestRowRisk:
+    windows = item["windows"]
+    missing = [w for w in BACKTEST_RISK_WINDOWS if w not in windows]
+    if missing:
+        # The risk table has a column per window, as the period table has one per period.
+        raise ValueError(f"risk row missing window(s) {', '.join(missing)}")
+    return BacktestRowRisk(
+        ticker=item["ticker"],
+        windows={w: _window_risk(windows[w]) for w in BACKTEST_RISK_WINDOWS},
+    )
+
+
+def _drawdown(item: dict) -> DrawdownSeries:
+    dates = tuple(date.fromisoformat(d) for d in item["dates"])
+    values = tuple(_opt_float(v, "drawdown value") for v in item["values"])
+    if len(values) != len(dates):
+        # One value per date, or the chart would draw each point against the wrong day.
+        raise ValueError(f"drawdown has {len(values)} values for {len(dates)} dates")
+    return DrawdownSeries(period=item["period"], dates=dates, values=values)
+
+
+def _benchmark_fields(item: dict) -> dict:
+    return {
+        "ticker": item["ticker"],
+        "available": _bool(item, "available"),
+        "reason": item["reason"],
+        "first_date": _opt_date(item["first_date"]),
+    }
+
+
+def _backtest_benchmark(item: dict, growth_dates: int | None) -> BacktestBenchmark:
+    growth = item["growth"]
+    if growth is not None:
+        if growth_dates is None:
+            raise ValueError("benchmark growth line with no growth series")
+        growth = _growth_line(growth, growth_dates)
+        if any(value is None for value in growth):
+            # Unlike a late asset's Max line, the benchmark's is null as a whole, never in part.
+            raise ValueError("benchmark growth line has a null point")
+    return BacktestBenchmark(
+        **_benchmark_fields(item), growth=growth, growth_reason=item["growth_reason"]
+    )
+
+
+def _backtest_risk(item: dict, growth_dates: int | None) -> BacktestRisk:
+    risk_free, drawdown = item["risk_free"], item["drawdown"]
+    return BacktestRisk(
+        label=item["label"],
+        end_date=date.fromisoformat(item["end_date"]),
+        common_start=_opt_date(item["common_start"]),
+        limited_by=_tickers(item, "limited_by"),
+        risk_free=RiskFreeStatus(
+            available=_bool(risk_free, "available"),
+            reason=risk_free["reason"],
+            first_date=_opt_date(risk_free["first_date"]),
+        ),
+        benchmark=_backtest_benchmark(item["benchmark"], growth_dates),
+        mix=_row_risk(item["mix"]),
+        assets=tuple(_row_risk(row) for row in item["assets"]),
+        drawdown=None if drawdown is None else _drawdown(drawdown),
+    )
+
+
+def _backtest(body: dict) -> Backtest:
+    try:
+        # `risk` is read as required: portfolio always sends it (null with no asset included),
+        # so a missing key is a contract break, not a backtest with no risk figures.
+        mix, growth, risk = body["mix"], body["growth"], body["risk"]
+        growth = None if growth is None else _backtest_growth(growth)
+        return Backtest(
+            end_date=_opt_date(body["end_date"]),
+            mix=None if mix is None else _backtest_row(mix),
+            assets=tuple(_backtest_row(item) for item in body["assets"]),
+            growth=growth,
+            statuses=tuple(
+                BacktestAssetStatus(
+                    ticker=item["ticker"], status=item["status"], reason=item["reason"]
+                )
+                for item in body["statuses"]
+            ),
+            risk=(
+                None
+                if risk is None
+                else _backtest_risk(risk, None if growth is None else len(growth.dates))
+            ),
+        )
+    except (KeyError, TypeError, ValueError, InvalidOperation) as exc:
+        raise PortfolioUnavailable(f"malformed portfolio response: {exc}") from exc
+
+
+def _ex_post_figure(item: dict, name: str) -> RiskFigure:
+    """Unlike a backtest window's, an ex-post figure is never null: an uncovered window greys
+    each figure with its reason instead (RK-11)."""
+    figure = _risk_figure(item[name])
+    if figure is None:
+        raise TypeError(f"{name} is null")
+    return figure
+
+
+def _ex_post_window(item: dict) -> ExPostWindow:
+    max_days = item["max_days_under_water"]
+    return ExPostWindow(
+        label=item["label"],
+        start=date.fromisoformat(item["start"]),
+        end=date.fromisoformat(item["end"]),
+        covered=_bool(item, "covered"),
+        figures={name: _ex_post_figure(item, name) for name in RISK_FIGURE_KEYS},
+        peak_date=_opt_date(item["peak_date"]),
+        trough_date=_opt_date(item["trough_date"]),
+        recovery_date=_opt_date(item["recovery_date"]),
+        max_days_under_water=None if max_days is None else _int(item, "max_days_under_water"),
+        relative=_relative(item["relative"]),
+    )
+
+
+def _rolling_points(items: list, name: str) -> tuple[RiskFigure, ...]:
+    return tuple(_ex_post_figure({name: item}, name) for item in items)
+
+
+def _rolling(item: dict | None) -> RollingRisk | None:
+    """RK-24's rolling 1Y figures. A gap is a greyed figure, never a null point."""
+    if item is None:
+        return None
+    volatility = _rolling_points(item["volatility"], "volatility")
+    sharpe = _rolling_points(item["sharpe"], "sharpe")
+    if [f.window_end for f in volatility] != [f.window_end for f in sharpe]:
+        # Two charts over the same windows: a missing point would shift every later one.
+        raise ValueError("rolling volatility and Sharpe aren't on the same windows")
+    return RollingRisk(
+        window=item["window"], step=item["step"], volatility=volatility, sharpe=sharpe
+    )
+
+
+def _rolling_correlation(item: dict | None) -> RollingCorrelation | None:
+    if item is None:
+        return None
+    return RollingCorrelation(
+        a=item["a"],
+        b=item["b"],
+        window=item["window"],
+        step=item["step"],
+        reason=item["reason"],
+        points=_rolling_points(item["points"], "point"),
+    )
+
+
+def _ex_post_risk(body: dict) -> ExPostRisk:
+    try:
+        windows = tuple(_ex_post_window(item) for item in body["windows"])
+        labels = tuple(w.label for w in windows)
+        if windows and labels != RISK_WINDOWS:
+            # The table has a column per window, in this order: anything else would put figures
+            # under the wrong heading.
+            raise ValueError(f"risk windows {labels}, expected {RISK_WINDOWS}")
+        return ExPostRisk(
+            label=body["label"],
+            base_date=_opt_date(body["base_date"]),
+            end_date=_opt_date(body["end_date"]),
+            rf_available=_bool(body, "rf_available"),
+            benchmark=BenchmarkStatus(**_benchmark_fields(body["benchmark"])),
+            windows=windows,
+            excluded=tuple(
+                ExcludedHolding(ticker=item["ticker"], status=item["status"], reason=item["reason"])
+                for item in body["excluded"]
+            ),
+            rolling=_rolling(body["rolling"]),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise PortfolioUnavailable(f"malformed portfolio response: {exc}") from exc
+
+
+def _ex_ante_holding(item: dict) -> ExAnteHolding:
+    return ExAnteHolding(
+        ticker=item["ticker"],
+        weight=_float(item["weight"], "weight"),
+        **{
+            key: _opt_float(item[key], key)
+            for key in ("volatility", "mcr", "cr", "pcr", "corr_with_portfolio")
+        },
+    )
+
+
+def _series_risk(item: dict) -> SeriesRisk:
+    max_days = item["max_days_under_water"]
+    return SeriesRisk(
+        figures={name: _ex_post_figure(item, name) for name in RISK_FIGURE_KEYS},
+        peak_date=_opt_date(item["peak_date"]),
+        trough_date=_opt_date(item["trough_date"]),
+        recovery_date=_opt_date(item["recovery_date"]),
+        max_days_under_water=None if max_days is None else _int(item, "max_days_under_water"),
+    )
+
+
+def _correlation_matrix(item: dict) -> CorrelationMatrix:
+    keys = _tickers(item, "keys")
+    cells = tuple(
+        CorrelationCell(a=cell["a"], b=cell["b"], figure=_ex_post_figure(cell, "figure"))
+        for cell in item["cells"]
+    )
+    expected = [(a, b) for i, a in enumerate(keys) for b in keys[i:]]
+    if [(cell.a, cell.b) for cell in cells] != expected:
+        # The heatmap mirrors the upper triangle into its squares: a missing, extra or
+        # misnamed cell would put a figure in the wrong square or leave one blank.
+        raise ValueError("correlation cells aren't the upper triangle of keys, row by row")
+    return CorrelationMatrix(keys=keys, benchmark_key=item["benchmark_key"], cells=cells)
+
+
+def _fx_decomposition_row(item: dict) -> FxDecompositionRow:
+    return FxDecompositionRow(
+        ticker=item["ticker"],
+        currency=item["currency"],
+        local_volatility=_ex_post_figure(item, "local_volatility"),
+        fx_volatility=_ex_post_figure(item, "fx_volatility"),
+        correlation=_ex_post_figure(item, "correlation"),
+        eur_volatility=_ex_post_figure(item, "eur_volatility"),
+    )
+
+
+def _ex_ante_window(item: dict) -> ExAnteWindow:
+    return ExAnteWindow(
+        label=item["label"],
+        requested_start=date.fromisoformat(item["requested_start"]),
+        start=_opt_date(item["start"]),
+        end=date.fromisoformat(item["end"]),
+        limited_by=_tickers(item, "limited_by"),
+    )
+
+
+def _ex_ante_risk(body: dict) -> ExAnteRisk:
+    try:
+        window, holdings = body["window"], body["holdings"]
+        constant, matrix = body["constant_weight"], body["correlation"]
+        fx_rows = body["fx_decomposition"]
+        return ExAnteRisk(
+            label=body["label"],
+            currency=body["currency"],
+            rf_available=_bool(body, "rf_available"),
+            window=None if window is None else _ex_ante_window(window),
+            benchmark=BenchmarkStatus(**_benchmark_fields(body["benchmark"])),
+            statuses=tuple(
+                BacktestAssetStatus(
+                    ticker=item["ticker"], status=item["status"], reason=item["reason"]
+                )
+                for item in body["statuses"]
+            ),
+            sigma_p=_risk_figure(body["sigma_p"]),
+            diversification_ratio=_risk_figure(body["diversification_ratio"]),
+            effective_n=_opt_float(body["effective_n"], "effective_n"),
+            holdings=None if holdings is None else tuple(_ex_ante_holding(h) for h in holdings),
+            constant_weight=None if constant is None else _series_risk(constant),
+            correlation=None if matrix is None else _correlation_matrix(matrix),
+            fx_decomposition=(
+                None if fx_rows is None else tuple(_fx_decomposition_row(r) for r in fx_rows)
+            ),
+            rolling=_rolling(body["rolling"]),
+            rolling_correlation=_rolling_correlation(body["rolling_correlation"]),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise PortfolioUnavailable(f"malformed portfolio response: {exc}") from exc
+
+
+def _what_if_row(item: dict) -> WhatIfRow:
+    after = _risk_figure(item["after"])
+    if after is None:
+        # An "after" figure is greyed with a reason, never null: a blank cell would read as 0.
+        raise ValueError("a what-if row has no after figure")
+    return WhatIfRow(
+        before=_risk_figure(item["before"]),
+        after=after,
+        delta=_opt_float(item["delta"], "delta"),
+        delta_se=_opt_float(item.get("delta_se"), "delta_se"),
+    )
+
+
+def _what_if_window(item: dict) -> WhatIfWindow:
+    return WhatIfWindow(
+        label=item["label"],
+        requested_start=date.fromisoformat(item["requested_start"]),
+        start=_opt_date(item["start"]),
+        end=date.fromisoformat(item["end"]),
+        limited_by=_tickers(item, "limited_by"),
+        shortened=_bool(item, "shortened"),
+        start_without_candidate=_opt_date(item["start_without_candidate"]),
+        end_without_candidate=_opt_date(item["end_without_candidate"]),
+    )
+
+
+def _what_if_threshold(item: dict) -> WhatIfThreshold:
+    return WhatIfThreshold(
+        applicable=_bool(item, "applicable"),
+        reason=item["reason"],
+        candidate_sharpe=_risk_figure(item["candidate_sharpe"]),
+        correlation=_opt_float(item["correlation"], "correlation"),
+        portfolio_sharpe=_opt_float(item["portfolio_sharpe"], "portfolio_sharpe"),
+        threshold=_opt_float(item["threshold"], "threshold"),
+        improves=_opt_bool(item, "improves"),
+    )
+
+
+def _what_if(body: dict) -> WhatIf:
+    try:
+        candidate, funding = body["candidate"], body["funding"]
+        window, rows, threshold = body["window"], body["rows"], body["threshold"]
+        return WhatIf(
+            label=body["label"],
+            rf_available=_bool(body, "rf_available"),
+            statuses=tuple(
+                BacktestAssetStatus(
+                    ticker=item["ticker"], status=item["status"], reason=item["reason"]
+                )
+                for item in body["statuses"]
+            ),
+            candidate=WhatIfCandidate(
+                ticker=candidate["ticker"],
+                status=candidate["status"],
+                reason=candidate["reason"],
+                requested_weight=_float(candidate["requested_weight"], "requested_weight"),
+                weight=_opt_float(candidate["weight"], "weight"),
+                capped=_opt_bool(candidate, "capped"),
+                survivorship=_bool(candidate, "survivorship"),
+            ),
+            funding=WhatIfFunding(
+                rule=funding["rule"], ticker=funding["ticker"], reason=funding["reason"]
+            ),
+            window=None if window is None else _what_if_window(window),
+            rows=(
+                None if rows is None else {key: _what_if_row(rows[key]) for key in WHAT_IF_ROW_KEYS}
+            ),
+            threshold=None if threshold is None else _what_if_threshold(threshold),
+        )
+    except (KeyError, TypeError, ValueError, AttributeError) as exc:
+        raise PortfolioUnavailable(f"malformed portfolio response: {exc}") from exc
+
+
+def _fixed(value, key: str) -> Decimal:
+    """A look-through weight: a fixed-point string, as portfolio serves shares (RK-22). A JSON
+    number would mean the contract changed to floats, which these sums mustn't round through."""
+    if not isinstance(value, str):
+        raise TypeError(f"{key} is not a fixed-point string")
+    return Decimal(value)
+
+
+def _opt_fixed(value, key: str) -> Decimal | None:
+    return None if value is None else _fixed(value, key)
+
+
+def _keyed(item: dict, keys: tuple[str, ...], what: str) -> None:
+    """Exactly these keys: a missing one would drop a table, and an unknown one would be
+    silently left out of the page."""
+    if not isinstance(item, dict) or set(item) != set(keys):
+        raise ValueError(f"{what} {sorted(item)}, expected {sorted(keys)}")
+
+
+def _concentration(item: dict) -> LookThroughConcentration:
+    return LookThroughConcentration(
+        top_shares={int(n): _fixed(v, "top_shares") for n, v in item["top_shares"].items()},
+        known_share=_fixed(item["known_share"], "known_share"),
+        herfindahl=_opt_fixed(item["herfindahl"], "herfindahl"),
+        effective_n=_opt_fixed(item["effective_n"], "effective_n"),
+        reason=item["reason"],
+    )
+
+
+def _dimension(item: dict) -> LookThroughDimension:
+    return LookThroughDimension(
+        label=item["label"],
+        buckets=tuple(
+            LookThroughBucket(b["label"], _fixed(b["weight"], "weight"), b["kind"])
+            for b in item["buckets"]
+        ),
+        concentration=_concentration(item["concentration"]),
+    )
+
+
+def _exposures(item: dict) -> LookThroughExposures:
+    coverage, dimensions, names = item["coverage"], item["dimensions"], item["names"]
+    _keyed(coverage, LOOK_THROUGH_COVERAGE, "coverage")
+    _keyed(dimensions, LOOK_THROUGH_DIMENSIONS, "dimensions")
+    return LookThroughExposures(
+        snapshots=tuple(
+            LookThroughSnapshot(
+                ticker=s["ticker"],
+                fund_key=s["fund_key"],
+                as_of_date=date.fromisoformat(s["as_of_date"]),
+                n_lines=_int(s, "n_lines"),
+                raw_weight_sum=_fixed(s["raw_weight_sum"], "raw_weight_sum"),
+            )
+            for s in item["snapshots"]
+        ),
+        coverage={key: _fixed(coverage[key], key) for key in LOOK_THROUGH_COVERAGE},
+        dimensions={key: _dimension(dimensions[key]) for key in LOOK_THROUGH_DIMENSIONS},
+        names=LookThroughNames(
+            top=tuple(
+                LookThroughName(
+                    issuer=n["issuer"],
+                    location=n["location"],
+                    weight=_fixed(n["weight"], "weight"),
+                    sources=_tickers(n, "sources"),
+                )
+                for n in names["top"]
+            ),
+            n_names=_int(names, "n_names"),
+            concentration=_concentration(names["concentration"]),
+        ),
+    )
+
+
+def _look_through(body: dict) -> LookThrough:
+    try:
+        exposures = body["exposures"]
+        return LookThrough(
+            assets=tuple(
+                LookThroughAsset(
+                    ticker=a["ticker"],
+                    status=a["status"],
+                    reason=a["reason"],
+                    kind=a["kind"],
+                    weight=_opt_fixed(a["weight"], "weight"),
+                    matched_in=a["matched_in"],
+                    note=a["note"],
+                )
+                for a in body["assets"]
+            ),
+            exposures=None if exposures is None else _exposures(exposures),
+        )
+    except (KeyError, TypeError, ValueError, InvalidOperation) as exc:
+        raise PortfolioUnavailable(f"malformed portfolio response: {exc}") from exc
