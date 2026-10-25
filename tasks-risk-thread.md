@@ -16,6 +16,7 @@ rule number (§5.4, R12). It doesn't restate them. The other open thread is
 - `done`: implemented, tested, merged.
 - `ready`: every dependency is `done`, so it can be started now.
 - `blocked`: waiting on at least one dependency.
+- `abandoned`: closed without being built. The task says why.
 
 ## Discovery and domain review
 
@@ -109,7 +110,7 @@ split out of this file for size; its row here links there.
 | RK-27 | [data-store: regimes endpoint](tasks-risk-thread-done.md#rk-27-data-store-regimes-endpoint) | RK-1 | done |
 | RK-28 | [Regime view (portfolio and web)](#rk-28-regime-view-portfolio-and-web) | RK-14, RK-27 | ready |
 | RK-29 | [Candidate ranking mode](#rk-29-candidate-ranking-mode) | RK-20 | ready |
-| RK-30 | [Ledoit–Wolf shrinkage (optional)](#rk-30-ledoitwolf-shrinkage-optional) | RK-15 | ready |
+| RK-30 | [Ledoit–Wolf shrinkage (optional)](#rk-30-ledoitwolf-shrinkage-optional) | RK-15 | abandoned: not needed (see task) |
 | RK-31 | [VaR day mask on traded volume](#rk-31-var-day-mask-on-traded-volume) | RK-1 | ready |
 
 ## Tasks
@@ -133,10 +134,22 @@ before building, since every candidate is a data-store fetch.
 
 ### RK-30. Ledoit–Wolf shrinkage (optional)
 
-**Status:** ready
+**Status:** abandoned
 
 Shrink Σ when the assets exceed about ¼ of the weekly observations. It is flagged in the result.
 Build it only if RK-18's matrices show the need.
+
+**Why not built** (2026-10-25):
+- **The trigger never fires on real data.** N > T/4 needs more than 26 holdings at the
+  decomposition's 104-week minimum (`history.py`), and more than 39 in the default 3Y window.
+  The portfolio, plus a what-if candidate, is well under that.
+- **σ_p doesn't need it.** For a fixed mix, wᵀSw is already unbiased, and §6.2's consistency
+  check pins σ_p to the constant-weight weekly volatility. Shrinkage would only ever matter for
+  the per-holding decomposition.
+- **If it's ever revived** (agreed scope): shrink Σ for the decomposition only (MCR, PCR,
+  correlation with the portfolio, the diversification ratio). σ_p stays the sample value, and
+  CR = PCR × sample σ_p, so CR still sums to σ_p. A new `Flag.SHRUNK_COVARIANCE` goes on the
+  affected figures. That needs a web `FLAG_NOTES` entry and an amendment to spec §6.2–6.3.
 
 ### RK-31. VaR day mask on traded volume
 

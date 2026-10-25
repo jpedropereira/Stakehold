@@ -629,6 +629,10 @@ is EUR-listed from 2019-07-29, and `IWDA.AS` is EUR-listed from 2009-09-25.
 4. Candidate ranking mode.
 5. Optional: Ledoit–Wolf shrinkage of Σ when assets exceed ~¼ of the weekly observations.
 
+*Amended (RK-30):* item 5 is not built. Its trigger needs more than 26 holdings at the
+decomposition's 104-week minimum, and more than 39 in the default 3Y window. The portfolio is
+well under that. The task thread records the scope agreed in case it is ever revived.
+
 ---
 
 ## 12. Decisions taken on the owner's behalf (override any)
