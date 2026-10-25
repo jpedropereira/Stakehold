@@ -247,6 +247,11 @@ class FakePortfolioClient:
         self.calls.append(("what_if", candidate))
         raise PortfolioUnavailable("not under test here")
 
+    async def rank_candidates(self, *, assets, weight, window, exclude, rank_by):
+        # The ranking's own tests are test_risk_ranking_page.py.
+        self.calls.append(("rank_candidates", weight))
+        raise PortfolioUnavailable("not under test here")
+
 
 def _settings() -> Settings:
     return Settings(
@@ -1107,6 +1112,22 @@ def test_the_benchmark_form_and_ex_ante_links_keep_the_what_if(client):
     assert (
         'href="/risk?candidate=EGLN.L&amp;candidate_weight=10&amp;funding=pro_rata'
         '&amp;ex_ante_window=5Y#risk-ex-ante"' in html
+    )
+
+
+def test_the_benchmark_form_and_ex_ante_links_keep_the_ranking(client):
+    test_client, fake_auth, _ = client
+    _logged_in(test_client, fake_auth)
+
+    html = test_client.get("/risk?rank_weight=5&rank_by=diversification_ratio").text
+
+    assert _hidden(_benchmark_form(html)) == [
+        ("rank_weight", "5"),
+        ("rank_by", "diversification_ratio"),
+    ]
+    assert (
+        'href="/risk?rank_weight=5&amp;rank_by=diversification_ratio&amp;ex_ante_window=5Y'
+        '#risk-ex-ante"' in html
     )
 
 

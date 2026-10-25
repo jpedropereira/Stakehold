@@ -1476,6 +1476,17 @@ img.logo-on-dark {
   white-space: nowrap;
 }
 
+/* RK-29's ranking: a candidate's name, under its ticker, wraps; fund names run long. A greyed
+   row has no rank, and its dash is muted like the reasons beside it. */
+.ranking-row th {
+  min-width: 18ch;
+  white-space: normal;
+}
+
+.ranking-row-greyed td:first-child .mono {
+  color: var(--text-muted);
+}
+
 /* A figure with its s.e. and markers: one unit, never broken apart. */
 .risk-value {
   white-space: nowrap;

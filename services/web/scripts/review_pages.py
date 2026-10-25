@@ -194,6 +194,22 @@ PAGES = [
         "/risk?candidate=FAIL.XX&candidate_weight=5#risk-what-if",
         "user",
     ),
+    # RK-29: the ranking. The unsent form; 5% ranked by volatility and by diversification ratio
+    # (a gap-flagged row, a greyed one, a too-young and an unmeasurable ticker, three past the
+    # cap); 3% without a risk-free rate; 1Y's note; an inline error; nothing to rank (2%); and
+    # the fake's failure (9%).
+    Page("risk-ranking-empty", "/risk#risk-ranking", "user"),
+    Page("risk-ranking", "/risk?rank_weight=5#risk-ranking", "user"),
+    Page(
+        "risk-ranking-by-ratio",
+        "/risk?rank_weight=5&rank_by=diversification_ratio#risk-ranking",
+        "user",
+    ),
+    Page("risk-ranking-no-rf", "/risk?rank_weight=3#risk-ranking", "user"),
+    Page("risk-ranking-1y", "/risk?rank_weight=5&ex_ante_window=1Y#risk-ranking", "user"),
+    Page("risk-ranking-form-error", "/risk?rank_weight=150#risk-ranking", "user"),
+    Page("risk-ranking-nothing", "/risk?rank_weight=2#risk-ranking", "user"),
+    Page("risk-ranking-unavailable", "/risk?rank_weight=9#risk-ranking", "user"),
     # RK-9: the risk comparison over 3Y (AAPL's volatility has a gap note), over 10Y (not
     # covered, so no table), a mix the fake answers with no risk-free data, and the drawdown
     # chart over Max.

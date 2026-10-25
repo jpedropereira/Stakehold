@@ -1,5 +1,5 @@
 """Parsers for portfolio's Labs and risk responses: the backtest (LB-2 onwards), ex-post and
-ex-ante risk, the what-if and the look-through. Lifted verbatim out of
+ex-ante risk, the what-if, the candidate ranking (RK-29) and the look-through. Lifted out of
 http_client.py when it neared the repo's 64KB limit (RK-29); HttpPortfolioClient still owns the
 requests and calls these on their bodies. Each raises PortfolioUnavailable on a malformed
 body, as before."""
@@ -12,6 +12,7 @@ from web.portfolio_client.base import (
     BACKTEST_RISK_WINDOWS,
     LOOK_THROUGH_COVERAGE,
     LOOK_THROUGH_DIMENSIONS,
+    RANKING_ROW_KEYS,
     RELATIVE_FIGURE_KEYS,
     RISK_FIGURE_KEYS,
     RISK_WINDOWS,
@@ -26,6 +27,7 @@ from web.portfolio_client.base import (
     BacktestRowRisk,
     BacktestWindowRisk,
     BenchmarkStatus,
+    CandidateRanking,
     CorrelationCell,
     CorrelationMatrix,
     DrawdownSeries,
@@ -45,11 +47,14 @@ from web.portfolio_client.base import (
     LookThroughName,
     LookThroughNames,
     LookThroughSnapshot,
+    RankedCandidate,
+    RankingWindow,
     RiskFigure,
     RiskFreeStatus,
     RollingCorrelation,
     RollingRisk,
     SeriesRisk,
+    UnrankedCandidate,
     WhatIf,
     WhatIfCandidate,
     WhatIfFunding,
@@ -492,6 +497,69 @@ def _what_if(body: dict) -> WhatIf:
                 None if rows is None else {key: _what_if_row(rows[key]) for key in WHAT_IF_ROW_KEYS}
             ),
             threshold=None if threshold is None else _what_if_threshold(threshold),
+        )
+    except (KeyError, TypeError, ValueError, AttributeError) as exc:
+        raise PortfolioUnavailable(f"malformed portfolio response: {exc}") from exc
+
+
+_RANKED_KEYS = ("ticker", "name", "history_start", "n_weeks", *RANKING_ROW_KEYS)
+
+
+def _ranked_candidate(item: dict) -> RankedCandidate:
+    # Exactly these keys: an unknown row would be left off the table without a word.
+    _keyed(item, _RANKED_KEYS, "a ranked candidate has")
+    return RankedCandidate(
+        ticker=item["ticker"],
+        name=item["name"],
+        history_start=date.fromisoformat(item["history_start"]),
+        n_weeks=_int(item, "n_weeks"),
+        rows={key: _what_if_row(item[key]) for key in RANKING_ROW_KEYS},
+    )
+
+
+def _unranked_candidate(item: dict) -> UnrankedCandidate:
+    n_weeks = item["n_weeks"]
+    return UnrankedCandidate(
+        ticker=item["ticker"],
+        name=item["name"],
+        status=item["status"],
+        reason=item["reason"],
+        history_start=_opt_date(item["history_start"]),
+        n_weeks=None if n_weeks is None else _int(item, "n_weeks"),
+    )
+
+
+def _candidate_ranking(body: dict) -> CandidateRanking:
+    try:
+        window, ranked, greyed = body["window"], body["ranked"], body["greyed"]
+        return CandidateRanking(
+            label=body["label"],
+            rf_available=_bool(body, "rf_available"),
+            statuses=tuple(
+                BacktestAssetStatus(
+                    ticker=item["ticker"], status=item["status"], reason=item["reason"]
+                )
+                for item in body["statuses"]
+            ),
+            nothing=body["nothing"],
+            universe=_int(body, "universe"),
+            cap=_int(body, "cap"),
+            over_cap=_tickers(body, "over_cap"),
+            weight=_float(body["weight"], "weight"),
+            rank_by=body["rank_by"],
+            window=(
+                None
+                if window is None
+                else RankingWindow(
+                    label=window["label"],
+                    requested_start=date.fromisoformat(window["requested_start"]),
+                    start=_opt_date(window["start"]),
+                    end=date.fromisoformat(window["end"]),
+                )
+            ),
+            ranked=None if ranked is None else tuple(_ranked_candidate(i) for i in ranked),
+            greyed=None if greyed is None else tuple(_ranked_candidate(i) for i in greyed),
+            unranked=tuple(_unranked_candidate(item) for item in body["unranked"]),
         )
     except (KeyError, TypeError, ValueError, AttributeError) as exc:
         raise PortfolioUnavailable(f"malformed portfolio response: {exc}") from exc

@@ -9,6 +9,7 @@ from web.portfolio_client.base import (
     AccountWriteResult,
     Backtest,
     Broker,
+    CandidateRanking,
     ExAnteRisk,
     ExPostRisk,
     Holding,
@@ -48,6 +49,7 @@ from web.portfolio_client.errors import (
 from web.portfolio_client.parsing import _bool, _opt_date, _opt_decimal
 from web.portfolio_client.risk_parsing import (
     _backtest,
+    _candidate_ranking,
     _ex_ante_risk,
     _ex_post_risk,
     _look_through,
@@ -668,6 +670,35 @@ class HttpPortfolioClient:
                 f"unexpected portfolio response {response.status_code}: {_error_detail(response)}"
             )
         return _what_if(_json_body(response))
+
+    async def rank_candidates(
+        self,
+        *,
+        assets: list[tuple[str, Decimal]],
+        weight: Decimal,
+        window: str,
+        exclude: list[str],
+        rank_by: str,
+    ) -> CandidateRanking:
+        response = await self._request(
+            "POST",
+            "/risk/what-if/ranking",
+            json={
+                "assets": [{"ticker": ticker, "weight": _decimal_str(w)} for ticker, w in assets],
+                "weight": _decimal_str(weight),
+                "window": window,
+                "exclude": exclude,
+                "rank_by": rank_by,
+            },
+        )
+        if response.status_code == 422:
+            raise InvalidPortfolioRequest(_error_detail(response))
+        if response.status_code != 200:
+            # Not _raise_for_status: its 404 means AccountNotFound, and this route has no account.
+            raise PortfolioUnavailable(
+                f"unexpected portfolio response {response.status_code}: {_error_detail(response)}"
+            )
+        return _candidate_ranking(_json_body(response))
 
     async def look_through(self, *, assets: list[tuple[str, Decimal]]) -> LookThrough:
         response = await self._request(
