@@ -109,7 +109,7 @@ split out of this file for size; its row here links there.
 | RK-26 | [FX decomposition (portfolio and web)](tasks-risk-thread-done.md#rk-26-fx-decomposition-portfolio-and-web) | RK-18 | done |
 | RK-27 | [data-store: regimes endpoint](tasks-risk-thread-done.md#rk-27-data-store-regimes-endpoint) | RK-1 | done |
 | RK-28 | [Regime view (portfolio and web)](#rk-28-regime-view-portfolio-and-web) | RK-14, RK-27 | ready |
-| RK-29 | [Candidate ranking mode](#rk-29-candidate-ranking-mode) | RK-20 | ready |
+| RK-29 | [Candidate ranking mode](tasks-risk-thread-done.md#rk-29-candidate-ranking-mode) | RK-20 | done |
 | RK-30 | [Ledoit–Wolf shrinkage (optional)](#rk-30-ledoitwolf-shrinkage-optional) | RK-15 | abandoned: not needed (see task) |
 | RK-31 | [VaR day mask on traded volume](#rk-31-var-day-mask-on-traded-volume) | RK-1 | ready |
 
@@ -121,16 +121,6 @@ split out of this file for size; its row here links there.
 
 For each regime overlapping the window, the portfolio's and the benchmark's return and MDD inside
 it. This is descriptive only, so `known_from` isn't applied (§11 phase 5).
-
-### RK-29. Candidate ranking mode
-
-**Status:** ready
-
-Score many candidates at a fixed weight on a common window, showing each candidate's history
-length, with R14's warning once at the top. Rank by Δσ_p and Δ diversification ratio. ΔSharpe
-is shown with its SE but is never the ranking key, because picking the best of many noisy
-historical Sharpe deltas is data-mining (spec §7.2). Agree the candidate universe and a cap on it
-before building, since every candidate is a data-store fetch.
 
 ### RK-30. Ledoit–Wolf shrinkage (optional)
 

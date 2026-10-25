@@ -2,7 +2,8 @@
 
 The "Ex-post risk" and "Labs backtest" sections of [`flows.md`](flows.md), moved here verbatim to
 keep that file under the repo's 64KB limit (RK-13). Later risk flows belong here too: ex-ante
-risk (RK-17), look-through exposures (RK-22) and rolling windows (RK-24) are, and the what-if will be. Their rows in the flow table, and the HTTP API's notes
+risk (RK-17), look-through exposures (RK-22), rolling windows (RK-24), the what-if (RK-19) and
+candidate ranking (RK-29) are. Their rows in the flow table, and the HTTP API's notes
 on them, stay in `flows.md`. "Above" and "below" in the sections here refer to this file;
 references to sections that stayed in `flows.md` link to it.
 
@@ -316,6 +317,70 @@ is a warning, with the reason, when there is nothing to compare.
 diversification ratio by 0.09, and cleared the threshold (SR_c above 0.51), with ΔSharpe +0.08
 ± 0.10. MSFT, which is priced only through IWDA's holdings, was flagged `survivorship`. On Max,
 NVCR shortened the window from 2019-08-02 to 2024-01-05.
+
+### Candidate ranking
+
+Spec §7.2's ranking mode (RK-29): every tracked ticker outside the mix, scored as a what-if
+candidate at one weight, funded pro-rata. `POST /risk/what-if/ranking` takes
+
+    {assets: [{ticker, weight}], weight, window, exclude, rank_by}
+
+`assets` and `exclude` are ex-ante's. `weight` is each candidate's share of the mix after the
+change, as the what-if's `candidate.weight`. `window` is 3Y (the default), 5Y, 10Y or Max: 1Y is
+a 422, because the diversification ratio needs 104 weeks and every row would be greyed.
+`rank_by` is `sigma_p` (the default) or `diversification_ratio`, never Sharpe. The response is
+
+    {"label", "rf_available", "statuses": [...], "nothing",
+     "universe", "cap", "over_cap": [tickers], "weight", "rank_by",
+     "window": {"label", "requested_start", "start", "end"},
+     "ranked": [{"ticker", "name", "history_start", "n_weeks",
+                 "sigma_p", "diversification_ratio", "candidate_pcr",
+                 "candidate_correlation", "sharpe"}],   # the what-if's rows
+     "greyed": [... as ranked],
+     "unranked": [{"ticker", "name", "status", "reason", "history_start", "n_weeks"}]}
+
+- **The universe is the tracked tickers** (agreed): every enabled `tracked_tickers` row with
+  status `ready` that isn't in the mix, excluded holdings included, from one
+  `GET /tracked-tickers?status=ready`. The list is the owner's own, so R14 never applies and no
+  figure is flagged `survivorship`. *Rejected: the index constituents* (about 1.3k, needing
+  R14's warning and a pre-filter), *and a typed list* (more typing, lost on leaving the page).
+  A failing tracked-ticker list is a 502: there is nothing to rank without it.
+- **The cap is 50** (agreed), alphabetically. Each candidate costs about two data-store calls
+  (ticker info and prices, plus one FX fetch per new currency), through the same 8-worker
+  fan-out as the holdings. The ones past it are named in `over_cap` and not fetched.
+- **The window is the holdings'** (agreed), ending on their latest common date, as ex-ante's.
+  A candidate that doesn't cover it, starting later or ending earlier, is listed in `unranked`
+  as `short_history` with R9's reason in weeks ("insufficient history (have 80, need 156)"),
+  rather than shortening the window for every other candidate. That amends R10's common window
+  for ranking mode (the spec records it). Without it, one young ticker in the tracked list
+  would cut a 5Y ranking down to its own history.
+- **Each row is the what-if's for that candidate**: its own listwise panel, the holdings plus
+  that candidate, with the candidate at weight 0 for "before". A test pins every row to
+  `what_if_report`'s under pro-rata funding. *Rejected: one panel over the holdings and all 50
+  candidates*, which would drop every candidate's NULL weeks for all of them, so the rows would
+  stop matching the what-if. Each figure carries its own `n_obs`.
+- **Only what ranking shows is measured** (`risk/ranking.py`). That is the decomposition before
+  and after, plus the two weekly Sharpes and Memmel's SE, on `mix_report`'s path, with no daily
+  figures, drawdown or "without the candidate" window. Max drawdown and the threshold stay in
+  the what-if: the threshold explains one candidate, and ranking by it would be ranking by
+  Sharpe. Synthetic worst case (12 holdings, 50 candidates, 16.8 years of weekdays): 0.5 s on
+  3Y, 0.8 s on Max, before the fetches.
+- **The order** is Δσ_p ascending or Δ diversification ratio descending, ties by ticker. ΔSharpe
+  is carried with its SE but never orders (§7.2: the best of many noisy Sharpe deltas is mostly
+  luck). A candidate missing either key, because its gaps put the panel under a minimum, is
+  listed in `greyed`, by ticker. Requiring both keys means switching the order never moves a
+  row between lists.
+- **Nothing to rank is a 200** with `nothing` set: "no tracked ticker outside the mix to rank"
+  (no fetch at all; the holdings are `not_fetched`), "no holding could be included", or "no
+  candidate could be measured". `window`, `ranked` and `greyed` are then null, and no
+  risk-free fetch is made. A candidate the fetch leaves out is in `unranked` with the fetch's
+  status and wording ("no FX series for HKD").
+
+The flow logs the start (holdings, exclusions, the universe and how many are past the cap, the
+weight, the window and the order), one line per asset from the fetch, each over-cap ticker, the
+window, one line per candidate (its three deltas and ΔSharpe's SE, or why it isn't ranked) and a
+summary of ranked, greyed, not ranked and past the cap. The job logs a start line and a done
+line, which is a warning, with the reason, when there is nothing to rank.
 
 ### Look-through exposures
 

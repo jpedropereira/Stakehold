@@ -43,6 +43,8 @@ from portfolio.api.models import (
     PortfolioReturnsResponse,
     PortfolioTwrResponse,
     PositionResponse,
+    RankingRequest,
+    RankingResponse,
     RebuildPositionsResponse,
     RebuildRequest,
     RebuildReturnsResponse,
@@ -552,6 +554,20 @@ def get_what_if(body: WhatIfRequest, settings: Settings = Depends(get_settings))
         funding=PRO_RATA if body.replaced is None else Funding.replace(body.replaced),
         window=body.window,
         exclude=body.exclude,
+        settings=settings,
+    )
+
+
+@router.post("/risk/what-if/ranking", response_model=RankingResponse)
+def get_ranking(body: RankingRequest, settings: Settings = Depends(get_settings)) -> dict:
+    """Every tracked ticker outside the mix, scored as a what-if candidate at one weight
+    (RK-29). A POST, no user_id and a 200 for the same reasons as the what-if."""
+    return risk_jobs.get_ranking(
+        assets=[(asset.ticker, asset.weight) for asset in body.assets],
+        weight=body.weight,
+        window=body.window,
+        exclude=body.exclude,
+        rank_by=body.rank_by,
         settings=settings,
     )
 
