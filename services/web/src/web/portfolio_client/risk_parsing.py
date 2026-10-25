@@ -1,5 +1,6 @@
 """Parsers for portfolio's Labs and risk responses: the backtest (LB-2 onwards), ex-post and
-ex-ante risk, the what-if, the candidate ranking (RK-29) and the look-through. Lifted out of
+ex-ante risk (with RK-28's regimes), the what-if, the candidate ranking (RK-29) and the
+look-through. Lifted out of
 http_client.py when it neared the repo's 64KB limit (RK-29); HttpPortfolioClient still owns the
 requests and calls these on their bodies. Each raises PortfolioUnavailable on a malformed
 body, as before."""
@@ -49,6 +50,9 @@ from web.portfolio_client.base import (
     LookThroughSnapshot,
     RankedCandidate,
     RankingWindow,
+    RegimeFigures,
+    RegimeRow,
+    RegimeView,
     RiskFigure,
     RiskFreeStatus,
     RollingCorrelation,
@@ -314,6 +318,45 @@ def _rolling_correlation(item: dict | None) -> RollingCorrelation | None:
     )
 
 
+def _regime_figures(item: dict) -> RegimeFigures:
+    return RegimeFigures(
+        cumulative_return=_ex_post_figure(item, "cumulative_return"),
+        max_drawdown=_ex_post_figure(item, "max_drawdown"),
+    )
+
+
+def _regime_row(item: dict) -> RegimeRow:
+    return RegimeRow(
+        regime_id=item["regime_id"],
+        dimension=item["dimension"],
+        scope=item["scope"],
+        name=item["name"],
+        severity=item["severity"],
+        source=item["source"],
+        start_date=date.fromisoformat(item["start_date"]),
+        end_date=_opt_date(item["end_date"]),
+        measured_start=date.fromisoformat(item["measured_start"]),
+        measured_end=date.fromisoformat(item["measured_end"]),
+        partial=_bool(item, "partial"),
+        ongoing=_bool(item, "ongoing"),
+        portfolio=_regime_figures(item["portfolio"]),
+        benchmark=_regime_figures(item["benchmark"]),
+    )
+
+
+def _regimes(item: dict | None) -> RegimeView | None:
+    """RK-28's regime view. A figure is greyed with its reason, never null."""
+    if item is None:
+        return None
+    total = item["total_loaded"]
+    return RegimeView(
+        available=_bool(item, "available"),
+        reason=item["reason"],
+        total_loaded=None if total is None else _int(item, "total_loaded"),
+        rows=tuple(_regime_row(row) for row in item["rows"]),
+    )
+
+
 def _ex_post_risk(body: dict) -> ExPostRisk:
     try:
         windows = tuple(_ex_post_window(item) for item in body["windows"])
@@ -334,6 +377,7 @@ def _ex_post_risk(body: dict) -> ExPostRisk:
                 for item in body["excluded"]
             ),
             rolling=_rolling(body["rolling"]),
+            regimes=_regimes(body["regimes"]),
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise PortfolioUnavailable(f"malformed portfolio response: {exc}") from exc
@@ -424,6 +468,7 @@ def _ex_ante_risk(body: dict) -> ExAnteRisk:
             ),
             rolling=_rolling(body["rolling"]),
             rolling_correlation=_rolling_correlation(body["rolling_correlation"]),
+            regimes=_regimes(body["regimes"]),
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise PortfolioUnavailable(f"malformed portfolio response: {exc}") from exc

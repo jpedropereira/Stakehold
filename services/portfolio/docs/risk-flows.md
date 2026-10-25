@@ -234,6 +234,54 @@ their risk-free and benchmark fetches.
   and Sharpe points are greyed, or "no point, the history is under a year". Ex-ante also logs
   the pair's weekly point count and gaps, or why it has none.
 
+### Regime view
+
+RK-28, spec §11 phase 5. The pure `risk/regimes.py` measures it, and both endpoints serve it as
+`regimes`: ex-post on the TWR, and ex-ante on the constant-weight daily mix over its whole
+history, whatever `window` asks for, as rolling does. For each regime data-store serves
+(`GET /regimes`, RK-27), it gives the series' and the benchmark's cumulative return and max
+drawdown inside the regime. The view is descriptive, so `known_from` isn't applied. Both series
+are served, each labelled (R2) by the section it sits in: ex-post overlaps only the regimes
+since the first trade (2021 onward in dev), while today's mix reaches back as far as its
+holdings' common history.
+
+- **A regime is a `Window` from its start date to its end date**: returns dated after the start
+  and on or before the end, measured from the level on the start. A drawdown regime's start is
+  its peak close (SPX 2020-02-19), so this gives its peak-to-trough exactly. A calendar regime
+  (an NBER month) starts from the close on its first day. That differs from the close before it
+  by one day's return, which is immaterial to a descriptive figure.
+- **Clipped to the series and flagged** (agreed). A regime the series covers only in part is
+  measured on the overlap. The row then carries `partial` and its `measured_start`/`measured_end`
+  beside the regime's own dates. A regime with no end runs to the series' last date and is
+  `ongoing`. *Rejected: greying a partial regime*, which would grey every long era a young
+  portfolio started inside, such as the COVID pandemic. A regime with no return dated inside the
+  series is left out, not greyed. data-store's overlap is inclusive, so a regime can end on the
+  base date.
+- **No §4.5 minimum beyond one return** (agreed; spec §4.5 "Amended (RK-28)").
+  `Measure.REGIME` needs one non-NULL daily return. The max drawdown carries `short_regime`
+  below §4.5's 200, as a single path. *Rejected: keeping 200*, which greys most regimes,
+  because a crash lasts weeks; and *a small minimum such as 5 days*, an arbitrary line under a
+  view that only describes. Cumulative return had no minimum anyway. No CAGR: most regimes are
+  under a year, and annualising one would invent a rate.
+- **The benchmark is measured on the same clipped window**, from its daily EUR returns (the
+  `Benchmark.daily` both flows already fetch). If it doesn't cover the window, it is greyed with
+  §5.6's "benchmark history too short (from <date>)", or "(to <date>)" when it stops before the
+  window ends. If it is unavailable, it is greyed with "benchmark unavailable: <reason>". It is
+  never swapped for another index.
+- **The fetch fails alone, like the benchmark.** One `get_regimes` call per request, over the
+  series' span. Only `DataStoreApiError` is caught, so a bug still surfaces. A failure gives
+  `available: false`, "regimes unavailable: data-store call failed", and the exception is
+  logged here. data-store's `total_regimes: 0` is "no regimes loaded" and is logged as a
+  warning, so it reads differently from an available view with no rows, where no regime
+  overlaps. Ex-ante doesn't fetch when the holdings' histories don't overlap, and says
+  `no overlap`.
+- **No filtering here.** Every overlapping regime is served, by start date, with its
+  `dimension`, `scope`, `severity` and `source`. web groups them. `notes` and `known_from` aren't
+  served, because the view shows neither.
+- **Logging:** a start line (regimes loaded, how many overlap the span), one line per regime
+  (its measured window, partial/ongoing, obs, short, and the benchmark's outcome) or why it is
+  left out, and a summary (shown, left out, benchmark greyed).
+
 ### Candidate what-if
 
 Today's mix before and after adding a candidate (RK-19; spec §7.2), labelled "ex-ante · constant

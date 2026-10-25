@@ -42,6 +42,37 @@ _NAMES = (
     "cvar_99",
 )
 
+# RK-28: one partial, ongoing regime, its benchmark greyed.
+_REGIMES = {
+    "available": True,
+    "reason": None,
+    "total_loaded": 94,
+    "rows": [
+        {
+            "regime_id": "ukraine_war",
+            "dimension": "event",
+            "scope": "GLOBAL",
+            "name": "Russian invasion of Ukraine",
+            "severity": "extreme",
+            "source": "manual",
+            "start_date": "2022-02-24",
+            "end_date": None,
+            "measured_start": "2025-01-09",
+            "measured_end": "2026-01-09",
+            "partial": True,
+            "ongoing": True,
+            "portfolio": {
+                "cumulative_return": _figure(0.12),
+                "max_drawdown": _figure(-0.08),
+            },
+            "benchmark": {
+                "cumulative_return": _figure(None, reason="benchmark unavailable: not tracked"),
+                "max_drawdown": _figure(None, reason="benchmark unavailable: not tracked"),
+            },
+        }
+    ],
+}
+
 _EX_POST = {
     "label": "ex-post · invested assets",
     "base_date": "2024-01-05",
@@ -91,6 +122,7 @@ _EX_POST = {
             _figure(0.5, "weekly", standard_error=0.9),
         ],
     },
+    "regimes": _REGIMES,
 }
 
 
@@ -150,6 +182,7 @@ def test_ex_post_with_nothing_to_measure_has_no_windows(monkeypatch, client):
         "n_excluded": 0,
         "excluded": [],
         "rolling": None,
+        "regimes": None,
     }
     monkeypatch.setattr(risk_jobs, "get_ex_post_risk", lambda **kw: empty)
 
@@ -255,6 +288,7 @@ _EX_ANTE = {
             "eur_volatility": _figure(0.2, "weekly"),
         }
     ],
+    "regimes": {"available": False, "reason": "no regimes loaded", "total_loaded": 0, "rows": []},
 }
 
 

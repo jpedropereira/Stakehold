@@ -93,7 +93,9 @@ class ExAnteReport:
     decomposition: ExAnteDecomposition
     constant_weight: SeriesFigures
     correlation: PairwiseCorrelation
-    # The constant-weight weekly mix over the holdings' common span; None when they don't overlap.
+    # The constant-weight mix over the holdings' common span, daily (the regime view's, RK-28)
+    # and weekly; None when they don't overlap.
+    mix_daily: ReturnSeries | None
     mix_weekly: ReturnSeries | None
     rolling: RollingFigures  # over the mix's whole history; empty when they don't overlap
     # Each non-EUR holding's, on the decomposition's panel; empty when every holding is EUR.
@@ -145,6 +147,7 @@ def ex_ante_report(
         mix.decomposition,
         mix.constant_weight,
         correlation,
+        mix.mix_daily,
         mix.mix_weekly,
         rolling,
         fx_rows,

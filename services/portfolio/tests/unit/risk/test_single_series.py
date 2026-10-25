@@ -15,6 +15,7 @@ from portfolio.risk.risk_free import RatePoint
 from portfolio.risk.single_series import (
     calmar_figure,
     drawdown_figures,
+    regime_figures,
     return_figures,
     tail_figures,
     weekly_excess,
@@ -461,3 +462,86 @@ def test_weekly_excess_is_what_the_sharpe_measures():
 def test_weekly_excess_refuses_a_daily_series():
     with pytest.raises(ValueError, match="weekly"):
         weekly_excess(_daily([0.01, 0.02]), Window("Max", FRIDAY, FRIDAY), RATES, FIRST_PUBLISHED)
+
+
+# --- regime_figures (RK-28): no §4.5 minimum beyond one return, `short_regime` under 200 ---
+
+
+def test_regime_figures_give_the_cumulative_return_and_max_drawdown_inside_the_window():
+    daily = _daily([0.10, -0.20, 0.05])
+
+    figures = regime_figures(daily, _whole(daily))
+
+    # 1.10 × 0.80 × 1.05 − 1, and the fall from the 1.10 peak to 0.88.
+    assert figures.cumulative_return.value == pytest.approx(-0.076)
+    assert figures.max_drawdown.value == pytest.approx(-0.20)
+    assert figures.cumulative_return.frequency is Frequency.DAILY
+    assert figures.max_drawdown.n_obs == 3
+
+
+def test_regime_figures_measure_from_the_level_on_the_window_start():
+    # A drawdown regime starts on its peak close: the return dated that day is outside it.
+    daily = _daily([0.10, -0.20, 0.05])
+    window = Window("spx_bear", daily.dates[0], daily.dates[1])
+
+    figures = regime_figures(daily, window)
+
+    assert figures.cumulative_return.value == pytest.approx(-0.20)
+    assert figures.max_drawdown.value == pytest.approx(-0.20)
+    assert figures.max_drawdown.n_obs == 1
+
+
+def test_a_regime_max_drawdown_under_200_obs_is_shown_and_flagged_short_regime():
+    daily = _daily(_alternating(199))
+
+    figures = regime_figures(daily, _whole(daily))
+
+    assert figures.max_drawdown.value < 0
+    assert figures.max_drawdown.flags == frozenset({Flag.SHORT_REGIME})
+    # Cumulative return has no minimum anywhere, so it isn't flagged.
+    assert Flag.SHORT_REGIME not in figures.cumulative_return.flags
+
+
+def test_a_regime_max_drawdown_at_200_obs_is_not_flagged():
+    daily = _daily(_alternating(200))
+
+    assert regime_figures(daily, _whole(daily)).max_drawdown.flags == frozenset()
+
+
+def test_a_regime_without_a_fall_has_a_max_drawdown_of_zero_not_a_greyed_one():
+    daily = _daily([0.01, 0.02])
+
+    figures = regime_figures(daily, _whole(daily))
+
+    assert figures.max_drawdown.value == 0.0
+    assert figures.max_drawdown.reason is None
+
+
+def test_a_null_return_inside_a_regime_is_excluded_not_read_as_zero():
+    daily = _daily([0.10, None, -0.20])
+
+    figures = regime_figures(daily, _whole(daily))
+
+    assert figures.cumulative_return.value == pytest.approx(1.10 * 0.80 - 1)
+    assert figures.cumulative_return.n_obs == 2
+    assert figures.cumulative_return.n_gaps == 1
+    assert Flag.DATA_GAPS in figures.max_drawdown.flags
+
+
+def test_a_regime_with_no_returns_inside_is_greyed():
+    daily = _daily([0.10, None, -0.20])
+    window = Window("one_gap", daily.dates[0], daily.dates[1])
+
+    figures = regime_figures(daily, window)
+
+    for figure in (figures.cumulative_return, figures.max_drawdown):
+        assert figure.value is None
+        assert figure.reason == "insufficient history (have 0, need 1)"
+        assert Flag.INSUFFICIENT_HISTORY in figure.flags
+
+
+def test_regime_figures_take_a_daily_series():
+    weekly = _weekly([0.01, 0.02])
+
+    with pytest.raises(ValueError, match="daily"):
+        regime_figures(weekly, _whole(weekly))

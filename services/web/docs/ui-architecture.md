@@ -530,6 +530,6 @@ described here updates this file in the same change.
   changes: `signed_points1` (`−0.2 pts`: a change of a percentage, which `−0.2%` would make
   read as a relative one) and `signed_ratio` (`+0.09`). Both are signed, as a delta is, but
   never coloured, since neither is a gain or a loss.
-- **Risk (RK-12, RK-14, RK-18, RK-20, RK-23, RK-25, RK-29)** has its own file, [`risk-ui.md`](risk-ui.md):
-  the section tables, the heatmap, the concentration tables, the rolling charts, the
-  what-if and the candidate ranking.
+- **Risk (RK-12, RK-14, RK-18, RK-20, RK-23, RK-25, RK-28, RK-29)** has its own file,
+  [`risk-ui.md`](risk-ui.md): the section tables, the heatmap, the concentration tables, the
+  rolling charts, the regime tables, the what-if and the candidate ranking.

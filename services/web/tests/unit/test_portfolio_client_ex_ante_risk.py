@@ -129,6 +129,7 @@ def _body(**changes):
         "fx_decomposition": [_fx_row()],
         "rolling": None,
         "rolling_correlation": None,
+        "regimes": None,
         **changes,
     }
 

@@ -75,7 +75,7 @@ flowchart TD
         HFLOW["holdings/flows.py<br/><i>reads that span a user's accounts (PF-1, PF-5)</i>"]
         LFLOW["labs/flows.py<br/><i>backtest fetches, concurrent (LB-4);<br/>risk-free fetch (RK-8)</i>"]
         TFLOW["twr/flows.py<br/><i>portfolio TWR: rows + data-store fetch (RK-10)</i>"]
-        RFLOW["risk/flows.py<br/><i>ex-post risk: TWR + risk-free fetch (RK-11);<br/>ex-ante risk of a mix (RK-17);<br/>rolling windows on both (RK-24);<br/>candidate what-if (RK-19) and ranking (RK-29)</i>"]
+        RFLOW["risk/flows.py<br/><i>ex-post risk: TWR + risk-free fetch (RK-11);<br/>ex-ante risk of a mix (RK-17);<br/>rolling windows on both (RK-24);<br/>regime view on both (RK-28);<br/>candidate what-if (RK-19) and ranking (RK-29)</i>"]
         BFLOW["benchmark/flows.py<br/><i>the request's benchmark: fetch + wording (RK-13)</i>"]
         LTFLOW["look_through/flows.py<br/><i>classify holdings + fund snapshots (RK-22)</i>"]
     end
@@ -91,7 +91,7 @@ flowchart TD
         LABS["labs/<br/>calculator · risk<br/><i>backtests (LB-3); their risk table (RK-8)</i>"]
         TWR["twr/<br/>calculator<br/><i>holdings-based daily TWR (RK-10)</i>"]
         EURR["eur_returns/<br/>calculator · fetch · eligibility<br/><i>daily EUR returns, shared with risk (RK-5);<br/>data-store fan-out (RK-10);<br/>risk path's wording (RK-17)</i>"]
-        RISK["risk/<br/>types · weekly · quality · history<br/>windows · risk_free · var_mask<br/>measures · drawdown · tail · single_series<br/>covariance · listwise · ex_ante<br/>correlation · pairing · relative · ex_post<br/>ex_ante_report · rolling · what_if<br/>ranking · fx_decomposition<br/><i>pure library (RK-6, RK-7, RK-15, RK-16, RK-11, RK-13, RK-17, RK-24, RK-19, RK-26, RK-29);<br/>first caller labs/risk (RK-8)</i>"]
+        RISK["risk/<br/>types · weekly · quality · history<br/>windows · risk_free · var_mask<br/>measures · drawdown · tail · single_series<br/>covariance · listwise · ex_ante<br/>correlation · pairing · relative · ex_post<br/>ex_ante_report · rolling · what_if<br/>ranking · fx_decomposition · regimes<br/><i>pure library (RK-6, RK-7, RK-15, RK-16, RK-11, RK-13, RK-17, RK-24, RK-19, RK-26, RK-29, RK-28);<br/>first caller labs/risk (RK-8)</i>"]
         BENCH["benchmark/<br/>base<br/><i>the benchmark's return series and status (RK-13)</i>"]
         LT["look_through/<br/>calculator · issuer · instruments<br/><i>exposures and concentration of a mix (RK-22)</i>"]
     end
@@ -100,7 +100,7 @@ flowchart TD
         SET["settings.py"]
         DB["db/schema.sql"]
         ERR["errors.py<br/><i>PortfolioError and subclasses</i>"]
-        DSC["datastore_client/<br/>base · http_client<br/><i>get_fx_rate built (task 14);<br/>price/FX-series/ticker methods built (task 8);<br/>risk-free series built (RK-4);<br/>ETF funds and holdings (RK-22)</i>"]
+        DSC["datastore_client/<br/>base · http_client<br/><i>get_fx_rate built (task 14);<br/>price/FX-series/ticker methods built (task 8);<br/>risk-free series built (RK-4);<br/>ETF funds and holdings (RK-22);<br/>regimes (RK-28)</i>"]
     end
 
     SH[["shared<br/><i>workspace package: db.connection, logging_config</i>"]]
@@ -275,6 +275,15 @@ same way.
 - **It is never saved and never swapped.** It is a request parameter: saving a choice needs a
   settings schema, deferred. A window it doesn't cover is greyed with its first day rather than
   measured against another index (spec §5.6).
+
+**Regimes are a read from data-store, clipped in portfolio (RK-28).** `GET /regimes` serves
+every regime overlapping a range with its own, unclipped dates, and `risk/regimes.py` clips
+each one to the series it measures. Only the caller knows that series' first and last dates,
+so data-store doesn't clip. Like the benchmark, the fetch fails alone: a failure, or an empty
+table, is said in the response, and every other figure is still measured.
+`risk/flows.py`'s `_regimes` is the one caller, for both endpoints. *Rejected: regimes in a
+package of their own*, as the benchmark has. The benchmark has two consumers (Labs and the
+risk flows) and a fetch with rules of its own. Regimes have one consumer and a single call.
 
 **Look-through has a package of its own, `look_through/` (RK-22)**, rather than living in
 `risk/`. `risk/` is a float library of return statistics that imports nothing from portfolio;

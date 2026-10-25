@@ -20,6 +20,8 @@ from portfolio.api.models import ExAnteRiskResponse
 from portfolio.datastore_client.base import (
     FxPoint,
     PricePoint,
+    Regime,
+    RegimeList,
     RiskFreePoint,
     RiskFreeSeries,
     TickerInfo,
@@ -89,6 +91,21 @@ class _FakeDataStoreClient:
     def get_risk_free_series(self, start, end):
         point = RiskFreePoint(date(2019, 12, 2), Decimal("-0.5000"), "estr")
         return RiskFreeSeries(first_date=date(1999, 1, 4), points=[point])
+
+    def get_regimes(self, start, end):
+        covid = Regime(
+            "spx_bear_2020",
+            "drawdown",
+            "SPX",
+            "COVID crash",
+            date(2020, 2, 19),
+            date(2020, 3, 23),
+            None,
+            "severe",
+            "manual_approx",
+            None,
+        )
+        return RegimeList(94, [covid])
 
 
 @pytest.fixture
@@ -199,6 +216,7 @@ def test_get_ex_ante_risk_with_nothing_included_has_only_statuses(fake_client):
         "rolling",
         "rolling_correlation",
         "fx_decomposition",
+        "regimes",
     ):
         assert result[key] is None
     assert result["benchmark"]["available"] is False
@@ -226,3 +244,20 @@ def test_get_ex_ante_risk_needs_data_store_settings(monkeypatch):
 
     with pytest.raises(SettingsError, match="ex-ante risk"):
         _get([("A", "1")])
+
+
+def test_get_ex_ante_risk_serves_the_regime_view_of_the_mix(fake_client):
+    result = _get([("A", "1"), ("B", "1")], window=StandardWindow.Y1)
+
+    ExAnteRiskResponse.model_validate(result)
+    regimes = result["regimes"]
+    assert (regimes["available"], regimes["total_loaded"]) == (True, 94)
+    (row,) = regimes["rows"]
+    assert (row["regime_id"], row["dimension"], row["name"]) == (
+        "spx_bear_2020",
+        "drawdown",
+        "COVID crash",
+    )
+    assert (row["measured_start"], row["measured_end"]) == (date(2020, 2, 19), date(2020, 3, 23))
+    assert row["portfolio"]["max_drawdown"]["flags"] == ["short_regime"]
+    assert row["benchmark"]["cumulative_return"]["value"] is not None

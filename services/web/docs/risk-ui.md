@@ -1,8 +1,8 @@
 # web Risk UI
 
 The `/risk` page's design decisions: its sections, their tables, the heatmap, the concentration
-tables, the rolling charts, the what-if and the candidate ranking. Split out of [`ui-architecture.md`](ui-architecture.md) for size
-before RK-25, verbatim apart from this header; RK-25's, RK-20's and RK-29's entries were added here. It is part of
+tables, the rolling charts, the regime tables, the what-if and the candidate ranking. Split out of [`ui-architecture.md`](ui-architecture.md) for size
+before RK-25, verbatim apart from this header; RK-25's, RK-20's, RK-28's and RK-29's entries were added here. It is part of
 the same document, so
 `.claude/rules/architecture.md` applies to it: a change to anything described here updates this
 file in the same change. The server side of `/risk` (its router, the upstream calls) is in
@@ -291,3 +291,36 @@ file in the same change. The server side of `/risk` (its router, the upstream ca
     - *Every form keeps the others.* The ranking form re-sends every other control and its own
       order. The benchmark and what-if forms re-send `rank_weight` and `rank_by`, and the
       ex-ante links keep the whole query, so changing one section never clears the ranking.
+- **Regime tables (RK-28): one per section, grouped by dimension.** portfolio serves each
+  section's `regimes`: ex-post's on the TWR and ex-ante's on today's mix over its whole history.
+  `risk_regime_view.py` turns each into a "Market regimes" block, after ex-post's rolling charts
+  and after ex-ante's pair. Two blocks, not one with both series, so R2's labels never share a
+  table, and each fails with its own section.
+  - *Grouped by dimension, every regime shown* (agreed). Each dimension is its own small table
+    with a plain heading (Drawdowns, Recessions, Events, Monetary policy, ...), in the order its
+    first regime starts. An unknown dimension is headed by its own name, not dropped. *Rejected:
+    a dimension filter*, and *showing only the "stress" dimensions*, which would hide the
+    monetary-policy and inflation eras.
+  - *Columns:* the regime (name, scope · severity, its own dates, and "measured from … to …"
+    when the series covers only part of it; "ongoing" for no end), then the series' return
+    and max drawdown, then the benchmark's. The series' header is "Your holdings" or "Today's
+    mix". A return is a gain or a loss, coloured; a drawdown is ink, as on the summary. Above the
+    stack breakpoint the tables use fixed column widths, so the figures line up from one group
+    to the next. At phone width each regime stacks into labelled figures.
+  - *Cells are the summary's* (`risk_view.figure_cell`). The title gives the regime's measured
+    window, frequency, n_obs, gaps and the section's label; the benchmark's ends "· against
+    <ticker>". A short regime's drawdown carries `short_regime`'s numbered marker, with its
+    note in the block's own legend. Almost every regime is under 200 days, so most drawdowns
+    carry it. That is the agreed honest default (spec §4.5 "Amended (RK-28)").
+  - *Benchmark:* the note under the heading names it and its first date. When it can't be used
+    at all, the note says why once and each benchmark cell says "Unavailable", as on the
+    summary. A regime it doesn't cover shows its own reason ("benchmark history too short (from
+    …)").
+  - *States:* "No market regimes are loaded yet", "Couldn't load the market regimes", or "No
+    market regime overlaps this history", each in place of the tables. No view (nothing
+    measured) means no block.
+  - *Each dimension is a group closed by default* (agreed after RK-28's first build), a
+    `<details>` whose summary is its heading and its count ("Events 4 regimes"). With real
+    data, ex-ante's Max can overlap 60+ regimes, which open tables would turn into a page of
+    their own. The legend stays outside the groups, so it shows while they are closed. No JS.
+    *Rejected: opening the first group*, which would favour one dimension for no reason.

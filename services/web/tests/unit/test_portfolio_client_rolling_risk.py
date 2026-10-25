@@ -101,6 +101,7 @@ def _ex_post_body(**changes):
         "n_excluded": 0,
         "excluded": [],
         "rolling": _rolling(),
+        "regimes": None,
         **changes,
     }
 
@@ -135,6 +136,7 @@ def _ex_ante_body(**changes):
             "reason": None,
             "points": [_figure(0.97, "2024-10-18", "2025-10-17"), _figure(0.95)],
         },
+        "regimes": None,
         **changes,
     }
 

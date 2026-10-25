@@ -1440,6 +1440,38 @@ img.logo-on-dark {
   margin: var(--space-2) 0 0;
 }
 
+/* RK-28: a section's regime tables, one per dimension, each headed like a rolling series. */
+.risk-regimes {
+  margin-top: var(--space-5);
+}
+
+/* One table per dimension: fixed column widths line the figures up from one table to the next.
+   Above the stack breakpoint only; a stacked table has no columns. */
+@media (min-width: 601px) {
+  .risk-regimes .risk-table {
+    table-layout: fixed;
+  }
+
+  .risk-regimes .risk-table th:first-child {
+    width: 36%;
+  }
+}
+
+/* Each dimension's group, closed by default: its summary is the group's heading. */
+.risk-regime-group {
+  margin-top: var(--space-3);
+}
+
+.risk-regime-group summary {
+  cursor: pointer;
+  font: var(--text-caption);
+  font-weight: 600;
+}
+
+.risk-regime-group[open] summary {
+  margin-bottom: var(--space-2);
+}
+
 .risk-rolling-gaps {
   margin: var(--space-2) 0 0;
   padding-left: var(--space-5);

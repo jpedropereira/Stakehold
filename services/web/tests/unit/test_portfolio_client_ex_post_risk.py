@@ -91,6 +91,7 @@ def _body(**changes):
             {"ticker": "7203.T", "status": "no_fx_rate", "reason": "no FX series for JPY"}
         ],
         "rolling": None,
+        "regimes": None,
         **changes,
     }
 

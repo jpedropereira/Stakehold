@@ -520,6 +520,48 @@ class RollingCorrelation:
 
 
 @dataclass(frozen=True)
+class RegimeFigures:
+    """Daily, inside a regime's measured window (RK-28). No minimum beyond one return: the max
+    drawdown carries `short_regime` under 200 obs instead of being greyed."""
+
+    cumulative_return: RiskFigure
+    max_drawdown: RiskFigure
+
+
+@dataclass(frozen=True)
+class RegimeRow:
+    """One regime overlapping the series (spec §11 phase 5), with its own dates and the window
+    it was measured on, the regime clipped to the series. The benchmark is measured on the same
+    window, or greyed with its reason."""
+
+    regime_id: str
+    dimension: str  # business_cycle, drawdown, event, monetary_policy, ...
+    scope: str  # US, EA, GLOBAL, SPX, ...
+    name: str
+    severity: str | None
+    source: str  # a citation: NBER, CEPR-EABCDC, manual_approx, ...
+    start_date: date
+    end_date: date | None  # None while the regime is ongoing
+    measured_start: date
+    measured_end: date
+    partial: bool  # the series covers only part of the regime
+    ongoing: bool  # measured to the series' last date
+    portfolio: RegimeFigures
+    benchmark: RegimeFigures
+
+
+@dataclass(frozen=True)
+class RegimeView:
+    """portfolio's regime view (RK-28). Not `available`: `reason` says why ("no regimes
+    loaded", "regimes unavailable: ..."). Available with no rows: no regime overlaps."""
+
+    available: bool
+    reason: str | None
+    total_loaded: int | None  # data-store's whole table; None when the fetch failed
+    rows: tuple[RegimeRow, ...]  # by regime start date
+
+
+@dataclass(frozen=True)
 class ExPostRisk:
     """portfolio's ExPostRiskResponse (RK-11), measured on the TWR of invested positions. With
     nothing to measure, the dates are None and `windows` is empty; otherwise it holds every
@@ -534,6 +576,7 @@ class ExPostRisk:
     windows: tuple[ExPostWindow, ...]
     excluded: tuple[ExcludedHolding, ...]
     rolling: RollingRisk | None = None  # on the TWR (RK-24); None exactly when there are no windows
+    regimes: RegimeView | None = None  # on the TWR (RK-28); None exactly when there are no windows
 
 
 @dataclass(frozen=True)
@@ -633,6 +676,8 @@ class ExAnteRisk:
     # RK-24: over the mix's whole history, whatever `window` is; the pair only when one was sent.
     rolling: RollingRisk | None = None
     rolling_correlation: RollingCorrelation | None = None
+    # RK-28: on the daily mix over its whole history, whatever `window` is.
+    regimes: RegimeView | None = None
 
 
 # The what-if's rows (RK-19, spec §7.2), as portfolio names and orders them: the risk deltas

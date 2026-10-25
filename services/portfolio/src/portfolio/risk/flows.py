@@ -21,6 +21,11 @@ them to risk/ex_post.py.
   out), there are no windows, no risk-free fetch and no benchmark fetch.
 - **Rolling 1Y volatility and Sharpe (RK-24)** run on the TWR's weekly returns, monthly, over its
   whole history (risk/rolling.py), from the same risk-free fetch.
+- **The regime view (RK-28)** fetches the regimes overlapping the TWR's whole history and hands
+  them, with the TWR's and the benchmark's daily returns, to risk/regimes.py, which clips each
+  to the TWR. Like the benchmark, a failed fetch is said in the response and logged here, and
+  everything else is still measured. data-store's `total_regimes` of 0 is "none loaded", a
+  warning, which reads differently from "none overlapping".
 
 Ex-ante risk (spec §6.2-6.3, §7.1) is measured on a mix the caller passes, as Labs' backtest
 is: web builds it from the holdings (`labs_view.build_default_mix`), so the weights are worked
@@ -40,6 +45,8 @@ out in one place. No user data is read and nothing is stored.
   ticker's local-currency returns (§7.1's toggle). σ_p and the decomposition are always EUR. A
   benchmark that is also a holding isn't repeated; an unavailable one is left out of the matrix,
   and the response says why.
+- **The regime view (RK-28)** runs on the constant-weight daily mix over its whole history,
+  whatever the window, as the rolling figures do, against the benchmark's daily returns.
 - **A rolling correlation (RK-24) is asked for by pair**: two tickers from the mix or the
   benchmark, or one ticker against the portfolio, which is the constant-weight weekly mix. It is
   always in EUR, whatever the matrix's currency, because the portfolio is EUR. A ticker that
@@ -79,13 +86,15 @@ from portfolio.benchmark.base import (
     unavailable_reason,
 )
 from portfolio.benchmark.flows import EPOCH, fetch_benchmark
-from portfolio.datastore_client.base import DataStoreClient
+from portfolio.datastore_client.base import DataStoreClient, Regime
+from portfolio.errors import DataStoreApiError
 from portfolio.eur_returns.calculator import EurReturns, eur_daily_returns
 from portfolio.eur_returns.eligibility import fetch_eur_returns
 from portfolio.risk.ex_ante_report import LABEL as EX_ANTE_LABEL
 from portfolio.risk.ex_ante_report import NO_OVERLAP, ExAnteReport, ex_ante_report
 from portfolio.risk.ex_post import SeriesFigures, WindowFigures, ex_post_figures
 from portfolio.risk.ranking import SIGMA_P, RankingReport, rank_candidates
+from portfolio.risk.regimes import RegimePeriod, RegimeRow, regime_rows
 from portfolio.risk.relative import BenchmarkReturns
 from portfolio.risk.risk_free import RatePoint
 from portfolio.risk.rolling import (
@@ -114,8 +123,24 @@ LOCAL_RETURNS = "local"
 FX_RETURNS = "fx"  # an EurReturns' r_fx, for the FX decomposition (RK-26)
 PORTFOLIO = "portfolio"  # a rolling pair's other side when it is the constant-weight mix
 _NOTHING_TO_MEASURE = "not fetched: nothing to measure"
+NO_REGIMES_LOADED = "no regimes loaded"
+REGIMES_UNAVAILABLE = "regimes unavailable: data-store call failed"
 _EUR = "EUR"
 _READY = "ready"  # a tracked ticker's onboarding status once it is priced
+
+
+@dataclass(frozen=True)
+class RegimeEntry:
+    regime: Regime  # data-store's row, for its name, dimension and own dates
+    row: RegimeRow
+
+
+@dataclass(frozen=True)
+class RegimeView:
+    available: bool
+    reason: str | None  # why there is no view: none loaded, or the fetch failed
+    total_loaded: int | None  # data-store's whole table; None when the fetch failed
+    entries: tuple[RegimeEntry, ...]  # by start date; empty when none overlaps
 
 
 @dataclass(frozen=True)
@@ -128,6 +153,7 @@ class ExPostRisk:
     windows: tuple[WindowFigures, ...]
     excluded: list[ExcludedHolding]  # from the TWR: by ticker, their weight went to the rest
     rolling: RollingFigures | None = None  # None exactly when there's nothing to measure
+    regimes: RegimeView | None = None  # None exactly when there's nothing to measure
 
 
 def compute_ex_post(
@@ -166,8 +192,10 @@ def compute_ex_post(
     fetched = fetch_benchmark(datastore_client, benchmark, daily.last_date, context="ex-post-risk")
     if isinstance(fetched, BenchmarkUnavailable):
         against: BenchmarkReturns | str = unavailable_reason(fetched)
+        against_daily: ReturnSeries | str = against
     else:
         against = BenchmarkReturns(fetched.first_date, fetched.weekly)
+        against_daily = fetched.daily
     windows = ex_post_figures(
         daily,
         traded_days={d.price_date for d in twr.days if d.traded},
@@ -183,6 +211,7 @@ def compute_ex_post(
         to_weekly(daily), monthly_windows(daily), rates=rates, first_published=first_published
     )
     _log_rolling(rolling, context="ex-post-risk")
+    regimes = _regimes(datastore_client, daily, against_daily, benchmark, context="ex-post-risk")
     return ExPostRisk(
         label=LABEL,
         base_date=daily.base_date,
@@ -192,6 +221,7 @@ def compute_ex_post(
         windows=windows,
         excluded=twr.excluded,
         rolling=rolling,
+        regimes=regimes,
     )
 
 
@@ -225,6 +255,7 @@ class ExAnteRisk:
     report: ExAnteReport | None  # None exactly when no holding is included
     # None when no pair was asked for, or no holding is included.
     rolling_correlation: RollingCorrelation | None = None
+    regimes: RegimeView | None = None  # None exactly when no holding is included
 
 
 def compute_ex_ante(
@@ -323,6 +354,21 @@ def compute_ex_ante(
             mix_weekly=report.mix_weekly,
         )
         _log_rolling_pair(pair)
+    if report.mix_daily is None or not report.mix_daily.dates:
+        logger.info("ex-ante-risk: regimes: not fetched, the holdings' histories don't overlap.")
+        regimes = RegimeView(False, NO_OVERLAP, None, ())
+    else:
+        regimes = _regimes(
+            datastore_client,
+            report.mix_daily,
+            (
+                unavailable_reason(fetched)
+                if isinstance(fetched, BenchmarkUnavailable)
+                else fetched.daily
+            ),
+            benchmark,
+            context="ex-ante-risk",
+        )
     return ExAnteRisk(
         label=EX_ANTE_LABEL,
         currency=currency,
@@ -333,6 +379,7 @@ def compute_ex_ante(
         weights=weights,
         report=report,
         rolling_correlation=pair,
+        regimes=regimes,
     )
 
 
@@ -877,6 +924,104 @@ def _risk_free(
         return None, None
     rates = [RatePoint(point.date, float(point.rate)) for point in series.points]
     return rates, series.first_date
+
+
+def _regimes(
+    datastore_client: DataStoreClient,
+    series: ReturnSeries,
+    benchmark: ReturnSeries | str,
+    ticker: str,
+    *,
+    context: str,
+) -> RegimeView:
+    """The regime view of `series` (RK-28): every regime overlapping it, clipped to it, against
+    `benchmark`'s daily returns (or why there are none)."""
+    start, end = series.base_date, series.last_date
+    try:
+        fetched = datastore_client.get_regimes(start, end)
+    except DataStoreApiError as exc:
+        logger.error(
+            "%s: couldn't fetch the regimes, so there is no regime view: %s",
+            context,
+            exc,
+            exc_info=exc,
+        )
+        return RegimeView(False, REGIMES_UNAVAILABLE, None, ())
+    if fetched.total_regimes == 0:
+        logger.warning(
+            "%s: regimes: none loaded in data-store (has ingest-regimes run?), so no regime "
+            "view.",
+            context,
+        )
+        return RegimeView(False, NO_REGIMES_LOADED, 0, ())
+
+    logger.info(
+        "%s: regimes: %d loaded, %d overlapping %s..%s.",
+        context,
+        fetched.total_regimes,
+        len(fetched.regimes),
+        start,
+        end,
+    )
+    by_id = {regime.regime_id: regime for regime in fetched.regimes}
+    rows = {
+        row.regime_id: row
+        for row in regime_rows(
+            series,
+            [RegimePeriod(r.regime_id, r.start_date, r.end_date) for r in fetched.regimes],
+            benchmark,
+        )
+    }
+    entries = []
+    for regime_id, regime in by_id.items():
+        span = f"{regime.start_date}..{regime.end_date or 'ongoing'}"
+        row = rows.get(regime_id)
+        if row is None:
+            logger.info(
+                "%s: regime %s (%s): not shown, no return dated inside %s..%s.",
+                context,
+                regime_id,
+                span,
+                start,
+                end,
+            )
+            continue
+        entries.append(RegimeEntry(regime, row))
+        _log_regime(row, span, ticker, context=context)
+    greyed = sum(1 for entry in entries if entry.row.benchmark.max_drawdown.value is None)
+    logger.info(
+        "%s: regimes: %d shown, %d not shown, benchmark greyed on %d.",
+        context,
+        len(entries),
+        len(by_id) - len(entries),
+        greyed,
+    )
+    return RegimeView(True, None, fetched.total_regimes, tuple(entries))
+
+
+def _log_regime(row: RegimeRow, span: str, ticker: str, *, context: str) -> None:
+    drawdown = row.portfolio.max_drawdown
+    notes = [
+        f"measured {row.measured.start}..{row.measured.end}",
+        *(["partial"] if row.partial else []),
+        *(["ongoing"] if row.ongoing else []),
+        (
+            f"{drawdown.n_obs} daily obs"
+            if drawdown.value is not None
+            else f"greyed, {drawdown.reason}"
+        ),
+        *(["short"] if Flag.SHORT_REGIME in drawdown.flags else []),
+    ]
+    against = row.benchmark.max_drawdown
+    logger.info(
+        "%s: regime %s (%s): %s; against %s, %s.",
+        context,
+        row.regime_id,
+        span,
+        ", ".join(notes),
+        ticker,
+        "measured" if against.value is not None else f"greyed, {against.reason}",
+    )
 
 
 def _log_rolling(rolling: RollingFigures, *, context: str) -> None:

@@ -303,6 +303,7 @@ def test_every_flag_portfolio_sets_has_a_note():
         "nonsync_daily",
         "tail_unstable",
         "data_gaps",
+        "short_regime",
     }
 
     assert portfolio_flags - {"insufficient_history"} == set(FLAG_NOTES)
