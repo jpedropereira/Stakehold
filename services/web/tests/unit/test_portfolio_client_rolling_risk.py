@@ -125,6 +125,7 @@ def _ex_ante_body(**changes):
         "holdings": None,
         "constant_weight": None,
         "correlation": None,
+        "fx_decomposition": None,
         "rolling": _rolling(),
         "rolling_correlation": {
             "a": "IWDA.AS",

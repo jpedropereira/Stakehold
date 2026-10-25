@@ -125,6 +125,7 @@ def _ex_ante(**changes) -> ExAnteRisk:
         holdings=None,
         constant_weight=None,
         correlation=None,
+        fx_decomposition=None,
         rolling=_rolling(volatility=(0.2011, 0.2122, 0.2233, None, 0.2455)),
         rolling_correlation=_pair(),
     )

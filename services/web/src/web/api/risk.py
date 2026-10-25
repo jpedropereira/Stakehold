@@ -431,7 +431,8 @@ def _log_ex_ante(risk, section: ExAnteSection) -> None:
     window = section.window
     logger.info(
         "risk: ex-ante over %s, %s to %s%s, %d of %d figures greyed, decomposition %s, "
-        "%d of %d correlation cells greyed, %d outsized, %d hedges, excluded %s, left out %s.",
+        "%d of %d correlation cells greyed, %d outsized, %d hedges, FX decomposition %s, "
+        "excluded %s, left out %s.",
         window.label,
         window.start or "no overlap",
         window.end,
@@ -447,9 +448,19 @@ def _log_ex_ante(risk, section: ExAnteSection) -> None:
         len(cells),
         len(section.decomposition.outsized) if section.decomposition else 0,
         len(section.decomposition.hedges) if section.decomposition else 0,
+        _fx_summary(section),
         ", ".join(section.excluded) or "none",
         left_out,
     )
+
+
+def _fx_summary(section: ExAnteSection) -> str:
+    rows = section.fx_decomposition.rows if section.fx_decomposition else ()
+    if not rows:
+        return "none, every holding in EUR"
+    cells = [cell for row in rows for cell in row.cells]
+    greyed = sum(1 for cell in cells if cell.value is None)
+    return f"{len(rows)} holdings, {greyed} of {len(cells)} figures greyed"
 
 
 @router.get("/risk")

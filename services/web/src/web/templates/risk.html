@@ -288,6 +288,47 @@
     </div>
     {% endif %}
 
+    {% set fx = ex_ante.fx_decomposition %}
+    {% if fx %}
+    {# RK-26, spec §6.4: each non-EUR holding's risk split into its own market's and its
+       currency's, on the decomposition's weeks. Every figure is in ink: none is a gain or a
+       loss. #}
+    <h3>How much of the risk is the currency</h3>
+    {% if fx.rows %}
+    <p class="labs-note">For each holding priced in another currency, historically: the {{ term("volatility", "volatility") }} of its weekly returns in its own currency, of that currency against the euro, how the two moved together, and the volatility you held in euros, which combines all three. A negative correlation means the currency partly offset the holding's moves. Measured over the same weeks as the share of risk above. See {{ term("FX decomposition", "fx-decomposition") }}.</p>
+    <div class="table-scroll" tabindex="0" role="region" aria-label="FX decomposition">
+    <table class="positions-table holdings-table risk-table stack-table" role="table">
+      <thead role="rowgroup">
+        <tr role="row">
+          <th role="columnheader" scope="col">Holding</th>
+          <th role="columnheader" scope="col">Currency</th>
+          {% for column in fx.columns %}
+          <th class="num" role="columnheader" scope="col">{{ column.label }}<span class="period-start">weekly · {{ column.note }}</span></th>
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody role="rowgroup">
+        {% for row in fx.rows %}
+        <tr role="row">
+          <th role="rowheader" scope="row"><span class="mono">{{ row.ticker }}</span></th>
+          <td role="cell" data-label="Currency"><span class="mono">{{ row.currency }}</span></td>
+          {% for cell in row.cells %}
+          {% set column = fx.columns[loop.index0] %}
+          <td class="num" role="cell" data-label="{{ column.label }}" title="{{ cell.title }}"><span class="risk-value">
+            {%- if cell.value is not none -%}{{ figure(cell.value, column.kind) }}{%- else -%}<span class="risk-greyed">{{ cell.reason }}</span>{%- endif -%}
+            {%- if cell.markers %}<sup class="risk-flag">{{ cell.markers | join(", ") }}</sup>{% endif -%}
+          </span></td>
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    {% else %}
+    <p class="labs-note">Every holding measured is in euros, so there is no currency risk to split out.</p>
+    {% endif %}
+    {% endif %}
+
     {% set heat = ex_ante.heatmap %}
     {% if heat %}
     {# Pairwise, for display only (R13): each square over the weeks that pair shares inside

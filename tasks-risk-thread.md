@@ -105,7 +105,7 @@ split out of this file for size; its row here links there.
 | RK-23 | [web: concentration section](tasks-risk-thread-done.md#rk-23-web-concentration-section) | RK-12, RK-22 | done |
 | RK-24 | [portfolio: rolling windows](tasks-risk-thread-done.md#rk-24-portfolio-rolling-windows) | RK-11, RK-16, RK-17 | done |
 | RK-25 | [web: rolling charts](tasks-risk-thread-done.md#rk-25-web-rolling-charts) | RK-18, RK-24 | done |
-| RK-26 | [FX decomposition (portfolio and web)](#rk-26-fx-decomposition-portfolio-and-web) | RK-18 | ready |
+| RK-26 | [FX decomposition (portfolio and web)](tasks-risk-thread-done.md#rk-26-fx-decomposition-portfolio-and-web) | RK-18 | done |
 | RK-27 | [data-store: regimes endpoint](tasks-risk-thread-done.md#rk-27-data-store-regimes-endpoint) | RK-1 | done |
 | RK-28 | [Regime view (portfolio and web)](#rk-28-regime-view-portfolio-and-web) | RK-14, RK-27 | ready |
 | RK-29 | [Candidate ranking mode](#rk-29-candidate-ranking-mode) | RK-20 | ready |
@@ -113,13 +113,6 @@ split out of this file for size; its row here links there.
 | RK-31 | [VaR day mask on traded volume](#rk-31-var-day-mask-on-traded-volume) | RK-1 | ready |
 
 ## Tasks
-
-### RK-26. FX decomposition (portfolio and web)
-
-**Status:** ready
-
-§6.4 for each non-EUR holding, on weekly returns: local volatility, FX volatility,
-corr(r_local, r_fx), and EUR volatility. It reuses RK-5's `r_local` and `r_fx`.
 
 ### RK-28. Regime view (portfolio and web)
 

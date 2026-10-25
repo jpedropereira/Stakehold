@@ -1,7 +1,8 @@
 """risk_ex_ante_view (RK-18): what /risk's ex-ante section shows -- the constant-weight summary,
 the decomposition with weight beside risk and the holdings whose risk outweighs their money,
 the € tail figures on the measured holdings' value, the heatmap's squares and their buckets,
-and the window, exclude and include links."""
+the FX decomposition of each non-EUR holding (RK-26), and the window, exclude and include
+links."""
 
 from dataclasses import replace
 from datetime import date
@@ -19,6 +20,7 @@ from web.portfolio_client.base import (
     ExAnteHolding,
     ExAnteRisk,
     ExAnteWindow,
+    FxDecompositionRow,
     Holding,
     RiskFigure,
     SeriesRisk,
@@ -54,6 +56,16 @@ def _figure(value=0.1, frequency="weekly", **changes):
 
 def _holding_row(ticker, weight, pcr, volatility=0.2):
     return ExAnteHolding(ticker, weight, volatility, 0.19, pcr * 0.137, pcr, 0.9)
+
+
+def _fx_row(ticker="AAPL", currency="USD", **changes):
+    figures = dict(
+        local_volatility=_figure(0.24),
+        fx_volatility=_figure(0.08),
+        correlation=_figure(-0.2),
+        eur_volatility=_figure(0.2),
+    )
+    return FxDecompositionRow(ticker, currency, **{**figures, **changes})
 
 
 def _matrix(keys, value=0.5, benchmark_key=None):
@@ -97,6 +109,7 @@ def _risk(**changes):
         holdings=rows,
         constant_weight=SeriesRisk(figures, date(2024, 2, 2), date(2024, 4, 7), None, 256),
         correlation=_matrix(["IWDA.AS", "AAPL", "VWCE.DE"], benchmark_key="VWCE.DE"),
+        fx_decomposition=(_fx_row(),),
     )
     defaults.update(changes)
     return ExAnteRisk(**defaults)
@@ -418,15 +431,73 @@ def test_nothing_included_has_no_figures_but_still_lists_why():
         holdings=None,
         constant_weight=None,
         correlation=None,
+        fx_decomposition=None,
     )
 
     section = _section(risk)
 
     assert section.summary_rows == ()
     assert section.decomposition is None
+    assert section.fx_decomposition is None
     assert section.heatmap is None
     assert section.tail_euros == ()
     assert [h.ticker for h in section.left_out] == ["7203.T"]
+
+
+# --- the FX decomposition (RK-26) ---
+
+
+def test_each_non_eur_holding_gets_its_four_figures_in_order():
+    section = _section()
+
+    fx = section.fx_decomposition
+    (row,) = fx.rows
+    assert (row.ticker, row.currency) == ("AAPL", "USD")
+    assert [cell.value for cell in row.cells] == [0.24, 0.08, -0.2, 0.2]
+    assert [column.kind for column in fx.columns] == ["pct1", "pct1", "ratio", "pct1"]
+    assert [column.key for column in fx.columns] == [
+        "local_volatility",
+        "fx_volatility",
+        "correlation",
+        "eur_volatility",
+    ]
+
+
+def test_an_fx_cell_carries_its_metadata_and_the_ex_ante_label():
+    (row,) = _section().fx_decomposition.rows
+
+    assert row.cells[2].title == (
+        "3Y: 2023-10-20 to 2026-10-16 · weekly · 156 obs · 0 gaps · ex-ante · constant weights"
+    )
+
+
+def test_a_greyed_fx_correlation_keeps_its_reason():
+    greyed = _figure(None, reason="insufficient history (have 52, need 104)")
+    risk = _risk(fx_decomposition=(_fx_row(correlation=greyed),))
+
+    (row,) = _section(risk).fx_decomposition.rows
+
+    assert row.cells[2].value is None
+    assert row.cells[2].reason == "insufficient history (have 52, need 104)"
+
+
+def test_an_fx_figures_flag_gets_a_marker_in_the_sections_legend():
+    flagged = _figure(0.08, flags=("has_suspect_rows",))
+    risk = _risk(fx_decomposition=(_fx_row(fx_volatility=flagged),))
+
+    section = _section(risk)
+
+    assert "has_suspect_rows" in [note.flag for note in section.legend]
+    marker = next(n.marker for n in section.legend if n.flag == "has_suspect_rows")
+    (row,) = section.fx_decomposition.rows
+    assert row.cells[1].markers == (marker,)
+
+
+def test_an_all_eur_mix_has_an_empty_fx_decomposition():
+    section = _section(_risk(fx_decomposition=()))
+
+    assert section.fx_decomposition is not None
+    assert section.fx_decomposition.rows == ()
 
 
 def _query(url):

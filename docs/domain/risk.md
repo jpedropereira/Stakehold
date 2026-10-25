@@ -419,6 +419,11 @@ returns are sampled at different times, which biases their correlation toward 0)
 
 This shows how much of the "USD stock risk" is actually the dollar. Phase 5.
 
+> **Amended (RK-26):** "over the window" means the listwise panel's weeks (R12), the weeks the
+> decomposition in §6.3 runs on. A holding's EUR volatility here is then its volatility in the
+> decomposition table, and a holding that shortens the window shortens these figures too. Each
+> volatility takes §4.5's 52-week minimum, and the correlation takes its 104.
+
 ---
 
 ## 7. Correlation and candidates

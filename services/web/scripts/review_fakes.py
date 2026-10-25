@@ -40,6 +40,7 @@ def fakes():
         ExcludedHolding,
         ExPostRisk,
         ExPostWindow,
+        FxDecompositionRow,
         Holding,
         HoldingAccount,
         Holdings,
@@ -840,6 +841,8 @@ def fakes():
         async def ex_ante_risk(self, *, assets, window, benchmark, exclude, rolling_pair=None):
             """The review mix at constant weights (RK-18). AAPL's history starts in 2015, so it
             limits Max; 1Y has too few weeks for the decomposition and the squares; 10Y fails.
+            AAPL is the one USD holding, so it has the FX decomposition's row (RK-26), its
+            correlation greyed with the squares; without it the mix is all EUR.
             Its rolling figures (RK-24) cover the mix's whole history, whatever the window; 5Y
             answers as if there were no risk-free series, so its rolling Sharpe is greyed
             throughout."""
@@ -955,6 +958,18 @@ def fakes():
                         for i, a in enumerate(keys)
                         for b in keys[i:]
                     ),
+                ),
+                fx_decomposition=tuple(
+                    FxDecompositionRow(
+                        t,
+                        "USD",
+                        figure(0.268),
+                        figure(0.084),
+                        figure(-0.21, reason=grey),
+                        figure(0.262),
+                    )
+                    for t in tickers
+                    if t == "AAPL"
                 ),
                 rolling=review_rolling(history, phase=1.3, no_rf=window == "5Y"),
                 rolling_correlation=(

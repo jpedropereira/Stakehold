@@ -121,7 +121,9 @@ the weights over the included holdings and hands the daily EUR returns to
      "correlation": {"keys", "benchmark_key", "cells": [{"a", "b", "figure"}, ...]},
      "rolling": {"window": "1Y", "step": "monthly", "volatility": [...], "sharpe": [...]},
      "rolling_correlation": {"a", "b", "window": "52W", "step": "weekly", "reason",
-                             "points": [figure, ...]} or null}
+                             "points": [figure, ...]} or null,
+     "fx_decomposition": [{"ticker", "currency", "local_volatility", "fx_volatility",
+                           "correlation", "eur_volatility"}, ...]}
 
 - **One requested window, three uses.** It ends on the holdings' latest common date, and Max
   starts on the *oldest* holding's first day. The decomposition runs on its listwise weekly
@@ -158,12 +160,37 @@ the weights over the included holdings and hands the daily EUR returns to
   "<ticker> not included: <its status reason>", "<benchmark> not included: benchmark
   unavailable: <reason>", or "portfolio not included: the holdings' histories don't overlap".
   `rolling_correlation` is null when no pair was asked for.
+- **`fx_decomposition`** (RK-26, spec §6.4) has one row per included non-EUR holding, in request
+  order: the volatility of its local-currency returns, of its currency against the EUR (r_fx),
+  their correlation, and the volatility of its EUR returns. It's empty when every holding is
+  EUR, whose r_fx is 0. The flow takes each holding's RK-5 `r_local` and `r_fx` from the same
+  `EurReturns` as its EUR series, so nothing more is fetched. Decisions (agreed):
+  - **The rows run on the decomposition's listwise panel**, the same weeks as `sigma_p`, so a
+    row's `eur_volatility` is that holding's `holdings` volatility exactly (tested), and the page
+    never shows two volatilities for one holding. A younger holding shortens the rows as it
+    shortens the decomposition, and the same exclude link lengthens both. *Rejected: each
+    holding over its own weeks in the requested window*, as a heatmap cell is. That shows a
+    longer history, but it would disagree with the decomposition table beside it.
+  - **Weekly, compounded from the daily components.** Per day (1 + r_local)(1 + r_fx) =
+    1 + r_eur, and compounding the same days keeps this per week, so the three volatilities
+    describe one return. A holding's weekly local return is NULL exactly where its EUR one is,
+    so the panel's weeks have all three.
+  - **Minimums:** the volatilities grey under 52 weeks and the correlation under 104 (§4.5), so
+    1Y always greys the correlation. Between 52 and 104 weeks, `eur_volatility` is shown while
+    the `holdings` volatility is null: that one is part of the decomposition, which takes 104.
+    A pegged currency greys the correlation ("no variation in returns").
+  - **Served on this endpoint, not a sibling** (*rejected: `POST /risk/fx-decomposition`*,
+    which would fetch every holding again and make web call twice), as RK-24 added `rolling`.
+  - **No derived "FX share of risk"**: the EUR variance is σ²_local + σ²_fx + 2ρσ_localσ_fx plus a
+    cross term, so no split into shares adds up.
 
 With nothing included (every asset excluded or left out), the response is a 200 with `statuses`
 and `benchmark` ("not fetched: nothing to measure") and every other section null. No risk-free
 or benchmark fetch is made. The flow logs the start (asset count, exclusions, window, benchmark,
 currency), one line per asset, the window (requested and measured, and what limited it), and a
-summary of how many figures and cells are greyed. The job logs a start line and a done line.
+summary of how many figures and cells are greyed, then one line for the FX decomposition: how
+many non-EUR holdings it covers and how many of their figures are greyed, or that every included
+holding is in EUR. The job logs a start line and a done line.
 
 **Size and time, synthetic worst case** (every asset on 16.8 years of weekdays, half in USD,
 Max): 12 assets give 25 KB in 0.18 s; 50 assets give 294 KB in 1.1 s, almost all of it the

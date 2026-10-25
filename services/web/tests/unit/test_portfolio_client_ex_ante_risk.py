@@ -1,7 +1,8 @@
 """HttpPortfolioClient.ex_ante_risk: portfolio's POST /risk/ex-ante (RK-17) -- the request it
-sends, how σ_p, the decomposition, the constant-weight figures and the correlation matrix are
-parsed, and which failures become which error. The JSON is written out in the shape portfolio's
-ExAnteRiskResponse serves: figures are JSON numbers and fractions (0.14 is 14%)."""
+sends, how σ_p, the decomposition, the constant-weight figures, the correlation matrix and the
+FX decomposition (RK-26) are parsed, and which failures become which error. The JSON is written
+out in the shape portfolio's ExAnteRiskResponse serves: figures are JSON numbers and fractions
+(0.14 is 14%)."""
 
 import copy
 import json
@@ -18,6 +19,7 @@ from web.portfolio_client.base import (
     ExAnteHolding,
     ExAnteRisk,
     ExAnteWindow,
+    FxDecompositionRow,
     RiskFigure,
 )
 from web.portfolio_client.errors import InvalidPortfolioRequest, PortfolioUnavailable
@@ -67,6 +69,20 @@ def _holding(ticker, weight, pcr):
     }
 
 
+_FX_FIGURES = ("local_volatility", "fx_volatility", "correlation", "eur_volatility")
+
+
+def _fx_row(ticker="AAPL", currency="USD"):
+    return {
+        "ticker": ticker,
+        "currency": currency,
+        "local_volatility": _figure(0.24),
+        "fx_volatility": _figure(0.08),
+        "correlation": _figure(-0.2),
+        "eur_volatility": _figure(0.2),
+    }
+
+
 def _body(**changes):
     return {
         "label": "ex-ante · constant weights",
@@ -110,6 +126,7 @@ def _body(**changes):
                 for b in ["IWDA.AS", "AAPL", "VWCE.DE"][i:]
             ],
         },
+        "fx_decomposition": [_fx_row()],
         "rolling": None,
         "rolling_correlation": None,
         **changes,
@@ -202,6 +219,24 @@ async def test_ex_ante_risk_parses_a_full_response():
     assert len(matrix.cells) == 6
     assert matrix.cells[1] == CorrelationCell(a="IWDA.AS", b="AAPL", figure=matrix.cells[1].figure)
     assert matrix.cells[1].figure.value == 0.5
+    (fx,) = result.fx_decomposition
+    assert isinstance(fx, FxDecompositionRow)
+    assert (fx.ticker, fx.currency) == ("AAPL", "USD")
+    assert (
+        fx.local_volatility.value,
+        fx.fx_volatility.value,
+        fx.correlation.value,
+        fx.eur_volatility.value,
+    ) == (0.24, 0.08, -0.2, 0.2)
+    assert fx.correlation.frequency == "weekly"
+
+
+async def test_ex_ante_risk_an_all_eur_mix_has_an_empty_fx_decomposition():
+    result = await _ok(_body(fx_decomposition=[])).ex_ante_risk(
+        assets=[("IWDA.AS", Decimal("1"))], window="3Y", benchmark="VWCE.DE", exclude=[]
+    )
+
+    assert result.fx_decomposition == ()
 
 
 async def test_ex_ante_risk_a_greyed_decomposition_keeps_the_weights():
@@ -255,6 +290,7 @@ async def test_ex_ante_risk_with_nothing_included():
                 "holdings",
                 "constant_weight",
                 "correlation",
+                "fx_decomposition",
             )
         ),
     )
@@ -283,6 +319,7 @@ async def test_ex_ante_risk_with_nothing_included():
         holdings=None,
         constant_weight=None,
         correlation=None,
+        fx_decomposition=None,
     )
 
 
@@ -309,6 +346,18 @@ def _section_without(section, key):
     return body
 
 
+def _fx(**changes):
+    body = _body()
+    body["fx_decomposition"] = [{**_fx_row(), **changes}]
+    return body
+
+
+def _fx_without(key):
+    body = _body()
+    del body["fx_decomposition"][0][key]
+    return body
+
+
 def _cells(cells):
     body = _body()
     body["correlation"]["cells"] = cells
@@ -327,6 +376,11 @@ def _cells(cells):
         _section_without("constant_weight", "var_95"),
         _section_without("constant_weight", "peak_date"),
         _section_without("correlation", "benchmark_key"),
+        _without("fx_decomposition"),
+        _fx_without("currency"),
+        _fx_without("correlation"),
+        # An FX figure is greyed with a reason, never null.
+        _fx(eur_volatility=None),
         {**_body(), "effective_n": "1.9"},
         # A constant-weight figure is greyed with a reason, never null.
         {**_body(), "constant_weight": {**_body()["constant_weight"], "sharpe": None}},

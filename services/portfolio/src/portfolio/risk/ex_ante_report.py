@@ -29,8 +29,12 @@ holdings, converts them to daily EUR returns and normalises the weights.
   move through time. Its monthly windows come from the daily mix, as ex-post's come from the
   daily TWR, so the last point is the 1Y constant-weight figure. `mix_weekly` is that weekly
   mix, which a rolling correlation against "the portfolio" uses.
-- **`mix_report` is the report without the matrix and the rolling figures**, which the what-if
-  (RK-19) measures twice, before and after; `ex_ante_report` is `mix_report` plus both.
+- **The FX decomposition (RK-26)** runs on the decomposition's own listwise panel
+  (`fx_decomposition.py`), one row per non-EUR holding the caller passes components for, so a
+  row's EUR volatility is that holding's in the decomposition table.
+- **`mix_report` is the report without the matrix, the rolling figures and the FX
+  decomposition**, which the what-if (RK-19) measures twice, before and after;
+  `ex_ante_report` is `mix_report` plus all three.
 """
 
 from collections.abc import Mapping, Sequence
@@ -44,6 +48,11 @@ from portfolio.risk.ex_ante import (
     decomposition_figures,
 )
 from portfolio.risk.ex_post import SeriesFigures, greyed_series_figures, series_figures
+from portfolio.risk.fx_decomposition import (
+    FxComponents,
+    FxDecompositionRow,
+    fx_decomposition,
+)
 from portfolio.risk.risk_free import RatePoint
 from portfolio.risk.rolling import RollingFigures, monthly_windows, rolling_weekly
 from portfolio.risk.types import ReturnSeries, Window
@@ -87,6 +96,8 @@ class ExAnteReport:
     # The constant-weight weekly mix over the holdings' common span; None when they don't overlap.
     mix_weekly: ReturnSeries | None
     rolling: RollingFigures  # over the mix's whole history; empty when they don't overlap
+    # Each non-EUR holding's, on the decomposition's panel; empty when every holding is EUR.
+    fx_decomposition: tuple[FxDecompositionRow, ...]
 
 
 def ex_ante_report(
@@ -98,11 +109,13 @@ def ex_ante_report(
     rates: Sequence[RatePoint] | None,
     first_published: date | None,
     correlation_daily: Mapping[str, ReturnSeries],
+    fx_daily: Mapping[str, tuple[ReturnSeries, ReturnSeries]],
 ) -> ExAnteReport:
     """`daily` is each holding's daily EUR returns, `weights` their normalised weights (each 0
     or more, summing to 1), `currencies` each one's FX currency. `rates` and `first_published`
     are None together when there's no risk-free series. `correlation_daily` is the matrix's
-    daily series, keyed in display order."""
+    daily series, keyed in display order. `fx_daily` is each non-EUR holding's daily (r_local,
+    r_fx), on the same dates as its EUR returns."""
     mix = mix_report(
         daily, weights, label, currencies=currencies, rates=rates, first_published=first_published
     )
@@ -118,6 +131,13 @@ def ex_ante_report(
             rates=rates,
             first_published=first_published,
         )
+    fx_rows = fx_decomposition(
+        mix.decomposition.panel,
+        {
+            key: FxComponents(currencies[key], to_weekly(local), to_weekly(fx))
+            for key, (local, fx) in fx_daily.items()
+        },
+    )
     return ExAnteReport(
         mix.requested,
         mix.window,
@@ -127,6 +147,7 @@ def ex_ante_report(
         correlation,
         mix.mix_weekly,
         rolling,
+        fx_rows,
     )
 
 

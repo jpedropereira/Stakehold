@@ -5,7 +5,8 @@ flow is tested in tests/unit/risk/test_flows_ex_ante.py; this runs it for real o
 to check the shape. Small helpers are repeated per file (no shared test modules).
 
 Calendar: 2020-01-03 is a Friday. A and B are EUR, with three years of weekday returns from a
-fixed seed; VWCE.DE is the benchmark. Anything else is untracked.
+fixed seed; VWCE.DE is the benchmark. U is USD, with a EURUSD series from the first day. Anything
+else is untracked.
 """
 
 import logging
@@ -17,6 +18,7 @@ import pytest
 from portfolio import risk_jobs
 from portfolio.api.models import ExAnteRiskResponse
 from portfolio.datastore_client.base import (
+    FxPoint,
     PricePoint,
     RiskFreePoint,
     RiskFreeSeries,
@@ -27,7 +29,7 @@ from portfolio.settings import SettingsError
 
 FIRST = date(2020, 1, 3)
 END = date(2023, 3, 1)
-_SEEDS = {"A": 1, "B": 2, "VWCE.DE": 3}
+_SEEDS = {"A": 1, "B": 2, "VWCE.DE": 3, "U": 4}
 
 
 def _settings(
@@ -46,12 +48,17 @@ def _settings(
     )()
 
 
-def _prices(seed):
+def _weekdays():
     days, day = [], FIRST
     while day < END:
         day += timedelta(days=1)
         if day.weekday() < 5:
             days.append(day)
+    return days
+
+
+def _prices(seed):
+    days = _weekdays()
     returns = np.random.default_rng(seed).normal(0.0003, 0.01, len(days))
     return [PricePoint(FIRST, Decimal("100"), None)] + [
         PricePoint(d, Decimal("100"), Decimal(str(round(float(r), 6))))
@@ -61,6 +68,8 @@ def _prices(seed):
 
 class _FakeDataStoreClient:
     def get_ticker_info(self, ticker):
+        if ticker == "U":
+            return TickerInfo(exists=True, has_returns=True, currency="USD", fx_currency="USD")
         if ticker in _SEEDS:
             return TickerInfo(exists=True, has_returns=True, currency="EUR", fx_currency="EUR")
         return TickerInfo(exists=False, has_returns=False)
@@ -69,7 +78,13 @@ class _FakeDataStoreClient:
         return _prices(_SEEDS[ticker])
 
     def get_fx_rate_series(self, base, quote, start, end):
-        raise AssertionError("a EUR-only mix needs no FX")
+        assert quote == "USD", "only U needs FX"
+        days = [FIRST, *_weekdays()]
+        moves = np.random.default_rng(5).normal(0, 0.005, len(days))
+        return [
+            FxPoint(d, Decimal(str(round(1.1 * float(np.prod(1 + moves[: k + 1])), 6))))
+            for k, d in enumerate(days)
+        ]
 
     def get_risk_free_series(self, start, end):
         point = RiskFreePoint(date(2019, 12, 2), Decimal("-0.5000"), "estr")
@@ -134,6 +149,22 @@ def test_get_ex_ante_risk_returns_builtins_the_response_model_accepts(fake_clien
     assert rolling["volatility"][-1]["frequency"] == "weekly"
     assert isinstance(rolling["volatility"][-1]["flags"], list)
     assert result["rolling_correlation"] is None
+    assert result["fx_decomposition"] == []  # A and B are EUR
+
+
+def test_get_ex_ante_risk_decomposes_each_non_eur_holding(fake_client):
+    result = _get([("A", "1"), ("U", "1")])
+
+    ExAnteRiskResponse.model_validate(result)
+    (row,) = result["fx_decomposition"]
+    assert (row["ticker"], row["currency"]) == ("U", "USD")
+    figures = ("local_volatility", "fx_volatility", "correlation", "eur_volatility")
+    for name in figures:
+        assert row[name]["frequency"] == "weekly"
+        assert row[name]["window_start"] == result["window"]["start"]
+        assert row[name]["value"] is not None
+    u = next(h for h in result["holdings"] if h["ticker"] == "U")
+    assert row["eur_volatility"]["value"] == pytest.approx(u["volatility"], rel=1e-12)
 
 
 def test_get_ex_ante_risk_returns_a_requested_rolling_pair(fake_client):
@@ -167,6 +198,7 @@ def test_get_ex_ante_risk_with_nothing_included_has_only_statuses(fake_client):
         "correlation",
         "rolling",
         "rolling_correlation",
+        "fx_decomposition",
     ):
         assert result[key] is None
     assert result["benchmark"]["available"] is False

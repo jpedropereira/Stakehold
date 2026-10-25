@@ -751,6 +751,20 @@ class RollingCorrelationResponse(BaseModel):
     points: list[RiskFigureResponse]
 
 
+class FxDecompositionResponse(BaseModel):
+    """One non-EUR holding's FX decomposition (RK-26, spec §6.4): how much of its EUR risk is its
+    currency. Every figure is on the decomposition's listwise weeks, so `eur_volatility` is the
+    holding's `volatility` in `holdings` whenever both are shown. Volatilities grey under 52
+    weeks, the correlation under 104."""
+
+    ticker: str
+    currency: str  # the holding's FX currency, e.g. USD
+    local_volatility: RiskFigureResponse  # of its returns in its own currency
+    fx_volatility: RiskFigureResponse  # of the currency against the EUR (r_fx)
+    correlation: RiskFigureResponse  # corr(r_local, r_fx)
+    eur_volatility: RiskFigureResponse  # of its returns in EUR
+
+
 class ExAnteRiskResponse(BaseModel):
     """Ex-ante risk of a mix held at constant weights (RK-17, spec §6.2-6.3, §7.1). Every section
     but `statuses` and `benchmark` is null exactly when no asset could be included."""
@@ -771,6 +785,8 @@ class ExAnteRiskResponse(BaseModel):
     # The constant-weight mix over its whole history, whatever `window` is (RK-24).
     rolling: RollingRiskResponse | None
     rolling_correlation: RollingCorrelationResponse | None  # null when no pair was asked for
+    # Each included non-EUR holding, in request order; empty when every one is EUR (RK-26).
+    fx_decomposition: list[FxDecompositionResponse] | None
 
 
 # --- what-if (RK-19) ---

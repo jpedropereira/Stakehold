@@ -355,3 +355,59 @@ def test_against_the_portfolio_when_the_holdings_do_not_overlap_says_why():
 
     assert result.rolling_correlation.points == ()
     assert result.rolling_correlation.reason == "portfolio not included: " + NO_OVERLAP
+
+
+# --- FX decomposition (RK-26) -----------------------------------------------------------------
+
+
+def test_each_non_eur_holding_is_decomposed_from_its_own_local_and_fx_returns(caplog):
+    prices, fx = _prices(2), _fx(7)
+    client = _FakeDataStoreClient({"A": (EUR, _prices(1)), "B": (USD, prices)}, fx={"USD": fx})
+
+    with caplog.at_level(logging.INFO, logger="portfolio.risk.flows"):
+        result = _run(client, [("A", "1"), ("B", "1")])
+
+    (row,) = result.report.fx_decomposition
+    assert (row.ticker, row.currency) == ("B", "USD")
+    returns = eur_daily_returns(prices, fx)
+    local = to_weekly(
+        ReturnSeries(
+            Frequency.DAILY,
+            returns.anchor,
+            tuple(returns.dates),
+            tuple(None if r is None else float(r) for r in returns.r_local),
+        )
+    )
+    panel = result.report.decomposition.panel
+    on_panel = [v for d, v in zip(local.dates, local.values) if d in panel.dates]
+    assert row.local_volatility.value == pytest.approx(np.std(on_panel, ddof=1) * np.sqrt(52))
+    b = next(h for h in result.report.decomposition.holdings if h.key == "B")
+    assert row.eur_volatility.value == pytest.approx(b.volatility, rel=1e-12)
+    assert (
+        "ex-ante-risk: FX decomposition of 1 non-EUR holding(s), 0 of 4 figure(s) greyed."
+        in caplog.text
+    )
+
+
+def test_an_all_eur_mix_has_no_fx_rows_and_says_so(caplog):
+    client = _FakeDataStoreClient({"A": (EUR, _prices(1)), "B": (EUR, _prices(2))})
+
+    with caplog.at_level(logging.INFO, logger="portfolio.risk.flows"):
+        result = _run(client, [("A", "1"), ("B", "1")])
+
+    assert result.report.fx_decomposition == ()
+    assert "ex-ante-risk: no FX decomposition, every included holding is in EUR." in caplog.text
+
+
+def test_a_one_year_window_greys_each_fx_correlation(caplog):
+    client = _FakeDataStoreClient(
+        {"A": (EUR, _prices(1)), "B": (USD, _prices(2))}, fx={"USD": _fx(7)}
+    )
+
+    with caplog.at_level(logging.INFO, logger="portfolio.risk.flows"):
+        result = _run(client, [("A", "1"), ("B", "1")], window=StandardWindow.Y1)
+
+    (row,) = result.report.fx_decomposition
+    assert row.correlation.value is None
+    assert row.eur_volatility.value is not None
+    assert "1 of 4 figure(s) greyed" in caplog.text

@@ -35,6 +35,7 @@ from web.portfolio_client.base import (
     ExcludedHolding,
     ExPostRisk,
     ExPostWindow,
+    FxDecompositionRow,
     Holding,
     HoldingAccount,
     Holdings,
@@ -700,6 +701,17 @@ def _correlation_matrix(item: dict) -> CorrelationMatrix:
     return CorrelationMatrix(keys=keys, benchmark_key=item["benchmark_key"], cells=cells)
 
 
+def _fx_decomposition_row(item: dict) -> FxDecompositionRow:
+    return FxDecompositionRow(
+        ticker=item["ticker"],
+        currency=item["currency"],
+        local_volatility=_ex_post_figure(item, "local_volatility"),
+        fx_volatility=_ex_post_figure(item, "fx_volatility"),
+        correlation=_ex_post_figure(item, "correlation"),
+        eur_volatility=_ex_post_figure(item, "eur_volatility"),
+    )
+
+
 def _ex_ante_window(item: dict) -> ExAnteWindow:
     return ExAnteWindow(
         label=item["label"],
@@ -714,6 +726,7 @@ def _ex_ante_risk(body: dict) -> ExAnteRisk:
     try:
         window, holdings = body["window"], body["holdings"]
         constant, matrix = body["constant_weight"], body["correlation"]
+        fx_rows = body["fx_decomposition"]
         return ExAnteRisk(
             label=body["label"],
             currency=body["currency"],
@@ -732,6 +745,9 @@ def _ex_ante_risk(body: dict) -> ExAnteRisk:
             holdings=None if holdings is None else tuple(_ex_ante_holding(h) for h in holdings),
             constant_weight=None if constant is None else _series_risk(constant),
             correlation=None if matrix is None else _correlation_matrix(matrix),
+            fx_decomposition=(
+                None if fx_rows is None else tuple(_fx_decomposition_row(r) for r in fx_rows)
+            ),
             rolling=_rolling(body["rolling"]),
             rolling_correlation=_rolling_correlation(body["rolling_correlation"]),
         )

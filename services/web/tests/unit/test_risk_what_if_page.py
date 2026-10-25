@@ -196,7 +196,7 @@ class FakePortfolioClient:
         if self.ex_ante_error:
             raise self.ex_ante_error
         statuses = tuple(BacktestAssetStatus(t, "excluded", "excluded") for t, _ in assets)
-        return ExAnteRisk(LABEL, "eur", False, None, BENCHMARK, statuses, *(None,) * 6)
+        return ExAnteRisk(LABEL, "eur", False, None, BENCHMARK, statuses, *(None,) * 7)
 
     async def look_through(self, *, assets):
         return LookThrough(assets=(), exposures=None)

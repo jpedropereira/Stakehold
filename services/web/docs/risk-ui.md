@@ -102,6 +102,23 @@ file in the same change. The server side of `/risk` (its router, the upstream ca
     - *Review tooling.* Chromium reports a `color-mix()` background as `color(srgb …)`, which
       `review_pages.py`'s contrast check didn't parse, so it measured the darkest squares
       against the card. It parses that form now.
+    - *How much of the risk is the currency (RK-26, spec §6.4).* A table under the
+      decomposition, one row per holding priced in another currency: the holding, its currency,
+      then local, currency and euro volatility and the correlation of local and currency
+      returns, in the spec's order. Each column header says what it measures ("against the
+      euro", "what you held"), since "FX volatility" means little to an owner. It's built like
+      the summary. Each cell is a `risk_view.figure_cell` with its window and n_obs in its
+      `title` and its reason when greyed (1Y always greys the correlation, which needs 104
+      weeks), and its flags join the section's legend. All four figures are in ink: a
+      volatility or a correlation is neither a gain nor a loss. A fixed note above it says what
+      the columns mean and that a negative correlation means the currency offset the holding's
+      moves. It also says the rows use the same weeks as the share of risk, because portfolio
+      puts them on the decomposition's panel (agreed), so the euro volatility repeats the
+      decomposition's. The note doesn't repeat the dates, which the "Measured from" line above
+      already gives. An all-EUR mix gets one sentence instead of an empty table. *Rejected (agreed):
+      a derived "currency share of risk"*, which reads easily but doesn't add up, because the
+      euro variance has a correlation term and a cross term. The table needs no CSS of its own:
+      it's a `.risk-table.stack-table`, so a phone stacks each holding into labelled lines.
   - **Concentration · look-through (RK-23).** The third section: portfolio's look-through
     (RK-22, spec §8) of the same default mix as ex-ante, built by `risk_concentration_view.py`.
     Decisions (agreed):

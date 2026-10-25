@@ -214,6 +214,7 @@ def get_ex_ante_risk(
                     "correlation",
                     "rolling",
                     "rolling_correlation",
+                    "fx_decomposition",
                 )
             ),
         }
@@ -253,6 +254,17 @@ def get_ex_ante_risk(
         },
         "rolling": _rolling(report.rolling),
         "rolling_correlation": _rolling_correlation(result.rolling_correlation),
+        "fx_decomposition": [
+            {
+                "ticker": row.ticker,
+                "currency": row.currency,
+                "local_volatility": _figure(row.local_volatility),
+                "fx_volatility": _figure(row.fx_volatility),
+                "correlation": _figure(row.correlation),
+                "eur_volatility": _figure(row.eur_volatility),
+            }
+            for row in report.fx_decomposition
+        ],
     }
 
 
