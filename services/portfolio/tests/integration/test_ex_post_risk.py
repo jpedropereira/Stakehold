@@ -5,7 +5,8 @@ Seeds through the real CLI stack, exactly as test_portfolio_twr.py does (its hel
 repeated here: test modules can't import each other). The history is three days, so only the
 Max window is measured, and only its cumulative return has enough history for a value: the
 point is the wiring, not the figures, which the unit suite pins. The benchmark (RK-13) is the
-same IWDA.AS series, named per request; the stub serves no other prices.
+same IWDA.AS series, named per request; the stub serves no other prices. Two regimes (RK-28):
+one inside the history and one ongoing that started before it.
 """
 
 import os
@@ -20,6 +21,8 @@ from portfolio.api.app import create_app
 from portfolio.benchmark.base import BenchmarkStatus
 from portfolio.datastore_client.base import (
     PricePoint,
+    Regime,
+    RegimeList,
     RiskFreePoint,
     RiskFreeSeries,
     TickerInfo,
@@ -60,6 +63,28 @@ class StubDataStoreClient:
         return RiskFreeSeries(
             first_date=date(1999, 1, 4),
             points=[RiskFreePoint(date(2025, 12, 31), Decimal("1.9300"), "estr")],
+        )
+
+    def get_regimes(self, start, end):
+        return RegimeList(
+            94,
+            [
+                Regime(
+                    "era",
+                    "monetary_policy",
+                    "EA",
+                    "Era",
+                    date(2024, 6, 12),
+                    None,
+                    None,
+                    None,
+                    "manual",
+                    None,
+                ),
+                Regime(
+                    "dip", "drawdown", "SPX", "Dip", D2, D3, None, "mild", "manual_approx", None
+                ),
+            ],
         )
 
 
@@ -153,6 +178,11 @@ def test_the_twr_from_two_accounts_is_measured_over_the_standard_windows(pg_conn
     assert result.excluded == []
     assert result.benchmark == BenchmarkStatus("IWDA.AS", True, None, D1)
     assert windows["Max"].relative.beta.reason == "insufficient history (have 0, need 104)"
+    era, dip = (entry.row for entry in result.regimes.entries)
+    assert (era.measured.start, era.measured.end, era.partial, era.ongoing) == (D1, D3, True, True)
+    assert era.portfolio.cumulative_return.value == pytest.approx(0.029)
+    assert dip.portfolio.cumulative_return.value == pytest.approx(-0.02)
+    assert dip.benchmark.max_drawdown.value == pytest.approx(-0.02)
 
 
 def test_the_default_benchmark_without_prices_is_reported_not_fatal(pg_connect):
@@ -223,6 +253,13 @@ def test_get_risk_ex_post_serves_every_window(client):
     assert max_window["relative"]["tracking_error"]["frequency"] == "weekly"
     # Two days of history: no full year, so no rolling point (RK-24).
     assert body["rolling"] == {"window": "1Y", "step": "monthly", "volatility": [], "sharpe": []}
+    regimes = body["regimes"]
+    assert (regimes["available"], regimes["total_loaded"]) == (True, 94)
+    assert [(r["regime_id"], r["measured_start"], r["partial"]) for r in regimes["rows"]] == [
+        ("era", "2026-01-05", True),
+        ("dip", "2026-01-06", False),
+    ]
+    assert regimes["rows"][1]["portfolio"]["max_drawdown"]["flags"] == ["short_regime"]
 
 
 def test_get_risk_ex_post_for_a_user_with_no_accounts_has_no_windows(client):
@@ -250,6 +287,7 @@ def test_get_risk_ex_post_for_a_user_with_no_accounts_has_no_windows(client):
         "n_excluded": 0,
         "excluded": [],
         "rolling": None,
+        "regimes": None,
     }
 
 

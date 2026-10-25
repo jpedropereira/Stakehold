@@ -15,6 +15,8 @@ import pytest
 from portfolio.datastore_client.base import (
     FxPoint,
     PricePoint,
+    Regime,
+    RegimeList,
     RiskFreePoint,
     RiskFreeSeries,
     TickerInfo,
@@ -68,15 +70,41 @@ def _fx(seed):
     ]
 
 
+COVID = Regime(
+    "spx_bear_2020",
+    "drawdown",
+    "SPX",
+    "COVID crash",
+    date(2020, 2, 19),
+    date(2020, 3, 23),
+    None,
+    "severe",
+    "manual_approx",
+    None,
+)
+GFC = Regime(
+    "gfc", "event", "GLOBAL", "GFC", date(2007, 8, 9), date(2009, 3, 9), None, None, "manual", None
+)
+REGIMES = RegimeList(94, [COVID])
+
+
 class _FakeDataStoreClient:
     """`tickers` maps a ticker to (TickerInfo, prices or an exception to raise)."""
 
-    def __init__(self, tickers, fx=None, risk_free=RF):
+    def __init__(self, tickers, fx=None, risk_free=RF, regimes=REGIMES):
         self._tickers = {"VWCE.DE": (EUR, _prices(99)), **tickers}
         self._fx = fx or {}
         self._risk_free = risk_free
+        self._regimes = regimes
         self.risk_free_calls = []
         self.price_calls = []
+        self.regime_calls = []
+
+    def get_regimes(self, start, end):
+        self.regime_calls.append((start, end))
+        if isinstance(self._regimes, Exception):
+            raise self._regimes
+        return self._regimes
 
     def get_ticker_info(self, ticker):
         return self._tickers.get(ticker, (UNTRACKED, None))[0]
@@ -411,3 +439,92 @@ def test_a_one_year_window_greys_each_fx_correlation(caplog):
     assert row.correlation.value is None
     assert row.eur_volatility.value is not None
     assert "1 of 4 figure(s) greyed" in caplog.text
+
+
+# --- the regime view (RK-28) ------------------------------------------------------------------
+
+
+def test_regimes_run_on_the_daily_mix_over_its_whole_history_whatever_the_window():
+    client = _FakeDataStoreClient({"A": (EUR, _prices(1)), "B": (EUR, _prices(2))})
+
+    result = _run(client, [("A", "1"), ("B", "3")], window=StandardWindow.Y1)
+
+    ((start, end),) = client.regime_calls
+    assert start == FIRST  # Max's start, not the 1Y window's
+    (entry,) = result.regimes.entries
+    assert entry.regime == COVID
+    row = entry.row
+    assert (row.measured.start, row.measured.end) == (COVID.start_date, COVID.end_date)
+    assert (row.partial, row.ongoing) == (False, False)
+    a, b = (eur_daily_returns(client._tickers[t][1], None) for t in ("A", "B"))
+    inside = [
+        0.25 * float(ra) + 0.75 * float(rb)
+        for d, ra, rb in zip(a.dates, a.r_eur, b.r_eur)
+        if COVID.start_date < d <= COVID.end_date
+    ]
+    assert row.portfolio.cumulative_return.value == pytest.approx(np.prod(1 + np.array(inside)) - 1)
+    assert row.benchmark.cumulative_return.value is not None
+
+
+def test_a_regime_before_the_mix_starts_is_not_shown():
+    client = _FakeDataStoreClient(
+        {"A": (EUR, _prices(1)), "B": (EUR, _prices(2))}, regimes=RegimeList(94, [GFC, COVID])
+    )
+
+    result = _run(client, [("A", "1"), ("B", "1")])
+
+    assert [entry.regime.regime_id for entry in result.regimes.entries] == ["spx_bear_2020"]
+
+
+def test_an_unavailable_benchmark_greys_the_regime_benchmark_figures_only():
+    client = _FakeDataStoreClient({"A": (EUR, _prices(1))})
+
+    result = _run(client, [("A", "1")], benchmark="NOPE")
+
+    row = result.regimes.entries[0].row
+    assert row.portfolio.max_drawdown.value is not None
+    assert row.benchmark.max_drawdown.reason == "benchmark unavailable: not tracked"
+
+
+def test_a_failed_regimes_fetch_still_measures_the_rest(caplog):
+    client = _FakeDataStoreClient({"A": (EUR, _prices(1))}, regimes=DataStoreApiError("boom"))
+
+    with caplog.at_level(logging.INFO, logger="portfolio.risk.flows"):
+        result = _run(client, [("A", "1")])
+
+    assert result.regimes == flows.RegimeView(False, flows.REGIMES_UNAVAILABLE, None, ())
+    assert result.report.decomposition.sigma_p.value is not None
+    assert (
+        "ex-ante-risk: couldn't fetch the regimes, so there is no regime view: boom" in caplog.text
+    )
+
+
+def test_regimes_log_with_the_ex_ante_context(caplog):
+    client = _FakeDataStoreClient({"A": (EUR, _prices(1))})
+
+    with caplog.at_level(logging.INFO, logger="portfolio.risk.flows"):
+        _run(client, [("A", "1")])
+
+    assert "ex-ante-risk: regimes: 94 loaded, 1 overlapping 2018-01-05.." in caplog.text
+    assert "ex-ante-risk: regime spx_bear_2020 (2020-02-19..2020-03-23): measured" in caplog.text
+    assert "ex-ante-risk: regimes: 1 shown, 0 not shown, benchmark greyed on 0." in caplog.text
+
+
+def test_when_the_holdings_do_not_overlap_regimes_are_not_fetched():
+    client = _FakeDataStoreClient(
+        {"A": (EUR, _prices(1)[:300]), "B": (EUR, _prices(2, first=date(2020, 6, 5)))}
+    )
+
+    result = _run(client, [("A", "1"), ("B", "1")])
+
+    assert result.regimes == flows.RegimeView(False, NO_OVERLAP, None, ())
+    assert client.regime_calls == []
+
+
+def test_with_nothing_included_there_is_no_regime_view():
+    client = _FakeDataStoreClient({})
+
+    result = _run(client, [("N", "1")])
+
+    assert result.regimes is None
+    assert client.regime_calls == []

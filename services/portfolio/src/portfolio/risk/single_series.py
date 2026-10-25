@@ -85,6 +85,12 @@ class DrawdownFigures:
 
 
 @dataclass(frozen=True)
+class RegimeFigures:
+    cumulative_return: RiskFigure
+    max_drawdown: RiskFigure
+
+
+@dataclass(frozen=True)
 class WeeklyFigures:
     volatility: RiskFigure
     downside_deviation: RiskFigure
@@ -168,6 +174,25 @@ def drawdown_figures(daily: ReturnSeries, window: Window) -> DrawdownFigures:
         result.recovery_date,
         result.max_days_under_water,
         result.series,
+    )
+
+
+def regime_figures(daily: ReturnSeries, window: Window) -> RegimeFigures:
+    """Cumulative return and max drawdown inside one regime (RK-28), which the regime view
+    describes rather than estimates (§11): no §4.5 minimum beyond one return, and the drawdown
+    flagged `short_regime` below its usual 200 obs, since it is then a single short path. No
+    drawdown in the window is a real 0, as in `drawdown_figures`."""
+    _require(daily, Measure.REGIME)
+    part = _slice(daily, window)
+    check = _check(Measure.REGIME, part)
+    if not check.sufficient:
+        return RegimeFigures(part.figure(None, check), part.figure(None, check))
+    short = frozenset(
+        {Flag.SHORT_REGIME} if not _check(Measure.MAX_DRAWDOWN, part).sufficient else ()
+    )
+    return RegimeFigures(
+        cumulative_return=part.figure(cumulative_return(to_array(part.series)), check),
+        max_drawdown=part.figure(drawdown(part.series).max_drawdown, check, flags=short),
     )
 
 

@@ -558,6 +558,11 @@ Every route `web` serves, with what it requires and which upstream calls it make
   country and asset class, the top names, each table's "show all" split and bars, and what was
   left out). Its own module for the same reason as the ex-ante one; see "Risk page" in
   [`risk-ui.md`](risk-ui.md).
+- `risk_regime_view.py` (RK-28) — pure: `build_regime_section`, a section's regime table
+  (the regimes grouped by dimension, each with its own and its measured dates, the four cells
+  and the short-regime legend, or why there are none). Ex-post and ex-ante each build one from
+  their own response, so it isn't part of either section's module. The router carries it beside
+  the rolling charts in `api/risk.py`'s `_Extras`. See "Risk page" in [`risk-ui.md`](risk-ui.md).
 - `risk_rolling_view.py` (RK-25) — pure: `chosen_pair` (the rolling correlation's pair from
   `?corr_a=&corr_b=`, or the default), `build_rolling_charts` and `build_correlation_chart`
   (each chart's data island, its summary in words and its gap notes, and the pair picker). Its

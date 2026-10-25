@@ -11,6 +11,7 @@ from decimal import Decimal
 def fakes():
     """Fake auth and portfolio clients serving the review data. Imported here rather than at
     module level, so the page list above can be read without the web package's dependencies."""
+    from review_regimes import review_regimes
     from web.auth_client.base import AuthResult, AuthUser
     from web.auth_client.errors import SessionInvalid
     from web.portfolio_client.base import (
@@ -836,6 +837,7 @@ def fakes():
                 excluded=(ExcludedHolding("7203.T", "no_fx_rate", "no FX series for JPY"),),
                 # RK-25: from 2024-04, with two months a NULL week short.
                 rolling=review_rolling(base, phase=0.0, gaps=(6, 7)),
+                regimes=review_regimes(base, today, benchmark, benchmark_firsts.get(benchmark)),
             )
 
         async def ex_ante_risk(self, *, assets, window, benchmark, exclude, rolling_pair=None):
@@ -976,6 +978,10 @@ def fakes():
                     None
                     if rolling_pair is None
                     else review_rolling_pair(rolling_pair, tickers, benchmark, history)
+                ),
+                # RK-28: over the mix's whole history, so older regimes than ex-post's.
+                regimes=review_regimes(
+                    history, today, benchmark, benchmark_firsts.get(benchmark), scale=1.08
                 ),
             )
 

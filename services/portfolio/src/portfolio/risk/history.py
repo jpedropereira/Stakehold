@@ -31,6 +31,7 @@ class Measure(StrEnum):
     TRACKING_ERROR = "tracking_error"
     INFORMATION_RATIO = "information_ratio"
     ROLLING_CORRELATION = "rolling_correlation"
+    REGIME = "regime"
 
 
 @dataclass(frozen=True)
@@ -60,6 +61,10 @@ _MINIMUMS = {
     # Agreed for RK-24: §7.1's rolling correlation runs over 52 weekly obs, which §4.5's 104
     # would grey at every point. It is for display only and never feeds portfolio maths (R13).
     Measure.ROLLING_CORRELATION: _Minimum(Frequency.WEEKLY, min_obs=52),
+    # Agreed for RK-28: a regime's cumulative return and max drawdown are descriptive (§11), and
+    # §4.5's 200 obs for a drawdown would grey most regimes (a crash lasts weeks). One return is
+    # enough; the drawdown carries `short_regime` under 200 instead (single_series.py).
+    Measure.REGIME: _Minimum(Frequency.DAILY, min_obs=1),
 }
 
 _SHORT_WINDOW_YEARS = 3

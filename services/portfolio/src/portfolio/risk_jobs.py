@@ -83,6 +83,7 @@ def get_ex_post_risk(
         "n_excluded": len(result.excluded),
         "excluded": [asdict(holding) for holding in result.excluded],
         "rolling": None if result.rolling is None else _rolling(result.rolling),
+        "regimes": _regimes(result.regimes),
     }
 
 
@@ -133,6 +134,44 @@ def _rolling_correlation(pair: risk_flows.RollingCorrelation | None) -> dict | N
         "step": "weekly",
         "reason": pair.reason,
         "points": [_figure(figure) for figure in pair.points],
+    }
+
+
+def _regimes(view: risk_flows.RegimeView | None) -> dict | None:
+    """The regime view (RK-28) as builtins. A regime's `known_from` and `notes` stay out: the
+    view is descriptive and shows neither."""
+    if view is None:
+        return None
+    return {
+        "available": view.available,
+        "reason": view.reason,
+        "total_loaded": view.total_loaded,
+        "rows": [
+            {
+                "regime_id": entry.regime.regime_id,
+                "dimension": entry.regime.dimension,
+                "scope": entry.regime.scope,
+                "name": entry.regime.name,
+                "severity": entry.regime.severity,
+                "source": entry.regime.source,
+                "start_date": entry.regime.start_date,
+                "end_date": entry.regime.end_date,
+                "measured_start": entry.row.measured.start,
+                "measured_end": entry.row.measured.end,
+                "partial": entry.row.partial,
+                "ongoing": entry.row.ongoing,
+                "portfolio": _regime_figures(entry.row.portfolio),
+                "benchmark": _regime_figures(entry.row.benchmark),
+            }
+            for entry in view.entries
+        ],
+    }
+
+
+def _regime_figures(figures) -> dict:
+    return {
+        "cumulative_return": _figure(figures.cumulative_return),
+        "max_drawdown": _figure(figures.max_drawdown),
     }
 
 
@@ -215,6 +254,7 @@ def get_ex_ante_risk(
                     "rolling",
                     "rolling_correlation",
                     "fx_decomposition",
+                    "regimes",
                 )
             ),
         }
@@ -265,6 +305,7 @@ def get_ex_ante_risk(
             }
             for row in report.fx_decomposition
         ],
+        "regimes": _regimes(result.regimes),
     }
 
 

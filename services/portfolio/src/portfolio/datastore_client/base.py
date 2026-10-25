@@ -46,6 +46,31 @@ class RiskFreeSeries:
 
 
 @dataclass(frozen=True)
+class Regime:
+    """One row of data-store's hand-curated `regimes` table -- GET /regimes. The dates are the
+    regime's own, unclipped: the caller clips them to the series it measures."""
+
+    regime_id: str
+    dimension: str  # business_cycle, drawdown, event, monetary_policy...
+    scope: str  # US, EA, GLOBAL, SPX...
+    name: str
+    start_date: date
+    end_date: date | None  # None for an ongoing regime
+    known_from: date | None  # served, not applied: the regime view is descriptive (spec §11)
+    severity: str | None
+    source: str  # a citation (NBER, manual_approx...), not a provider
+    notes: str | None
+
+
+@dataclass(frozen=True)
+class RegimeList:
+    # The whole table's count, whatever the range: 0 means nothing is loaded, which a caller
+    # must word differently from "no regime overlaps this range".
+    total_regimes: int
+    regimes: list[Regime]
+
+
+@dataclass(frozen=True)
 class EtfFund:
     """One fund in data-store's etfs.yaml -- GET /etf-holdings. `ticker` is the fund's own
     tradeable ticker (IWDA.AS), the only link from a holding to the fund's snapshots."""
@@ -166,6 +191,12 @@ class DataStoreClient(Protocol):
         points is normal (a weekend, a window before 1999): its first_date still says where
         coverage begins.
         """
+        ...
+
+    def get_regimes(self, start: date, end: date) -> RegimeList:
+        """Every regime overlapping [start, end], inclusive at both ends (an ongoing regime
+        overlaps every range ending on or after its start), ordered by start date, with the
+        table's total count."""
         ...
 
     def list_etf_funds(self) -> list[EtfFund]:

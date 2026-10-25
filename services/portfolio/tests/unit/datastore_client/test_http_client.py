@@ -13,6 +13,8 @@ from portfolio.datastore_client.base import (
     EtfFund,
     FxPoint,
     PricePoint,
+    Regime,
+    RegimeList,
     RiskFreePoint,
     RiskFreeSeries,
     TickerInfo,
@@ -503,6 +505,158 @@ def test_get_risk_free_series_raises_when_the_request_itself_fails(client, monke
 
     with pytest.raises(DataStoreApiError):
         client.get_risk_free_series(date(2026, 1, 8), date(2026, 1, 9))
+
+
+# --- get_regimes ---
+
+
+def _regime(**overrides):
+    regime = {
+        "regime_id": "spx_bear_2020",
+        "dimension": "drawdown",
+        "scope": "SPX",
+        "name": "COVID crash",
+        "start_date": "2020-02-19",
+        "end_date": "2020-03-23",
+        "known_from": None,
+        "severity": "severe",
+        "source": "manual_approx",
+        "notes": None,
+    }
+    return {**regime, **overrides}
+
+
+def test_get_regimes_returns_every_regime_with_the_table_total(client, monkeypatch):
+    captured = {}
+
+    def fake_get(url, params, headers, timeout):
+        captured.update(url=url, params=params, headers=headers)
+        return FakeResponse(
+            200,
+            {
+                "total_regimes": 94,
+                "regimes": [
+                    _regime(),
+                    _regime(
+                        regime_id="ukraine_war",
+                        dimension="event",
+                        scope="GLOBAL",
+                        name="Russian invasion of Ukraine",
+                        start_date="2022-02-24",
+                        end_date=None,
+                        known_from="2022-02-24",
+                        severity=None,
+                        source="manual",
+                        notes="ongoing",
+                    ),
+                ],
+            },
+        )
+
+    monkeypatch.setattr(requests, "get", fake_get)
+
+    result = client.get_regimes(date(2020, 1, 1), date(2026, 10, 23))
+
+    assert result == RegimeList(
+        total_regimes=94,
+        regimes=[
+            Regime(
+                regime_id="spx_bear_2020",
+                dimension="drawdown",
+                scope="SPX",
+                name="COVID crash",
+                start_date=date(2020, 2, 19),
+                end_date=date(2020, 3, 23),
+                known_from=None,
+                severity="severe",
+                source="manual_approx",
+                notes=None,
+            ),
+            Regime(
+                regime_id="ukraine_war",
+                dimension="event",
+                scope="GLOBAL",
+                name="Russian invasion of Ukraine",
+                start_date=date(2022, 2, 24),
+                end_date=None,
+                known_from=date(2022, 2, 24),
+                severity=None,
+                source="manual",
+                notes="ongoing",
+            ),
+        ],
+    )
+    assert captured["url"] == "http://datastore:8000/regimes"
+    assert captured["params"] == {"start": "2020-01-01", "end": "2026-10-23"}
+    assert captured["headers"]["Authorization"] == "Bearer secret"
+
+
+def test_get_regimes_with_nothing_loaded_reports_a_zero_total(client, monkeypatch):
+    # total_regimes 0 is "nothing loaded", which the caller words differently from an empty
+    # range -- so it is passed through, not collapsed into an empty list.
+    monkeypatch.setattr(
+        requests,
+        "get",
+        lambda *a, **kw: FakeResponse(200, {"total_regimes": 0, "regimes": []}),
+    )
+
+    assert client.get_regimes(date(2020, 1, 1), date(2020, 12, 31)) == RegimeList(0, [])
+
+
+@pytest.mark.parametrize("key", ["total_regimes", "regimes"])
+def test_get_regimes_raises_on_a_response_missing_a_key(client, monkeypatch, key):
+    body = {"total_regimes": 1, "regimes": [_regime()]}
+    del body[key]
+    monkeypatch.setattr(requests, "get", lambda *a, **kw: FakeResponse(200, body))
+
+    with pytest.raises(DataStoreApiError):
+        client.get_regimes(date(2020, 1, 1), date(2020, 12, 31))
+
+
+@pytest.mark.parametrize("key", list(_regime()))
+def test_get_regimes_raises_on_a_regime_missing_a_key(client, monkeypatch, key):
+    regime = _regime()
+    del regime[key]
+    monkeypatch.setattr(
+        requests,
+        "get",
+        lambda *a, **kw: FakeResponse(200, {"total_regimes": 1, "regimes": [regime]}),
+    )
+
+    with pytest.raises(DataStoreApiError):
+        client.get_regimes(date(2020, 1, 1), date(2020, 12, 31))
+
+
+@pytest.mark.parametrize(
+    "overrides", [{"start_date": "19/02/2020"}, {"end_date": "soon"}, {"known_from": 2020}]
+)
+def test_get_regimes_raises_on_an_unparseable_date(client, monkeypatch, overrides):
+    monkeypatch.setattr(
+        requests,
+        "get",
+        lambda *a, **kw: FakeResponse(200, {"total_regimes": 1, "regimes": [_regime(**overrides)]}),
+    )
+
+    with pytest.raises(DataStoreApiError):
+        client.get_regimes(date(2020, 1, 1), date(2020, 12, 31))
+
+
+@pytest.mark.parametrize("status_code", [422, 500])
+def test_get_regimes_raises_on_an_error_status(client, monkeypatch, status_code):
+    monkeypatch.setattr(requests, "get", lambda *a, **kw: FakeResponse(status_code))
+
+    with pytest.raises(DataStoreApiError):
+        client.get_regimes(date(2020, 1, 1), date(2020, 12, 31))
+
+
+def test_get_regimes_raises_when_the_request_itself_fails(client, monkeypatch):
+    def boom(*a, **kw):
+        raise requests.ConnectionError("connection refused")
+
+    monkeypatch.setattr(requests, "get", boom)
+
+    with pytest.raises(DataStoreApiError):
+        client.get_regimes(date(2020, 1, 1), date(2020, 12, 31))
 
 
 # --- get_ticker_info ---

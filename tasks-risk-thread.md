@@ -107,19 +107,12 @@ split out of this file for size; its row here links there.
 | RK-25 | [web: rolling charts](tasks-risk-thread-done.md#rk-25-web-rolling-charts) | RK-18, RK-24 | done |
 | RK-26 | [FX decomposition (portfolio and web)](tasks-risk-thread-done.md#rk-26-fx-decomposition-portfolio-and-web) | RK-18 | done |
 | RK-27 | [data-store: regimes endpoint](tasks-risk-thread-done.md#rk-27-data-store-regimes-endpoint) | RK-1 | done |
-| RK-28 | [Regime view (portfolio and web)](#rk-28-regime-view-portfolio-and-web) | RK-14, RK-27 | ready |
+| RK-28 | [Regime view (portfolio and web)](tasks-risk-thread-done.md#rk-28-regime-view-portfolio-and-web) | RK-14, RK-27 | done |
 | RK-29 | [Candidate ranking mode](#rk-29-candidate-ranking-mode) | RK-20 | ready |
 | RK-30 | [Ledoit–Wolf shrinkage (optional)](#rk-30-ledoitwolf-shrinkage-optional) | RK-15 | ready |
 | RK-31 | [VaR day mask on traded volume](#rk-31-var-day-mask-on-traded-volume) | RK-1 | ready |
 
 ## Tasks
-
-### RK-28. Regime view (portfolio and web)
-
-**Status:** ready
-
-For each regime overlapping the window, the portfolio's and the benchmark's return and MDD inside
-it. This is descriptive only, so `known_from` isn't applied (§11 phase 5).
 
 ### RK-29. Candidate ranking mode
 

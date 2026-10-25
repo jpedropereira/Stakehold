@@ -211,6 +211,11 @@ Standard windows: **1Y, 3Y, 5Y, 10Y, Max**, ending at the latest common date. Ro
 > ρ is for display only, as a pairwise cell is (R13), and never feeds portfolio maths. Over 52
 > obs its standard error is about 0.14, which the chart has to carry.
 
+> **Amended (RK-28):** the regime view (§11 phase 5) is descriptive, so it takes none of the
+> minimums above. A regime's cumulative return and max drawdown need one non-NULL daily return.
+> Under 200, the drawdown is flagged `short_regime` (one short path) instead of greyed.
+> Otherwise most regimes would be greyed: a crash lasts weeks.
+
 - **R9.** Below the minimum: show the measure greyed out with "insufficient history (have N,
   need M)", never a number and never a hidden row. **DECISION.**
 - **R10. Comparability.** When ranking or comparing several assets or mixes side by side, the
@@ -626,6 +631,10 @@ is EUR-listed from 2019-07-29, and `IWDA.AS` is EUR-listed from 2009-09-25.
 3. Regime view: for each `regimes` row overlapping the window, the portfolio's and benchmark's
    return and MDD within that period. Use `known_from` only if regimes ever become a signal; for
    descriptive use it isn't needed.
+   > **Amended (RK-28):** measured on both the ex-post TWR and the ex-ante constant-weight mix,
+   > each labelled (R2). A regime the series covers only in part is clipped to the overlap and
+   > flagged `partial`; one with no end runs to the series' last date, `ongoing`. The benchmark
+   > is measured on the same clipped window, or greyed.
 4. Candidate ranking mode.
 5. Optional: Ledoit–Wolf shrinkage of Σ when assets exceed ~¼ of the weekly observations.
 

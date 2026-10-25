@@ -22,7 +22,9 @@ its notice in all three.
 The rolling charts (RK-25) come with the first two sections' own calls, so nothing more is
 fetched and each section's charts fail with it: ex-post's and ex-ante's rolling 1Y volatility
 and Sharpe, and ex-ante's rolling correlation of the pair `?corr_a=&corr_b=` names (the heaviest
-holding against the portfolio by default; risk_rolling_view.chosen_pair has the rule).
+holding against the portfolio by default; risk_rolling_view.chosen_pair has the rule). So do
+the regime tables (RK-28, risk_regime_view.py): each section's `regimes`, how its series and
+the benchmark did in each market regime.
 
 `?benchmark=` (RK-14) picks what the summary's relative figures measure against, portfolio's
 VWCE.DE by default (benchmark_param.py has the rule). The field suggests the tracked tickers,
@@ -56,6 +58,7 @@ from web.risk_ex_ante_view import (
     build_ex_ante_section,
     chosen_ex_ante_window,
 )
+from web.risk_regime_view import RegimeSection, build_regime_section
 from web.risk_rolling_view import (
     PAIR_PARAMS,
     CorrelationChart,
@@ -94,11 +97,13 @@ _UNAVAILABLE = "Can't reach the portfolio service right now, so it can't be show
 
 
 @dataclass(frozen=True)
-class _Rolling:
-    """A section's rolling charts: None where portfolio had nothing to measure."""
+class _Extras:
+    """What a section shows under its figures: its rolling charts (RK-25) and its regime table
+    (RK-28). None where portfolio had nothing to measure."""
 
     charts: RollingCharts | None = None
     correlation: CorrelationChart | None = None
+    regimes: RegimeSection | None = None
 
 
 def _n_points(series: RollingSeries) -> int:
@@ -125,19 +130,19 @@ def _log_rolling(section: str, charts: RollingCharts | None) -> None:
 
 async def _load_ex_post(
     portfolio_client: PortfolioClient, user_id: str, benchmark: str
-) -> tuple[ExPostTable | None, str | None, _Rolling]:
+) -> tuple[ExPostTable | None, str | None, _Extras]:
     """The ex-post summary and None, or None and the message to show in its place, then its
-    rolling charts. Both None: nothing to measure yet."""
+    rolling charts and regime table. Both None: nothing to measure yet."""
     logger.info("risk: loading the ex-post figures against %s.", benchmark)
     try:
         risk = await portfolio_client.ex_post_risk(user_id=user_id, benchmark=benchmark)
     except PortfolioClientError:
         logger.exception("risk: portfolio service unavailable loading the ex-post figures.")
-        return None, _UNAVAILABLE, _Rolling()
+        return None, _UNAVAILABLE, _Extras()
     table = build_ex_post_table(risk)
     if table is None:
         logger.info("risk: nothing to measure yet, no TWR returns.")
-        return None, None, _Rolling()
+        return None, None, _Extras()
     figures = [figure for window in risk.windows for figure in window.figures.values()]
     relative = [figure for window in risk.windows for figure in window.relative.values()]
     excluded = ", ".join(e.ticker for e in risk.excluded) or "none"
@@ -160,7 +165,9 @@ async def _load_ex_post(
     )
     rolling = build_rolling_charts(risk.rolling, "ex-post")
     _log_rolling("ex-post", rolling)
-    return table, None, _Rolling(charts=rolling)
+    regimes = build_regime_section(risk.regimes, risk.label, risk.benchmark)
+    _log_regimes("ex-post", regimes)
+    return table, None, _Extras(charts=rolling, regimes=regimes)
 
 
 @dataclass(frozen=True)
@@ -189,19 +196,20 @@ async def _load_holdings_sections(
     params: list[tuple[str, str]],
     ask: _WhatIfAsk,
 ) -> tuple[
-    tuple[ExAnteSection | None, str | None, _Rolling],
+    tuple[ExAnteSection | None, str | None, _Extras],
     tuple[ConcentrationSection | None, str | None],
     _WhatIfParts,
 ]:
     """The ex-ante and concentration sections, each as (section, None) or (None, the message to
-    show in its place), ex-ante's with its rolling charts, and the what-if's parts. (None,
+    show in its place), ex-ante's with its rolling charts and regime table, and the what-if's
+    parts. (None,
     None): no holding to measure yet."""
     try:
         holdings = await portfolio_client.list_holdings(user_id=user_id)
     except PortfolioClientError:
         logger.exception("risk: portfolio service unavailable listing holdings.")
         return (
-            (None, _UNAVAILABLE, _Rolling()),
+            (None, _UNAVAILABLE, _Extras()),
             (None, _UNAVAILABLE),
             _WhatIfParts(error=_UNAVAILABLE),
         )
@@ -212,7 +220,7 @@ async def _load_holdings_sections(
             "priced and worth something.",
             len(holdings.holdings),
         )
-        return (None, None, _Rolling()), (None, None), _WhatIfParts()
+        return (None, None, _Extras()), (None, None), _WhatIfParts()
     sent = _sent_exclusions(mix, exclude)
     form = parse_what_if(ask.candidate, ask.weight, ask.funding, mix, sent)
     ex_ante, concentration, what_if = await asyncio.gather(
@@ -245,9 +253,9 @@ async def _load_ex_ante(
     window: str,
     sent: list[str],
     params: list[tuple[str, str]],
-) -> tuple[ExAnteSection | None, str | None, _Rolling]:
+) -> tuple[ExAnteSection | None, str | None, _Extras]:
     """The ex-ante section and None, or None and the message to show in its place, then its
-    rolling charts."""
+    rolling charts and regime table."""
     measured = [ticker for ticker, _ in mix.assets if ticker not in sent]
     raw = dict((k, v) for k, v in params if k in PAIR_PARAMS)
     pair = chosen_pair(raw.get("corr_a"), raw.get("corr_b"), measured, benchmark)
@@ -279,18 +287,36 @@ async def _load_ex_ante(
         )
     except PortfolioClientError:
         logger.exception("risk: portfolio service unavailable loading the ex-ante figures.")
-        return None, _UNAVAILABLE, _Rolling()
+        return None, _UNAVAILABLE, _Extras()
     section = build_ex_ante_section(risk, mix, holdings, params)
     _log_ex_ante(risk, section)
-    rolling = _Rolling(
+    extras = _Extras(
         charts=build_rolling_charts(risk.rolling, "ex-ante"),
         correlation=build_correlation_chart(
             risk.rolling_correlation, pair, measured, benchmark, params
         ),
+        regimes=build_regime_section(risk.regimes, risk.label, risk.benchmark),
     )
-    _log_rolling("ex-ante", rolling.charts)
-    _log_rolling_pair(rolling.correlation)
-    return section, None, rolling
+    _log_rolling("ex-ante", extras.charts)
+    _log_rolling_pair(extras.correlation)
+    _log_regimes("ex-ante", extras.regimes)
+    return section, None, extras
+
+
+def _log_regimes(section: str, regimes: RegimeSection | None) -> None:
+    if regimes is None:
+        return
+    if not regimes.groups:
+        logger.info("risk: %s regimes: none shown, %s.", section, regimes.reason)
+        return
+    lines = [line for group in regimes.groups for line in group.lines]
+    logger.info(
+        "risk: %s regimes: %d shown in %d group(s), benchmark greyed on %d.",
+        section,
+        len(lines),
+        len(regimes.groups),
+        sum(1 for line in lines if line.cells[3].value is None),
+    )
 
 
 def _log_rolling_pair(chart: CorrelationChart | None) -> None:
@@ -488,9 +514,9 @@ async def risk(
         logger.info("risk: unknown ex-ante window %r, showing %s.", ex_ante_window, window)
     params = request.query_params.multi_items()
     (
-        (ex_post, ex_post_error, ex_post_rolling),
+        (ex_post, ex_post_error, ex_post_extras),
         (
-            (ex_ante, ex_ante_error, ex_ante_rolling),
+            (ex_ante, ex_ante_error, ex_ante_extras),
             (concentration, concentration_error),
             what_if,
         ),
@@ -519,11 +545,13 @@ async def risk(
             "nav_active": "risk",
             "ex_post": ex_post,
             "ex_post_error": ex_post_error,
-            "ex_post_rolling": ex_post_rolling,
+            "ex_post_rolling": ex_post_extras,
+            "ex_post_regimes": ex_post_extras.regimes,
             "ex_ante": ex_ante,
             "ex_ante_error": ex_ante_error,
             "ex_ante_window": window,
-            "ex_ante_rolling": ex_ante_rolling,
+            "ex_ante_rolling": ex_ante_extras,
+            "ex_ante_regimes": ex_ante_extras.regimes,
             "concentration": concentration,
             "concentration_error": concentration_error,
             "what_if_form": what_if.form,

@@ -82,6 +82,11 @@ FLAG_NOTES = {
         "of the window."
     ),
     "short_window": "Under 3 years of history, so this figure can move a lot as time passes.",
+    # Set only on a regime's max drawdown (RK-28), which is shown however short the regime.
+    "short_regime": (
+        "Fewer than 200 trading days, so this historical drawdown is one short path through "
+        "the regime, not a typical fall."
+    ),
     # Set only on a what-if candidate's "after" figures (RK-19): spec R14's warning.
     "survivorship": (
         "The candidate is priced only through a fund's holdings, so its history comes from "

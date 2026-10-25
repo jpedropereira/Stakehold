@@ -605,6 +605,45 @@ class RollingRiskResponse(BaseModel):
     sharpe: list[RiskFigureResponse]
 
 
+class RegimeFiguresResponse(BaseModel):
+    """Daily, inside the regime's measured window. No §4.5 minimum beyond one return (RK-28):
+    the max drawdown is flagged `short_regime` under 200 obs instead of greyed."""
+
+    cumulative_return: RiskFigureResponse
+    max_drawdown: RiskFigureResponse
+
+
+class RegimeRowResponse(BaseModel):
+    """One regime overlapping the series (spec §11 phase 5), with its own dates and the window it
+    was measured on: the regime clipped to the series. The benchmark is measured on the same
+    window, and greyed when it doesn't cover it or is unavailable."""
+
+    regime_id: str
+    dimension: str  # business_cycle, drawdown, event, monetary_policy, ...
+    scope: str  # US, EA, GLOBAL, SPX, ...
+    name: str
+    severity: str | None
+    source: str  # a citation: NBER, CEPR-EABCDC, manual_approx, ...
+    start_date: date
+    end_date: date | None  # null while the regime is ongoing
+    measured_start: date
+    measured_end: date
+    partial: bool  # the series covers only part of the regime
+    ongoing: bool  # measured to the series' last date
+    portfolio: RegimeFiguresResponse
+    benchmark: RegimeFiguresResponse
+
+
+class RegimeViewResponse(BaseModel):
+    """The regime view (RK-28). `available` false: `reason` says why, "no regimes loaded" or
+    "regimes unavailable: ...". Available with no rows: no regime overlaps the series."""
+
+    available: bool
+    reason: str | None
+    total_loaded: int | None  # data-store's whole table; null when the fetch failed
+    rows: list[RegimeRowResponse]  # by regime start date
+
+
 class ExPostWindowResponse(SeriesRiskResponse):
     """One standard window (1Y, 3Y, 5Y, 10Y, Max), all ending at end_date. covered is false when
     the history starts after the window does: every figure is then greyed."""
@@ -632,6 +671,8 @@ class ExPostRiskResponse(BaseModel):
     # Held tickers left out of the TWR, by ticker; the rest were renormalised to 100%.
     excluded: list[ExcludedHoldingResponse]
     rolling: RollingRiskResponse | None  # on the TWR; null exactly when there are no windows
+    # On the TWR's whole history (RK-28); null exactly when there are no windows.
+    regimes: RegimeViewResponse | None
 
 
 # --- ex-ante risk (RK-17) ---
@@ -787,6 +828,9 @@ class ExAnteRiskResponse(BaseModel):
     rolling_correlation: RollingCorrelationResponse | None  # null when no pair was asked for
     # Each included non-EUR holding, in request order; empty when every one is EUR (RK-26).
     fx_decomposition: list[FxDecompositionResponse] | None
+    # On the constant-weight daily mix over its whole history, whatever `window` is (RK-28).
+    # Not available, "no overlap", when the holdings' histories don't overlap.
+    regimes: RegimeViewResponse | None
 
 
 # --- what-if (RK-19) ---

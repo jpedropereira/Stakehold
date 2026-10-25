@@ -11,12 +11,15 @@ import pytest
 from portfolio import risk_jobs
 from portfolio.api.models import ExPostRiskResponse
 from portfolio.benchmark.base import BenchmarkStatus
+from portfolio.datastore_client.base import Regime
 from portfolio.risk.ex_post import WindowFigures
-from portfolio.risk.flows import LABEL, ExPostRisk
+from portfolio.risk.flows import LABEL, ExPostRisk, RegimeEntry, RegimeView
+from portfolio.risk.regimes import RegimeRow
 from portfolio.risk.relative import RelativeFigures, relative_greyed
 from portfolio.risk.rolling import RollingFigures
 from portfolio.risk.single_series import (
     DrawdownFigures,
+    RegimeFigures,
     ReturnFigures,
     TailFigures,
     WeeklyFigures,
@@ -111,6 +114,65 @@ def _window(window, covered=True):
     )
 
 
+CRASH = Window("spx_corr_2025", date(2025, 2, 19), date(2025, 4, 8))
+WAR = Window("ukraine_war", BASE, END)
+_REGIMES = RegimeView(
+    available=True,
+    reason=None,
+    total_loaded=94,
+    entries=(
+        RegimeEntry(
+            Regime(
+                "ukraine_war",
+                "event",
+                "GLOBAL",
+                "Russian invasion of Ukraine",
+                date(2022, 2, 24),
+                None,
+                date(2022, 2, 24),
+                "extreme",
+                "manual",
+                "a note the view doesn't use",
+            ),
+            RegimeRow(
+                "ukraine_war",
+                WAR,
+                partial=True,
+                ongoing=True,
+                portfolio=RegimeFigures(_figure(WAR, 0.3), _figure(WAR, -0.12)),
+                benchmark=RegimeFigures(_figure(WAR, 0.25), _figure(WAR, -0.15)),
+            ),
+        ),
+        RegimeEntry(
+            Regime(
+                "spx_corr_2025",
+                "drawdown",
+                "SPX",
+                "2025 tariff selloff",
+                date(2025, 2, 19),
+                date(2025, 4, 8),
+                None,
+                "moderate",
+                "manual_approx",
+                None,
+            ),
+            RegimeRow(
+                "spx_corr_2025",
+                CRASH,
+                partial=False,
+                ongoing=False,
+                portfolio=RegimeFigures(
+                    _figure(CRASH, -0.1), _figure(CRASH, -0.14, flags={Flag.SHORT_REGIME})
+                ),
+                benchmark=RegimeFigures(
+                    _figure(CRASH, -0.11), _figure(CRASH, -0.16, flags={Flag.SHORT_REGIME})
+                ),
+            ),
+        ),
+    ),
+)
+
+
 _RISK = ExPostRisk(
     label=LABEL,
     base_date=BASE,
@@ -129,6 +191,7 @@ _RISK = ExPostRisk(
             _figure(ONE_YEAR, 0.5, Frequency.WEEKLY, se=0.9),
         ),
     ),
+    regimes=_REGIMES,
 )
 
 
@@ -301,6 +364,7 @@ def test_get_ex_post_risk_says_plainly_when_there_is_nothing_to_measure(
 
     assert result["windows"] == []
     assert result["rolling"] is None
+    assert result["regimes"] is None
     ExPostRiskResponse.model_validate(result)
     assert (
         "get-ex-post-risk: done, no TWR returns in any account yet, so nothing to measure."
@@ -338,3 +402,51 @@ def test_get_ex_post_risk_needs_data_store_settings(monkeypatch):
 
     with pytest.raises(SettingsError, match="ex-post risk"):
         risk_jobs.get_ex_post_risk(user_id=uuid.uuid4())
+
+
+def test_get_ex_post_risk_serves_each_regime_with_its_own_and_its_measured_dates(
+    monkeypatch, fake_conn
+):
+    monkeypatch.setattr(risk_jobs.risk_flows, "compute_ex_post", lambda c, d, **kw: _RISK)
+
+    result = risk_jobs.get_ex_post_risk(user_id=uuid.uuid4())
+
+    regimes = result["regimes"]
+    assert (regimes["available"], regimes["reason"], regimes["total_loaded"]) == (True, None, 94)
+    war, crash = regimes["rows"]
+    assert {key: war[key] for key in war if key not in ("portfolio", "benchmark")} == {
+        "regime_id": "ukraine_war",
+        "dimension": "event",
+        "scope": "GLOBAL",
+        "name": "Russian invasion of Ukraine",
+        "severity": "extreme",
+        "source": "manual",
+        "start_date": date(2022, 2, 24),
+        "end_date": None,
+        "measured_start": BASE,
+        "measured_end": END,
+        "partial": True,
+        "ongoing": True,
+    }
+    assert war["portfolio"]["cumulative_return"]["value"] == 0.3
+    assert war["benchmark"]["max_drawdown"]["value"] == -0.15
+    assert crash["portfolio"]["max_drawdown"]["flags"] == ["short_regime"]
+    assert crash["benchmark"]["cumulative_return"]["frequency"] == "daily"
+    ExPostRiskResponse.model_validate(result)
+
+
+def test_get_ex_post_risk_serves_a_missing_regime_view_with_its_reason(monkeypatch, fake_conn):
+    none_loaded = ExPostRisk(
+        **{**_RISK.__dict__, "regimes": RegimeView(False, "no regimes loaded", 0, ())}
+    )
+    monkeypatch.setattr(risk_jobs.risk_flows, "compute_ex_post", lambda c, d, **kw: none_loaded)
+
+    result = risk_jobs.get_ex_post_risk(user_id=uuid.uuid4())
+
+    assert result["regimes"] == {
+        "available": False,
+        "reason": "no regimes loaded",
+        "total_loaded": 0,
+        "rows": [],
+    }
+    ExPostRiskResponse.model_validate(result)

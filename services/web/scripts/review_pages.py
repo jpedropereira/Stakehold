@@ -153,6 +153,27 @@ PAGES = [
         "user",
     ),
     Page("risk-rolling-no-rf", "/risk?ex_ante_window=5Y#risk-ex-ante-rolling", "user"),
+    # RK-28: the regime tables, each dimension a group closed by default; then ex-post's first
+    # two groups and ex-ante's first opened. Ex-post's since 2023, partial and ongoing regimes
+    # among them; ex-ante's since AAPL's 2015 start, older regimes greyed for VWCE.DE's 2019
+    # start, and every one measured against IWDA.AS; an untracked benchmark; the fetch failing;
+    # and no regimes loaded.
+    Page("risk-regimes", "/risk#risk-ex-post-regimes", "user"),
+    Page(
+        "risk-regimes-open",
+        "/risk#risk-ex-post-regimes",
+        "user",
+        click=(
+            "#risk-ex-post-regimes .risk-regime-group:nth-of-type(1) summary",
+            "#risk-ex-post-regimes .risk-regime-group:nth-of-type(2) summary",
+            "#risk-ex-ante-regimes .risk-regime-group:nth-of-type(1) summary",
+        ),
+    ),
+    Page("risk-regimes-ex-ante", "/risk?ex_ante_window=Max#risk-ex-ante-regimes", "user"),
+    Page("risk-regimes-iwda", "/risk?benchmark=IWDA.AS#risk-ex-ante-regimes", "user"),
+    Page("risk-regimes-unavailable", "/risk?benchmark=NOPE.XX#risk-ex-post-regimes", "user"),
+    Page("risk-regimes-failed", "/risk?benchmark=REGIMES.FAIL#risk-ex-post-regimes", "user"),
+    Page("risk-regimes-none-loaded", "/risk?benchmark=REGIMES.NONE#risk-ex-post-regimes", "user"),
     # RK-23: the concentration section, with the unmapped note, the currency table's two views
     # and greyed buckets; then with every "show all" open.
     Page("risk-concentration", "/risk#risk-concentration", "user"),

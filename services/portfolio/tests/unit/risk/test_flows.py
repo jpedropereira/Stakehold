@@ -16,6 +16,8 @@ from portfolio.benchmark.base import BenchmarkStatus
 from portfolio.benchmark.flows import EPOCH
 from portfolio.datastore_client.base import (
     PricePoint,
+    Regime,
+    RegimeList,
     RiskFreePoint,
     RiskFreeSeries,
     TickerInfo,
@@ -72,13 +74,41 @@ VWCE = [PricePoint(VWCE_FIRST, Decimal("100"), None)] + [
 ]
 
 
-class _FakeDataStoreClient:
-    """The risk-free series, and VWCE.DE as the only tracked ticker."""
+def _regime(regime_id, start, end, dimension="drawdown"):
+    return Regime(
+        regime_id, dimension, "SPX", regime_id.title(), start, end, None, None, "manual", None
+    )
 
-    def __init__(self, risk_free=RF):
+
+TWR_DATES = _weekdays(BASE, 530)
+# Inside the TWR; starting before it (so partial); ongoing; and one ending on its base date,
+# which data-store serves (its overlap is inclusive) but has no return inside.
+REGIMES = RegimeList(
+    total_regimes=94,
+    regimes=[
+        _regime("touching", date(2019, 10, 1), BASE),
+        _regime("covid", date(2019, 12, 2), TWR_DATES[40]),
+        _regime("crash", TWR_DATES[100], TWR_DATES[120]),
+        _regime("war", TWR_DATES[500], None, dimension="event"),
+    ],
+)
+
+
+class _FakeDataStoreClient:
+    """The risk-free series, VWCE.DE as the only tracked ticker, and the regimes."""
+
+    def __init__(self, risk_free=RF, regimes=REGIMES):
         self._risk_free = risk_free
+        self._regimes = regimes
         self.calls = []
         self.price_calls = []
+        self.regime_calls = []
+
+    def get_regimes(self, start, end):
+        self.regime_calls.append((start, end))
+        if isinstance(self._regimes, Exception):
+            raise self._regimes
+        return self._regimes
 
     def get_ticker_info(self, ticker):
         return EUR if ticker == "VWCE.DE" else TickerInfo(exists=False, has_returns=False)
@@ -360,3 +390,128 @@ def test_with_nothing_to_measure_there_is_no_rolling(monkeypatch):
     result = flows.compute_ex_post(object(), _FakeDataStoreClient(), user_id=uuid.uuid4())
 
     assert result.rolling is None
+
+
+# --- the regime view (RK-28) ---
+
+
+def test_regimes_are_fetched_over_the_twr_and_measured_inside_each(monkeypatch):
+    client = _FakeDataStoreClient()
+    _fake_twr(monkeypatch, _twr())
+
+    result = flows.compute_ex_post(object(), client, user_id=uuid.uuid4(), today=TODAY)
+
+    assert client.regime_calls == [(BASE, TWR_DATES[-1])]
+    view = result.regimes
+    assert (view.available, view.reason, view.total_loaded) == (True, None, 94)
+    assert [entry.regime.regime_id for entry in view.entries] == ["covid", "crash", "war"]
+    covid, crash, war = (entry.row for entry in view.entries)
+    assert (covid.measured.start, covid.partial, covid.ongoing) == (BASE, True, False)
+    assert (crash.partial, crash.ongoing) == (False, False)
+    assert (war.measured.end, war.partial, war.ongoing) == (TWR_DATES[-1], False, True)
+    # 20 alternating days from an up day: ten +1%/-1% pairs.
+    assert crash.portfolio.cumulative_return.value == pytest.approx(0.9999**10 - 1)
+    assert crash.benchmark.cumulative_return.value is not None
+
+
+def test_regimes_are_measured_against_the_benchmark_daily_series(monkeypatch):
+    _fake_twr(monkeypatch, _twr())
+
+    result = flows.compute_ex_post(object(), _FakeDataStoreClient(), user_id=uuid.uuid4())
+
+    crash = result.regimes.entries[1].row
+    assert crash.benchmark.max_drawdown.frequency == "daily"
+    assert crash.benchmark.max_drawdown.n_obs == 20
+
+
+def test_an_unavailable_benchmark_greys_the_regime_benchmark_figures(monkeypatch):
+    _fake_twr(monkeypatch, _twr())
+
+    result = flows.compute_ex_post(
+        object(), _FakeDataStoreClient(), user_id=uuid.uuid4(), benchmark="NOPE.XX"
+    )
+
+    crash = result.regimes.entries[1].row
+    assert crash.portfolio.max_drawdown.value is not None
+    assert crash.benchmark.max_drawdown.value is None
+    assert crash.benchmark.max_drawdown.reason.startswith("benchmark unavailable: ")
+
+
+def test_regimes_log_a_start_line_each_regime_and_a_summary(monkeypatch, caplog):
+    _fake_twr(monkeypatch, _twr())
+
+    with caplog.at_level(logging.INFO, logger="portfolio.risk.flows"):
+        flows.compute_ex_post(object(), _FakeDataStoreClient(), user_id=uuid.uuid4())
+
+    lines = [r.getMessage() for r in caplog.records if ": regime" in r.getMessage()]
+    end = TWR_DATES[-1]
+    assert lines == [
+        f"ex-post-risk: regimes: 94 loaded, 4 overlapping {BASE}..{end}.",
+        f"ex-post-risk: regime touching (2019-10-01..{BASE}): not shown, no return dated "
+        f"inside {BASE}..{end}.",
+        f"ex-post-risk: regime covid (2019-12-02..{TWR_DATES[40]}): measured {BASE}.."
+        f"{TWR_DATES[40]}, partial, 41 daily obs, short; against VWCE.DE, measured.",
+        f"ex-post-risk: regime crash ({TWR_DATES[100]}..{TWR_DATES[120]}): measured "
+        f"{TWR_DATES[100]}..{TWR_DATES[120]}, 20 daily obs, short; against VWCE.DE, measured.",
+        f"ex-post-risk: regime war ({TWR_DATES[500]}..ongoing): measured {TWR_DATES[500]}.."
+        f"{end}, ongoing, 29 daily obs, short; against VWCE.DE, measured.",
+        "ex-post-risk: regimes: 3 shown, 1 not shown, benchmark greyed on 0.",
+    ]
+
+
+def test_no_regimes_loaded_is_a_warning_and_says_so(monkeypatch, caplog):
+    _fake_twr(monkeypatch, _twr())
+    client = _FakeDataStoreClient(regimes=RegimeList(0, []))
+
+    with caplog.at_level(logging.INFO, logger="portfolio.risk.flows"):
+        result = flows.compute_ex_post(object(), client, user_id=uuid.uuid4())
+
+    assert result.regimes == flows.RegimeView(False, "no regimes loaded", 0, ())
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert warnings == [
+        "ex-post-risk: regimes: none loaded in data-store (has ingest-regimes run?), so no "
+        "regime view."
+    ]
+
+
+def test_no_regime_overlapping_the_twr_is_an_empty_view_not_a_missing_one(monkeypatch, caplog):
+    _fake_twr(monkeypatch, _twr())
+    client = _FakeDataStoreClient(regimes=RegimeList(94, []))
+
+    with caplog.at_level(logging.INFO, logger="portfolio.risk.flows"):
+        result = flows.compute_ex_post(object(), client, user_id=uuid.uuid4())
+
+    assert result.regimes == flows.RegimeView(True, None, 94, ())
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert (
+        f"ex-post-risk: regimes: 94 loaded, 0 overlapping {BASE}..{TWR_DATES[-1]}."
+        in caplog.messages
+    )
+
+
+def test_a_failed_regimes_fetch_is_reported_and_the_rest_still_measured(monkeypatch, caplog):
+    _fake_twr(monkeypatch, _twr())
+    client = _FakeDataStoreClient(regimes=DataStoreApiError("boom"))
+
+    with caplog.at_level(logging.INFO, logger="portfolio.risk.flows"):
+        result = flows.compute_ex_post(object(), client, user_id=uuid.uuid4())
+
+    assert result.regimes == flows.RegimeView(
+        False, "regimes unavailable: data-store call failed", None, ()
+    )
+    assert _by_label(result)["1Y"].weekly.volatility.value is not None
+    errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert [r.getMessage() for r in errors] == [
+        "ex-post-risk: couldn't fetch the regimes, so there is no regime view: boom"
+    ]
+    assert errors[0].exc_info is not None
+
+
+def test_with_nothing_to_measure_regimes_are_not_fetched(monkeypatch):
+    client = _FakeDataStoreClient()
+    _fake_twr(monkeypatch, PortfolioTwr(base_date=None, points=[], n_gaps=0, excluded=[]))
+
+    result = flows.compute_ex_post(object(), client, user_id=uuid.uuid4())
+
+    assert result.regimes is None
+    assert client.regime_calls == []

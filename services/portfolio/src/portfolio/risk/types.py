@@ -73,7 +73,8 @@ class Window:
 
 
 class Flag(StrEnum):
-    """Spec §9's flags, plus `data_gaps` for R8's 2% gap budget."""
+    """Spec §9's flags, plus `data_gaps` for R8's 2% gap budget and `short_regime` for a regime's
+    max drawdown on fewer than 200 daily obs (RK-28)."""
 
     INSUFFICIENT_HISTORY = "insufficient_history"
     SHORT_WINDOW = "short_window"
@@ -83,6 +84,7 @@ class Flag(StrEnum):
     NONSYNC_DAILY = "nonsync_daily"
     TAIL_UNSTABLE = "tail_unstable"
     DATA_GAPS = "data_gaps"
+    SHORT_REGIME = "short_regime"
 
 
 @dataclass(frozen=True)

@@ -942,3 +942,38 @@ Decisions (agreed):
 - **For RK-28:** add `get_regimes` to the client Protocol, the HTTP client and the fakes, as in
   RK-4. Treat `total_regimes: 0` as "no regimes loaded", not as "none in this window". Clip each
   regime to the window, and filter by dimension or scope there.
+
+### RK-28. Regime view (portfolio and web)
+
+**Status:** done
+
+For each regime overlapping the window, the portfolio's and the benchmark's return and MDD inside
+it. This is descriptive only, so `known_from` isn't applied (§11 phase 5).
+
+**As built:** `get_regimes` on portfolio's data-store client. A pure `risk/regimes.py` clips
+each regime to the series and measures it with `single_series.regime_figures`. Both endpoints
+serve the result as `regimes`. On web, `risk_regime_view.py` and `partials/_regime_table.html`
+render a "Market regimes" block in each section. The reasoning is in portfolio's
+`risk-flows.md` and web's `risk-ui.md`. The spec's §4.5 and §11 have "Amended (RK-28)" notes.
+Decisions (agreed):
+- **Both series, each labelled (R2).** Ex-post runs on the TWR. Ex-ante runs on the
+  constant-weight daily mix (`ExAnteReport.mix_daily`, added for this) over its whole history,
+  whatever the window, as rolling does. In dev, ex-post reaches back only to 2021, while today's
+  mix reaches its holdings' common start.
+- **Every overlapping regime is shown, grouped by dimension** in web. There is no filter, and
+  portfolio serves them all.
+- **No §4.5 minimum beyond one return** (`Measure.REGIME`). The drawdown is flagged with a new
+  `short_regime` under 200 obs instead of being greyed. *Rejected: 200*, which greys nearly
+  every regime, and *a 5-day minimum*. No CAGR.
+- **Clip and flag.** A regime is a `Window` from its start date to its end date, so a drawdown
+  regime that starts on its peak close measures peak-to-trough. A regime the series covers only
+  in part is measured on the overlap and marked `partial`, with its measured dates. One with no
+  end runs to the last date and is marked `ongoing`. One with no return inside is left out. The
+  benchmark is measured on the same clipped window, or greyed with §5.6's wording.
+- **The fetch fails alone.** Only `DataStoreApiError` is caught. A failure gives "regimes
+  unavailable: data-store call failed", and `total_regimes: 0` gives "no regimes loaded" with a
+  warning. Both answer 200.
+- **Each dimension is a group closed by default** (agreed after the first build), whose summary
+  names it and counts its regimes: ex-ante's Max can list 60+ regimes with real data.
+- **Not measured against the dev stack:** the dev `portfolio-api` and `web` images predate the
+  change.

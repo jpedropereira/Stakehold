@@ -15,6 +15,8 @@ from portfolio.datastore_client.base import (
     EtfHoldings,
     FxPoint,
     PricePoint,
+    Regime,
+    RegimeList,
     RiskFreePoint,
     RiskFreeSeries,
     TickerInfo,
@@ -205,6 +207,49 @@ class HttpDataStoreClient:
         except (KeyError, TypeError, ValueError, InvalidOperation) as exc:
             raise DataStoreApiError(
                 f"data-store returned a malformed response for rates/risk-free: {exc}"
+            ) from exc
+
+    def get_regimes(self, start: date, end: date) -> RegimeList:
+        try:
+            response = requests.get(
+                f"{self._base_url}/regimes",
+                params={"start": start.isoformat(), "end": end.isoformat()},
+                headers=self._headers,
+                timeout=_REQUEST_TIMEOUT,
+            )
+        except requests.RequestException as exc:
+            raise DataStoreApiError(f"request to data-store failed: {exc}") from exc
+
+        try:
+            response.raise_for_status()
+        except requests.HTTPError as exc:
+            raise DataStoreApiError(
+                f"data-store returned {response.status_code} for regimes: {exc}"
+            ) from exc
+
+        try:
+            body = response.json()
+            return RegimeList(
+                total_regimes=int(body["total_regimes"]),
+                regimes=[
+                    Regime(
+                        regime_id=row["regime_id"],
+                        dimension=row["dimension"],
+                        scope=row["scope"],
+                        name=row["name"],
+                        start_date=date.fromisoformat(row["start_date"]),
+                        end_date=_optional_date(row["end_date"]),
+                        known_from=_optional_date(row["known_from"]),
+                        severity=row["severity"],
+                        source=row["source"],
+                        notes=row["notes"],
+                    )
+                    for row in body["regimes"]
+                ],
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise DataStoreApiError(
+                f"data-store returned a malformed response for regimes: {exc}"
             ) from exc
 
     def list_etf_funds(self) -> list[EtfFund]:
@@ -425,6 +470,10 @@ class HttpDataStoreClient:
 def _optional_decimal(value) -> Decimal | None:
     """A nullable numeric field: None stays None (a gap), anything else must parse."""
     return None if value is None else Decimal(value)
+
+
+def _optional_date(value) -> date | None:
+    return None if value is None else date.fromisoformat(value)
 
 
 def _path(segment: str) -> str:
