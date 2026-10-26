@@ -1,0 +1,426 @@
+# Tasks: UI improvement thread
+
+Roadmap for the UI-improvement chunk. It makes each page show less at once and makes every
+instrument recognisable by its full name, not only its ticker. Each page in `web` was built up
+chunk by chunk, and no page was ever reworked as a whole. The result:
+
+- **`/risk` is about 12,500px tall on a desktop.** One page holds five major sections: ex-post,
+  ex-ante, what-if candidate, ranking and look-through concentration. Each section has its own
+  tables, legend notes, rolling charts, regime tables and "Left out" lists.
+- **`/labs` puts "Edit the mix" at the very bottom.** The form drives everything on the page,
+  but it comes after three tables and two charts.
+- **The site header crowds one row** with seven nav links, the user name, Log out and a
+  three-button theme switch.
+- **Switches look like links.** Period and series switches (`1M 6M 1Y All`,
+  `Total return | Market value`) are plain underlined links on Portfolio, Overview, Labs and
+  Risk.
+- **Tickers appear bare everywhere** (`VWCE.DE`, `AAPL`). A user may not know what a symbol
+  stands for.
+- **Changing a period reloads the page and jumps to the top.** On Labs and Risk, the period,
+  window and sort switches are plain links. A click reloads the whole page and loses the
+  reader's place, often far below the top.
+
+Earlier chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archive/):
+[walking skeleton](docs/roadmap-archive/walking-skeleton.md),
+[UI/UX](docs/roadmap-archive/ui-ux.md),
+[ticker onboarding](docs/roadmap-archive/ticker-onboarding.md),
+[portfolio view](docs/roadmap-archive/portfolio-view.md),
+[screen layout](docs/roadmap-archive/screen-layout.md),
+[labs](docs/roadmap-archive/labs.md) and
+[risk](docs/roadmap-archive/risk.md).
+
+**Task IDs are prefixed `UX-`.** The prefix keeps them apart from the walking skeleton's bare
+"task N" references and from the earlier chunks' `UI-`, `TK-`, `PF-`, `LY-`, `LB-` and `RK-` IDs.
+
+**Status** is one of:
+- `done`: implemented, tested, merged.
+- `ready`: every dependency is `done`, so it can be started now.
+- `blocked`: waiting on at least one dependency.
+
+## Agreed requirements
+
+- **Every ticker can show its instrument's full name.** This applies wherever a ticker appears:
+  tables, prose, form fields, the benchmark picker, chart legends and chart tooltips. The name
+  shows on hover, on keyboard focus and on tap, so a native `title` attribute alone isn't
+  enough. Screen readers announce the name too.
+- **The names come from data that already exists.** data-store keeps a `display_name` for every
+  tracked ticker (the YAML name, or the provider's long name). web already reads it as
+  `TrackedTicker.display_name` through `list_tracked_tickers(tickers=[...])` in
+  `services/web/src/web/portfolio_client/base.py`. No schema change and no new endpoint.
+- **`/risk` becomes sub-pages under one sub-nav**, one per major section. Collapsible sections
+  on one URL and JS tabs were considered and rejected. A collapsible page still loads every
+  section's data. JS tabs need a separate no-JS fallback. Sub-pages can be linked and
+  bookmarked.
+- **Each screen region carries one idea.** The headline figures stay visible. Secondary detail
+  (rolling charts, regimes, "Left out" lists, method notes) folds behind a disclosure with a
+  one-line summary.
+- **A page's main action comes before the results it produces.**
+- **Changing a view keeps the reader's place.** A period, window or sort switch updates only the
+  section it belongs to. The page doesn't jump, focus stays on the switch, and the URL still
+  records the choice, so Back, reload and shared links behave as today. Without JS the switch
+  is still a link, and it lands on its section rather than the top of the page.
+- **Out of scope:** new `portfolio` endpoints, schema changes, and changes to which figures
+  exist. The screen-layout chunk's decision to keep all ten columns on `/portfolio` stands.
+
+## Constraints that apply to every task
+
+- **Brand.** Colours, type and shape come only from `brand/tokens.css` custom properties;
+  `test_templates.py` enforces this. Gold is the only accent. Forest and oxblood mean gains and
+  losses, nothing else. Every number and every ticker is in `--font-mono`. Copy follows
+  chapter IV of `brand/brand-charter.html`.
+- **CSP stays `script-src 'self'`.** No inline executable script, no CDN. Server data reaches JS
+  through a `<script type="application/json">` data island.
+- **Progressive enhancement.** Every page and form works without JS. A `<details>` disclosure
+  needs no JS, so it counts as a no-JS solution.
+- **DOM order is reading order.** Layout uses CSS, never reordered markup.
+- **Phone layout doesn't regress.** Tables still stack at 600px and below. No width in the
+  review set scrolls the page sideways.
+- **Tests first**, per `.claude/rules/testing.md`. CSS can't be asserted in a unit test, so
+  tests cover what is in the markup. Each task is also checked visually: run
+  `services/web/scripts/review_pages.py` at every width in both themes and look at the
+  screenshots. Screenshots stay local (gitignored).
+- **Docs in the same change.** Update `services/web/docs/architecture.md` when a route, module
+  or static asset with behaviour is added. Presentation decisions go in `ui-architecture.md`,
+  and page-specific ones in `risk-ui.md` or `labs-ui.md`. Routes are listed in `endpoints.md`.
+- **File size.** `web.css` and every doc stay under 64KB.
+
+## Status table
+
+| ID | Task | Depends on | Status |
+|----|------|-------------|--------|
+| UX-0 | [Roadmap housekeeping and baseline](#ux-0-roadmap-housekeeping-and-baseline) | — | done |
+| UX-1 | [Ticker name lookup and component](#ux-1-ticker-name-lookup-and-component) | UX-0 | ready |
+| UX-2 | [Ticker names in tables, text and forms](#ux-2-ticker-names-in-tables-text-and-forms) | UX-1 | blocked |
+| UX-3 | [Ticker names in charts](#ux-3-ticker-names-in-charts) | UX-1 | blocked |
+| UX-4 | [Quieter site header](#ux-4-quieter-site-header) | UX-0 | ready |
+| UX-5 | [One segmented control for switches](#ux-5-one-segmented-control-for-switches) | UX-0 | ready |
+| UX-6 | [Risk sub-pages and sub-nav](#ux-6-risk-sub-pages-and-sub-nav) | UX-0 | ready |
+| UX-7 | [Secondary detail behind disclosures](#ux-7-secondary-detail-behind-disclosures) | UX-6 | blocked |
+| UX-8 | [Labs: mix editor first](#ux-8-labs-mix-editor-first) | UX-0 | ready |
+| UX-9 | [Copy density pass](#ux-9-copy-density-pass) | UX-6, UX-7, UX-8 | blocked |
+| UX-10 | [Period switches without a page reload](#ux-10-period-switches-without-a-page-reload) | UX-0 | ready |
+| UX-11 | [Forms beside the list they add to](#ux-11-forms-beside-the-list-they-add-to) | UX-0 | ready |
+
+## Tasks
+
+### UX-0. Roadmap housekeeping and baseline
+
+**Status:** done
+
+- Ask the user whether this thread takes over the archived Deferred item "Forms beside the list
+  they add to". If it does, add it to [Deferred](#deferred).
+- Regenerate the screenshots with `review_pages.py` before any change. They are the baseline
+  that later tasks are compared against. This matters most for Risk, Labs, Portfolio, Overview
+  and the header.
+
+Done as:
+- Forms beside the list: taken on as a task, [UX-11](#ux-11-forms-beside-the-list-they-add-to),
+  rather than a Deferred item.
+- Baseline: written to `services/web/screenshots/baseline/` (gitignored), apart from the usual
+  `screenshots/` folder, so later runs don't overwrite it. 820 screenshots (every page state,
+  both themes, five widths); all 820 passed the script's checks, so the baseline starts clean.
+
+### UX-1. Ticker name lookup and component
+
+**Status:** ready
+
+This task builds the foundation that UX-2 and UX-3 apply everywhere.
+
+- **Lookup.** A web helper takes the set of tickers a page shows and returns
+  `{ticker: display_name}` from one `list_tracked_tickers(tickers=[...])` call. It leaves out a
+  name equal to its ticker, since that adds nothing.
+- **Failure isolation.** If the lookup fails, the page renders with bare tickers, not an error
+  page. A missing name is cosmetic.
+- **Component.** A Jinja macro in `partials/_ticker.html`, built like `partials/_term.html`. It
+  renders the ticker in mono inside a focusable element. A CSS tooltip with the full name shows
+  on `:hover` and `:focus-visible`. A tap focuses the element, so touch gets the same tooltip.
+  The name is also in the accessible text, so a screen reader reads "VWCE.DE, Vanguard FTSE
+  All-World".
+- **No name, no tooltip.** A ticker with no known name, such as an untracked symbol or an
+  ISIN-only row, renders as plain text with no empty tooltip.
+- **Tooltip placement.** The tooltip stays inside the viewport at phone width and doesn't push
+  table columns wider.
+
+Tests: macro output with and without a name. The helper returns names, drops names equal to
+their ticker, and returns an empty map when the client raises.
+
+Files: new helper module under `services/web/src/web/`, `templates/partials/_ticker.html`,
+`static/web.css`, `docs/architecture.md`, `docs/ui-architecture.md`.
+
+### UX-2. Ticker names in tables, text and forms
+
+**Status:** blocked
+
+Apply the UX-1 component at every place a template prints a ticker. A grep for `.ticker }}` in
+`templates/` finds them. They include:
+
+- holdings on `/portfolio` and account holdings
+- transactions and the Tickers list
+- Labs tables, "Not backtested" and "Left out"
+- Risk tables, regime tables, what-if, ranking and look-through funds
+
+Pickers can't hold the tooltip, so they show the name in the option itself:
+
+- **The benchmark picker** shows options as `VWCE.DE — Vanguard FTSE All-World`.
+- **The Labs mix inputs** suggest tickers the same way. The value submitted is still the bare
+  ticker.
+
+Each route gathers its page's tickers and passes `ticker_names`.
+
+Tests: for every page that shows a ticker, a fake client with names makes the page render them.
+A page whose name lookup fails still renders.
+
+### UX-3. Ticker names in charts
+
+**Status:** blocked
+
+- Each chart's data island carries `ticker_names`.
+- Chart legends and hover tooltips label a series "TICKER — Name". This covers
+  `labs_chart.js`, `labs_drawdown_chart.js`, `risk_rolling_chart.js` and
+  `holdings_breakdown.js`.
+- The Labs "Assets on the chart" checkboxes use the `_ticker` component.
+
+Tests: the data islands contain the names. Check chart labels visually with `review_pages.py`.
+
+### UX-4. Quieter site header
+
+**Status:** ready
+
+- **Main nav** keeps only the sections: Overview, Portfolio, Labs, Risk, Accounts, Tickers.
+- **Account menu.** The user's name becomes a `<details>` menu, which works without JS. It
+  holds Admin (admins only), the Light/Dark/System theme switch and Log out. The theme form's
+  plain POST and its htmx swap keep working.
+- **Phone width.** Nav and menu fit without sideways scroll.
+
+Tests: `aria-current` still marks the current section. The menu lists Admin only for admins. The
+theme form posts as before.
+
+Files: `templates/base.html`, `static/web.css`, `static/theme.js` if needed,
+`docs/ui-architecture.md`.
+
+### UX-5. One segmented control for switches
+
+**Status:** ready
+
+- **One component.** A partial and its CSS replace the underlined-link switches: series and
+  period on Overview, Portfolio and account holdings; growth period and window on Labs; and the
+  same on Risk.
+- **It reads as a control.** It shows a clear selected state that doesn't rely on colour alone.
+  The selected option carries `aria-current` (for links) or `aria-pressed` (for buttons).
+- **No-JS behaviour.** Options stay links or form buttons, so they work without JS as they do
+  today.
+
+Tests: each page renders the component, with exactly one option selected that matches the query
+parameter.
+
+### UX-6. Risk sub-pages and sub-nav
+
+**Status:** ready
+
+Split `/risk` into four routes, each loading only its own data:
+
+| Route | Contents |
+|-------|----------|
+| `/risk` | Ex-post: invested assets |
+| `/risk/ex-ante` | Ex-ante: constant weights |
+| `/risk/what-if` | What-if: adding a candidate, and ranking the tracked tickers |
+| `/risk/concentration` | Concentration: look-through |
+
+- **Sub-nav.** A partial modelled on `partials/_account_header.html` heads every sub-page and
+  marks the current one with `aria-current`.
+- **Split along existing seams.** `api/risk.py` already loads each section on its own, with its
+  own error notice, so the split follows those seams. The risk template splits per sub-page;
+  shared macros move to partials.
+- **Benchmark choice.** The chosen benchmark carries across sub-pages in the sub-nav links.
+- **Old links.** Links to the old in-page section anchors land on the matching sub-page.
+
+Tests: each route renders only its section and calls only its own client methods. Sub-nav
+marking is correct. A section failure shows its notice on its own sub-page. The benchmark
+parameter survives navigation.
+
+Files: `api/risk.py`, `api/routes.py`, `templates/risk*.html`, new sub-nav partial,
+`docs/endpoints.md`, `docs/architecture.md`, `docs/risk-ui.md`.
+
+### UX-7. Secondary detail behind disclosures
+
+**Status:** blocked
+
+Each Risk sub-page keeps its headline table open. Secondary detail moves into `<details>`
+blocks, each with a one-line summary that names what is inside, such as "Rolling volatility ·
+1Y window". That covers:
+
+- rolling charts
+- market regimes
+- legend footnotes
+- the "Left out" and "Not ranked" lists
+
+The rules:
+
+- The disclosure's summary gives the count where there is one, such as "Left out ·
+  2 holdings".
+- A chart that is drawn while closed must size correctly when opened. Check
+  `risk_rolling_chart.js`.
+- Labs gets the same treatment for "Not backtested" and "Left out".
+
+Tests: each moved block renders inside a `<details>` with its summary and count. Nothing that
+renders today is dropped.
+
+### UX-8. Labs: mix editor first
+
+**Status:** ready
+
+- **Editor first.** "Edit the mix" moves to the top of `/labs`, right after the intro. On wide
+  screens it is a compact card beside the returns table; on narrower ones it sits above it.
+- **Results order.** Results follow as: returns table, then growth chart, then drawdown. The
+  risk and window tables go behind a disclosure, per UX-7.
+- **Editor behaviour.** Update, Add another asset and Reset behave as today. The running total
+  stays next to the inputs.
+
+Tests: in DOM order the form comes before the results. Form behaviour tests stay green.
+
+Files: `templates/labs.html`, `static/web.css`, `docs/labs-ui.md`.
+
+### UX-9. Copy density pass
+
+**Status:** blocked
+
+Done last, once the structure has settled.
+
+- **Intros.** Every page and section intro becomes one plain sentence plus its glossary link.
+  Longer method notes move to the glossary.
+- **Repeated notes.** Notes like "Hover a figure for its window…" and as-of lines that repeat
+  within a page appear once per page.
+- **Voice.** Copy follows chapter IV of the brand charter.
+
+Tests: page tests that assert copy are updated. Glossary links still land (existing tests).
+
+### UX-10. Period switches without a page reload
+
+**Status:** ready
+
+**Scope.** These switches reload the whole page today:
+
+| Page | Switch |
+|------|--------|
+| Labs | Growth period (it drives both the growth and drawdown charts) |
+| Labs | Risk comparison window |
+| Risk | Ex-ante window |
+| Risk | Exclude and Include ticker links |
+| Risk | Ranking sort (volatility or diversification ratio) |
+
+The returns chart on Portfolio, Overview and account holdings already switches in the browser
+(`static/portfolio_chart.js`). It is out of scope.
+
+The page jumps for two reasons. Each switch is a plain link built server-side (for example
+`_period_links` in `api/labs.py`). Each chart script draws once, on `DOMContentLoaded`
+(`labs_chart.js`, `labs_drawdown_chart.js`, `risk_rolling_chart.js`).
+
+The approach:
+
+1. **Swap one section, not the whole page.** Every switch above sits inside a region with a
+   stable `id`: the Labs growth-and-drawdown block, the Labs comparison block, the ex-ante
+   block and the ranking block. Each link gets these htmx attributes:
+   - `hx-get` (same URL as `href`)
+   - `hx-target` and `hx-select` (its region's `id`)
+   - `hx-swap="outerHTML show:none"`
+   - `hx-push-url="true"`
+
+   htmx is already vendored and used for forms. With `hx-push-url` the address bar keeps the
+   chosen period, so reload, Back and a shared link still show it.
+2. **Server sends only the region on an htmx request.** If the request has `HX-Request` and
+   `HX-Target`, the route renders only that region's partial. This uses the existing
+   `api/htmx.py` `is_htmx`. Otherwise the route renders the full page as today. The server
+   does the same work as today; it only sends less back. Moving the regions into partials is a
+   preparatory refactor, done first.
+3. **Charts redraw after a swap.** Each chart script gets an init function. It runs on
+   `DOMContentLoaded` and again on `htmx:afterSettle` for charts inside the swapped region.
+   Before drawing it destroys any `Chart` already on that canvas (`Chart.getChart`).
+   `chart_theme.js` still applies.
+4. **Feedback and focus.**
+   - **Loading.** While the request runs, the region gets `aria-busy="true"` and is visibly
+     dimmed, using htmx's `htmx-request` class and a tokens-only style. The switch is disabled
+     to stop double clicks.
+   - **Focus.** After the swap, focus returns to the newly selected switch.
+   - **Screen readers.** A polite live region says what changed, such as "Growth over 5Y".
+5. **Errors stay in the section.** If the request fails, the section shows the existing error
+   banner (`htmx-error-swap.js`) and the rest of the page stays as it was.
+6. **No-JS fallback.** Every `href` gains its region's `#anchor`, as `benchmark_form` already
+   does with `anchor=`. Without JS, a click reloads the page but lands on its section, not the
+   top.
+
+**Coordination.**
+- UX-5's segmented control must carry these attributes, whichever task lands first.
+- UX-6 moves the ex-ante and ranking blocks to their own sub-pages. The region ids move with
+  them unchanged.
+- UX-8 reorders Labs. The regions stay self-contained, so the order doesn't matter to them.
+
+**Tests:**
+- An htmx request (`HX-Request` and `HX-Target` headers) returns only the region, with the right
+  period selected.
+- A plain request returns the full page.
+- Every switch's `href` ends with its region's anchor and its `hx-*` attributes match it.
+- An error in an htmx request returns the section's error markup, not an error page.
+- In the browser, with `review_pages.py` or by hand:
+  - after a switch the scroll position is unchanged
+  - the charts are redrawn
+  - Back restores the previous period
+
+**Files:**
+- `api/labs.py` and `api/risk.py`
+- new region partials under `templates/partials/`
+- `templates/labs.html` and `templates/risk.html`
+- `static/labs_chart.js`, `static/labs_drawdown_chart.js` and `static/risk_rolling_chart.js`
+- `static/web.css`
+- `docs/ui-architecture.md` (partial-swap pattern), `docs/labs-ui.md` and `docs/risk-ui.md`
+- `docs/architecture.md`, because routes now return partials
+
+### UX-11. Forms beside the list they add to
+
+**Status:** ready
+
+This item was carried over from the screen-layout chunk's Deferred list, where it was left out
+by choice. It is taken on here because of UX-0. Today every form keeps its narrow card. On a
+wide screen, a form ends up below or away from the list it changes, so the reader can't see
+both at once.
+
+| Page | Today | On wide screens |
+|------|-------|-----------------|
+| Admin mappings | "Add or change a mapping" sits below the two full-width tables | The form sits beside "Waiting for a mapping" and the mappings table |
+| Accounts | The list and the form share one narrow card | The list and the form are two cards side by side |
+| Add transaction | A page of its own; the list is on the Transactions tab | The account's recent transactions sit beside the form |
+| Add a ticker | A page of its own; the list is on `/tickers` | The user's tracked tickers, with status, sit beside the lookup |
+
+- **Reuse the `.split` grid** in `static/web.css`, which the holdings pages already use. The
+  form card keeps its form-tier width, and the list takes the rest. Below the split breakpoint,
+  the cards stack as they do today.
+- **The extra lists come from existing client methods**: the transactions list and
+  `list_tracked_tickers`. No new `portfolio` endpoint. Each list loads on its own, so if it
+  fails, the form still works and the list shows a notice in its place.
+- **Reading order is an assumption to confirm when the task starts.** On Accounts and Admin
+  mappings, the list comes first in the DOM: it is what the page is for, and the form changes
+  it. On Add transaction and Add a ticker, the form comes first: the page is for the form, and
+  the list is context. Stacked on a phone, the cards follow the same order.
+- **After a successful add, the new row appears in the list beside the form.** This is a
+  redirect back to the same page, as today, unless the htmx form swap already covers it.
+
+Tests:
+- Each page renders the form and the list inside the split container, in the agreed order.
+- A failure loading the side list keeps the form and shows the notice.
+- Form behaviour tests stay green.
+
+Visual check with `review_pages.py`:
+- no sideways scroll
+- no `.table-scroll` box that scrolls while two columns show
+
+Files:
+- `templates/accounts.html`, `templates/admin_mappings.html`, `templates/transactions_new.html`
+  and `templates/tickers_new.html`
+- their routes in `api/`
+- `static/web.css`
+- `docs/ui-architecture.md`, whose "forms keep their narrow cards" statement is rewritten
+- `scripts/review_pages.py`, to add page states if needed
+
+## Deferred
+
+- **Names for tickers data-store doesn't track**, such as an unmapped ISIN. These need a
+  data-store lookup that doesn't exist yet. Until then they render bare (UX-1).
