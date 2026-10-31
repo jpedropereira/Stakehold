@@ -1,0 +1,14 @@
+{# A ticker, with its full name in a tooltip that shows on hover, focus and tap (UX-1). `names` is
+   the page's {ticker: display_name} map from ticker_names.load_names. The name is always in the
+   markup, clipped until shown, so a screen reader reads "VWCE.DE, Vanguard FTSE All-World". A
+   ticker with no name is plain mono text: no tab stop, no empty tooltip. focusable=false is for
+   a ticker inside a link, button or label, which is already focusable and opens the tooltip
+   itself. #}
+{% macro ticker(symbol, names, focusable=true) -%}
+{%- set name = names.get(symbol) if names else none -%}
+{%- if name -%}
+<span class="ticker"{% if focusable %} tabindex="0"{% endif %}><span class="mono">{{ symbol }}</span><span class="ticker-name"><span class="visually-hidden">, </span>{{ name }}</span></span>
+{%- else -%}
+<span class="mono">{{ symbol }}</span>
+{%- endif -%}
+{%- endmacro %}

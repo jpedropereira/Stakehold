@@ -500,6 +500,33 @@ described here updates this file in the same change.
   three copies to keep in step. *Known cost:* an anchor renamed in `glossary.html` breaks its
   links silently in a browser. Each page's tests fetch `/glossary` and check every link lands
   on an entry.
+- **Ticker names (UX-1): a tooltip that is also text.** A bare `VWCE.DE` doesn't tell everyone
+  what it is. The `ticker` macro (`partials/_ticker.html`) takes the page's name map from
+  `ticker_names.load_names`. The name sits in the markup after the ticker, clipped like
+  `.visually-hidden` until shown, so a screen reader reads "VWCE.DE, Vanguard FTSE All-World"
+  without opening anything.
+  - **Opening it.** It opens on hover and on `:focus`, not `:focus-visible`: a tap focuses the
+    ticker without matching `:focus-visible`, and the tap is how touch opens it. The focus ring
+    stays on `:focus-visible`. `ticker_tooltip.js` lets Escape close it in place (WCAG 1.4.13);
+    without JS, moving away closes it.
+  - **No name.** A ticker without one (untracked, ISIN-only, or the lookup failed) is plain mono
+    text, with no tab stop and no empty tooltip.
+  - **Inside a link, button or label.** `focusable=false` drops the ticker's own tab stop there,
+    since a nested one is invalid. The host's hover and focus open the tooltip instead.
+  - **Positioning.** Most ticker tables sit in a `.table-scroll` box, which clips anything
+    absolutely positioned inside it. So the open tooltip is `position: fixed`, anchored to its
+    ticker with CSS anchor positioning (Baseline since January 2026), and flips to whichever
+    side keeps it on screen. It is out of flow, so it never widens a column. Only the open
+    ticker carries the anchor name; one name shared by every ticker would anchor each tooltip
+    to the last one. The tooltip uses the page colour (`--surface`), so it stands off the card
+    its ticker sits on.
+  - *Rejected: `title` tooltips*, for the glossary's reasons. *Rejected: a plain absolute
+    tooltip*, clipped by `.table-scroll`.
+  - *Known costs:*
+    - Every named ticker is a tab stop.
+    - A browser without anchor positioning falls back to the absolute tooltip, which those
+      boxes clip.
+    - With one ticker hovered and another focused, only one tooltip anchors correctly.
 - **Labs (LB-6 to LB-10, RK-9)** has its own file, [`labs-ui.md`](labs-ui.md): the period
   table, the mix form, the growth chart, and the risk panel and drawdown chart.
 - **Display formatting (UI-5) is one fixed convention, applied by Jinja filters from a pure
