@@ -89,9 +89,9 @@ Earlier chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archive/):
 | ID | Task | Depends on | Status |
 |----|------|-------------|--------|
 | UX-0 | [Roadmap housekeeping and baseline](#ux-0-roadmap-housekeeping-and-baseline) | — | done |
-| UX-1 | [Ticker name lookup and component](#ux-1-ticker-name-lookup-and-component) | UX-0 | ready |
-| UX-2 | [Ticker names in tables, text and forms](#ux-2-ticker-names-in-tables-text-and-forms) | UX-1 | blocked |
-| UX-3 | [Ticker names in charts](#ux-3-ticker-names-in-charts) | UX-1 | blocked |
+| UX-1 | [Ticker name lookup and component](#ux-1-ticker-name-lookup-and-component) | UX-0 | done |
+| UX-2 | [Ticker names in tables, text and forms](#ux-2-ticker-names-in-tables-text-and-forms) | UX-1 | ready |
+| UX-3 | [Ticker names in charts](#ux-3-ticker-names-in-charts) | UX-1 | ready |
 | UX-4 | [Quieter site header](#ux-4-quieter-site-header) | UX-0 | ready |
 | UX-5 | [One segmented control for switches](#ux-5-one-segmented-control-for-switches) | UX-0 | ready |
 | UX-6 | [Risk sub-pages and sub-nav](#ux-6-risk-sub-pages-and-sub-nav) | UX-0 | ready |
@@ -122,7 +122,7 @@ Done as:
 
 ### UX-1. Ticker name lookup and component
 
-**Status:** ready
+**Status:** done
 
 This task builds the foundation that UX-2 and UX-3 apply everywhere.
 
@@ -147,9 +147,32 @@ their ticker, and returns an empty map when the client raises.
 Files: new helper module under `services/web/src/web/`, `templates/partials/_ticker.html`,
 `static/web.css`, `docs/architecture.md`, `docs/ui-architecture.md`.
 
+Done as:
+- **Helper.** `ticker_names.load_names(client, tickers)`, modelled on
+  `ticker_status.load_statuses`. It also drops empty names. It catches only
+  `PortfolioClientError`, so a bug in web still surfaces.
+- **Macro.** `ticker(symbol, names, focusable=true)`. Use `focusable=false` for a ticker inside
+  a link, button or label, where a nested tab stop is invalid; the host opens the tooltip.
+  UX-2/UX-3 call sites that need it: `/portfolio`'s `ticker-toggle` button, the Risk
+  "Exclude/Include TICKER" links and the Labs "Assets on the chart" labels.
+- **Tooltip escapes scroll boxes.** Most ticker tables sit in a `.table-scroll` box, which
+  clips an absolute tooltip. So the open tooltip is `position: fixed` and uses CSS anchor
+  positioning, flipping to stay on screen. Browsers without anchor positioning fall back to
+  the absolute tooltip.
+- **Opens on `:focus`, not `:focus-visible`.** A tap doesn't match `:focus-visible`.
+- **Escape closes it.** `static/ticker_tooltip.js` handles Escape (WCAG 1.4.13).
+- **Checked visually.** The macro was wired into the Labs returns table and checkbox labels
+  temporarily, then reverted. At 360px and 1280px in both themes:
+  - hover, tap, focus and the label host open it
+  - it stays inside the viewport and isn't clipped by `.table-scroll`
+  - it doesn't widen its cell
+  - Escape closes it
+- **For UX-2.** The holdings pages already call `load_statuses`. Adding `load_names` makes a
+  second `list_tracked_tickers` call unless the two share one fetch.
+
 ### UX-2. Ticker names in tables, text and forms
 
-**Status:** blocked
+**Status:** ready
 
 Apply the UX-1 component at every place a template prints a ticker. A grep for `.ticker }}` in
 `templates/` finds them. They include:
@@ -172,7 +195,7 @@ A page whose name lookup fails still renders.
 
 ### UX-3. Ticker names in charts
 
-**Status:** blocked
+**Status:** ready
 
 - Each chart's data island carries `ticker_names`.
 - Chart legends and hover tooltips label a series "TICKER — Name". This covers

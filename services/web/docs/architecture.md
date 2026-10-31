@@ -588,6 +588,9 @@ Every route `web` serves, with what it requires and which upstream calls it make
 - `ticker_status.py` (TK-8/TK-9) — how a tracked ticker's status reads (labels, a holding's
   price note) and the degrading status lookup the portfolio page uses. Its own module so
   `api/holdings.py` and `api/tickers.py` share it without importing each other.
+- `ticker_names.py` (UX-1) — `load_names`, a page's `{ticker: display_name}` for the `ticker`
+  macro, from one `list_tracked_tickers` call. A failure returns `{}`: a name is cosmetic, so the
+  page shows bare tickers rather than an error.
 - `static_assets.py` — `make_asset_url`, the content-versioned `/static` and `/brand` URLs
   behind the `asset_url` Jinja global that `app.py` registers (see "Asset URLs are versioned by
   content" above). It needs no upstream client.
@@ -614,6 +617,7 @@ Every route `web` serves, with what it requires and which upstream calls it make
   target; `partials/_banner.html`, the message macro, and `partials/_logo.html`, the two-logo
   pair (UI-12); `partials/_account_header.html`, included by the four account-scoped pages;
   `partials/_delta.html`, the gain/loss-colored figure macro shared by home and portfolio;
+  `partials/_ticker.html` (UX-1), a ticker with its full name in a tooltip;
   `partials/_delete_dialog.html`, the confirmation dialog macro, and
   `partials/_transaction_summary.html` and `partials/_account_summary.html`, the one line
   naming what a delete takes, which a dialog and its confirmation page
@@ -624,7 +628,7 @@ Every route `web` serves, with what it requires and which upstream calls it make
   `labs_chart.js` (LB-8, the Labs growth chart), `labs_drawdown_chart.js` (RK-9, the mix's
   drawdown under it; both take `formatPct` from `chart_theme.js`), `risk_rolling_chart.js`
   (RK-25, every `/risk` rolling chart, from its data island), `theme.js` (UI-3, applies a theme
-  switch in place), `transaction_form.js` (UI-9, shows the manual-entry fields the chosen type
+  switch in place), `ticker_tooltip.js` (UX-1, Escape closes a ticker's name tooltip), `transaction_form.js` (UI-9, shows the manual-entry fields the chosen type
   and currency need), `password_toggle.js` (UI-12), `confirm_dialog.js` (opens a delete's
   confirmation as a dialog in place of its page), and `holdings_breakdown.js` (shows and hides a
   `/portfolio` holding's per-account breakdown from its ticker), and `labs_form.js` (LB-7, adds
