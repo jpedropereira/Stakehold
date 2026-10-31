@@ -7,6 +7,7 @@ test_portfolio_page.py, it carries its own minimal fakes: only the calls this on
 import re
 from datetime import datetime, timezone
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -44,6 +45,9 @@ class FakePortfolioClient:
         self.list_accounts_error: Exception | None = None
         self.list_transactions_result: list[Transaction] = []
         self.list_transactions_error: Exception | None = None
+        # {ticker: display_name} for tickers data-store tracks (UX-2).
+        self.tracked_names: dict[str, str] = {}
+        self.list_tracked_tickers_error: Exception | None = None
         self.calls: list[tuple] = []
 
     async def list_accounts(self, *, user_id):
@@ -56,6 +60,15 @@ class FakePortfolioClient:
         if self.list_transactions_error:
             raise self.list_transactions_error
         return self.list_transactions_result
+
+    async def list_tracked_tickers(self, *, requested_by=None, statuses=None, tickers=None):
+        self.calls.append(("list_tracked_tickers", tuple(tickers or ())))
+        if self.list_tracked_tickers_error:
+            raise self.list_tracked_tickers_error
+        return [
+            SimpleNamespace(ticker=ticker, display_name=name, status="ready")
+            for ticker, name in self.tracked_names.items()
+        ]
 
 
 def _settings() -> Settings:
@@ -286,6 +299,53 @@ def test_transactions_page_names_a_non_ticker_instrument_by_its_kind(client):
     [row] = _rows(_get(test_client).text)
 
     assert _cells(row)[2] == "ISIN IE00BK5BQT80"
+
+
+def test_transactions_page_names_a_ticker(client):
+    """UX-2: a TICKER row's instrument carries its name, in the ticker tooltip."""
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.list_transactions_result = [_buy()]
+    fake_portfolio.tracked_names = {"VWCE.DE": "Vanguard FTSE All-World"}
+
+    html = _get(test_client).text
+
+    assert (
+        '<td role="cell" data-label="Instrument"><span class="ticker" tabindex="0">'
+        '<span class="mono">VWCE.DE</span><span class="ticker-name">'
+    ) in html
+    assert "Vanguard FTSE All-World" in html
+    assert fake_portfolio.calls.count(("list_tracked_tickers", ())) == 1
+
+
+def test_transactions_page_gives_an_isin_no_name(client):
+    """A name belongs to a ticker; an ISIN that happens to match one is still an ISIN."""
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.list_transactions_result = [
+        _buy(instrument_identifier="IE00BK5BQT80", instrument_identifier_kind="ISIN")
+    ]
+    fake_portfolio.tracked_names = {"IE00BK5BQT80": "Vanguard FTSE All-World"}
+
+    html = _get(test_client).text
+
+    assert "Vanguard FTSE All-World" not in html
+    assert not [c for c in fake_portfolio.calls if c[0] == "list_tracked_tickers"]
+
+
+def test_transactions_page_renders_bare_tickers_when_names_are_unavailable(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.list_transactions_result = [_buy()]
+    fake_portfolio.tracked_names = {"VWCE.DE": "Vanguard FTSE All-World"}
+    fake_portfolio.list_tracked_tickers_error = PortfolioUnavailable("down")
+
+    response = _get(test_client)
+
+    assert response.status_code == 200
+    [row] = _rows(response.text)
+    assert _cells(row)[2] == "VWCE.DE"
+    assert "Vanguard FTSE All-World" not in response.text
 
 
 def test_transactions_page_type_is_a_neutral_badge(client):

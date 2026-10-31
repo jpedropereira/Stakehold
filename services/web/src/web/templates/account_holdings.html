@@ -3,6 +3,7 @@
 {% block title %}Portfolio — {{ account_label }} — Stakehold{% endblock %}
 {% from "partials/_delta.html" import delta %}
 {% from "partials/_term.html" import term %}
+{% from "partials/_ticker.html" import ticker %}
 {% from "partials/_returns_chart.html" import returns_chart %}
 {% set freshness = "Prices update daily; returns are recalculated a few times a day." %}
 {% block content %}
@@ -60,7 +61,7 @@
     <tbody role="rowgroup">
       {% for holding in holdings %}
       <tr role="row">
-        <td role="cell"><span class="mono">{{ holding.canonical_ticker }}</span></td>
+        <td role="cell">{{ ticker(holding.canonical_ticker, ticker_names) }}</td>
         <td class="num" role="cell" data-label="Quantity"><span class="mono">{{ holding.quantity | qty }}</span></td>
         <td class="num" role="cell" data-label="Avg cost"><span class="mono">{{ holding.average_cost_eur | money }}</span></td>
         {% if prices_known and holding.awaiting_prices %}

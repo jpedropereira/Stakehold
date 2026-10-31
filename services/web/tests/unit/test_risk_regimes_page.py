@@ -6,10 +6,12 @@ Like test_risk_page.py, it carries its own minimal fakes: only the calls this on
 """
 
 import logging
+import re
 from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 from html import unescape
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -274,6 +276,18 @@ class FakePortfolioClient:
     async def list_tickers(self):
         return ["IWDA.AS", "VWCE.DE"]
 
+    # {ticker: display_name} for tickers data-store tracks (UX-2); a test sets its own.
+    tracked_names: dict[str, str] = {}
+    tracked_error: Exception | None = None
+
+    async def list_tracked_tickers(self, *, requested_by=None, statuses=None, tickers=None):
+        if self.tracked_error:
+            raise self.tracked_error
+        return [
+            SimpleNamespace(ticker=ticker, display_name=name, status="ready")
+            for ticker, name in self.tracked_names.items()
+        ]
+
     async def ex_post_risk(self, *, user_id, benchmark):
         if self.ex_post_error:
             raise self.ex_post_error
@@ -509,3 +523,21 @@ def test_each_dimension_is_a_closed_group_naming_its_count(client):
     assert 'Events <span class="mono">1</span> regime</summary>' in block
     # The legend stays outside the groups, so it shows while they are closed.
     assert block.rindex("</details>") < block.index('class="risk-legend"')
+
+
+# --- ticker names (UX-2) ---
+
+
+def test_the_regime_tables_name_the_benchmark(client):
+    test_client, fake = client
+    fake.tracked_names = {"VWCE.DE": "Vanguard FTSE All-World"}
+
+    block = _block(test_client.get("/risk").text, "risk-ex-post-regimes")
+
+    note = re.search(r'<p class="labs-note">How .*?</p>', block, re.S).group(0)
+    assert '<span class="ticker" tabindex="0"><span class="mono">VWCE.DE</span>' in note
+    assert "Vanguard FTSE All-World" in note
+    header = re.search(r'<th class="num"[^>]*>(?:(?!</th>).)*VWCE\.DE.*?</th>', block, re.S)
+    assert "Vanguard FTSE All-World" in header.group(0)
+    # The table's accessible name stays plain text: markup can't go in an attribute.
+    assert re.search(r'aria-label="[^"]*: your holdings and VWCE\.DE"', block)

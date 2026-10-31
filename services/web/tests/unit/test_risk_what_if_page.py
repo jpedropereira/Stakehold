@@ -13,6 +13,7 @@ import re
 from dataclasses import replace
 from datetime import date
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -181,6 +182,18 @@ class FakePortfolioClient:
 
     async def list_tickers(self):
         return self.tickers
+
+    # {ticker: display_name} for tickers data-store tracks (UX-2); a test sets its own.
+    tracked_names: dict[str, str] = {}
+    tracked_error: Exception | None = None
+
+    async def list_tracked_tickers(self, *, requested_by=None, statuses=None, tickers=None):
+        if self.tracked_error:
+            raise self.tracked_error
+        return [
+            SimpleNamespace(ticker=ticker, display_name=name, status="ready")
+            for ticker, name in self.tracked_names.items()
+        ]
 
     async def ex_post_risk(self, *, user_id, benchmark):
         return ExPostRisk("ex-post · invested assets", None, None, False, BENCHMARK, (), ())
@@ -651,3 +664,57 @@ def test_logs_nothing_to_compare(client, caplog):
         "risk: what-if had nothing to compare: TSLA, the holding to replace, can't be measured."
         in _messages(caplog)
     )
+
+
+# --- ticker names (UX-2) ------------------------------------------------------------------------
+
+_NAMED = '<span class="ticker" tabindex="0"><span class="mono">{}</span>'
+
+
+def test_the_candidate_field_suggests_each_ticker_with_its_name(client):
+    """An option can't hold the tooltip, so it carries the name; the value stays the ticker."""
+    test_client, fake = client
+    fake.tracked_names = {"EGLN.L": "iShares Physical Gold"}
+
+    section = _get(test_client)
+
+    datalist = re.search(r'<datalist id="risk-what-if-options">(.*?)</datalist>', section, re.S)
+    assert '<option value="EGLN.L" label="EGLN.L — iShares Physical Gold">' in datalist[1]
+    assert '<option value="IWDA.AS">' in datalist[1]
+
+
+def test_the_candidate_and_its_funding_are_named(client):
+    test_client, fake = client
+    fake.what_if_result = _what_if(
+        candidate=replace(_CANDIDATE, weight=0.05, capped=True),
+        funding=WhatIfFunding("replace", "TSLA", None),
+        threshold=WhatIfThreshold(
+            False, "shown under pro-rata funding only", None, None, None, None, None
+        ),
+    )
+    fake.tracked_names = {"EGLN.L": "iShares Physical Gold", "TSLA": "Tesla, Inc."}
+
+    section = _get(test_client, "?candidate=EGLN.L&candidate_weight=10&funding=replace:TSLA")
+
+    header = re.search(r"<th[^>]*>After, with .*?</th>", section, re.S).group(0)
+    assert _NAMED.format("EGLN.L") in header and "iShares Physical Gold" in header
+    note = re.search(r"<p[^>]*>Replacing .*?</p>", section, re.S).group(0)
+    assert _NAMED.format("TSLA") in note and "Tesla, Inc." in note
+    assert _NAMED.format("EGLN.L") in note
+
+
+def test_a_holding_the_what_if_couldnt_measure_is_named(client):
+    test_client, fake = client
+    fake.what_if_result = _what_if(
+        statuses=(
+            BacktestAssetStatus("IWDA.AS", "included", None),
+            BacktestAssetStatus("AAPL", "included", None),
+            BacktestAssetStatus("TSLA", "no_fx_rate", "no FX series for USD"),
+        )
+    )
+    fake.tracked_names = {"TSLA": "Tesla, Inc."}
+
+    section = _get(test_client, WHAT_IF_QUERY)
+
+    item = re.search(r"<li>(?:(?!</li>).)*no FX series for USD.*?</li>", section, re.S).group(0)
+    assert _NAMED.format("TSLA") in item

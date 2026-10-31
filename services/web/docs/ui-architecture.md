@@ -527,6 +527,23 @@ described here updates this file in the same change.
     - A browser without anchor positioning falls back to the absolute tooltip, which those
       boxes clip.
     - With one ticker hovered and another focused, only one tooltip anchors correctly.
+  - **Where it applies (UX-2).** Every ticker a page prints in a table, a sentence or a heading:
+    holdings, transactions (a `TICKER` identifier only; an ISIN or broker symbol has no tracked
+    name), Labs and Risk. Labs' "Assets on the chart" labels and the charts are UX-3's.
+    - *Already named, left alone:* the Tickers list (its own Name column), and Risk's ranking
+      rows and their "Left out" list, which print the candidate's name beside it.
+    - *Not named:* a fund constituent such as `AAPL` inside an ETF. Only tracked tickers have a
+      `display_name`; look-through data has a constituent's name, but nothing reads it for this.
+    - *A sentence that repeats a ticker* names it at its first mention only, as in the regime
+      notes, since each named ticker is a tab stop. That kept /risk's tab walk in reach of
+      `review_pages.py`, whose cap went from 120 to 200 stops all the same.
+    - `aria-label`s keep the bare ticker: markup can't go in an attribute.
+  - **Pickers (UX-2).** A `<datalist>` option can't hold the tooltip, so `ticker_option` puts the
+    name in its `label`: `VWCE.DE — Vanguard FTSE All-World`. The value stays the bare ticker,
+    so that is what the form submits. The label repeats the ticker because Firefox shows only the
+    label, while Chromium and Safari show the value beside it. *Known cost:* Chromium shows the
+    ticker twice. Used by the Labs and Risk benchmark fields, the Labs mix inputs and the Risk
+    what-if candidate; the new-transaction and admin-mapping pickers stay bare.
 - **Labs (LB-6 to LB-10, RK-9)** has its own file, [`labs-ui.md`](labs-ui.md): the period
   table, the mix form, the growth chart, and the risk panel and drawdown chart.
 - **Display formatting (UI-5) is one fixed convention, applied by Jinja filters from a pure

@@ -456,7 +456,9 @@ _CHART_SIZE_JS = """
 }
 """
 
-_MAX_TABS = 120
+# Only a cap on the walk, not the trap check (that is _MAX_TABS_ON_ONE). /risk passed 120 once
+# UX-2 made each named ticker a tab stop; UX-6 splits it into sub-pages.
+_MAX_TABS = 200
 # A date/time input takes one Tab per part (day, month, year, hours, minutes...) without focus
 # leaving the element, so only this many Tabs in a row on one element count as stuck.
 _MAX_TABS_ON_ONE = 8

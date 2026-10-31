@@ -10,6 +10,7 @@ import re
 from dataclasses import replace
 from datetime import date
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -219,6 +220,18 @@ class FakePortfolioClient:
         if self.tickers_error:
             raise self.tickers_error
         return self.tickers
+
+    # {ticker: display_name} for tickers data-store tracks (UX-2); a test sets its own.
+    tracked_names: dict[str, str] = {}
+    tracked_error: Exception | None = None
+
+    async def list_tracked_tickers(self, *, requested_by=None, statuses=None, tickers=None):
+        if self.tracked_error:
+            raise self.tracked_error
+        return [
+            SimpleNamespace(ticker=ticker, display_name=name, status="ready")
+            for ticker, name in self.tracked_names.items()
+        ]
 
     async def ex_post_risk(self, *, user_id, benchmark):
         self.calls.append(("ex_post_risk", user_id, benchmark))
@@ -781,7 +794,20 @@ def test_the_field_suggests_the_tracked_tickers(client):
 
     assert 'list="risk-benchmark-options"' in form
     datalist = re.search(r'<datalist id="risk-benchmark-options">(.*?)</datalist>', form, re.S)[1]
-    assert re.findall(r'<option value="([^"]+)">', datalist) == ["IWDA.AS", "VWCE.DE"]
+    assert re.findall(r'<option value="([^"]+)"', datalist) == ["IWDA.AS", "VWCE.DE"]
+
+
+def test_the_field_suggests_each_ticker_with_its_name(client):
+    """UX-2: the name is in the option; the value submitted is still the bare ticker."""
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.tracked_names = {"VWCE.DE": "Vanguard FTSE All-World"}
+
+    form = _benchmark_form(_page(test_client))
+
+    datalist = re.search(r'<datalist id="risk-benchmark-options">(.*?)</datalist>', form, re.S)[1]
+    assert '<option value="VWCE.DE" label="VWCE.DE — Vanguard FTSE All-World">' in datalist
+    assert '<option value="IWDA.AS">' in datalist
 
 
 def test_a_failed_ticker_list_still_shows_the_field_and_the_figures(client):
@@ -1280,3 +1306,117 @@ def test_the_ex_ante_terms_link_to_the_glossary(client):
         "correlation-matrix",
         "fx-decomposition",
     } <= anchors
+
+
+# --- ticker names (UX-2) ------------------------------------------------------------------------
+
+_NAMED = '<span class="ticker" tabindex="0"><span class="mono">{}</span>'
+_NAMED_IN_HOST = '<span class="ticker"><span class="mono">{}</span>'
+
+
+def test_the_relative_group_names_the_benchmark(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.tracked_names = {"VWCE.DE": "Vanguard FTSE All-World"}
+
+    group = _relative_group(_page(test_client))
+
+    heading = re.search(r"<th[^>]*colspan.*?</th>", group, re.S).group(0)
+    assert _NAMED.format("VWCE.DE") in heading
+    assert "Vanguard FTSE All-World" in heading
+
+
+def test_a_holding_left_out_of_ex_post_is_named(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.ex_post = _risk(
+        excluded=(ExcludedHolding("7203.T", "no_fx_rate", "no FX series for JPY"),)
+    )
+    fake_portfolio.tracked_names = {"7203.T": "Toyota Motor Corp"}
+
+    html = _page(test_client)
+
+    item = re.search(r"<li>(?:(?!</li>).)*7203\.T.*?</li>", html, re.S).group(0)
+    assert _NAMED.format("7203.T") in item
+    assert "Toyota Motor Corp" in item and "no FX series for JPY" in item
+
+
+def test_the_decomposition_and_its_note_name_each_holding(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.tracked_names = {"TSLA": "Tesla, Inc."}
+
+    section = _ex_ante_html(_page(test_client))
+
+    table = re.search(r"<table[^>]*risk-decomposition.*?</table>", section, re.S).group(0)
+    header = re.search(r'<th role="rowheader"[^>]*>(?:(?!</th>).)*TSLA.*?</th>', table, re.S)
+    assert _NAMED.format("TSLA") in header.group(0)
+    assert "Tesla, Inc." in header.group(0)
+    note = re.search(r'<p class="risk-insight">.*?</p>', section, re.S).group(0)
+    assert _NAMED.format("TSLA") in note
+
+
+def test_the_exclude_link_hosts_the_tickers_name(client):
+    """A ticker inside a link has no tab stop of its own: the link opens the tooltip."""
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.ex_ante = _ex_ante(
+        window=ExAnteWindow("Max", date(2009, 9, 25), date(2015, 3, 6), END, ("TSLA",))
+    )
+    fake_portfolio.tracked_names = {"TSLA": "Tesla, Inc."}
+
+    section = _ex_ante_html(test_client.get("/risk?ex_ante_window=Max").text)
+
+    link = re.search(r"<a [^>]*exclude=TSLA[^>]*>.*?</a>", section, re.S).group(0)
+    assert f"Exclude {_NAMED_IN_HOST.format('TSLA')}" in link
+    assert "Tesla, Inc." in link
+
+
+def test_an_excluded_holding_is_named_and_its_include_link_hosts_the_name(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.ex_ante = _ex_ante(
+        statuses=(
+            BacktestAssetStatus("IWDA.AS", "included", None),
+            BacktestAssetStatus("AAPL", "included", None),
+            BacktestAssetStatus("TSLA", "excluded", "excluded by request"),
+        )
+    )
+    fake_portfolio.tracked_names = {"TSLA": "Tesla, Inc."}
+
+    section = _ex_ante_html(test_client.get("/risk?exclude=TSLA").text)
+
+    note = re.search(r"Excluded at your request:.*?</p>", section, re.S).group(0)
+    assert _NAMED.format("TSLA") in note
+    link = re.search(r"<a [^>]*>Include .*?</a>", note, re.S).group(0)
+    assert f"Include {_NAMED_IN_HOST.format('TSLA')}" in link
+
+
+def test_a_holding_left_out_of_ex_ante_is_named(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.ex_ante = _ex_ante(
+        statuses=(
+            BacktestAssetStatus("IWDA.AS", "included", None),
+            BacktestAssetStatus("AAPL", "included", None),
+            BacktestAssetStatus("TSLA", "no_fx_rate", "no FX series for USD"),
+        )
+    )
+    fake_portfolio.tracked_names = {"TSLA": "Tesla, Inc."}
+
+    section = _ex_ante_html(_page(test_client))
+
+    item = re.search(r"<li>(?:(?!</li>).)*no FX series for USD.*?</li>", section, re.S).group(0)
+    assert _NAMED.format("TSLA") in item
+
+
+def test_a_failed_name_lookup_leaves_risk_with_bare_tickers(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.tracked_names = {"TSLA": "Tesla, Inc.", "VWCE.DE": "Vanguard FTSE All-World"}
+    fake_portfolio.tracked_error = PortfolioUnavailable("down")
+
+    html = _page(test_client)
+
+    assert "Tesla, Inc." not in html and "Vanguard FTSE All-World" not in html
+    assert '<span class="mono">TSLA</span>' in _ex_ante_html(html)

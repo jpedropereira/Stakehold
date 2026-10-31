@@ -4,6 +4,7 @@
 {% from "partials/_benchmark_field.html" import benchmark_form %}
 {% from "partials/_rolling_charts.html" import rolling_block, pair_block %}
 {% from "partials/_regime_table.html" import regime_block %}
+{% from "partials/_ticker.html" import ticker, ticker_list, ticker_option %}
 {% block title %}Risk — Stakehold{% endblock %}
 {# One figure, formatted by its row's kind (risk_view.SUMMARY_ROWS): only a return is coloured as a gain
    or a loss, to 1 decimal like the Labs risk panel's CAGR (RK-9). #}
@@ -126,7 +127,7 @@
     {% call banner("warning") %}<strong>No risk-free rate.</strong> Without it, downside deviation, Sharpe and Sortino can't be measured, so they're greyed.{% endcall %}
     {% endif %}
     <p class="as-of">Measured from <span class="mono">{{ ex_post.base_date | date }}</span> to <span class="mono">{{ ex_post.end_date | date }}</span>. Hover a figure for its window and number of returns.</p>
-    {{ benchmark_form("/risk", "risk", benchmark, benchmark_error, tickers, tickers_notice, kept=benchmark_kept) }}
+    {{ benchmark_form("/risk", "risk", benchmark, benchmark_error, tickers, tickers_notice, ticker_names, kept=benchmark_kept) }}
     {# Measures down, windows across. Stacks at phone width like the Labs table (web.css,
        .stack-table), each figure labelled with its window; between that and the width its six
        columns fit, it scrolls in its own focusable box. #}
@@ -150,7 +151,7 @@
       {% set bench = ex_post.benchmark %}
       <tbody role="rowgroup">
         <tr role="row" class="risk-group">
-          <th role="columnheader" scope="colgroup" colspan="{{ ex_post.columns | length + 1 }}">Against <span class="mono">{{ bench.ticker }}</span>{% if not bench.available %}: unavailable, {{ bench.reason }}{% elif bench.first_date %}, history from <span class="mono">{{ bench.first_date | date }}</span>{% endif %}</th>
+          <th role="columnheader" scope="colgroup" colspan="{{ ex_post.columns | length + 1 }}">Against {{ ticker(bench.ticker, ticker_names) }}{% if not bench.available %}: unavailable, {{ bench.reason }}{% elif bench.first_date %}, history from <span class="mono">{{ bench.first_date | date }}</span>{% endif %}</th>
         </tr>
         {% for row in ex_post.relative_rows %}
         {{ summary_row(row, ex_post.columns) }}
@@ -166,12 +167,12 @@
     </ol>
     {% endif %}
     {{ rolling_block(ex_post_rolling.charts, "your invested holdings", "risk-ex-post-rolling") }}
-    {{ regime_block(ex_post_regimes, "Your holdings", "your invested holdings", "risk-ex-post-regimes") }}
+    {{ regime_block(ex_post_regimes, "Your holdings", "your invested holdings", "risk-ex-post-regimes", ticker_names) }}
     {% if ex_post.excluded %}
     <h3>Left out</h3>
     <ul class="labs-unavailable">
       {% for holding in ex_post.excluded %}
-      <li><span class="mono">{{ holding.ticker }}</span> — {{ holding.reason }}</li>
+      <li>{{ ticker(holding.ticker, ticker_names) }} — {{ holding.reason }}</li>
       {% endfor %}
     </ul>
     <p class="labs-note">The other holdings' weights were scaled to 100%.</p>
@@ -209,10 +210,10 @@
     <p class="as-of">{% if window.start %}Measured from <span class="mono">{{ window.start | date }}</span> to <span class="mono">{{ window.end | date }}</span>{% if window.limited_by %}, not from <span class="mono">{{ window.requested_start | date }}</span>: the window is limited by <span class="mono">{{ window.limited_by | join(", ") }}</span>, whose history starts later{% endif %}.{% else %}The holdings' histories don't overlap, so nothing could be measured over {{ window.label }}.{% endif %}
       Hover a figure for its window and number of returns.</p>
     {% if ex_ante.exclude_links %}
-    <p class="labs-note">{% for ticker, url in ex_ante.exclude_links %}<a href="{{ url }}">Exclude <span class="mono">{{ ticker }}</span></a>{% if not loop.last %} · {% endif %}{% endfor %} to measure the other holdings over the longer window.</p>
+    <p class="labs-note">{% for symbol, url in ex_ante.exclude_links %}<a href="{{ url }}">Exclude {{ ticker(symbol, ticker_names, focusable=false) }}</a>{% if not loop.last %} · {% endif %}{% endfor %} to measure the other holdings over the longer window.</p>
     {% endif %}
     {% if ex_ante.include_links %}
-    <p class="labs-note">Excluded at your request: {% for ticker, url in ex_ante.include_links %}<span class="mono">{{ ticker }}</span> (<a href="{{ url }}">Include <span class="mono">{{ ticker }}</span> again</a>){% if not loop.last %}, {% endif %}{% endfor %}. The other weights were scaled to 100%.</p>
+    <p class="labs-note">Excluded at your request: {% for symbol, url in ex_ante.include_links %}{{ ticker(symbol, ticker_names) }} (<a href="{{ url }}">Include {{ ticker(symbol, ticker_names, focusable=false) }} again</a>){% if not loop.last %}, {% endif %}{% endfor %}. The other weights were scaled to 100%.</p>
     {% endif %}
 
     <div class="table-scroll" tabindex="0" role="region" aria-label="Ex-ante risk figures">
@@ -254,10 +255,10 @@
     {% if dec %}
     <h3>Where the risk comes from</h3>
     {% for named in dec.outsized %}
-    <p class="risk-insight"><span class="mono">{{ named.ticker }}</span> is <span class="mono">{{ named.weight | pct1 }}</span> of the money and <span class="mono">{{ named.pcr | pct1 }}</span> of the risk.</p>
+    <p class="risk-insight">{{ ticker(named.ticker, ticker_names) }} is <span class="mono">{{ named.weight | pct1 }}</span> of the money and <span class="mono">{{ named.pcr | pct1 }}</span> of the risk.</p>
     {% endfor %}
     {% for named in dec.hedges %}
-    <p class="risk-hedge"><span class="mono">{{ named.ticker }}</span> lowered the mix's volatility: its {{ term("share of risk", "share-of-risk") }} is <span class="mono">{{ named.pcr | pct1 }}</span>.</p>
+    <p class="risk-hedge">{{ ticker(named.ticker, ticker_names) }} lowered the mix's volatility: its {{ term("share of risk", "share-of-risk") }} is <span class="mono">{{ named.pcr | pct1 }}</span>.</p>
     {% endfor %}
     {% if dec.reason %}
     <p class="labs-note">Only the weights can be shown: {{ dec.reason }}.</p>
@@ -278,7 +279,7 @@
       <tbody role="rowgroup">
         {% for row in dec.rows %}
         <tr role="row"{% if row.outsized %} class="risk-outsized"{% endif %}>
-          <th role="rowheader" scope="row"><span class="mono">{{ row.ticker }}</span></th>
+          <th role="rowheader" scope="row">{{ ticker(row.ticker, ticker_names) }}</th>
           <td class="num" role="cell" data-label="Weight"><span class="mono">{{ row.weight | pct1 }}</span></td>
           {% for value, label, fmt in ((row.pcr, "Share of risk", "pct1"), (row.risk_to_weight, "Risk ÷ weight", "ratio"), (row.volatility, "Volatility", "pct1"), (row.cr, "Contribution", "pct1"), (row.corr_with_portfolio, "Correlation", "ratio")) %}
           <td class="num" role="cell" data-label="{{ label }}" title="{{ dec.title }}">{% if value is none %}<span class="risk-greyed">Not measured</span>{% elif fmt == "ratio" %}<span class="mono">{{ value | ratio }}</span>{% else %}<span class="mono">{{ value | pct1 }}</span>{% endif %}</td>
@@ -312,7 +313,7 @@
       <tbody role="rowgroup">
         {% for row in fx.rows %}
         <tr role="row">
-          <th role="rowheader" scope="row"><span class="mono">{{ row.ticker }}</span></th>
+          <th role="rowheader" scope="row">{{ ticker(row.ticker, ticker_names) }}</th>
           <td role="cell" data-label="Currency"><span class="mono">{{ row.currency }}</span></td>
           {% for cell in row.cells %}
           {% set column = fx.columns[loop.index0] %}
@@ -373,13 +374,13 @@
 
     {{ rolling_block(ex_ante_rolling.charts, "today's mix", "risk-ex-ante-rolling") }}
     {{ pair_block(ex_ante_rolling.correlation) }}
-    {{ regime_block(ex_ante_regimes, "Today's mix", "today's mix", "risk-ex-ante-regimes") }}
+    {{ regime_block(ex_ante_regimes, "Today's mix", "today's mix", "risk-ex-ante-regimes", ticker_names) }}
 
     {% if ex_ante.left_out %}
     <h3>Left out</h3>
     <ul class="labs-unavailable">
       {% for holding in ex_ante.left_out %}
-      <li><span class="mono">{{ holding.ticker }}</span> — {{ holding.reason }}</li>
+      <li>{{ ticker(holding.ticker, ticker_names) }} — {{ holding.reason }}</li>
       {% endfor %}
     </ul>
     <p class="labs-note">The other holdings' weights were scaled to 100%.</p>
@@ -427,8 +428,8 @@
         <button type="submit" class="btn btn-secondary">Compare</button>
       </div>
       <datalist id="risk-what-if-options">
-        {% for ticker in tickers %}
-        <option value="{{ ticker }}">
+        {% for symbol in tickers %}
+        {{ ticker_option(symbol, ticker_names) }}
         {% endfor %}
       </datalist>
       {% if form.errors.ticker %}<p class="form-row-error" id="risk-what-if-candidate-error"><strong>Candidate:</strong> {{ form.errors.ticker }}</p>{% endif %}
@@ -452,10 +453,10 @@
     {% call banner("warning") %}<strong>No risk-free rate.</strong> Without it, the Sharpe ratio can't be measured, so it's greyed.{% endcall %}
     {% endif %}
     {% set window = wi.window %}
-    <p class="as-of">{% if window.start %}Measured from <span class="mono">{{ window.start | date }}</span> to <span class="mono">{{ window.end | date }}</span>{% if window.shortened %}: <span class="mono">{{ c }}</span>'s history starts later than the holdings' (<span class="mono">{{ window.start_without_candidate | date }}</span>), so before is measured over the same shorter window{% endif %}.{% else %}<span class="mono">{{ c }}</span>'s and the holdings' histories don't overlap, so nothing could be measured over {{ window.label }}.{% endif %}
+    <p class="as-of">{% if window.start %}Measured from <span class="mono">{{ window.start | date }}</span> to <span class="mono">{{ window.end | date }}</span>{% if window.shortened %}: {{ ticker(c, ticker_names) }}'s history starts later than the holdings' (<span class="mono">{{ window.start_without_candidate | date }}</span>), so before is measured over the same shorter window{% endif %}.{% else %}{{ ticker(c, ticker_names) }}'s and the holdings' histories don't overlap, so nothing could be measured over {{ window.label }}.{% endif %}
       Hover a figure for its window and number of returns.</p>
     {% if wi.candidate.capped %}
-    <p class="labs-note">Replacing <span class="mono">{{ wi.funding.ticker }}</span> can fund at most its own weight, so <span class="mono">{{ c }}</span> enters at <span class="mono">{{ wi.candidate.weight | pct1 }}</span>, not <span class="mono">{{ wi.candidate.requested_weight | pct1 }}</span>.</p>
+    <p class="labs-note">Replacing {{ ticker(wi.funding.ticker, ticker_names) }} can fund at most its own weight, so {{ ticker(c, ticker_names) }} enters at <span class="mono">{{ wi.candidate.weight | pct1 }}</span>, not <span class="mono">{{ wi.candidate.requested_weight | pct1 }}</span>.</p>
     {% endif %}
     {# Before, after and the change, risk first (spec §7.2). Stacks at phone width, each figure
        labelled with its column. No delta is coloured: none is a gain or a loss. #}
@@ -465,7 +466,7 @@
         <tr role="row">
           <th role="columnheader" scope="col">Measure</th>
           <th class="num" role="columnheader" scope="col">Before</th>
-          <th class="num" role="columnheader" scope="col">After, with <span class="mono">{{ c }}</span></th>
+          <th class="num" role="columnheader" scope="col">After, with {{ ticker(c, ticker_names) }}</th>
           <th class="num" role="columnheader" scope="col">Change</th>
         </tr>
       </thead>
@@ -509,7 +510,7 @@
     {% set t = wi.threshold %}
     {% set sr_c = wi.threshold_cell %}
     {% if t and t.applicable and sr_c and sr_c.value is not none and t.improves is not none %}
-    <p class="labs-note" title="{{ sr_c.title }}">A small amount of <span class="mono">{{ c }}</span> raises the mix's historical {{ term("Sharpe ratio", "sharpe") }} if its own Sharpe ratio is above its correlation with the mix times the mix's: <span class="mono">{{ sr_c.value | ratio }}</span> ± <span class="mono">{{ sr_c.standard_error | ratio }}</span>{% if sr_c.markers %}<sup class="risk-flag">{{ sr_c.markers | join(", ") }}</sup>{% endif %} against <span class="mono">{{ t.correlation | ratio }}</span> × <span class="mono">{{ t.portfolio_sharpe | ratio }}</span> = <span class="mono">{{ t.threshold | ratio }}</span>. {% if t.improves %}It is, so a small amount of <span class="mono">{{ c }}</span> would have raised it.{% else %}It isn't, so a small amount of <span class="mono">{{ c }}</span> wouldn't have raised it.{% endif %}</p>
+    <p class="labs-note" title="{{ sr_c.title }}">A small amount of {{ ticker(c, ticker_names) }} raises the mix's historical {{ term("Sharpe ratio", "sharpe") }} if its own Sharpe ratio is above its correlation with the mix times the mix's: <span class="mono">{{ sr_c.value | ratio }}</span> ± <span class="mono">{{ sr_c.standard_error | ratio }}</span>{% if sr_c.markers %}<sup class="risk-flag">{{ sr_c.markers | join(", ") }}</sup>{% endif %} against <span class="mono">{{ t.correlation | ratio }}</span> × <span class="mono">{{ t.portfolio_sharpe | ratio }}</span> = <span class="mono">{{ t.threshold | ratio }}</span>. {% if t.improves %}It is, so a small amount of <span class="mono">{{ c }}</span> would have raised it.{% else %}It isn't, so a small amount of <span class="mono">{{ c }}</span> wouldn't have raised it.{% endif %}</p>
     {% elif t and t.applicable %}
     <p class="labs-note">The Sharpe threshold can't be shown: {{ t.reason or (sr_c and sr_c.reason) }}.</p>
     {% elif t %}
@@ -520,7 +521,7 @@
     <h3>Left out</h3>
     <ul class="labs-unavailable">
       {% for holding in wi.left_out %}
-      <li><span class="mono">{{ holding.ticker }}</span> — {{ holding.reason }}</li>
+      <li>{{ ticker(holding.ticker, ticker_names) }} — {{ holding.reason }}</li>
       {% endfor %}
     </ul>
     <p class="labs-note">The other holdings' weights were scaled to 100%.</p>
@@ -653,14 +654,14 @@
     </ul>
     {% endif %}
     {% if rk.over_cap %}
-    <p class="labs-note"><span class="mono">{{ rk.over_cap | length }}</span> more tracked tickers weren't scored: the ranking takes the first <span class="mono">{{ rk.cap }}</span> alphabetically. Not scored: {% for t in rk.over_cap %}<span class="mono">{{ t }}</span>{% if not loop.last %}, {% endif %}{% endfor %}.</p>
+    <p class="labs-note"><span class="mono">{{ rk.over_cap | length }}</span> more tracked tickers weren't scored: the ranking takes the first <span class="mono">{{ rk.cap }}</span> alphabetically. Not scored: {{ ticker_list(rk.over_cap, ticker_names) }}.</p>
     {% endif %}
     {% endif %}
     {% if rk.left_out %}
     <h3>Left out</h3>
     <ul class="labs-unavailable">
       {% for holding in rk.left_out %}
-      <li><span class="mono">{{ holding.ticker }}</span> — {{ holding.reason }}</li>
+      <li>{{ ticker(holding.ticker, ticker_names) }} — {{ holding.reason }}</li>
       {% endfor %}
     </ul>
     <p class="labs-note">The other holdings' weights were scaled to 100%.</p>
@@ -685,10 +686,10 @@
     <p class="entry-empty">Nothing could be looked through: every holding was left out.</p>
     {% else %}
     {% if concentration.snapshots %}
-    <p class="labs-note">{% for s in concentration.snapshots %}<span class="mono">{{ s.ticker }}</span>'s holdings as of <span class="mono">{{ s.as_of_date | date }}</span> (<span class="mono">{{ s.n_lines }}</span> lines){% if not loop.last %}; {% endif %}{% endfor %}.</p>
+    <p class="labs-note">{% for s in concentration.snapshots %}{{ ticker(s.ticker, ticker_names) }}'s holdings as of <span class="mono">{{ s.as_of_date | date }}</span> (<span class="mono">{{ s.n_lines }}</span> lines){% if not loop.last %}; {% endif %}{% endfor %}.</p>
     {% endif %}
     {% if concentration.unmapped_share > 0 %}
-    <p class="risk-insight lt-unmapped"><span class="mono">{{ concentration.unmapped_share | pct1 }}</span> of the mix is in funds with no holdings data, so it can't be looked through: {% for fund in concentration.unmapped %}<span class="mono">{{ fund.ticker }}</span>{% if fund.note %} ({{ fund.note }}){% endif %}{% if not loop.last %}, {% endif %}{% endfor %}. Each table shows it as its own row.</p>
+    <p class="risk-insight lt-unmapped"><span class="mono">{{ concentration.unmapped_share | pct1 }}</span> of the mix is in funds with no holdings data, so it can't be looked through: {% for fund in concentration.unmapped %}{{ ticker(fund.ticker, ticker_names) }}{% if fund.note %} ({{ fund.note }}){% endif %}{% if not loop.last %}, {% endif %}{% endfor %}. Each table shows it as its own row.</p>
     {% endif %}
     <ul class="lt-coverage" aria-label="What could be looked through">
       {% for share in concentration.coverage %}
@@ -722,7 +723,7 @@
     <h3>Left out</h3>
     <ul class="labs-unavailable">
       {% for holding in concentration.left_out %}
-      <li><span class="mono">{{ holding.ticker }}</span> — {{ holding.reason }}</li>
+      <li>{{ ticker(holding.ticker, ticker_names) }} — {{ holding.reason }}</li>
       {% endfor %}
     </ul>
     {% if concentration.measured %}<p class="labs-note">The other holdings' weights were scaled to 100%.</p>{% endif %}

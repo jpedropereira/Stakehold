@@ -12,6 +12,7 @@ import logging
 import re
 from datetime import date
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -188,6 +189,18 @@ class FakePortfolioClient:
 
     async def list_tickers(self):
         return []
+
+    # {ticker: display_name} for tickers data-store tracks (UX-2); a test sets its own.
+    tracked_names: dict[str, str] = {}
+    tracked_error: Exception | None = None
+
+    async def list_tracked_tickers(self, *, requested_by=None, statuses=None, tickers=None):
+        if self.tracked_error:
+            raise self.tracked_error
+        return [
+            SimpleNamespace(ticker=ticker, display_name=name, status="ready")
+            for ticker, name in self.tracked_names.items()
+        ]
 
     async def ex_post_risk(self, *, user_id, benchmark):
         return ExPostRisk("ex-post · invested assets", None, None, False, BENCHMARK, (), ())
@@ -470,3 +483,39 @@ def test_logs_a_look_through_with_nothing_included(client, caplog):
     assert (
         "risk: look-through included nothing, left out: " "IWDA.AS (couldn't reach data-store)."
     ) in messages
+
+
+# --- ticker names (UX-2) ------------------------------------------------------------------------
+
+_NAMED = '<span class="ticker" tabindex="0"><span class="mono">{}</span>'
+
+
+def test_the_snapshot_and_unmapped_funds_are_named(client):
+    test_client, fake = client
+    fake.tracked_names = {
+        "IWDA.AS": "iShares Core MSCI World",
+        "VWCE.DE": "Vanguard FTSE All-World",
+    }
+
+    section = _section(test_client)
+
+    snapshots = re.search(r"<p[^>]*>(?:(?!</p>).)*'s holdings as of.*?</p>", section, re.S)
+    assert _NAMED.format("IWDA.AS") in snapshots.group(0)
+    assert "iShares Core MSCI World" in snapshots.group(0)
+    unmapped = re.search(r'<p class="risk-insight lt-unmapped">.*?</p>', section, re.S).group(0)
+    assert _NAMED.format("VWCE.DE") in unmapped
+    assert "Vanguard FTSE All-World" in unmapped
+
+
+def test_a_fund_left_out_of_the_look_through_is_named(client):
+    test_client, fake = client
+    fake.look_through_result = LookThrough(
+        assets=(LookThroughAsset("IWDA.AS", "not_tracked", "not tracked", None, None, None, None),),
+        exposures=None,
+    )
+    fake.tracked_names = {"IWDA.AS": "iShares Core MSCI World"}
+
+    section = _section(test_client)
+
+    item = re.search(r"<li>(?:(?!</li>).)*not tracked.*?</li>", section, re.S).group(0)
+    assert _NAMED.format("IWDA.AS") in item

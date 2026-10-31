@@ -58,6 +58,9 @@ class FakePortfolioClient:
             raise self.list_transactions_error
         return self.list_transactions_result
 
+    async def list_tracked_tickers(self, *, requested_by=None, statuses=None, tickers=None):
+        return []
+
     async def delete_transaction(self, *, user_id, account_label, broker_transaction_ref):
         self.deletes.append((user_id, account_label, broker_transaction_ref))
         if self.delete_error:
