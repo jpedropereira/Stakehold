@@ -12,6 +12,7 @@ from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 from html import unescape
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -179,6 +180,18 @@ class FakePortfolioClient:
 
     async def list_tickers(self):
         return ["IWDA.AS", "VWCE.DE"]
+
+    # {ticker: display_name} for tickers data-store tracks (UX-2); a test sets its own.
+    tracked_names: dict[str, str] = {}
+    tracked_error: Exception | None = None
+
+    async def list_tracked_tickers(self, *, requested_by=None, statuses=None, tickers=None):
+        if self.tracked_error:
+            raise self.tracked_error
+        return [
+            SimpleNamespace(ticker=ticker, display_name=name, status="ready")
+            for ticker, name in self.tracked_names.items()
+        ]
 
     async def ex_post_risk(self, *, user_id, benchmark):
         if self.ex_post_error:

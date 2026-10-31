@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% from "partials/_banner.html" import banner %}
 {% from "partials/_delete_dialog.html" import delete_dialog %}
+{% from "partials/_ticker.html" import ticker %}
 {% from "partials/_transaction_summary.html" import transaction_summary %}
 {% block title %}Transactions — {{ account_label }} — Stakehold{% endblock %}
 {% block content %}
@@ -41,8 +42,9 @@
         <td class="date" role="cell"><span class="mono">{{ txn.trade_datetime | date }}</span></td>
         {# Neutral, never gain/loss colored: a SELL or a WITHDRAWAL isn't a loss. #}
         <td role="cell" data-label="Type"><span class="badge">{{ txn.transaction_type }}</span></td>
-        {# A TICKER is already the ticker; an ISIN or SYMBOL is named by its kind. #}
-        <td role="cell" data-label="Instrument">{% if txn.instrument_identifier %}<span class="mono">{% if txn.instrument_identifier_kind != "TICKER" %}{{ txn.instrument_identifier_kind }} {% endif %}{{ txn.instrument_identifier }}</span>{% else %}<span class="mono">—</span>{% endif %}</td>
+        {# A TICKER is already the ticker, with its name (UX-2); an ISIN or SYMBOL is named by its
+           kind. #}
+        <td role="cell" data-label="Instrument">{% if txn.instrument_identifier_kind == "TICKER" %}{{ ticker(txn.instrument_identifier, ticker_names) }}{% elif txn.instrument_identifier %}<span class="mono">{{ txn.instrument_identifier_kind }} {{ txn.instrument_identifier }}</span>{% else %}<span class="mono">—</span>{% endif %}</td>
         <td class="num" role="cell" data-label="Quantity"><span class="mono">{{ txn.quantity | qty }}</span></td>
         <td class="num" role="cell" data-label="Price"><span class="mono">{{ txn.price | native_money(currency, 4) }}</span></td>
         {# The frozen EUR figure sits under a non-EUR amount; for a EUR row it would repeat it. #}

@@ -48,7 +48,8 @@ from web.portfolio_view import (
     unmapped_across_brokers,
 )
 from web.settings import Settings
-from web.ticker_status import holding_price_note, load_statuses
+from web.ticker_names import load_tracked, names_from
+from web.ticker_status import holding_price_note, statuses_from
 
 logger = logging.getLogger(__name__)
 
@@ -123,7 +124,9 @@ async def portfolio(
     rows = [] if view.holdings is None else build_portfolio_holdings(view.holdings.holdings)
     # An unpriced holding says where its ticker's loading stands (ticker onboarding, TK-9).
     unpriced = [r.holding.canonical_ticker for r in rows if not r.holding.priced]
-    statuses = await load_statuses(portfolio_client, unpriced)
+    # One call gives both those statuses and every ticker's name (UX-2).
+    tracked = await load_tracked(portfolio_client) if rows else []
+    statuses = statuses_from(tracked)
     return _render(
         request,
         response,
@@ -142,6 +145,7 @@ async def portfolio(
             "returns_error": _UNAVAILABLE if view.returns is None else None,
             "chart_payload": build_portfolio_chart_payload(series),
             "price_notes": {t: holding_price_note(statuses.get(t)) for t in unpriced},
+            "ticker_names": names_from(tracked),
             "unmapped": unmapped_across_brokers(view.unmapped or []),
         },
     )

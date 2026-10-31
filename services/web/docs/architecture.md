@@ -289,7 +289,8 @@ under `.claude/rules/architecture.md`.
   empty table. The tiles come from `/holdings`' `totals`, not from the rows: totals count closed
   positions' dividends, the home page's rule, so the two pages agree. A holding is unpriced
   unless every account holding it has a return row (portfolio's rule, so no partial sum is
-  shown); unpriced holdings ask `ticker_status.load_statuses` where their prices stand.
+  shown); unpriced holdings say where their prices stand (`ticker_status.statuses_from`), read
+  from the same tracked-ticker call that names every holding (UX-2).
   PF-6 adds a fourth concurrent call, `GET /returns/portfolio` (PF-5). It alone feeds the chart,
   so a failure shows a notice in the chart card and nothing else. The chart's island is portfolio's series as served
   (`build_portfolio_chart_payload`), never web's own aggregation, which groups by ticker alone.
@@ -335,13 +336,13 @@ under `.claude/rules/architecture.md`.
 
     **Ticker onboarding (TK-9) splits out the one case a user causes:** a ticker they added that
     data-store is still loading, or gave up on.
-    - For holdings with no return row only, the page asks `portfolio`'s
-      `GET /instruments/tracked-tickers?ticker=…` for their status. That's one extra call, made
-      only when such a holding exists.
+    - The page asks `portfolio`'s `GET /instruments/tracked-tickers` once, unfiltered, when it
+      has any holding (UX-2). The same rows give each ticker's name and, for holdings with no
+      return row, their status, so naming the holdings added no second call.
     - The row reads "Prices loading" (`pending`/`backfilling`), "Prices couldn't be loaded"
       (`failed`), or still "Waiting for prices" for anything else.
     - The decision above stands for those other cases. A failed status call leaves every such
-      row at "Waiting for prices", which is true either way (`ticker_status.load_statuses`).
+      row at "Waiting for prices", which is true either way (`ticker_names.load_tracked`).
   - *Waiting for a ticker mapping.* An unmapped instrument never becomes a position, because
     `portfolio`'s positions rebuild drops it before it has a ticker. So it can't be a holdings
     row, and is shown as a notice under the Holdings heading instead. The notice shows even with
@@ -586,11 +587,20 @@ Every route `web` serves, with what it requires and which upstream calls it make
 - `api/tickers.py` (TK-8) — the Tickers pages, on their own router for the same file-size
   reason, rendering through `routes.py`'s helpers so CSRF and cookie handling stay identical.
 - `ticker_status.py` (TK-8/TK-9) — how a tracked ticker's status reads (labels, a holding's
-  price note) and the degrading status lookup the portfolio page uses. Its own module so
-  `api/holdings.py` and `api/tickers.py` share it without importing each other.
-- `ticker_names.py` (UX-1) — `load_names`, a page's `{ticker: display_name}` for the `ticker`
-  macro, from one `list_tracked_tickers` call. A failure returns `{}`: a name is cosmetic, so the
-  page shows bare tickers rather than an error.
+  price note), and `statuses_from`, a holding page's statuses from `ticker_names.load_tracked`'s
+  rows. Its own module so `api/holdings.py` and `api/tickers.py` share it without importing each
+  other.
+- `ticker_names.py` (UX-1, UX-2) — `load_tracked`, every tracked ticker from one unfiltered
+  `list_tracked_tickers` call, and `load_names`, those rows as the page's
+  `{ticker: display_name}` for the `ticker` macro and the pickers. A failure returns `[]`/`{}`:
+  a name is cosmetic, so the page shows bare tickers rather than an error.
+  - *Unfiltered, not filtered to the page's tickers.* The pickers offer every priced ticker
+    (~1.3k, mostly fund constituents), too many `ticker=` params for one query string, and only
+    tracked tickers have a name: the YAML's handful plus user requests, capped by the daily
+    limit. So one small call covers a page's pickers, tables and prose, and no route has to
+    collect tickers from Risk's nested view models, where one would be easy to miss.
+  - *Known cost:* the response grows with the tracked list. If that reaches thousands, ask for
+    the page's own tickers again (and a separate call for the pickers).
 - `static_assets.py` — `make_asset_url`, the content-versioned `/static` and `/brand` URLs
   behind the `asset_url` Jinja global that `app.py` registers (see "Asset URLs are versioned by
   content" above). It needs no upstream client.

@@ -13,6 +13,7 @@ import re
 from dataclasses import replace
 from datetime import date
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -77,6 +78,18 @@ class FakePortfolioClient:
 
     async def list_tickers(self):
         return ["IWDA.AS", "AAPL"]
+
+    # {ticker: display_name} for tickers data-store tracks (UX-2); a test sets its own.
+    tracked_names: dict[str, str] = {}
+    tracked_error: Exception | None = None
+
+    async def list_tracked_tickers(self, *, requested_by=None, statuses=None, tickers=None):
+        if self.tracked_error:
+            raise self.tracked_error
+        return [
+            SimpleNamespace(ticker=ticker, display_name=name, status="ready")
+            for ticker, name in self.tracked_names.items()
+        ]
 
     async def list_holdings(self, *, user_id):
         return self.holdings
@@ -725,7 +738,20 @@ def test_the_benchmark_field_suggests_the_tracked_tickers(client):
     form = _benchmark_form(_page(test_client))
 
     datalist = re.search(r'<datalist id="labs-benchmark-options">(.*?)</datalist>', form, re.S)[1]
-    assert re.findall(r'<option value="([^"]+)">', datalist) == ["IWDA.AS", "AAPL"]
+    assert re.findall(r'<option value="([^"]+)"', datalist) == ["IWDA.AS", "AAPL"]
+
+
+def test_the_benchmark_field_suggests_each_ticker_with_its_name(client):
+    """UX-2: the name is in the option; the value submitted is still the bare ticker."""
+    test_client, fake_portfolio = client
+    _with_risk(fake_portfolio)
+    fake_portfolio.tracked_names = {"IWDA.AS": "iShares Core MSCI World"}
+
+    form = _benchmark_form(_page(test_client))
+
+    datalist = re.search(r'<datalist id="labs-benchmark-options">(.*?)</datalist>', form, re.S)[1]
+    assert '<option value="IWDA.AS" label="IWDA.AS — iShares Core MSCI World">' in datalist
+    assert '<option value="AAPL">' in datalist
 
 
 def test_an_over_long_benchmark_says_so_and_sends_the_default(client):

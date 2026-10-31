@@ -12,3 +12,17 @@
 <span class="mono">{{ symbol }}</span>
 {%- endif -%}
 {%- endmacro %}
+
+{# A picker's <option> for a ticker (UX-2). An option can't hold the tooltip, so the name goes in
+   its label: "VWCE.DE — Vanguard FTSE All-World". The ticker is repeated there because Firefox
+   shows only the label, while Chrome and Safari show the value beside it. The value stays the
+   bare ticker, so that is what a form submits. No name, no label. #}
+{% macro ticker_option(symbol, names) -%}
+{%- set name = names.get(symbol) if names else none -%}
+<option value="{{ symbol }}"{% if name %} label="{{ symbol }} — {{ name }}"{% endif %}>
+{%- endmacro %}
+
+{# Several tickers in a sentence, comma-separated, each with its name. #}
+{% macro ticker_list(symbols, names) -%}
+{%- for symbol in symbols %}{{ ticker(symbol, names) }}{% if not loop.last %}, {% endif %}{% endfor -%}
+{%- endmacro %}

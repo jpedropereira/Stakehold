@@ -6,13 +6,10 @@ data-store's statuses are "pending" (queued), "backfilling" (loading its history
 "failed" (given up on after its retries). Copy follows the charter's voice: plain, no alarm.
 """
 
-import logging
 import re
+from collections.abc import Iterable
 
-from web.portfolio_client.base import PortfolioClient
-from web.portfolio_client.errors import PortfolioClientError
-
-logger = logging.getLogger(__name__)
+from web.portfolio_client.base import TrackedTicker
 
 STATUS_LABELS = {
     "pending": "Queued",
@@ -45,15 +42,8 @@ def holding_price_note(status: str | None) -> str:
     return "Waiting for prices"
 
 
-async def load_statuses(portfolio_client: PortfolioClient, tickers: list[str]) -> dict[str, str]:
-    """{ticker: status} for whichever of `tickers` data-store tracks directly. Empty when there's
-    nothing to ask about, or when the call fails: a holding then reads "Waiting for prices",
-    which is true either way, rather than taking the page down."""
-    if not tickers:
-        return {}
-    try:
-        rows = await portfolio_client.list_tracked_tickers(tickers=sorted(tickers))
-    except PortfolioClientError as exc:
-        logger.warning("portfolio service unavailable listing ticker statuses: %s", exc)
-        return {}
+def statuses_from(rows: Iterable[TrackedTicker]) -> dict[str, str]:
+    """{ticker: status} for the tracked tickers in `rows` (ticker_names.load_tracked). A holding
+    whose ticker isn't there, or whose lookup failed, reads "Waiting for prices", which is true
+    either way, rather than taking the page down."""
     return {row.ticker: row.status for row in rows}

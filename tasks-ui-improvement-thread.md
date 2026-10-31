@@ -90,7 +90,7 @@ Earlier chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archive/):
 |----|------|-------------|--------|
 | UX-0 | [Roadmap housekeeping and baseline](#ux-0-roadmap-housekeeping-and-baseline) | — | done |
 | UX-1 | [Ticker name lookup and component](#ux-1-ticker-name-lookup-and-component) | UX-0 | done |
-| UX-2 | [Ticker names in tables, text and forms](#ux-2-ticker-names-in-tables-text-and-forms) | UX-1 | ready |
+| UX-2 | [Ticker names in tables, text and forms](#ux-2-ticker-names-in-tables-text-and-forms) | UX-1 | done |
 | UX-3 | [Ticker names in charts](#ux-3-ticker-names-in-charts) | UX-1 | ready |
 | UX-4 | [Quieter site header](#ux-4-quieter-site-header) | UX-0 | ready |
 | UX-5 | [One segmented control for switches](#ux-5-one-segmented-control-for-switches) | UX-0 | ready |
@@ -172,7 +172,7 @@ Done as:
 
 ### UX-2. Ticker names in tables, text and forms
 
-**Status:** ready
+**Status:** done
 
 Apply the UX-1 component at every place a template prints a ticker. A grep for `.ticker }}` in
 `templates/` finds them. They include:
@@ -192,6 +192,27 @@ Each route gathers its page's tickers and passes `ticker_names`.
 
 Tests: for every page that shows a ticker, a fake client with names makes the page render them.
 A page whose name lookup fails still renders.
+
+Done as:
+- **One unfiltered fetch per page**, not "each route gathers its page's tickers". The pickers
+  offer every priced ticker (~1.3k), too many for one filtered query string. Only tracked
+  tickers have names, and there are few of them. `ticker_names.load_tracked` makes the call,
+  and `load_names` builds the map from it.
+- **Holdings pages make one call, not two.** The same rows give names and statuses
+  (`ticker_status.statuses_from` replaced `load_statuses`). A page with no holdings makes no
+  call.
+- **Pickers.** The benchmark fields, the Labs mix inputs and the Risk what-if candidate use
+  `ticker_option`. Its `label` is `VWCE.DE — Name`, so Firefox, which shows only the label,
+  still shows the ticker. Chromium shows the ticker twice. Not checked by eye: a native
+  datalist popup doesn't render in a headless screenshot. The new-transaction and
+  admin-mapping pickers are left bare.
+- **Not changed.** The Tickers list already has a Name column. Risk's ranking rows and their
+  "Left out" list already print the name. The ranking's "Not scored" list is named.
+- **Fund constituents stay bare.** Only tracked tickers have a `display_name`.
+- **Tab stops.** /risk went past `review_pages.py`'s 120-stop walk, so its cap is now 200. A
+  regime note names the benchmark only at its first mention.
+- **Checked visually** at 360px: the /portfolio toggle button hosts the tooltip, a focused Risk
+  ticker opens it, and Escape closes it. Every reviewed page passed `review_pages.py`.
 
 ### UX-3. Ticker names in charts
 

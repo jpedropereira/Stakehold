@@ -12,6 +12,7 @@ import logging
 import re
 from datetime import date
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -69,6 +70,18 @@ class FakePortfolioClient:
         if self.tickers_error:
             raise self.tickers_error
         return self.tickers
+
+    # {ticker: display_name} for tickers data-store tracks (UX-2); a test sets its own.
+    tracked_names: dict[str, str] = {}
+    tracked_error: Exception | None = None
+
+    async def list_tracked_tickers(self, *, requested_by=None, statuses=None, tickers=None):
+        if self.tracked_error:
+            raise self.tracked_error
+        return [
+            SimpleNamespace(ticker=ticker, display_name=name, status="ready")
+            for ticker, name in self.tracked_names.items()
+        ]
 
     async def list_holdings(self, *, user_id):
         self.calls.append(("list_holdings", user_id))
@@ -440,7 +453,8 @@ def test_the_mix_names_the_assets_it_leaves_out_by_run_of_periods(client):
         "Over 5Y the mix leaves out IWDA.AS, VWRL.AS: not enough history.",
     ]
     between = html.split("</table>", 1)[1].split('<section class="labs-growth"', 1)[0]
-    assert '<span class="mono">IWDA.AS, VWRL.AS</span>' in between
+    # Each ticker its own element, so each can carry its name (UX-2).
+    assert '<span class="mono">IWDA.AS</span>, <span class="mono">VWRL.AS</span>' in between
 
 
 def test_no_left_out_note_when_the_mix_covers_every_asset(client):
@@ -1007,8 +1021,79 @@ def test_the_ticker_field_suggests_every_tracked_ticker(client):
     form = _form(_page(test_client))
 
     datalist = re.search(r'<datalist id="labs-ticker-options">(.*?)</datalist>', form, re.S)[1]
-    assert re.findall(r'<option value="([^"]+)">', datalist) == ["IWDA.AS", "VWRL.AS", "AAPL"]
+    assert re.findall(r'<option value="([^"]+)"', datalist) == ["IWDA.AS", "VWRL.AS", "AAPL"]
     assert form.count('list="labs-ticker-options"') == 3
+
+
+def test_the_ticker_field_suggests_each_ticker_with_its_name(client):
+    """UX-2: an option can't hold the tooltip, so it carries the name itself. The value is still
+    the bare ticker, so that is what the form submits."""
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_backtest(fake_portfolio)
+    fake_portfolio.tracked_names = {"IWDA.AS": "iShares Core MSCI World"}
+
+    form = _form(_page(test_client))
+
+    datalist = re.search(r'<datalist id="labs-ticker-options">(.*?)</datalist>', form, re.S)[1]
+    assert '<option value="IWDA.AS" label="IWDA.AS — iShares Core MSCI World">' in datalist
+    # No name, no label: the option reads as the ticker alone.
+    assert '<option value="AAPL">' in datalist
+
+
+# --- ticker names (UX-2) ------------------------------------------------------------------------
+
+
+def test_the_returns_table_names_each_asset(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_backtest(fake_portfolio)
+    fake_portfolio.tracked_names = {"IWDA.AS": "iShares Core MSCI World"}
+
+    rows = _body_rows(_page(test_client))
+
+    named = next(r for r in rows if "IWDA.AS" in r)
+    assert '<span class="ticker" tabindex="0"><span class="mono">IWDA.AS</span>' in named
+    assert "iShares Core MSCI World" in named
+    unnamed = next(r for r in rows if "VWRL.AS" in r)
+    assert '<span class="mono">VWRL.AS</span>' in unnamed
+    assert 'class="ticker-name"' not in unnamed
+
+
+def test_a_not_backtested_asset_is_named(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_holdings(fake_portfolio, _holding("IWDA.AS", "750"), _holding("7203.T", "250"))
+    fake_portfolio.backtest_result = Backtest(
+        end_date=END,
+        mix=_row(None, "1", **{"1M": "0.02"}),
+        assets=(_row("IWDA.AS", "1", **{"1M": "0.02"}),),
+        growth=None,
+        statuses=(
+            _status("IWDA.AS"),
+            _status("7203.T", "no_fx_rate", "no JPY exchange rate"),
+        ),
+    )
+    fake_portfolio.tracked_names = {"7203.T": "Toyota Motor Corp"}
+
+    html = _page(test_client)
+
+    item = re.search(r"<li>(?:(?!</li>).)*7203\.T.*?</li>", html, re.S)[0]
+    assert "Toyota Motor Corp" in item
+    assert "no JPY exchange rate" in item
+
+
+def test_a_failed_name_lookup_leaves_the_page_with_bare_tickers(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_backtest(fake_portfolio)
+    fake_portfolio.tracked_names = {"IWDA.AS": "iShares Core MSCI World"}
+    fake_portfolio.tracked_error = PortfolioUnavailable("down")
+
+    html = _page(test_client)
+
+    assert "iShares Core MSCI World" not in html
+    assert any("IWDA.AS" in r for r in _body_rows(html))
 
 
 def test_each_asset_row_has_a_remove_button_naming_it(client):

@@ -68,6 +68,8 @@ class FakePortfolioClient:
         self.list_accounts_error: Exception | None = None
         # {ticker: status} data-store reports for tickers it tracks directly (TK-9).
         self.tracked_statuses: dict[str, str] = {}
+        # {ticker: display_name} for tickers it tracks (UX-2).
+        self.tracked_names: dict[str, str] = {}
         self.list_tracked_tickers_error: Exception | None = None
         self.calls: list[tuple] = []
 
@@ -98,11 +100,16 @@ class FakePortfolioClient:
         self.calls.append(("list_tracked_tickers", tuple(tickers or ())))
         if self.list_tracked_tickers_error:
             raise self.list_tracked_tickers_error
-        return [
-            SimpleNamespace(ticker=ticker, status=self.tracked_statuses[ticker])
-            for ticker in tickers or ()
-            if ticker in self.tracked_statuses
+        tracked = sorted(set(self.tracked_statuses) | set(self.tracked_names))
+        rows = [
+            SimpleNamespace(
+                ticker=ticker,
+                status=self.tracked_statuses.get(ticker, "ready"),
+                display_name=self.tracked_names.get(ticker, ticker),
+            )
+            for ticker in tracked
         ]
+        return [r for r in rows if r.ticker in tickers] if tickers else rows
 
     async def list_latest_returns(self, *, user_id, account_label):
         self.calls.append(("list_latest_returns", user_id, account_label))
@@ -739,19 +746,65 @@ def test_a_holding_without_prices_says_where_its_ticker_stands(client, status, n
     response = test_client.get("/accounts/holdings", params={"account": "main"})
 
     assert _holding_cells(response.text, "NEW")[3:] == [f'<span class="entry-empty">{note}</span>']
-    # Only the holdings without prices are asked about.
-    assert ("list_tracked_tickers", ("NEW",)) in fake_portfolio.calls
 
 
-def test_every_holding_priced_asks_nothing_about_loading(client):
+def test_a_priced_holdings_status_isnt_shown(client):
     test_client, _, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)
     fake_portfolio.list_positions_result = [_position(ticker="AAPL")]
     fake_portfolio.list_latest_returns_result = [_return_row(ticker="AAPL")]
+    fake_portfolio.tracked_statuses = {"AAPL": "backfilling"}
+
+    response = test_client.get("/accounts/holdings", params={"account": "main"})
+
+    assert "Prices loading" not in response.text
+
+
+def test_names_and_statuses_come_from_one_call(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.list_positions_result = [_position(ticker="AAPL"), _position(ticker="NEW")]
+    fake_portfolio.list_latest_returns_result = [_return_row(ticker="AAPL")]
 
     test_client.get("/accounts/holdings", params={"account": "main"})
 
-    assert not [c for c in fake_portfolio.calls if c[0] == "list_tracked_tickers"]
+    assert [c for c in fake_portfolio.calls if c[0] == "list_tracked_tickers"] == [
+        ("list_tracked_tickers", ())
+    ]
+
+
+# --- ticker names (UX-2) ---
+
+
+def test_a_holdings_ticker_shows_its_name(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.list_positions_result = [_position(ticker="AAPL")]
+    fake_portfolio.list_latest_returns_result = [_return_row(ticker="AAPL")]
+    fake_portfolio.tracked_names = {"AAPL": "Apple Inc."}
+
+    response = test_client.get("/accounts/holdings", params={"account": "main"})
+
+    assert re.search(
+        r'<td role="cell"><span class="ticker" tabindex="0"><span class="mono">AAPL</span>'
+        r'<span class="ticker-name">.*Apple Inc\.</span></span></td>',
+        response.text,
+    )
+
+
+def test_a_failed_name_lookup_still_renders_the_holdings(client):
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.list_positions_result = [_position(ticker="AAPL")]
+    fake_portfolio.list_latest_returns_result = [_return_row(ticker="AAPL")]
+    fake_portfolio.tracked_names = {"AAPL": "Apple Inc."}
+    fake_portfolio.list_tracked_tickers_error = PortfolioUnavailable("down")
+
+    response = test_client.get("/accounts/holdings", params={"account": "main"})
+
+    assert response.status_code == 200
+    assert _holding_cells(response.text, "AAPL")
+    assert "Apple Inc." not in response.text
 
 
 def test_an_unanswered_status_call_still_says_waiting_for_prices(client):

@@ -3,18 +3,19 @@
 {% from "partials/_delta.html" import delta %}
 {% from "partials/_term.html" import term %}
 {% from "partials/_benchmark_field.html" import benchmark_form %}
+{% from "partials/_ticker.html" import ticker, ticker_list, ticker_option %}
 {% block title %}Labs — Stakehold{% endblock %}
 {# The holdings the default mix left out, one line per reason (labs_view.DefaultMix). Shown
    whatever the backtest did, since it says what the figures don't cover. #}
 {% macro left_out_notes(mix) -%}
 {% if mix.unpriced %}
-<p class="labs-note">Left out: <span class="mono">{{ mix.unpriced | join(", ") }}</span> — no price yet, so no weight.</p>
+<p class="labs-note">Left out: {{ ticker_list(mix.unpriced, ticker_names) }} — no price yet, so no weight.</p>
 {% endif %}
 {% if mix.unweighted %}
-<p class="labs-note">Left out: <span class="mono">{{ mix.unweighted | join(", ") }}</span> — a market value of zero, so no weight.</p>
+<p class="labs-note">Left out: {{ ticker_list(mix.unweighted, ticker_names) }} — a market value of zero, so no weight.</p>
 {% endif %}
 {% if mix.dropped %}
-<p class="labs-note">Only your largest {{ max_assets }} holdings are backtested. Left out: <span class="mono">{{ mix.dropped | join(", ") }}</span>.</p>
+<p class="labs-note">Only your largest {{ max_assets }} holdings are backtested. Left out: {{ ticker_list(mix.dropped, ticker_names) }}.</p>
 {% endif %}
 {%- endmacro %}
 {# One row of the mix form. `row` is a labs_mix.CheckedRow, or none for the empty row that adds
@@ -23,7 +24,7 @@
 {# The mix's figures and line cover only the assets whose history covers the period (LB-9);
    this names the rest, for `first` to `last` of the periods. #}
 {% macro mix_leaves_out(first, last, tickers) -%}
-{% if first == last %}Over {{ first }}{% else %}From {{ first }} to {{ last }}{% endif %} the mix leaves out <span class="mono">{{ tickers | join(", ") }}</span>: not enough history.
+{% if first == last %}Over {{ first }}{% else %}From {{ first }} to {{ last }}{% endif %} the mix leaves out {{ ticker_list(tickers, ticker_names) }}: not enough history.
 {%- endmacro %}
 {# A risk figure (labs_risk_view.RiskCell): its value in mono, with a Sharpe's standard error
    and any flags as notes; greyed, its reason (R9); none, a window that isn't covered. One
@@ -50,7 +51,7 @@
 {# The heading of the figures against the benchmark (RK-14): its ticker and first date, or why
    it couldn't be used at all, said once for every cell under it. #}
 {% macro against_heading(bench) -%}
-Against <span class="mono">{{ bench.ticker }}</span>{% if not bench.available %}: unavailable, {{ bench.reason }}{% elif bench.first_date %}, history from <span class="mono">{{ bench.first_date | date }}</span>{% endif %}
+Against {{ ticker(bench.ticker, ticker_names) }}{% if not bench.available %}: unavailable, {{ bench.reason }}{% elif bench.first_date %}, history from <span class="mono">{{ bench.first_date | date }}</span>{% endif %}
 {%- endmacro %}
 {% macro mix_row(i, row=none) -%}
 <div class="labs-row">
@@ -127,7 +128,7 @@ Against <span class="mono">{{ bench.ticker }}</span>{% if not bench.available %}
     <tbody role="rowgroup">
       {% for row in [backtest.mix] + backtest.assets | list %}
       <tr role="row"{% if loop.first %} class="labs-mix-row"{% endif %}>
-        <td role="cell">{% if row.ticker is none %}Mix{% else %}<span class="mono">{{ row.ticker }}</span>{% endif %}</td>
+        <td role="cell">{% if row.ticker is none %}Mix{% else %}{{ ticker(row.ticker, ticker_names) }}{% endif %}</td>
         <td class="num" role="cell" data-label="Weight"><span class="mono">{{ row.weight | share }}</span></td>
         {% for period in periods %}
         {% set figure = row.periods[period] %}
@@ -160,7 +161,7 @@ Against <span class="mono">{{ bench.ticker }}</span>{% if not bench.available %}
     <p class="labs-note">Sharpe and Sortino can't be measured: {{ risk.risk_free.reason }}.</p>
     {% endif %}
     {# Back at the risk section, since the page reloads; the rest of the query rides along. #}
-    {{ benchmark_form("/labs", "labs", benchmark, benchmark_error, tickers, tickers_notice, kept=benchmark_kept, anchor="#labs-risk") }}
+    {{ benchmark_form("/labs", "labs", benchmark, benchmark_error, tickers, tickers_notice, ticker_names, kept=benchmark_kept, anchor="#labs-risk") }}
     <div class="table-scroll" tabindex="0" role="region" aria-label="Risk of the mix by window">
     <table class="positions-table holdings-table labs-table labs-risk-table stack-table" role="table">
       <thead role="rowgroup">
@@ -219,7 +220,7 @@ Against <span class="mono">{{ bench.ticker }}</span>{% if not bench.available %}
     {% if risk_comparison.covered %}
     {# The benchmark is named once here, not under each of its four columns, which would widen
        a table that already scrolls. #}
-    <p class="as-of">Over {{ risk_comparison.window }}, from <span class="mono">{{ risk_comparison.start | date }}</span> to <span class="mono">{{ risk_comparison.end | date }}</span>. {% if risk.benchmark.available %}Beta to information ratio are against <span class="mono">{{ risk.benchmark.ticker }}</span>.{% else %}Beta to information ratio can't be measured against <span class="mono">{{ risk.benchmark.ticker }}</span>: {{ risk.benchmark.reason }}.{% endif %}</p>
+    <p class="as-of">Over {{ risk_comparison.window }}, from <span class="mono">{{ risk_comparison.start | date }}</span> to <span class="mono">{{ risk_comparison.end | date }}</span>. {% if risk.benchmark.available %}Beta to information ratio are against {{ ticker(risk.benchmark.ticker, ticker_names) }}.{% else %}Beta to information ratio can't be measured against {{ ticker(risk.benchmark.ticker, ticker_names) }}: {{ risk.benchmark.reason }}.{% endif %}</p>
     <div class="table-scroll" tabindex="0" role="region" aria-label="Risk of the mix and its assets over {{ risk_comparison.window }}">
     <table class="positions-table holdings-table labs-table labs-risk-table stack-table" role="table">
       <thead role="rowgroup">
@@ -237,7 +238,7 @@ Against <span class="mono">{{ bench.ticker }}</span>{% if not bench.available %}
       <tbody role="rowgroup">
         {% for row in risk_comparison.rows %}
         <tr role="row"{% if loop.first %} class="labs-mix-row"{% endif %}>
-          <td role="cell">{% if row.ticker is none %}Mix{% else %}<span class="mono">{{ row.ticker }}</span>{% endif %}</td>
+          <td role="cell">{% if row.ticker is none %}Mix{% else %}{{ ticker(row.ticker, ticker_names) }}{% endif %}</td>
           {% for cell in row.cells %}
           <td class="num" role="cell" data-label="{{ risk_measures[loop.index0].label }}">{{ risk_cell(cell) }}</td>
           {% endfor %}
@@ -325,7 +326,7 @@ Against <span class="mono">{{ bench.ticker }}</span>{% if not bench.available %}
   <h2>Not backtested</h2>
   <ul class="labs-unavailable">
     {% for status in unavailable %}
-    <li><span class="mono">{{ status.ticker }}</span> — {{ status.reason }}</li>
+    <li>{{ ticker(status.ticker, ticker_names) }} — {{ status.reason }}</li>
     {% endfor %}
   </ul>
   {% endif %}
@@ -350,8 +351,8 @@ Against <span class="mono">{{ bench.ticker }}</span>{% if not bench.available %}
       {{ mix_row(checked.rows | length if checked else 0) }}
     </div>
     <datalist id="labs-ticker-options">
-      {% for ticker in tickers %}
-      <option value="{{ ticker }}">
+      {% for symbol in tickers %}
+      {{ ticker_option(symbol, ticker_names) }}
       {% endfor %}
     </datalist>
     <p class="field-hint">Weights are percentages. Not in the list? <a href="/tickers/new">Add a ticker</a>.</p>

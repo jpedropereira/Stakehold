@@ -50,6 +50,7 @@ from web.portfolio_client.errors import (
 )
 from web.rebuild_outcome import rebuild_outcome
 from web.settings import Settings
+from web.ticker_names import load_names
 from web.transaction_counts import load_transaction_counts
 
 logger = logging.getLogger(__name__)
@@ -1030,6 +1031,8 @@ async def transactions_page(
         transactions, error = None, _TRANSACTIONS_UNAVAILABLE
     elif isinstance(transactions, BaseException):
         raise transactions
+    # Only a TICKER identifier is a ticker; an ISIN or broker SYMBOL has no tracked name.
+    has_tickers = any(t.instrument_identifier_kind == "TICKER" for t in transactions or ())
     return _render(
         request,
         response,
@@ -1040,6 +1043,7 @@ async def transactions_page(
             "csrf_token": csrf_token,
             "account_label": account,
             "transactions": None if transactions is None else transactions[::-1],
+            "ticker_names": await load_names(portfolio_client) if has_tickers else {},
             "error": error,
             # Set by deletion.py's redirect after a delete: 1 if it deleted the row, 0 if the
             # row was already gone.

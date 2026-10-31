@@ -39,7 +39,8 @@ from web.portfolio_view import (
     unmapped_for_broker,
 )
 from web.settings import Settings
-from web.ticker_status import holding_price_note, load_statuses
+from web.ticker_names import load_tracked, names_from
+from web.ticker_status import holding_price_note, statuses_from
 
 logger = logging.getLogger(__name__)
 
@@ -130,10 +131,11 @@ async def account_holdings_page(
 
     holdings = build_holdings(filter_open_positions(view.positions), view.latest_returns)
     prices_known = "latest returns" not in view.failed
-    # A holding with no return row says where its ticker's loading stands (ticker onboarding):
-    # asked only about those holdings, and only when the returns call answered.
+    # A holding with no return row says where its ticker's loading stands (ticker onboarding),
+    # only when the returns call answered. One call gives those statuses and every ticker's name.
     awaiting = [h.canonical_ticker for h in holdings if prices_known and h.awaiting_prices]
-    statuses = await load_statuses(portfolio_client, awaiting)
+    tracked = await load_tracked(portfolio_client) if holdings else []
+    statuses = statuses_from(tracked)
     return_points = aggregate_portfolio_returns(view.returns)
     return _render(
         request,
@@ -149,6 +151,7 @@ async def account_holdings_page(
             # A holding with no return row is "waiting for prices" only if the call answered.
             "prices_known": prices_known,
             "price_notes": {t: holding_price_note(statuses.get(t)) for t in awaiting},
+            "ticker_names": names_from(tracked),
             "unmapped": unmapped_for_broker(
                 view.unmapped, header["account"].broker if header["account"] else None
             ),

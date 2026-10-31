@@ -65,6 +65,8 @@ class FakePortfolioClient:
         self.list_portfolio_returns_error: Exception | None = None
         # {ticker: status} data-store reports for tickers it tracks directly (TK-9).
         self.tracked_statuses: dict[str, str] = {}
+        # {ticker: display_name} for tickers it tracks (UX-2).
+        self.tracked_names: dict[str, str] = {}
         self.list_tracked_tickers_error: Exception | None = None
         self.calls: list[tuple] = []
 
@@ -96,11 +98,16 @@ class FakePortfolioClient:
         self.calls.append(("list_tracked_tickers", tuple(tickers or ())))
         if self.list_tracked_tickers_error:
             raise self.list_tracked_tickers_error
-        return [
-            SimpleNamespace(ticker=ticker, status=self.tracked_statuses[ticker])
-            for ticker in tickers or ()
-            if ticker in self.tracked_statuses
+        tracked = sorted(set(self.tracked_statuses) | set(self.tracked_names))
+        rows = [
+            SimpleNamespace(
+                ticker=ticker,
+                status=self.tracked_statuses.get(ticker, "ready"),
+                display_name=self.tracked_names.get(ticker, ticker),
+            )
+            for ticker in tracked
         ]
+        return [r for r in rows if r.ticker in tickers] if tickers else rows
 
 
 def _settings() -> Settings:
@@ -211,7 +218,8 @@ def _holding_row(html, ticker):
     """The holdings table's main row for `ticker` (not its breakdown row)."""
     match = re.search(
         rf'<tr role="row" class="holding-row">\s*<td[^>]*><button [^>]*>'
-        rf"{re.escape(ticker)}</button></td>.*?</tr>",
+        rf'(?:<span class="ticker">)?<span class="mono">{re.escape(ticker)}</span>'
+        rf".*?</button></td>.*?</tr>",
         html,
         re.S,
     )
@@ -468,7 +476,18 @@ def test_unpriced_row_says_where_its_tickers_loading_stands(client, status, note
     assert note in row
 
 
-def test_ticker_statuses_are_asked_only_about_unpriced_holdings(client):
+def test_a_priced_holdings_status_isnt_shown(client):
+    """Only an unpriced holding says where its ticker's loading stands."""
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.holdings = Holdings(holdings=(_holding("IWDA.AS"),), totals=_totals())
+    fake_portfolio.tracked_statuses = {"IWDA.AS": "backfilling"}
+
+    assert "Prices loading" not in _holding_row(_page(test_client), "IWDA.AS")
+
+
+def test_names_and_statuses_come_from_one_call(client):
+    """UX-1 flagged the risk of a second list_tracked_tickers call once names were added."""
     test_client, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)
     fake_portfolio.holdings = Holdings(
@@ -477,20 +496,9 @@ def test_ticker_statuses_are_asked_only_about_unpriced_holdings(client):
 
     _page(test_client)
 
-    assert ("list_tracked_tickers", ("NEW.DE",)) in fake_portfolio.calls
-    assert not any(
-        c[0] == "list_tracked_tickers" and "IWDA.AS" in c[1] for c in fake_portfolio.calls
-    )
-
-
-def test_no_status_call_when_every_holding_is_priced(client):
-    test_client, fake_auth, fake_portfolio = client
-    _logged_in(test_client, fake_auth)
-    fake_portfolio.holdings = Holdings(holdings=(_holding(),), totals=_totals())
-
-    _page(test_client)
-
-    assert not any(c[0] == "list_tracked_tickers" for c in fake_portfolio.calls)
+    assert [c for c in fake_portfolio.calls if c[0] == "list_tracked_tickers"] == [
+        ("list_tracked_tickers", ())
+    ]
 
 
 def test_a_status_failure_still_renders_the_row(client):
@@ -500,6 +508,46 @@ def test_a_status_failure_still_renders_the_row(client):
     fake_portfolio.list_tracked_tickers_error = PortfolioUnavailable("down")
 
     assert "Waiting for prices" in _holding_row(_page(test_client), "NEW.DE")
+
+
+# --- ticker names (UX-2) ------------------------------------------------------------------------
+
+
+def test_a_holdings_ticker_shows_its_name(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.holdings = Holdings(holdings=(_holding("IWDA.AS"),), totals=_totals())
+    fake_portfolio.tracked_names = {"IWDA.AS": "iShares Core MSCI World"}
+
+    toggle = re.search(
+        r"<button [^>]*>.*?</button>", _holding_row(_page(test_client), "IWDA.AS"), re.S
+    )
+
+    # Inside the breakdown button, so no tab stop of its own: the button opens the tooltip.
+    assert '<span class="ticker"><span class="mono">IWDA.AS</span>' in toggle.group(0)
+    assert "iShares Core MSCI World" in toggle.group(0)
+    assert "tabindex" not in toggle.group(0)
+
+
+def test_a_ticker_with_no_name_is_plain(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.holdings = Holdings(holdings=(_holding("IWDA.AS"),), totals=_totals())
+
+    assert 'class="ticker-name"' not in _holding_row(_page(test_client), "IWDA.AS")
+
+
+def test_a_failed_name_lookup_still_renders_the_holdings(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.holdings = Holdings(holdings=(_holding("IWDA.AS"),), totals=_totals())
+    fake_portfolio.tracked_names = {"IWDA.AS": "iShares Core MSCI World"}
+    fake_portfolio.list_tracked_tickers_error = PortfolioUnavailable("down")
+
+    row = _holding_row(_page(test_client), "IWDA.AS")
+
+    assert "100.00%" in _cell(row, "Weight")
+    assert "iShares Core MSCI World" not in row
 
 
 # --- the per-account breakdown ------------------------------------------------------------------

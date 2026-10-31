@@ -2,6 +2,7 @@
 {% from "partials/_banner.html" import banner %}
 {% from "partials/_delta.html" import delta %}
 {% from "partials/_term.html" import term %}
+{% from "partials/_ticker.html" import ticker %}
 {% from "partials/_returns_chart.html" import returns_chart %}
 {% block title %}Portfolio — Stakehold{% endblock %}
 {% set freshness = "Prices update daily; returns are recalculated a few times a day." %}
@@ -87,7 +88,7 @@
       {% for row in rows %}
       {% set holding = row.holding %}
       <tr role="row" class="holding-row">
-        <td role="cell"><button type="button" class="ticker-toggle mono" aria-controls="breakdown-{{ loop.index }}" aria-expanded="true" disabled>{{ holding.canonical_ticker }}</button></td>
+        <td role="cell"><button type="button" class="ticker-toggle mono" aria-controls="breakdown-{{ loop.index }}" aria-expanded="true" disabled>{{ ticker(holding.canonical_ticker, ticker_names, focusable=false) }}</button></td>
         <td class="num" role="cell" data-label="Units"><span class="mono">{{ holding.quantity | qty }}</span></td>
         <td class="num" role="cell" data-label="Avg cost"><span class="mono">{{ holding.average_cost_eur | money }}</span>{{ native_line(holding, holding.average_cost_native) }}</td>
         {% if not holding.priced %}

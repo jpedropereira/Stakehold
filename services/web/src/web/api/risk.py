@@ -87,6 +87,7 @@ from web.risk_what_if_view import (
     parse_what_if,
 )
 from web.settings import Settings
+from web.ticker_names import load_names
 
 logger = logging.getLogger(__name__)
 
@@ -627,6 +628,7 @@ async def risk(
             ranking,
         ),
         (tickers, tickers_notice),
+        ticker_names,
     ) = await asyncio.gather(
         _load_ex_post(portfolio_client, user.user_id, benchmark),
         _load_holdings_sections(
@@ -640,6 +642,7 @@ async def risk(
             _RankingAsk(rank_weight, rank_by),
         ),
         _load_tickers(portfolio_client),
+        load_names(portfolio_client),
     )
     return _render(
         request,
@@ -675,5 +678,6 @@ async def risk(
             "benchmark_error": benchmark_error,
             "tickers": tickers,
             "tickers_notice": tickers_notice,
+            "ticker_names": ticker_names,
         },
     )

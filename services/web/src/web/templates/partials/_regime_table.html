@@ -1,4 +1,5 @@
 {% from "partials/_term.html" import term %}
+{% from "partials/_ticker.html" import ticker %}
 {# /risk's regime tables (RK-28), built by risk_regime_view.py: for each market regime the
    section's history overlaps, the series' and the benchmark's cumulative return and max
    drawdown inside it. A return is coloured as a gain or a loss; a drawdown is plain ink, as on
@@ -21,8 +22,9 @@
 {%- endmacro %}
 
 {# `series` heads the series' columns ("Your holdings", "Today's mix"); `what` names it in
-   the note; `anchor` is the block's id. #}
-{% macro regime_block(regimes, series, what, anchor) -%}
+   the note; `anchor` is the block's id; `names` is the page's ticker_names, for the benchmark's
+   name (UX-2). The note names it at its first mention only: each named ticker is a tab stop. #}
+{% macro regime_block(regimes, series, what, anchor, names) -%}
 {% if regimes %}
 <div class="risk-regimes" id="{{ anchor }}">
   <h3>Market regimes</h3>
@@ -30,7 +32,7 @@
   <p class="entry-empty">{{ regimes.empty_reason }}</p>
   {% else %}
   {% set bench = regimes.benchmark %}
-  <p class="labs-note">How {{ what }} and <span class="mono">{{ bench.ticker }}</span> did, historically, during each market {{ term("regime", "regime") }} in this history: the {{ term("cumulative return", "cumulative-return") }} and the {{ term("max drawdown", "max-drawdown") }} from each regime's start to its end, on daily returns. Open a group to see its regimes. A regime that began before this history, or hasn't ended, is measured on the part inside it.{% if not bench.available %} <span class="mono">{{ bench.ticker }}</span> is unavailable: {{ bench.reason }}.{% elif bench.first_date %} <span class="mono">{{ bench.ticker }}</span>'s history starts <span class="mono">{{ bench.first_date | date }}</span>.{% endif %}</p>
+  <p class="labs-note">How {{ what }} and {{ ticker(bench.ticker, names) }} did, historically, during each market {{ term("regime", "regime") }} in this history: the {{ term("cumulative return", "cumulative-return") }} and the {{ term("max drawdown", "max-drawdown") }} from each regime's start to its end, on daily returns. Open a group to see its regimes. A regime that began before this history, or hasn't ended, is measured on the part inside it.{% if not bench.available %} <span class="mono">{{ bench.ticker }}</span> is unavailable: {{ bench.reason }}.{% elif bench.first_date %} <span class="mono">{{ bench.ticker }}</span>'s history starts <span class="mono">{{ bench.first_date | date }}</span>.{% endif %}</p>
   {% for group in regimes.groups %}
   <details class="risk-regime-group">
   <summary>{{ group.label }} <span class="mono">{{ group.lines | length }}</span> regime{% if group.lines | length != 1 %}s{% endif %}</summary>
@@ -41,8 +43,8 @@
         <th role="columnheader" scope="col">Regime</th>
         <th class="num" role="columnheader" scope="col">{{ series }}<span class="period-start">return</span></th>
         <th class="num" role="columnheader" scope="col">{{ series }}<span class="period-start">max drawdown</span></th>
-        <th class="num" role="columnheader" scope="col"><span class="mono">{{ bench.ticker }}</span><span class="period-start">return</span></th>
-        <th class="num" role="columnheader" scope="col"><span class="mono">{{ bench.ticker }}</span><span class="period-start">max drawdown</span></th>
+        <th class="num" role="columnheader" scope="col">{{ ticker(bench.ticker, names) }}<span class="period-start">return</span></th>
+        <th class="num" role="columnheader" scope="col">{{ ticker(bench.ticker, names) }}<span class="period-start">max drawdown</span></th>
       </tr>
     </thead>
     <tbody role="rowgroup">

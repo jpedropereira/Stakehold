@@ -73,6 +73,7 @@ from web.portfolio_client.base import (
 )
 from web.portfolio_client.errors import InvalidPortfolioRequest, PortfolioClientError
 from web.settings import Settings
+from web.ticker_names import load_names
 
 logger = logging.getLogger(__name__)
 
@@ -251,8 +252,10 @@ async def labs(
     shown: tuple[MixRow, ...] = ()  # the mix the table shows, for the form's last_* fields
     to_send: tuple[tuple[str, Decimal], ...] = ()
     if form is None:
-        mix, (tickers, tickers_notice) = await asyncio.gather(
-            _load_mix(portfolio_client, user.user_id), _load_tickers(portfolio_client)
+        mix, (tickers, tickers_notice), ticker_names = await asyncio.gather(
+            _load_mix(portfolio_client, user.user_id),
+            _load_tickers(portfolio_client),
+            load_names(portfolio_client),
         )
         if mix is None:
             holdings_error = _UNAVAILABLE
@@ -262,7 +265,9 @@ async def labs(
             if not mix.assets:
                 logger.info("labs: nothing to backtest, no holding has a market value.")
     else:
-        tickers, tickers_notice = await _load_tickers(portfolio_client)
+        (tickers, tickers_notice), ticker_names = await asyncio.gather(
+            _load_tickers(portfolio_client), load_names(portfolio_client)
+        )
         checked = check_mix(form.rows, None if tickers_notice else tickers)
         logger.info(
             "labs: edited mix, %d rows, %d with errors%s.",
@@ -314,6 +319,7 @@ async def labs(
             "showing_last": checked is not None and not checked.valid and bool(to_send),
             "tickers": tickers,
             "tickers_notice": tickers_notice,
+            "ticker_names": ticker_names,
             "backtest": backtest,
             "backtest_error": backtest_error,
             "periods": BACKTEST_PERIODS,
