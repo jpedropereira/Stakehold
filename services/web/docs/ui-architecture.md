@@ -252,9 +252,11 @@ described here updates this file in the same change.
     `system` would also need JS to rebuild the element after an in-place switch. The cost is one
     extra small SVG download per page. The hidden image is `display: none`, so screen readers
     skip it.
-  - *Toggle*: a form in the header with three submit buttons (`name="theme"`), the current one
-    marked `aria-pressed="true"`. It's shown on every page rendered with a CSRF token, logged in
-    or not; the 403 page has no token, so no toggle. Without JS it posts and gets a 303 back to
+  - *Toggle*: a form with three submit buttons (`name="theme"`), the current one marked
+    `aria-pressed="true"`. Logged in, it sits in the header's account menu (UX-4, below);
+    logged out (login, signup, an anonymous 404), it sits bare in the header, since there is no
+    user to name a menu after. One `theme_toggle()` macro in `base.html` renders both. It's
+    shown on every page rendered with a CSRF token; the 403 page has no token, so no toggle. Without JS it posts and gets a 303 back to
     the page it came from (`next`, the current path and query). With htmx (`hx-swap="none"`)
     the route answers `200` with `HX-Trigger: {"stakehold:theme": "<value>"}`, and
     `static/theme.js` sets the attribute and `aria-pressed`, then fires
@@ -400,6 +402,23 @@ described here updates this file in the same change.
   header and no switcher, because an outage must not tell the visitor a real account doesn't
   exist. POST routes load the header lazily (`extra_context_loader`), so only a full-page error
   re-render pays for that call, never a successful write.
+- **Site header (UX-4): six sections in the nav, the rest in an account menu.** The header
+  had grown to seven nav links, the user's name, Log out and the three theme buttons on one
+  row. The main nav now holds only the sections: Overview, Portfolio, Labs, Risk, Accounts and
+  Tickers. Admin, the theme switch and Log out sit in a menu opened from the user's name.
+  - *Admin left the nav*: only admins see it, and it's a tool rather than a section of the
+    user's portfolio. On an admin page the menu's Admin link carries `aria-current="page"` and
+    no nav link does.
+  - *A `<details>`, not a scripted dropdown*: it opens and closes without JS, and the browser
+    exposes its expanded state. Its contents are ordinary links and forms, so it takes no ARIA
+    `menu` roles, which promise arrow-key navigation that a disclosure doesn't need.
+  - *`static/account_menu.js` adds the other ways out*: Escape (focus returns to the name), a
+    click outside, and focus leaving the menu. A click inside, such as a theme button, leaves
+    it open, so the theme change shows in place.
+  - *The panel floats*, right-aligned under the name and capped at the viewport less the
+    gutters, so opening it neither makes the header taller nor pushes a phone-width page
+    sideways. At phone width the mark and the name share the first row and the six sections
+    fill the second, spread with `space-between` to fit one line at 360px.
 - **`/portfolio`'s per-account breakdown is a row of its own under each holding, opened from
   the ticker (PF-4).** One cell spans the table and holds a small table of the accounts. A row of
   its own, rather than a `<details>` in the ticker cell, gives the accounts the table's full

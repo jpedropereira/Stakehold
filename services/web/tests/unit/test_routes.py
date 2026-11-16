@@ -1835,7 +1835,10 @@ def test_nav_marks_admin_on_admin_pages(client, path):
 
     response = test_client.get(path)
 
-    assert _current_links(_SITE_NAV, response.text) == ["/admin"]
+    # Admin is in the account menu since UX-4, not the main nav.
+    account_menu = re.compile(r'<details class="account-menu">(.*?)</details>', re.DOTALL)
+    assert _current_links(account_menu, response.text) == ["/admin"]
+    assert _current_links(_SITE_NAV, response.text) == []
 
 
 def test_nav_keeps_its_current_section_on_a_full_page_error(client):

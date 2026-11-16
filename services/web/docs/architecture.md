@@ -638,7 +638,7 @@ Every route `web` serves, with what it requires and which upstream calls it make
   `labs_chart.js` (LB-8, the Labs growth chart), `labs_drawdown_chart.js` (RK-9, the mix's
   drawdown under it; both take `formatPct` from `chart_theme.js`), `risk_rolling_chart.js`
   (RK-25, every `/risk` rolling chart, from its data island), `theme.js` (UI-3, applies a theme
-  switch in place), `ticker_tooltip.js` (UX-1, Escape closes a ticker's name tooltip), `transaction_form.js` (UI-9, shows the manual-entry fields the chosen type
+  switch in place), `ticker_tooltip.js` (UX-1, Escape closes a ticker's name tooltip), `account_menu.js` (UX-4, closes the header's account menu on Escape, an outside click or focus leaving it), `transaction_form.js` (UI-9, shows the manual-entry fields the chosen type
   and currency need), `password_toggle.js` (UI-12), `confirm_dialog.js` (opens a delete's
   confirmation as a dialog in place of its page), and `holdings_breakdown.js` (shows and hides a
   `/portfolio` holding's per-account breakdown from its ticker), and `labs_form.js` (LB-7, adds
