@@ -118,6 +118,22 @@ upstream calls) is in [`architecture.md`](architecture.md) and [`endpoints.md`](
     matched no line, and lists the mix first, then only the shown lines. *Rejected: a color per
     asset*, which chapter II has no room for. *Rejected: a legend*, which would repeat the
     checkboxes under the chart.
+  - *The tooltip and the checkboxes carry each line's full name (UX-3)*. The data island holds
+    a `name` per asset and for the benchmark, `null` when data-store has none, so it carries
+    only the names of lines it draws and the script looks nothing up. *Rejected: the page's
+    whole `ticker_names` map in the island*, most of it for tickers the chart doesn't draw.
+    - *Tooltip.* A line reads `VWCE.DE — Vanguard FTSE All-World: +7.07%`, the benchmark's
+      with `(benchmark)` after the name. Chart.js doesn't wrap a tooltip line, and at phone
+      width a fund's name is wider than the canvas, which would clip it. So the name is cut
+      with `…` to the room the canvas leaves (`chart_theme.js`'s `fitText`), and left out
+      when fewer than four characters would fit. The names are kept in a `Map` beside the
+      datasets, not on them, for the frozen-animation reason below.
+    - *Checkboxes.* Each label prints its ticker through the `ticker` macro with
+      `focusable=false`: the box is the tab stop and the label opens the name.
+    - *The end-of-line labels stay bare tickers.* Their room comes out of the plot's width, so
+      a name there would take most of the plot at phone width.
+    - *Known cost:* a disabled box can't take focus, so an asset with no line shows its name
+      on hover only. The returns table above the chart names it too.
   - *The date axis is capped by the plot's real width (LB-10)*. Chart.js's tick skipping sizes
     the dates against a width that leaves out the y axis, so with the labels' padding at phone
     width adjacent dates touched. `labs_chart.js` sets `maxTicksLimit` to the dates that fit

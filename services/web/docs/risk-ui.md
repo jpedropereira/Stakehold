@@ -182,6 +182,14 @@ file in the same change. The server side of `/risk` (its router, the upstream ca
       for the growth chart's reason. The zero gridline is `--text-muted`. ρ's axis is fixed at
       −1 to 1, so a move from 0.90 to 0.95 reads as small as it is. Volatility's axis starts
       at 0.
+    - *The pair is named beside its chart, not in it (UX-3).* The chart's one line is
+      "Correlation", so the canvas has no ticker to name. The note above it prints both sides
+      through the `ticker` macro, and each option of the pair's two selects reads
+      `AAPL — Apple Inc.`, with `(benchmark)` after the name for a benchmark outside the mix.
+      A select can't hold the tooltip, so the name is the option's text; its value is still
+      the bare ticker. A select is as wide as its longest option, so the pair's are capped at
+      their row: at phone width the closed select cuts a long name and the open list shows it
+      whole. The volatility and Sharpe charts are of the whole portfolio and name no ticker.
     - *A gap breaks the line, and its reason goes under the chart.* Each point is plotted at
       its window's end. A greyed point stays in the series as a null (`spanGaps: false`), and
       the canvas can't show why, so each run of greyed windows with one reason becomes one

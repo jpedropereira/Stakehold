@@ -3,10 +3,11 @@ document.addEventListener("DOMContentLoaded", () => {
   const dataEl = document.getElementById("labs-chart-data");
   if (!canvas || !dataEl) return;
 
-  // labs_view.build_growth_payload: {period, dates, mix, assets: [{ticker, values}], left_out,
-  // benchmark: {ticker, values, reason} or null}, each line cumulative growth as a fraction (0 on
-  // the first date), or null when it doesn't cover the period. A late asset's Max line has null
-  // points before its first day.
+  // labs_view.build_growth_payload: {period, dates, mix, assets: [{ticker, name, values}],
+  // left_out, benchmark: {ticker, name, values, reason} or null}, each line cumulative growth as
+  // a fraction (0 on the first date), or null when it doesn't cover the period. A late asset's
+  // Max line has null points before its first day. A name is the instrument's full name, or
+  // null when data-store has none.
   const growth = JSON.parse(dataEl.textContent);
 
   // Theme colors, the percentage format and the redraw on a theme change: static/chart_theme.js.
@@ -30,6 +31,13 @@ document.addEventListener("DOMContentLoaded", () => {
   // own on a dataset left a toggled chart frozen mid-animation, where boolean flags don't.
   const BENCHMARK = "__benchmark";
   const seriesOf = (dataset) => (dataset.isBenchmark ? BENCHMARK : dataset.label);
+  // Each line's full name (UX-3), for the tooltip, keyed like seriesOf. Kept here, not on the
+  // dataset, for the reason above.
+  const names = new Map();
+  if (growth.benchmark && growth.benchmark.name) names.set(BENCHMARK, growth.benchmark.name);
+  for (const asset of growth.assets) {
+    if (asset.name) names.set(asset.ticker, asset.name);
+  }
   const datasets = [];
   if (growth.mix) {
     datasets.push({ label: "Mix", data: growth.mix, borderWidth: 2.5, isMix: true });
@@ -55,7 +63,9 @@ document.addEventListener("DOMContentLoaded", () => {
     ctx.p0.parsed.y >= 0 && ctx.p1.parsed.y >= 0 ? colors.gain : colors.loss;
 
   // Asset lines share one muted color (the palette has none to spare), so each shown one is
-  // named by its ticker at its last point, in the figures' mono. Labels that would overlap are
+  // named by its ticker at its last point, in the figures' mono. The ticker alone, not its full
+  // name (UX-3): the labels' room comes out of the plot's width, and a name would take most of
+  // it at phone width. The tooltip and the checkbox labels carry the names. Labels that would overlap are
   // pushed apart vertically, staying inside the plot's height; they sit in right padding that
   // render() sizes to the widest shown label.
   const LABEL_GAP = 6;
@@ -63,6 +73,8 @@ document.addEventListener("DOMContentLoaded", () => {
   const LABEL_LINE = LABEL_SIZE + 2;
   // How far, in px, the pointer can be from an asset line and still raise it.
   const HOVER_REACH = 12;
+  // The space, in px, kept between a tooltip and the canvas's edges.
+  const TOOLTIP_MARGIN = 8;
   const monoFamily = getComputedStyle(document.documentElement)
     .getPropertyValue("--font-mono")
     .trim();
@@ -154,11 +166,25 @@ document.addEventListener("DOMContentLoaded", () => {
           // The mix first, then the benchmark, then the assets.
           itemSort: (a, b) => rank(a.dataset) - rank(b.dataset) || a.datasetIndex - b.datasetIndex,
           callbacks: {
+            // "TICKER — Name: +12.34%" (UX-3). Chart.js doesn't wrap a tooltip line, so the name
+            // is cut to what the canvas has room for, or left out when almost nothing fits.
             label: (ctx) => {
-              const name = ctx.dataset.isBenchmark
-                ? `${ctx.dataset.label} (benchmark)`
-                : ctx.dataset.label;
-              return `${name}: ${formatPct(ctx.parsed.y, 2)}`;
+              const { dataset, chart } = ctx;
+              const role = dataset.isBenchmark ? " (benchmark)" : "";
+              const value = `: ${formatPct(ctx.parsed.y, 2)}`;
+              const name = names.get(seriesOf(dataset));
+              if (!name) return `${dataset.label}${role}${value}`;
+              const tooltip = chart.tooltip.options;
+              const padding = Chart.helpers.toPadding(tooltip.padding);
+              chart.ctx.save();
+              chart.ctx.font = Chart.helpers.toFont(tooltip.bodyFont).string;
+              const rest = chart.ctx.measureText(`${dataset.label} — ${role}${value}`).width;
+              const room = chart.width - padding.width - TOOLTIP_MARGIN - rest;
+              const fitted = theme.fitText(chart.ctx, name, room);
+              chart.ctx.restore();
+              return fitted
+                ? `${dataset.label} — ${fitted}${role}${value}`
+                : `${dataset.label}${role}${value}`;
             },
           },
         },

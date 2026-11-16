@@ -329,7 +329,9 @@ async def labs(
                 None
                 if backtest is None or backtest.growth is None
                 else build_growth_payload(
-                    backtest.growth, None if backtest.risk is None else backtest.risk.benchmark
+                    backtest.growth,
+                    None if backtest.risk is None else backtest.risk.benchmark,
+                    ticker_names,
                 )
             ),
             "left_out_runs": (
