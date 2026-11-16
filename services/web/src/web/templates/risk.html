@@ -5,6 +5,7 @@
 {% from "partials/_rolling_charts.html" import rolling_block, pair_block %}
 {% from "partials/_regime_table.html" import regime_block %}
 {% from "partials/_ticker.html" import ticker, ticker_list, ticker_option %}
+{% from "partials/_segmented.html" import segmented_links %}
 {% block title %}Risk — Stakehold{% endblock %}
 {# One figure, formatted by its row's kind (risk_view.SUMMARY_ROWS): only a return is coloured as a gain
    or a loss, to 1 decimal like the Labs risk panel's CAGR (RK-9). #}
@@ -194,11 +195,7 @@
     <p class="entry-empty">Nothing to measure yet — ex-ante figures start once a holding has a
       price. <a href="/accounts">Add transactions to an account</a>.</p>
     {% else %}
-    <nav class="chart-toggle labs-risk-windows" aria-label="Ex-ante window">
-      {% for w, url in ex_ante.window_links.items() %}
-      <a class="btn btn-ghost" href="{{ url }}"{% if w == ex_ante_window %} aria-current="true"{% endif %}>{{ w }}</a>
-      {% endfor %}
-    </nav>
+    {{ segmented_links("Ex-ante window", ex_ante.window_links, ex_ante_window, mono=true) }}
     {% if ex_ante.column is none %}
     <p class="entry-empty">None of your holdings could be measured, so there are no ex-ante
       figures.</p>
@@ -604,8 +601,8 @@
     {% call banner("warning") %}<strong>No risk-free rate.</strong> Without it, the Sharpe ratio can't be measured, so its change is greyed.{% endcall %}
     {% endif %}
     <p class="as-of">Each ticker at <span class="mono">{{ rk.weight | pct1 }}</span> of the mix, measured {% if rk.window.start %}from <span class="mono">{{ rk.window.start | date }}</span> {% endif %}to <span class="mono">{{ rk.window.end | date }}</span>, your holdings' {{ rk.window.label }} window. Hover a figure for its window and number of returns.</p>
-    <p class="labs-note">Ordered by the change in
-      {% for key, label in [("sigma_p", "volatility"), ("diversification_ratio", "diversification ratio")] %}<a href="{{ rk.sort_links[key] }}"{% if rk.rank_by == key %} aria-current="true"{% endif %}>{{ label }}</a>{% if loop.first %} or {% endif %}{% endfor %}:
+    {{ segmented_links("Order by", rk.sort_links, rk.rank_by, labels={"sigma_p": "Volatility", "diversification_ratio": "Diversification ratio"}) }}
+    <p class="labs-note">Ordered by the change in {{ "volatility" if rk.rank_by == "sigma_p" else "diversification ratio" }}:
       the risk changes are the reliable ones. The change in the historical Sharpe ratio is shown
       with its standard error but never ordered by: the best of many noisy Sharpe changes is
       mostly luck.</p>

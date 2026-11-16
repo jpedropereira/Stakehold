@@ -209,6 +209,26 @@ described here updates this file in the same change.
   labels use a small formatter in `portfolio_chart.js` that mirrors `formatting.py`'s
   `money`/`signed_money`. **Known sharp edge:** that is two copies of one convention, and no test
   ties them together (there's no JS test runner). A change to the convention must touch both.
+  Since UX-5 the buttons are the segmented control below.
+- **Every view switch is one segmented control (UX-5).** Period, window, series and sort
+  switches had been `.btn-ghost` text, underlined like links, the selected one only losing its
+  underline. They read as links in prose, not as a control. `partials/_segmented.html` now
+  draws them all as one bordered row of options:
+  - *Two macros, one look.* `segmented_links` for the switches the server answers (Labs' growth
+    period and comparison window, Risk's ex-ante window and ranking order): plain links, so
+    they work without JS as before, the current one `aria-current="true"`. It takes the routes'
+    existing `{value: url}` link dicts unchanged. `segmented_buttons` for the returns chart's
+    client-side view and range: `aria-pressed`, flipped by `portfolio_chart.js`, which needed no
+    change.
+  - *A labelled `role="group"`, not a `<nav>`.* A view switch isn't site navigation, and `/risk`
+    would otherwise gain a landmark per switch.
+  - *The selected state doesn't rest on colour.* A filled option, bold, with a gold bar along its
+    foot: the mark the site nav gives `aria-current`. Gold stays a control colour, never gain or
+    loss. Periods and windows are set in mono, like every number.
+  - *It wraps rather than overflow.* Labs' seven growth periods must fit a 360px phone.
+  - *Not the header's theme switch*, which UX-4 moves into the account menu; it may adopt the
+    buttons variant there. UX-10 adds its `hx-*` attributes and section anchor in the
+    `segmented_links` macro, so every server-answered switch gets them at once.
 - **The chart's height comes from a `.chart-frame` around the canvas, not from its width (LY-3).**
   Chart.js's default 2:1 aspect ratio ties height to width: about 150px at phone width, and about
   775px once a chart runs the full content width. `portfolio_chart.js` turns that off

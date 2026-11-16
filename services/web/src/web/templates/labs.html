@@ -4,6 +4,7 @@
 {% from "partials/_term.html" import term %}
 {% from "partials/_benchmark_field.html" import benchmark_form %}
 {% from "partials/_ticker.html" import ticker, ticker_list, ticker_option %}
+{% from "partials/_segmented.html" import segmented_links %}
 {% block title %}Labs — Stakehold{% endblock %}
 {# The holdings the default mix left out, one line per reason (labs_view.DefaultMix). Shown
    whatever the backtest did, since it says what the figures don't cover. #}
@@ -212,11 +213,7 @@ Against {{ ticker(bench.ticker, ticker_names) }}{% if not bench.available %}: un
     <h3 id="labs-risk-compare-title">Mix and assets over one window</h3>
     {# Links, like the growth periods: the page works without JS. Every window is already in
        the response, so this reruns the same backtest; it doesn't ask portfolio for more. #}
-    <nav class="chart-toggle labs-risk-windows" aria-label="Comparison window">
-      {% for w in risk_grid.columns %}
-      <a class="btn btn-ghost" href="{{ risk_window_links[w.window] }}"{% if w.window == risk_window %} aria-current="true"{% endif %}>{{ w.window }}</a>
-      {% endfor %}
-    </nav>
+    {{ segmented_links("Comparison window", risk_window_links, risk_window, mono=true, class_="labs-risk-windows") }}
     {% if risk_comparison.covered %}
     {# The benchmark is named once here, not under each of its four columns, which would widen
        a table that already scrolls. #}
@@ -261,11 +258,7 @@ Against {{ ticker(bench.ticker, ticker_names) }}{% if not bench.available %}: un
      The asset toggles ship hidden, since they'd do nothing without the script. #}
   <section class="labs-growth" aria-labelledby="labs-growth-title">
     <h2 id="labs-growth-title">Growth</h2>
-    <nav class="chart-toggle labs-periods" aria-label="Growth period">
-      {% for p in periods %}
-      <a class="btn btn-ghost" href="{{ period_links[p] }}"{% if p == period %} aria-current="true"{% endif %}>{{ p }}</a>
-      {% endfor %}
-    </nav>
+    {{ segmented_links("Growth period", period_links, period, mono=true, class_="labs-periods") }}
     {# The mix has a line whenever any asset covers the period (LB-9), so no mix line means no
        line at all. #}
     {% if growth is none or growth.mix is none %}

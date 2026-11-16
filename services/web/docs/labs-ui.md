@@ -89,7 +89,7 @@ upstream calls) is in [`architecture.md`](architecture.md) and [`endpoints.md`](
     the series portfolio computes; 1Y is the default and stands in for anything that isn't a
     period. Each link is the current query string with only `period` changed, so it carries
     whatever mix the query string holds (LB-7). The current one is `aria-current="true"`,
-    styled like the pressed chart buttons.
+    in the segmented control every switch shares (UX-5, see `ui-architecture.md`).
   - *Styling, agreed against chapter II*: the mix is the heavier line (2.5px), gain/loss
     colored by segment like `/portfolio`'s total return, since a growth is a gain or a loss.
     Assets are thin (1.25px) `--text-muted` lines; hovering or focusing an asset's box raises

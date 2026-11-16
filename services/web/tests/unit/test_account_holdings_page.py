@@ -463,8 +463,20 @@ def test_holdings_page_chart_controls_are_hidden_until_the_script_runs(client):
     response = test_client.get("/accounts/holdings", params={"account": "main"})
 
     assert '<div class="chart-controls" hidden>' in response.text
+    labels = [re.sub(r"<[^>]+>", "", b) for b in re.findall(r">(.*?)</button>", response.text)]
     for label in ("Total return", "Market value", "1M", "6M", "1Y", "All"):
-        assert f">{label}</button>" in response.text
+        assert label in labels
+
+    groups = re.findall(
+        r'<div class="segmented" role="group" aria-label="([^"]+)">(.*?)</div>', response.text, re.S
+    )
+    assert [label for label, _ in groups] == ["Chart view", "Date range"]
+    pressed = [
+        re.sub(r"<[^>]+>", "", text)
+        for _, group in groups
+        for text in re.findall(r'aria-pressed="true">(.*?)</button>', group)
+    ]
+    assert pressed == ["Total return", "All"]
 
 
 def test_holdings_page_filters_closed_positions(client):

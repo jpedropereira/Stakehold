@@ -329,11 +329,12 @@ def _text(fragment):
 
 
 def _links(html, nav_class):
-    nav = re.search(rf'<nav class="chart-toggle {nav_class}".*?</nav>', html, re.S).group(0)
+    nav = re.search(rf'<div class="segmented {nav_class}".*?</div>', html, re.S).group(0)
     return [
         (label, href.replace("&amp;", "&"), bool(current))
         for href, current, label in re.findall(
-            r'<a [^>]*href="([^"]*)"( aria-current="true")?[^>]*>(\w+)</a>', nav
+            r'<a [^>]*href="([^"]*)"( aria-current="true")?[^>]*>(?:<span class="mono">)?(\w+)<',
+            nav,
         )
     ]
 

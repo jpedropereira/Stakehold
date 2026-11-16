@@ -368,12 +368,33 @@ def test_the_order_links_mark_the_current_one(client):
 
     section = _get(test_client, f"{RANK_QUERY}&benchmark=IWDA.AS")
 
-    orders = re.findall(r'<a href="/risk\?[^"]*rank_by=(\w+)#risk-ranking"', section)
-    assert sorted(orders) == ["diversification_ratio", "sigma_p"]
-    current = re.search(r'<a href="([^"]*)" aria-current="true"', section)
-    assert current and "rank_by=sigma_p" in html.unescape(current.group(1))
-    assert "benchmark=IWDA.AS" in html.unescape(current.group(1))
-    assert "rank_weight=5" in html.unescape(current.group(1))
+    group = _order_group(section)
+    orders = re.findall(r'<a [^>]*href="/risk\?[^"]*rank_by=(\w+)#risk-ranking"', group)
+    assert orders == ["sigma_p", "diversification_ratio"]
+    current = re.findall(r'<a [^>]*href="([^"]*)" aria-current="true"', group)
+    assert len(current) == 1 and "rank_by=sigma_p" in html.unescape(current[0])
+    assert "benchmark=IWDA.AS" in html.unescape(current[0])
+    assert "rank_weight=5" in html.unescape(current[0])
+
+
+def _order_group(section):
+    """The ranking's sort switch (UX-5): a segmented control, not links inside the prose."""
+    match = re.search(
+        r'<div class="segmented[^"]*" role="group" aria-label="Order by">.*?</div>', section, re.S
+    )
+    assert match, "no sort switch"
+    return match.group(0)
+
+
+def test_the_order_switch_marks_the_chosen_measure(client):
+    test_client, _ = client
+
+    group = _order_group(_get(test_client, f"{RANK_QUERY}&rank_by=diversification_ratio"))
+
+    current = re.findall(r'href="([^"]*)" aria-current="true">([^<]*)<', group)
+    assert len(current) == 1
+    assert "rank_by=diversification_ratio" in html.unescape(current[0][0])
+    assert current[0][1] == "Diversification ratio"
 
 
 def test_greyed_unranked_and_over_cap_candidates_are_listed(client):
