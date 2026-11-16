@@ -153,8 +153,8 @@ main:focus {
   border-bottom: 1px solid var(--border);
 }
 
-/* Wraps so the logo, nav, logout and theme toggle never push a phone-width page sideways. The
-   logo's auto margin pushes everything else right, logged in or not. */
+/* Wraps so the logo, nav and account menu (or, logged out, the theme toggle) never push a
+   phone-width page sideways. The logo's auto margin pushes everything else right. */
 .site-header-inner {
   display: flex;
   flex-wrap: wrap;
@@ -228,10 +228,86 @@ img.logo-on-dark {
   border-bottom-color: var(--accent);
 }
 
-.logout-form {
+/* The account menu (UX-4): the user's name opens Admin, the theme switch and Log out. A
+   <details>, so it works without JS; its panel floats over the page rather than pushing the
+   header taller. */
+/* A little further from the last section than the sections are from each other, so the name
+   doesn't read as a seventh one. */
+.account-menu {
+  position: relative;
+  margin-inline-start: var(--space-3);
+}
+
+.account-menu > summary {
   display: flex;
   align-items: center;
+  gap: var(--space-2);
+  padding-block: var(--space-1);
+  list-style: none;
+  cursor: pointer;
+}
+
+.account-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+/* A caret drawn from two borders, so it follows the text color in either theme; it turns over
+   when the menu is open, which marks the state without relying on color. */
+.account-menu > summary::after {
+  content: "";
+  width: 0.4em;
+  height: 0.4em;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: translateY(-25%) rotate(45deg);
+}
+
+.account-menu[open] > summary::after {
+  transform: translateY(25%) rotate(-135deg);
+}
+
+.account-menu > summary .user-name {
+  max-width: 12rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Right-aligned under the name. Above the ticker tooltip's layer (2); capped at the viewport
+   less the gutters, so it never pushes a phone-width page sideways. */
+.account-menu-panel {
+  position: absolute;
+  z-index: 3;
+  top: 100%;
+  inset-inline-end: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
   gap: var(--space-3);
+  width: max-content;
+  max-width: calc(100vw - 2 * var(--gutter));
+  margin-top: var(--space-2);
+  padding: var(--space-4);
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+}
+
+.account-menu-panel > a {
+  font: var(--text-caption);
+}
+
+/* Log out ends the session, not a setting: a hairline sets it apart from the rest. */
+.logout-form {
+  align-self: stretch;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+}
+
+/* The Admin page is current: marked as the nav marks a section. */
+.account-menu-panel > a[aria-current="page"] {
+  font-weight: 600;
+  text-decoration-color: var(--accent);
 }
 
 .theme-toggle {
@@ -1991,19 +2067,21 @@ img.logo-on-dark {
     padding-block: var(--space-4);
   }
 
-  /* Mark and log-out share the first row; the nav takes a row of its own below them. */
+  /* Mark and account menu share the first row; the nav takes a row of its own below them. */
   .site-header-inner {
     flex-wrap: wrap;
     justify-content: space-between;
   }
 
-  /* Five links for an admin since PF-4 added Portfolio: a tighter gap keeps them on one line
-     at 360px, and they wrap rather than scroll sideways on anything narrower. */
+  /* Six sections since Admin moved into the account menu (UX-4): the tightest gap, spread
+     across the row, keeps them on one line at 360px; they wrap rather than scroll sideways on
+     anything narrower. */
   .site-nav {
     order: 1;
     flex-basis: 100%;
     flex-wrap: wrap;
-    gap: var(--space-1) var(--space-3);
+    justify-content: space-between;
+    gap: var(--space-1) var(--space-2);
     margin-left: 0;
   }
 

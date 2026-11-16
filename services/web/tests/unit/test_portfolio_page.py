@@ -603,7 +603,9 @@ def test_the_ticker_is_the_toggle_for_its_breakdown(client):
     row_tag = re.search(r"<tr [^>]*>", _breakdown_of(html, "IWDA.AS")).group(0)
     assert "breakdown-row" in _attr(row_tag, "class")
     assert _attr(row_tag, "hidden") is None
-    assert "<details" not in html and not re.search(r"In \d+ accounts?\b", html)
+    # In <main> only: the header's account menu (UX-4) is a <details> of its own.
+    main = re.search(r"<main\b.*?</main>", html, re.S).group(0)
+    assert "<details" not in main and not re.search(r"In \d+ accounts?\b", html)
     assert re.search(r'<script src="/static/holdings_breakdown\.js\?v=\w+" defer></script>', html)
 
 

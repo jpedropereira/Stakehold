@@ -92,7 +92,7 @@ Earlier chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archive/):
 | UX-1 | [Ticker name lookup and component](#ux-1-ticker-name-lookup-and-component) | UX-0 | done |
 | UX-2 | [Ticker names in tables, text and forms](#ux-2-ticker-names-in-tables-text-and-forms) | UX-1 | done |
 | UX-3 | [Ticker names in charts](#ux-3-ticker-names-in-charts) | UX-1 | done |
-| UX-4 | [Quieter site header](#ux-4-quieter-site-header) | UX-0 | ready |
+| UX-4 | [Quieter site header](#ux-4-quieter-site-header) | UX-0 | done |
 | UX-5 | [One segmented control for switches](#ux-5-one-segmented-control-for-switches) | UX-0 | done |
 | UX-6 | [Risk sub-pages and sub-nav](#ux-6-risk-sub-pages-and-sub-nav) | UX-0 | ready |
 | UX-7 | [Secondary detail behind disclosures](#ux-7-secondary-detail-behind-disclosures) | UX-6 | blocked |
@@ -259,7 +259,7 @@ Done as:
 
 ### UX-4. Quieter site header
 
-**Status:** ready
+**Status:** done
 
 - **Main nav** keeps only the sections: Overview, Portfolio, Labs, Risk, Accounts, Tickers.
 - **Account menu.** The user's name becomes a `<details>` menu, which works without JS. It
@@ -272,6 +272,24 @@ theme form posts as before.
 
 Files: `templates/base.html`, `static/web.css`, `static/theme.js` if needed,
 `docs/ui-architecture.md`.
+
+Done as:
+- **Menu.** A `<details class="account-menu">` labelled with the user's name. It holds Admin
+  (admins only), the theme switch and Log out, in that order, with a hairline above Log out.
+  On an admin page, the menu's Admin link is the one marked `aria-current`.
+- **Logged out.** Login, signup and an anonymous 404 keep the bare theme switch in the header,
+  since there is no user to name a menu after. One `theme_toggle()` macro in `base.html`
+  renders both. `theme.js` didn't change.
+- **Closing.** `static/account_menu.js` closes the menu on Escape (focus returns to the name), on
+  an outside click, and when focus leaves it. A theme click inside leaves it open.
+- **Phone width.** The six sections fit on one line at 360px (tighter gap, `space-between`); the
+  name shares the first row with the mark.
+- **Checked.** `review_pages.py` gained `account-menu-admin` and `account-menu-user` states.
+  The header pages passed at every width in both themes. Escape, outside click, tab-out and the
+  theme switch were checked in a browser. The UX-0 baseline folder wasn't in this checkout, so
+  the comparison was by eye, not side by side.
+- **Theme buttons still look like links.** UX-5 left the header's switch out because UX-4 moves
+  it, and UX-4 kept its look, so neither task gave it the segmented control.
 
 ### UX-5. One segmented control for switches
 

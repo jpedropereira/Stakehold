@@ -60,6 +60,9 @@ PAGES = [
     Page("signup", "/signup", "anon"),
     Page("overview", "/", "admin"),
     Page("overview-market-value", "/", "admin", click="[data-chart-view=market_value_eur]"),
+    # The header's account menu (UX-4), open: with Admin, and without it for a user.
+    Page("account-menu-admin", "/", "admin", click=".account-menu > summary"),
+    Page("account-menu-user", "/", "user", click=".account-menu > summary"),
     Page("portfolio", "/portfolio", "admin"),
     # The first holding's per-account breakdown, opened.
     Page("portfolio-breakdown", "/portfolio", "admin", click=".ticker-toggle"),
