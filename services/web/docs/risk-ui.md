@@ -280,9 +280,10 @@ file in the same change. The server side of `/risk` (its router, the upstream ca
       ticker, up to 50. The field hint says it can take a few seconds. On a 1Y ex-ante window
       the form says why it can't rank (the diversification ratio needs 104 weeks) and sends
       nothing, rather than letting portfolio's 422 show as a failed section.
-    - *The order is a link, not a field.* Two links in the note above the table switch between
-      Δ volatility (the default) and Δ diversification ratio. The current one carries
-      `aria-current`. The note says why the Sharpe change is shown but never an order: the
+    - *The order is a link, not a field.* An "Order by" segmented control (UX-5) above the note
+      switches between Δ volatility (the default) and Δ diversification ratio; until UX-5 the
+      two links sat inside the note's sentence. The current one carries `aria-current`, and the
+      note names it. The note says why the Sharpe change is shown but never an order: the
       best of many noisy Sharpe changes is mostly luck (spec §7.2). There is no Sharpe link to
       tempt anyone.
     - *One row per candidate, numbered in portfolio's order.* Columns: rank, ticker over its

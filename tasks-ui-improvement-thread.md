@@ -93,7 +93,7 @@ Earlier chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archive/):
 | UX-2 | [Ticker names in tables, text and forms](#ux-2-ticker-names-in-tables-text-and-forms) | UX-1 | done |
 | UX-3 | [Ticker names in charts](#ux-3-ticker-names-in-charts) | UX-1 | done |
 | UX-4 | [Quieter site header](#ux-4-quieter-site-header) | UX-0 | ready |
-| UX-5 | [One segmented control for switches](#ux-5-one-segmented-control-for-switches) | UX-0 | ready |
+| UX-5 | [One segmented control for switches](#ux-5-one-segmented-control-for-switches) | UX-0 | done |
 | UX-6 | [Risk sub-pages and sub-nav](#ux-6-risk-sub-pages-and-sub-nav) | UX-0 | ready |
 | UX-7 | [Secondary detail behind disclosures](#ux-7-secondary-detail-behind-disclosures) | UX-6 | blocked |
 | UX-8 | [Labs: mix editor first](#ux-8-labs-mix-editor-first) | UX-0 | ready |
@@ -275,7 +275,7 @@ Files: `templates/base.html`, `static/web.css`, `static/theme.js` if needed,
 
 ### UX-5. One segmented control for switches
 
-**Status:** ready
+**Status:** done
 
 - **One component.** A partial and its CSS replace the underlined-link switches: series and
   period on Overview, Portfolio and account holdings; growth period and window on Labs; and the
@@ -287,6 +287,25 @@ Files: `templates/base.html`, `static/web.css`, `static/theme.js` if needed,
 
 Tests: each page renders the component, with exactly one option selected that matches the query
 parameter.
+
+Done as:
+- **`partials/_segmented.html`, two macros.** `segmented_links(label, links, current, labels,
+  mono, class_)` takes the routes' existing `{value: url}` link dicts, so no route changed.
+  `segmented_buttons(label, options, pressed, data_attr, mono)` draws the returns chart's view
+  and range; `portfolio_chart.js` is unchanged.
+- **A labelled `role="group"`, not `<nav>`.** A view switch isn't site navigation, and /risk
+  would otherwise gain a landmark per switch.
+- **Selected state.** Filled, bold, with a gold bar along its foot (the site nav's
+  `aria-current` mark). Period and window labels are in mono.
+- **Ranking order.** The two links inside the note's sentence became an "Order by" control above
+  it, labelled "Volatility" and "Diversification ratio"; the note now names the chosen measure.
+- **Not changed.** The header's theme switch (UX-4 moves it) and the Exclude/Include links, which
+  are per-row actions, not switches.
+- **Checked visually.** Overview, Portfolio, Labs, Risk and the ranking, in both themes. Options
+  are padded 8px a side so Labs' seven growth periods fit one row at 360px; the control still
+  wraps if a narrower box ever needs it. `review_pages.py`: 819 of 820 passed. The one miss, a
+  0px-wide rolling chart on `risk-concentration-all` (dark, phone), passed on a rerun of that
+  page: a flaky layout timing, not this change.
 
 ### UX-6. Risk sub-pages and sub-nav
 
@@ -424,7 +443,9 @@ The approach:
    top.
 
 **Coordination.**
-- UX-5's segmented control must carry these attributes, whichever task lands first.
+- UX-5's segmented control must carry these attributes. UX-5 landed first: add them, and the
+  section anchor, in `segmented_links` (`partials/_segmented.html`), which every switch in scope
+  already uses.
 - UX-6 moves the ex-ante and ranking blocks to their own sub-pages. The region ids move with
   them unchanged.
 - UX-8 reorders Labs. The regions stay self-contained, so the order doesn't matter to them.

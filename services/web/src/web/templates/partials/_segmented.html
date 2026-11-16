@@ -1,0 +1,34 @@
+{# The segmented control (UX-5): one look for every period, window, series and sort switch. A
+   labelled group rather than a <nav>: a view switch isn't site navigation, and /risk would
+   otherwise grow a landmark per switch.
+
+   segmented_links: links maps each value to its URL, in order, as the routes' link builders
+   already return them; labels maps a value to its text where the two differ. The switches the
+   server answers (Labs' period and window, Risk's window and sort) stay plain links, so they
+   work without JS. The current one carries aria-current. UX-10 adds its hx-* attributes and
+   #anchor here.
+
+   segmented_buttons: options are (value, text). For a client-side switch (the returns chart);
+   the pressed one carries aria-pressed, and the script that owns the group flips it. Values
+   compare as text, so a number and its string match.
+
+   mono: the labels are periods or windows (1M, 5Y, Max), set in mono like every number. #}
+{% macro _text(text, mono) -%}
+{% if mono %}<span class="mono">{{ text }}</span>{% else %}{{ text }}{% endif %}
+{%- endmacro %}
+
+{% macro segmented_links(label, links, current, labels={}, mono=false, class_="") -%}
+<div class="segmented{% if class_ %} {{ class_ }}{% endif %}" role="group" aria-label="{{ label }}">
+  {%- for value, href in links.items() %}
+  <a class="segmented-option" href="{{ href }}"{% if value | string == current | string %} aria-current="true"{% endif %}>{{ _text(labels.get(value, value), mono) }}</a>
+  {%- endfor %}
+</div>
+{%- endmacro %}
+
+{% macro segmented_buttons(label, options, pressed, data_attr, mono=false) -%}
+<div class="segmented" role="group" aria-label="{{ label }}">
+  {%- for value, text in options %}
+  <button type="button" class="segmented-option" data-{{ data_attr }}="{{ value }}" aria-pressed="{{ 'true' if value | string == pressed | string else 'false' }}">{{ _text(text, mono) }}</button>
+  {%- endfor %}
+</div>
+{%- endmacro %}

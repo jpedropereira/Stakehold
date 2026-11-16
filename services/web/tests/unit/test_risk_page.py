@@ -1113,6 +1113,23 @@ def test_the_window_links_mark_the_current_one(client):
     assert 'href="/risk?benchmark=IWDA.AS&amp;ex_ante_window=5Y#risk-ex-ante"' in section
 
 
+def test_the_window_switch_is_a_segmented_control(client):
+    """UX-5: one labelled group, with exactly the chosen window marked."""
+    test_client, fake_auth, _ = client
+    _logged_in(test_client, fake_auth)
+
+    section = _ex_ante_html(test_client.get("/risk?ex_ante_window=5Y").text)
+
+    group = re.search(
+        r'<div class="segmented[^"]*" role="group" aria-label="Ex-ante window">.*?</div>',
+        section,
+        re.S,
+    )
+    assert group, "no window switch"
+    assert re.findall(r'ex_ante_window=(\w+)[^"]*" aria-current="true"', group.group(0)) == ["5Y"]
+    assert '<span class="mono">5Y</span>' in group.group(0)
+
+
 def test_the_benchmark_form_keeps_the_ex_ante_choices(client):
     test_client, fake_auth, _ = client
     _logged_in(test_client, fake_auth)

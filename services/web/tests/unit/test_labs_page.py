@@ -683,11 +683,12 @@ def _growth_section(html):
 
 def _period_links(html):
     """(period, href, current) for each period link, in order."""
-    nav = re.search(r'<nav class="chart-toggle labs-periods".*?</nav>', html, re.S).group(0)
+    nav = re.search(r'<div class="segmented labs-periods".*?</div>', html, re.S).group(0)
     return [
         (label, href.replace("&amp;", "&"), bool(current))
         for href, current, label in re.findall(
-            r'<a [^>]*href="([^"]*)"( aria-current="true")?[^>]*>(\w+)</a>', nav
+            r'<a [^>]*href="([^"]*)"( aria-current="true")?[^>]*>(?:<span class="mono">)?(\w+)<',
+            nav,
         )
     ]
 
