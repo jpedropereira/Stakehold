@@ -182,6 +182,14 @@ file in the same change. The server side of `/risk` (its router, the upstream ca
       for the growth chart's reason. The zero gridline is `--text-muted`. ρ's axis is fixed at
       −1 to 1, so a move from 0.90 to 0.95 reads as small as it is. Volatility's axis starts
       at 0.
+    - *The pair is named beside its chart, not in it (UX-3).* The chart's one line is
+      "Correlation", so the canvas has no ticker to name. The note above it prints both sides
+      through the `ticker` macro, and each option of the pair's two selects reads
+      `AAPL — Apple Inc.`, with `(benchmark)` after the name for a benchmark outside the mix.
+      A select can't hold the tooltip, so the name is the option's text; its value is still
+      the bare ticker. A select is as wide as its longest option, so the pair's are capped at
+      their row: at phone width the closed select cuts a long name and the open list shows it
+      whole. The volatility and Sharpe charts are of the whole portfolio and name no ticker.
     - *A gap breaks the line, and its reason goes under the chart.* Each point is plotted at
       its window's end. A greyed point stays in the series as a null (`spanGaps: false`), and
       the canvas can't show why, so each run of greyed windows with one reason becomes one
@@ -272,9 +280,10 @@ file in the same change. The server side of `/risk` (its router, the upstream ca
       ticker, up to 50. The field hint says it can take a few seconds. On a 1Y ex-ante window
       the form says why it can't rank (the diversification ratio needs 104 weeks) and sends
       nothing, rather than letting portfolio's 422 show as a failed section.
-    - *The order is a link, not a field.* Two links in the note above the table switch between
-      Δ volatility (the default) and Δ diversification ratio. The current one carries
-      `aria-current`. The note says why the Sharpe change is shown but never an order: the
+    - *The order is a link, not a field.* An "Order by" segmented control (UX-5) above the note
+      switches between Δ volatility (the default) and Δ diversification ratio; until UX-5 the
+      two links sat inside the note's sentence. The current one carries `aria-current`, and the
+      note names it. The note says why the Sharpe change is shown but never an order: the
       best of many noisy Sharpe changes is mostly luck (spec §7.2). There is no Sharpe link to
       tempt anyone.
     - *One row per candidate, numbered in portfolio's order.* Columns: rank, ticker over its

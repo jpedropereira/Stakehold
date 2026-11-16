@@ -123,7 +123,10 @@ def test_growth_payload_keeps_the_assets_order_and_their_missing_lines():
         "period": "Max",
         "dates": ["2021-03-15", "2021-03-16"],
         "mix": [0.0, 0.5],
-        "assets": [{"ticker": "B", "values": [0.0, 1.0]}, {"ticker": "A", "values": None}],
+        "assets": [
+            {"ticker": "B", "name": None, "values": [0.0, 1.0]},
+            {"ticker": "A", "name": None, "values": None},
+        ],
         "left_out": [],
         "benchmark": None,
     }
@@ -142,7 +145,9 @@ def test_growth_payload_names_the_assets_the_mixs_line_leaves_out():
 def test_growth_payload_keeps_a_late_assets_null_points():
     growth = _growth(mix=(Decimal("0"), Decimal("0.5")), assets={"A": (None, Decimal("0"))})
 
-    assert build_growth_payload(growth)["assets"] == [{"ticker": "A", "values": [None, 0.0]}]
+    assert build_growth_payload(growth)["assets"] == [
+        {"ticker": "A", "name": None, "values": [None, 0.0]}
+    ]
 
 
 def test_growth_payload_rounds_to_six_significant_digits():
@@ -158,6 +163,24 @@ def test_growth_payload_rounds_to_six_significant_digits():
     assert payload["mix"] == [0.0, 1.23457]
     assert payload["assets"][0]["values"] == [-0.000123457, 12.3457]
     assert all(type(v) is float for v in payload["mix"] + payload["assets"][0]["values"])
+
+
+def test_growth_payload_names_each_line_that_has_a_name():
+    """UX-3: the tooltip prints "TICKER — Name". A ticker with no name carries None, and so
+    does every line when no names are given."""
+    growth = _growth(
+        mix=(Decimal("0"), Decimal("0.5")),
+        assets={"B": (Decimal("0"), Decimal("1")), "A": None, "C": (Decimal("0"), Decimal("0"))},
+    )
+
+    payload = build_growth_payload(growth, names={"B": "Beta Fund", "A": "Alpha Corp"})
+
+    assert [(a["ticker"], a["name"]) for a in payload["assets"]] == [
+        ("B", "Beta Fund"),
+        ("A", "Alpha Corp"),
+        ("C", None),
+    ]
+    assert [a["name"] for a in build_growth_payload(growth)["assets"]] == [None, None, None]
 
 
 # --- the assets the mix leaves out ----------------------------------------------------------
@@ -236,7 +259,12 @@ def test_growth_payload_carries_the_benchmark_line_rounded():
 
     payload = build_growth_payload(growth, benchmark)
 
-    assert payload["benchmark"] == {"ticker": "IWDA.AS", "values": [0.0, 0.123457], "reason": None}
+    assert payload["benchmark"] == {
+        "ticker": "IWDA.AS",
+        "name": None,
+        "values": [0.0, 0.123457],
+        "reason": None,
+    }
 
 
 def test_growth_payload_says_why_there_is_no_benchmark_line():
@@ -245,7 +273,12 @@ def test_growth_payload_says_why_there_is_no_benchmark_line():
 
     payload = build_growth_payload(growth, _benchmark(reason=reason, ticker="VWCE.DE"))
 
-    assert payload["benchmark"] == {"ticker": "VWCE.DE", "values": None, "reason": reason}
+    assert payload["benchmark"] == {
+        "ticker": "VWCE.DE",
+        "name": None,
+        "values": None,
+        "reason": reason,
+    }
 
 
 def test_growth_payload_with_no_line_and_no_reason_still_gives_one():
@@ -254,3 +287,14 @@ def test_growth_payload_with_no_line_and_no_reason_still_gives_one():
     payload = build_growth_payload(growth, _benchmark())
 
     assert payload["benchmark"]["reason"] == "not available"
+
+
+def test_growth_payload_names_the_benchmark():
+    growth = _growth(mix=(Decimal("0"), Decimal("0.5")), assets={})
+    benchmark = _benchmark(growth=(Decimal("0"), Decimal("0.1")))
+
+    named = build_growth_payload(growth, benchmark, {"IWDA.AS": "iShares Core MSCI World"})
+    unnamed = build_growth_payload(growth, benchmark, {"AAPL": "Apple Inc."})
+
+    assert named["benchmark"]["name"] == "iShares Core MSCI World"
+    assert unnamed["benchmark"]["name"] is None

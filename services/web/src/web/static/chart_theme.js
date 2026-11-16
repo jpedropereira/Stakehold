@@ -38,6 +38,20 @@ window.StakeholdChartTheme = {
     return `rgba(${r}, ${g}, ${b}, ${alpha})`;
   },
 
+  // `text` cut to fit `maxWidth` in the font set on `ctx`, ending in "…" when cut. "" when
+  // fewer than MIN characters would be left: a stub says nothing. For a tooltip line, which
+  // Chart.js doesn't wrap, so a long instrument name would run past the canvas edge and be
+  // clipped (UX-3).
+  fitText(ctx, text, maxWidth) {
+    const MIN = 4;
+    if (ctx.measureText(text).width <= maxWidth) return text;
+    for (let length = text.length - 1; length >= MIN; length--) {
+      const cut = `${text.slice(0, length).trimEnd()}…`;
+      if (ctx.measureText(cut).width <= maxWidth) return cut;
+    }
+    return "";
+  },
+
   // A canvas doesn't restyle itself, so `redraw` runs when the OS switches scheme (only
   // visible with no manual choice, but harmless otherwise) or on the header toggle
   // (static/theme.js).

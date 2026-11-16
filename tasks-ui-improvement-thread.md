@@ -91,9 +91,9 @@ Earlier chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archive/):
 | UX-0 | [Roadmap housekeeping and baseline](#ux-0-roadmap-housekeeping-and-baseline) | — | done |
 | UX-1 | [Ticker name lookup and component](#ux-1-ticker-name-lookup-and-component) | UX-0 | done |
 | UX-2 | [Ticker names in tables, text and forms](#ux-2-ticker-names-in-tables-text-and-forms) | UX-1 | done |
-| UX-3 | [Ticker names in charts](#ux-3-ticker-names-in-charts) | UX-1 | ready |
+| UX-3 | [Ticker names in charts](#ux-3-ticker-names-in-charts) | UX-1 | done |
 | UX-4 | [Quieter site header](#ux-4-quieter-site-header) | UX-0 | done |
-| UX-5 | [One segmented control for switches](#ux-5-one-segmented-control-for-switches) | UX-0 | ready |
+| UX-5 | [One segmented control for switches](#ux-5-one-segmented-control-for-switches) | UX-0 | done |
 | UX-6 | [Risk sub-pages and sub-nav](#ux-6-risk-sub-pages-and-sub-nav) | UX-0 | ready |
 | UX-7 | [Secondary detail behind disclosures](#ux-7-secondary-detail-behind-disclosures) | UX-6 | blocked |
 | UX-8 | [Labs: mix editor first](#ux-8-labs-mix-editor-first) | UX-0 | ready |
@@ -216,7 +216,7 @@ Done as:
 
 ### UX-3. Ticker names in charts
 
-**Status:** ready
+**Status:** done
 
 - Each chart's data island carries `ticker_names`.
 - Chart legends and hover tooltips label a series "TICKER — Name". This covers
@@ -225,6 +225,37 @@ Done as:
 - The Labs "Assets on the chart" checkboxes use the `_ticker` component.
 
 Tests: the data islands contain the names. Check chart labels visually with `review_pages.py`.
+
+Done as:
+- **Only the Labs growth chart draws a ticker.** Of the four scripts listed:
+  - `labs_chart.js`: changed.
+  - `labs_drawdown_chart.js`: one "Drawdown" line for the mix. Not changed.
+  - `risk_rolling_chart.js`: its lines are "Volatility", "Sharpe" and "Correlation". Not
+    changed; the correlation's pair is named in the markup beside the chart instead.
+  - `holdings_breakdown.js`: not a chart. It is /portfolio's row toggle, whose button UX-2
+    named.
+- **A name per line, not a `ticker_names` map.** The growth island's assets and benchmark each
+  carry `name` (`null` when there is none), so the island holds only the names of lines it
+  draws.
+- **Tooltip.** `VWCE.DE — Vanguard FTSE All-World: +7.07%`. Chart.js doesn't wrap a tooltip
+  line, so the name is cut with `…` to fit the canvas (`chart_theme.js` `fitText`), or left out
+  when almost nothing fits.
+- **End-of-line labels stay bare.** Their room comes out of the plot's width.
+- **"Assets on the chart" labels** use `ticker(..., focusable=false)`.
+- **Label hosts open on `:focus-within`.** UX-1's CSS opened a host's tooltip on `:focus`, which
+  a label never has: focus is on its box. Fixed in `web.css` and `ticker_tooltip.js`.
+- **Risk's correlation pair, not in the task text.** UX-2 left its note and its two selects
+  bare. The note now uses the macro, and each option reads `AAPL — Apple Inc.`, with
+  `(benchmark)` after the name. The selects are capped at their row's width: with names in
+  them they pushed the page sideways at 360px.
+- **Known cost.** A disabled box can't take focus, so an asset with no line shows its name on
+  hover only.
+- **Checked visually** at 360px and 1280px in both themes, on review data with names:
+  - the tooltip stays inside the canvas and cuts the benchmark's name at 360px
+  - toggling a line still redraws the chart
+  - a focused box opens its label's name, inside the viewport, and Escape closes it
+  - the pair's selects stay inside their card
+- **`review_pages.py`:** all 820 screenshots passed its checks.
 
 ### UX-4. Quieter site header
 
@@ -257,11 +288,12 @@ Done as:
   The header pages passed at every width in both themes. Escape, outside click, tab-out and the
   theme switch were checked in a browser. The UX-0 baseline folder wasn't in this checkout, so
   the comparison was by eye, not side by side.
-- **Theme buttons still look like links.** Giving them the segmented control is UX-5's job.
+- **Theme buttons still look like links.** UX-5 left the header's switch out because UX-4 moves
+  it, and UX-4 kept its look, so neither task gave it the segmented control.
 
 ### UX-5. One segmented control for switches
 
-**Status:** ready
+**Status:** done
 
 - **One component.** A partial and its CSS replace the underlined-link switches: series and
   period on Overview, Portfolio and account holdings; growth period and window on Labs; and the
@@ -273,6 +305,25 @@ Done as:
 
 Tests: each page renders the component, with exactly one option selected that matches the query
 parameter.
+
+Done as:
+- **`partials/_segmented.html`, two macros.** `segmented_links(label, links, current, labels,
+  mono, class_)` takes the routes' existing `{value: url}` link dicts, so no route changed.
+  `segmented_buttons(label, options, pressed, data_attr, mono)` draws the returns chart's view
+  and range; `portfolio_chart.js` is unchanged.
+- **A labelled `role="group"`, not `<nav>`.** A view switch isn't site navigation, and /risk
+  would otherwise gain a landmark per switch.
+- **Selected state.** Filled, bold, with a gold bar along its foot (the site nav's
+  `aria-current` mark). Period and window labels are in mono.
+- **Ranking order.** The two links inside the note's sentence became an "Order by" control above
+  it, labelled "Volatility" and "Diversification ratio"; the note now names the chosen measure.
+- **Not changed.** The header's theme switch (UX-4 moves it) and the Exclude/Include links, which
+  are per-row actions, not switches.
+- **Checked visually.** Overview, Portfolio, Labs, Risk and the ranking, in both themes. Options
+  are padded 8px a side so Labs' seven growth periods fit one row at 360px; the control still
+  wraps if a narrower box ever needs it. `review_pages.py`: 819 of 820 passed. The one miss, a
+  0px-wide rolling chart on `risk-concentration-all` (dark, phone), passed on a rerun of that
+  page: a flaky layout timing, not this change.
 
 ### UX-6. Risk sub-pages and sub-nav
 
@@ -410,7 +461,9 @@ The approach:
    top.
 
 **Coordination.**
-- UX-5's segmented control must carry these attributes, whichever task lands first.
+- UX-5's segmented control must carry these attributes. UX-5 landed first: add them, and the
+  section anchor, in `segmented_links` (`partials/_segmented.html`), which every switch in scope
+  already uses.
 - UX-6 moves the ex-ante and ranking blocks to their own sub-pages. The region ids move with
   them unchanged.
 - UX-8 reorders Labs. The regions stay self-contained, so the order doesn't matter to them.

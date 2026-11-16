@@ -209,6 +209,26 @@ described here updates this file in the same change.
   labels use a small formatter in `portfolio_chart.js` that mirrors `formatting.py`'s
   `money`/`signed_money`. **Known sharp edge:** that is two copies of one convention, and no test
   ties them together (there's no JS test runner). A change to the convention must touch both.
+  Since UX-5 the buttons are the segmented control below.
+- **Every view switch is one segmented control (UX-5).** Period, window, series and sort
+  switches had been `.btn-ghost` text, underlined like links, the selected one only losing its
+  underline. They read as links in prose, not as a control. `partials/_segmented.html` now
+  draws them all as one bordered row of options:
+  - *Two macros, one look.* `segmented_links` for the switches the server answers (Labs' growth
+    period and comparison window, Risk's ex-ante window and ranking order): plain links, so
+    they work without JS as before, the current one `aria-current="true"`. It takes the routes'
+    existing `{value: url}` link dicts unchanged. `segmented_buttons` for the returns chart's
+    client-side view and range: `aria-pressed`, flipped by `portfolio_chart.js`, which needed no
+    change.
+  - *A labelled `role="group"`, not a `<nav>`.* A view switch isn't site navigation, and `/risk`
+    would otherwise gain a landmark per switch.
+  - *The selected state doesn't rest on colour.* A filled option, bold, with a gold bar along its
+    foot: the mark the site nav gives `aria-current`. Gold stays a control colour, never gain or
+    loss. Periods and windows are set in mono, like every number.
+  - *It wraps rather than overflow.* Labs' seven growth periods must fit a 360px phone.
+  - *Not the header's theme switch*, which UX-4 moves into the account menu; it may adopt the
+    buttons variant there. UX-10 adds its `hx-*` attributes and section anchor in the
+    `segmented_links` macro, so every server-answered switch gets them at once.
 - **The chart's height comes from a `.chart-frame` around the canvas, not from its width (LY-3).**
   Chart.js's default 2:1 aspect ratio ties height to width: about 150px at phone width, and about
   775px once a chart runs the full content width. `portfolio_chart.js` turns that off
@@ -531,7 +551,9 @@ described here updates this file in the same change.
   - **No name.** A ticker without one (untracked, ISIN-only, or the lookup failed) is plain mono
     text, with no tab stop and no empty tooltip.
   - **Inside a link, button or label.** `focusable=false` drops the ticker's own tab stop there,
-    since a nested one is invalid. The host's hover and focus open the tooltip instead.
+    since a nested one is invalid. The host's hover and focus open the tooltip instead. Focus
+    is `:focus-within` on the host: a label's focus is on the box inside it, never on the label
+    (UX-3).
   - **Positioning.** Most ticker tables sit in a `.table-scroll` box, which clips anything
     absolutely positioned inside it. So the open tooltip is `position: fixed`, anchored to its
     ticker with CSS anchor positioning (Baseline since January 2026), and flips to whichever
@@ -548,7 +570,7 @@ described here updates this file in the same change.
     - With one ticker hovered and another focused, only one tooltip anchors correctly.
   - **Where it applies (UX-2).** Every ticker a page prints in a table, a sentence or a heading:
     holdings, transactions (a `TICKER` identifier only; an ISIN or broker symbol has no tracked
-    name), Labs and Risk. Labs' "Assets on the chart" labels and the charts are UX-3's.
+    name), Labs and Risk.
     - *Already named, left alone:* the Tickers list (its own Name column), and Risk's ranking
       rows and their "Left out" list, which print the candidate's name beside it.
     - *Not named:* a fund constituent such as `AAPL` inside an ETF. Only tracked tickers have a
@@ -557,6 +579,11 @@ described here updates this file in the same change.
       notes, since each named ticker is a tab stop. That kept /risk's tab walk in reach of
       `review_pages.py`, whose cap went from 120 to 200 stops all the same.
     - `aria-label`s keep the bare ticker: markup can't go in an attribute.
+  - **In charts (UX-3).** A canvas can't hold the macro, so a chart is named around it and in
+    its tooltip. The Labs growth chart's "Assets on the chart" labels use the macro and its
+    tooltip prints `TICKER — Name` (`labs-ui.md`). Risk's rolling correlation names its pair
+    in the note and the selects above the chart (`risk-ui.md`). The drawdown chart and the
+    rolling volatility and Sharpe charts draw the mix or the portfolio, so they name no ticker.
   - **Pickers (UX-2).** A `<datalist>` option can't hold the tooltip, so `ticker_option` puts the
     name in its `label`: `VWCE.DE — Vanguard FTSE All-World`. The value stays the bare ticker,
     so that is what the form submits. The label repeats the ticker because Firefox shows only the

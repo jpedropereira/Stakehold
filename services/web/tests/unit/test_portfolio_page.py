@@ -874,6 +874,17 @@ def test_chart_offers_every_view_and_range(client):
     # Hidden until the script shows them: without it, they'd do nothing.
     assert '<div class="chart-controls" hidden>' in card
 
+    groups = re.findall(
+        r'<div class="segmented" role="group" aria-label="([^"]+)">(.*?)</div>', card, re.S
+    )
+    assert [label for label, _ in groups] == ["Chart view", "Date range"]
+    pressed = [
+        re.sub(r"<[^>]+>", "", text)
+        for _, group in groups
+        for text in re.findall(r'aria-pressed="true">(.*?)</button>', group)
+    ]
+    assert pressed == ["Total return", "All"]
+
 
 def test_no_return_history_yet_says_so(client):
     test_client, fake_auth, fake_portfolio = client

@@ -9,7 +9,10 @@ const HOSTS = "a, button, label";
 
 function isOpen(ticker) {
   const host = ticker.closest(HOSTS);
-  return ticker.matches(":hover, :focus") || (host !== null && host.matches(":hover, :focus"));
+  // :focus-within, since a label's focus is on the box inside it.
+  return (
+    ticker.matches(":hover, :focus") || (host !== null && host.matches(":hover, :focus-within"))
+  );
 }
 
 document.addEventListener("keydown", function (event) {

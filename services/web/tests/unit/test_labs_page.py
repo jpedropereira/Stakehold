@@ -683,11 +683,12 @@ def _growth_section(html):
 
 def _period_links(html):
     """(period, href, current) for each period link, in order."""
-    nav = re.search(r'<nav class="chart-toggle labs-periods".*?</nav>', html, re.S).group(0)
+    nav = re.search(r'<div class="segmented labs-periods".*?</div>', html, re.S).group(0)
     return [
         (label, href.replace("&amp;", "&"), bool(current))
         for href, current, label in re.findall(
-            r'<a [^>]*href="([^"]*)"( aria-current="true")?[^>]*>(\w+)</a>', nav
+            r'<a [^>]*href="([^"]*)"( aria-current="true")?[^>]*>(?:<span class="mono">)?(\w+)<',
+            nav,
         )
     ]
 
@@ -791,8 +792,8 @@ def test_the_data_island_carries_every_series_for_the_period(client):
         "dates": ["2025-10-09", "2025-10-10", "2025-10-13"],
         "mix": [0.0, 0.02, -0.04],
         "assets": [
-            {"ticker": "IWDA.AS", "values": [0.0, 0.02, -0.04]},
-            {"ticker": "VWRL.AS", "values": None},
+            {"ticker": "IWDA.AS", "name": None, "values": [0.0, 0.02, -0.04]},
+            {"ticker": "VWRL.AS", "name": None, "values": None},
         ],
         "left_out": ["VWRL.AS"],
         # This backtest has no risk section, so no benchmark (RK-14).
@@ -1094,6 +1095,76 @@ def test_a_failed_name_lookup_leaves_the_page_with_bare_tickers(client):
 
     assert "iShares Core MSCI World" not in html
     assert any("IWDA.AS" in r for r in _body_rows(html))
+
+
+# --- ticker names in the growth chart (UX-3) ----------------------------------------------------
+
+
+def _series_labels(html):
+    toggles = re.search(r'<fieldset class="labs-series" hidden>.*?</fieldset>', html, re.S)
+    return re.findall(r"<label[^>]*>(.*?)</label>", toggles.group(0), re.S)
+
+
+def test_the_growth_island_names_each_asset(client):
+    """The tooltip's "TICKER — Name" comes from the island, one name per line it draws."""
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_backtest(fake_portfolio)
+    fake_portfolio.tracked_names = {"IWDA.AS": "iShares Core MSCI World"}
+
+    assets = _island(_page(test_client))["assets"]
+
+    assert {a["ticker"]: a["name"] for a in assets} == {
+        "IWDA.AS": "iShares Core MSCI World",
+        "VWRL.AS": None,
+    }
+
+
+def test_the_asset_toggles_name_each_asset(client):
+    """The label is already focusable through its box, so the ticker inside is no tab stop of
+    its own: the label opens the tooltip. An asset with no line is named too."""
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_backtest(fake_portfolio)
+    _with_a_line_leaving_out_vwrl(fake_portfolio)
+    fake_portfolio.tracked_names = {
+        "IWDA.AS": "iShares Core MSCI World",
+        "VWRL.AS": "Vanguard FTSE All-World",
+    }
+
+    labels = _series_labels(_page(test_client))
+
+    assert '<span class="ticker"><span class="mono">IWDA.AS</span>' in labels[0]
+    assert "iShares Core MSCI World" in labels[0]
+    assert '<span class="ticker"><span class="mono">VWRL.AS</span>' in labels[1]
+    assert "Vanguard FTSE All-World" in labels[1] and "Not enough history" in labels[1]
+    assert not [label for label in labels if "tabindex" in label]
+
+
+def test_an_asset_toggle_with_no_name_is_the_bare_ticker(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_backtest(fake_portfolio)
+    fake_portfolio.tracked_names = {"IWDA.AS": "iShares Core MSCI World"}
+
+    labels = _series_labels(_page(test_client))
+
+    unnamed = next(label for label in labels if "VWRL.AS" in label)
+    assert '<span class="mono">VWRL.AS</span>' in unnamed
+    assert 'class="ticker-name"' not in unnamed
+
+
+def test_a_failed_name_lookup_leaves_the_chart_with_bare_tickers(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_backtest(fake_portfolio)
+    fake_portfolio.tracked_names = {"IWDA.AS": "iShares Core MSCI World"}
+    fake_portfolio.tracked_error = PortfolioUnavailable("down")
+
+    html = _page(test_client)
+
+    assert [a["name"] for a in _island(html)["assets"]] == [None, None]
+    assert not [label for label in _series_labels(html) if 'class="ticker-name"' in label]
 
 
 def test_each_asset_row_has_a_remove_button_naming_it(client):

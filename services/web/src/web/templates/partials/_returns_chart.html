@@ -2,17 +2,11 @@
    JSON island. Shared by /portfolio, /accounts/holdings and Overview; each page keeps its own
    error and empty states around it. The buttons stay hidden until the script has drawn the
    chart. #}
+{% from "partials/_segmented.html" import segmented_buttons %}
 {% macro returns_chart(payload) -%}
 <div class="chart-controls" hidden>
-  <div class="chart-toggle" role="group" aria-label="Chart view">
-    <button type="button" class="btn btn-ghost" data-chart-view="total_return_eur" aria-pressed="true">Total return</button>
-    <button type="button" class="btn btn-ghost" data-chart-view="market_value_eur" aria-pressed="false">Market value</button>
-  </div>
-  <div class="chart-toggle" role="group" aria-label="Date range">
-    {% for months, label in [(1, "1M"), (6, "6M"), (12, "1Y"), (0, "All")] %}
-    <button type="button" class="btn btn-ghost" data-chart-range="{{ months }}" aria-pressed="{{ 'true' if months == 0 else 'false' }}">{{ label }}</button>
-    {% endfor %}
-  </div>
+  {{ segmented_buttons("Chart view", [("total_return_eur", "Total return"), ("market_value_eur", "Market value")], "total_return_eur", "chart-view") }}
+  {{ segmented_buttons("Date range", [(1, "1M"), (6, "6M"), (12, "1Y"), (0, "All")], 0, "chart-range", mono=true) }}
 </div>
 <div class="chart-frame">
   <canvas id="returns-chart" role="img" aria-label="Portfolio total return over time"></canvas>
