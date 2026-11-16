@@ -91,7 +91,7 @@ Earlier chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archive/):
 | UX-0 | [Roadmap housekeeping and baseline](#ux-0-roadmap-housekeeping-and-baseline) | — | done |
 | UX-1 | [Ticker name lookup and component](#ux-1-ticker-name-lookup-and-component) | UX-0 | done |
 | UX-2 | [Ticker names in tables, text and forms](#ux-2-ticker-names-in-tables-text-and-forms) | UX-1 | done |
-| UX-3 | [Ticker names in charts](#ux-3-ticker-names-in-charts) | UX-1 | ready |
+| UX-3 | [Ticker names in charts](#ux-3-ticker-names-in-charts) | UX-1 | done |
 | UX-4 | [Quieter site header](#ux-4-quieter-site-header) | UX-0 | ready |
 | UX-5 | [One segmented control for switches](#ux-5-one-segmented-control-for-switches) | UX-0 | ready |
 | UX-6 | [Risk sub-pages and sub-nav](#ux-6-risk-sub-pages-and-sub-nav) | UX-0 | ready |
@@ -216,7 +216,7 @@ Done as:
 
 ### UX-3. Ticker names in charts
 
-**Status:** ready
+**Status:** done
 
 - Each chart's data island carries `ticker_names`.
 - Chart legends and hover tooltips label a series "TICKER — Name". This covers
@@ -225,6 +225,37 @@ Done as:
 - The Labs "Assets on the chart" checkboxes use the `_ticker` component.
 
 Tests: the data islands contain the names. Check chart labels visually with `review_pages.py`.
+
+Done as:
+- **Only the Labs growth chart draws a ticker.** Of the four scripts listed:
+  - `labs_chart.js`: changed.
+  - `labs_drawdown_chart.js`: one "Drawdown" line for the mix. Not changed.
+  - `risk_rolling_chart.js`: its lines are "Volatility", "Sharpe" and "Correlation". Not
+    changed; the correlation's pair is named in the markup beside the chart instead.
+  - `holdings_breakdown.js`: not a chart. It is /portfolio's row toggle, whose button UX-2
+    named.
+- **A name per line, not a `ticker_names` map.** The growth island's assets and benchmark each
+  carry `name` (`null` when there is none), so the island holds only the names of lines it
+  draws.
+- **Tooltip.** `VWCE.DE — Vanguard FTSE All-World: +7.07%`. Chart.js doesn't wrap a tooltip
+  line, so the name is cut with `…` to fit the canvas (`chart_theme.js` `fitText`), or left out
+  when almost nothing fits.
+- **End-of-line labels stay bare.** Their room comes out of the plot's width.
+- **"Assets on the chart" labels** use `ticker(..., focusable=false)`.
+- **Label hosts open on `:focus-within`.** UX-1's CSS opened a host's tooltip on `:focus`, which
+  a label never has: focus is on its box. Fixed in `web.css` and `ticker_tooltip.js`.
+- **Risk's correlation pair, not in the task text.** UX-2 left its note and its two selects
+  bare. The note now uses the macro, and each option reads `AAPL — Apple Inc.`, with
+  `(benchmark)` after the name. The selects are capped at their row's width: with names in
+  them they pushed the page sideways at 360px.
+- **Known cost.** A disabled box can't take focus, so an asset with no line shows its name on
+  hover only.
+- **Checked visually** at 360px and 1280px in both themes, on review data with names:
+  - the tooltip stays inside the canvas and cuts the benchmark's name at 360px
+  - toggling a line still redraws the chart
+  - a focused box opens its label's name, inside the viewport, and Escape closes it
+  - the pair's selects stay inside their card
+- **`review_pages.py`:** all 820 screenshots passed its checks.
 
 ### UX-4. Quieter site header
 

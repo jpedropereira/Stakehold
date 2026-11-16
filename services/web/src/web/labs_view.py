@@ -6,7 +6,7 @@ Pure, like portfolio_view.py: the router fetches, this decides what is sent. Edi
 (LB-7) replaces this default; it doesn't change how a mix is backtested.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 
@@ -103,7 +103,9 @@ def chart_value(value: Decimal | float) -> float:
 
 
 def build_growth_payload(
-    growth: BacktestGrowth, benchmark: BacktestBenchmark | None = None
+    growth: BacktestGrowth,
+    benchmark: BacktestBenchmark | None = None,
+    names: Mapping[str, str] | None = None,
 ) -> dict:
     """The growth chart's data island (static/labs_chart.js). Assets are a list, so they keep
     the table's order; a line is None when it doesn't cover the period, and a point is None
@@ -111,7 +113,12 @@ def build_growth_payload(
 
     The benchmark's line (RK-14), when portfolio sent one, is priced like an asset's on the
     same dates. Without one, `reason` says why (its history starts after the period, or it is
-    unavailable), for the note beside its disabled checkbox. None with no risk section."""
+    unavailable), for the note beside its disabled checkbox. None with no risk section.
+
+    `names` is the page's {ticker: display_name} map (ticker_names.load_names). Each line carries
+    its own `name` (UX-3), None when it has none, for the tooltip's "TICKER — Name": the island
+    then holds only the names of lines it draws, and the script looks nothing up."""
+    names = names or {}
 
     def line(values):
         return None if values is None else [None if v is None else chart_value(v) for v in values]
@@ -121,7 +128,8 @@ def build_growth_payload(
         "dates": [d.isoformat() for d in growth.dates],
         "mix": line(growth.mix),
         "assets": [
-            {"ticker": ticker, "values": line(values)} for ticker, values in growth.assets.items()
+            {"ticker": ticker, "name": names.get(ticker), "values": line(values)}
+            for ticker, values in growth.assets.items()
         ],
         # The page names these under the chart; the script doesn't read them.
         "left_out": list(growth.left_out),
@@ -130,6 +138,7 @@ def build_growth_payload(
             if benchmark is None
             else {
                 "ticker": benchmark.ticker,
+                "name": names.get(benchmark.ticker),
                 "values": line(benchmark.growth),
                 "reason": (
                     None

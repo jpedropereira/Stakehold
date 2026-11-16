@@ -875,10 +875,30 @@ def test_the_benchmark_line_is_on_by_default_with_its_own_box(client):
     assert "VWCE.DE" in box and "benchmark" in box
     assert _growth_island(html)["benchmark"] == {
         "ticker": "VWCE.DE",
+        "name": None,
         "values": [0.0, 0.004, -0.01],
         "reason": None,
     }
     assert "the dashed line is the benchmark" in _series_box(html)
+
+
+def test_the_benchmark_line_and_its_box_are_named(client):
+    """UX-3: the island names the benchmark for the tooltip, and its label hosts the name."""
+    test_client, fake_portfolio = client
+    line = (Decimal("0"), Decimal("0.004"), Decimal("-0.01"))
+    _with_risk(fake_portfolio, _risk(benchmark=replace(BENCHMARK, growth=line, growth_reason=None)))
+    fake_portfolio.tracked_names = {"VWCE.DE": "Vanguard FTSE All-World"}
+
+    html = _page(test_client)
+
+    box = re.search(
+        r'<label[^>]*>\s*<input[^>]*data-series="__benchmark"[^>]*>.*?</label>',
+        _series_box(html),
+        re.S,
+    ).group(0)
+    assert '<span class="ticker"><span class="mono">VWCE.DE</span>' in box
+    assert "Vanguard FTSE All-World" in box and "(benchmark)" in box
+    assert _growth_island(html)["benchmark"]["name"] == "Vanguard FTSE All-World"
 
 
 def test_no_benchmark_line_disables_its_box_and_says_why(client):

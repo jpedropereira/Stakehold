@@ -283,19 +283,20 @@ Against {{ ticker(bench.ticker, ticker_names) }}{% if not bench.available %}: un
     <fieldset class="labs-series" hidden>
       <legend>Assets on the chart</legend>
       <p class="chart-note">The heavier line is the mix{% if growth.benchmark and growth.benchmark["values"] is not none %}; the dashed line is the benchmark{% endif %}.</p>
-      {# The benchmark first, and on: the line the mix is read against (RK-14). #}
+      {# The benchmark first, and on: the line the mix is read against (RK-14). Each label hosts
+         its ticker's name tooltip (UX-3): the box is the tab stop, so the ticker isn't one. #}
       {% if growth.benchmark %}
       {% if growth.benchmark["values"] is none %}
-      <label><input type="checkbox" data-series="__benchmark" disabled> <span class="mono">{{ growth.benchmark.ticker }}</span> (benchmark) <span class="entry-empty">No line</span></label>
+      <label><input type="checkbox" data-series="__benchmark" disabled> {{ ticker(growth.benchmark.ticker, ticker_names, focusable=false) }} (benchmark) <span class="entry-empty">No line</span></label>
       {% else %}
-      <label><input type="checkbox" data-series="__benchmark" checked> <span class="mono">{{ growth.benchmark.ticker }}</span> (benchmark)</label>
+      <label><input type="checkbox" data-series="__benchmark" checked> {{ ticker(growth.benchmark.ticker, ticker_names, focusable=false) }} (benchmark)</label>
       {% endif %}
       {% endif %}
       {% for asset in growth.assets %}
       {% if asset["values"] is none %}
-      <label><input type="checkbox" data-series="{{ asset.ticker }}" disabled> <span class="mono">{{ asset.ticker }}</span> <span class="entry-empty">Not enough history</span></label>
+      <label><input type="checkbox" data-series="{{ asset.ticker }}" disabled> {{ ticker(asset.ticker, ticker_names, focusable=false) }} <span class="entry-empty">Not enough history</span></label>
       {% else %}
-      <label><input type="checkbox" data-series="{{ asset.ticker }}"> <span class="mono">{{ asset.ticker }}</span></label>
+      <label><input type="checkbox" data-series="{{ asset.ticker }}"> {{ ticker(asset.ticker, ticker_names, focusable=false) }}</label>
       {% endif %}
       {% endfor %}
     </fieldset>

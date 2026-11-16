@@ -1486,6 +1486,13 @@ img.logo-on-dark {
   height: 2.75rem;
 }
 
+/* An option's text carries the instrument's name (UX-3), and a select is as wide as its longest
+   option: capped at the row, so a long name is cut in the closed select, not pushed past the
+   card at phone width. The open list still shows it whole. */
+.rolling-pair :is(.field, select) {
+  max-width: 100%;
+}
+
 /* Six columns of short figures, Labs' tighter cells and figure size. */
 .risk-table th,
 .risk-table td {
@@ -2019,11 +2026,12 @@ img.logo-on-dark {
 
 /* Open on hover, and on :focus rather than :focus-visible: a tap focuses the ticker but doesn't
    match :focus-visible, and the tap is how touch opens it. A ticker inside a link, button or
-   label has no tab stop of its own, so its host opens it. ticker_tooltip.js sets
+   label has no tab stop of its own, so its host opens it: on :focus-within, since a label's
+   focus is on the box inside it (UX-3). ticker_tooltip.js sets
    data-dismissed when Escape closes it. Positioned absolutely here as the fallback; below, the
    anchored version escapes a .table-scroll box's clipping. Absolute, so never wider columns. */
 .ticker:is(:hover, :focus):not([data-dismissed]) > .ticker-name,
-:is(a, button, label):is(:hover, :focus) .ticker:not([data-dismissed]) > .ticker-name {
+:is(a, button, label):is(:hover, :focus-within) .ticker:not([data-dismissed]) > .ticker-name {
   z-index: 2;
   top: 100%;
   inset-inline-start: 0;
@@ -2050,12 +2058,12 @@ img.logo-on-dark {
    the anchor name: a name shared by every ticker would anchor each tooltip to the last one. */
 @supports (anchor-name: --ticker) {
   .ticker:is(:hover, :focus),
-  :is(a, button, label):is(:hover, :focus) .ticker {
+  :is(a, button, label):is(:hover, :focus-within) .ticker {
     anchor-name: --ticker;
   }
 
   .ticker:is(:hover, :focus):not([data-dismissed]) > .ticker-name,
-  :is(a, button, label):is(:hover, :focus) .ticker:not([data-dismissed]) > .ticker-name {
+  :is(a, button, label):is(:hover, :focus-within) .ticker:not([data-dismissed]) > .ticker-name {
     position: fixed;
     position-anchor: --ticker;
     position-area: block-end span-inline-end;

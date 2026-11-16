@@ -100,8 +100,11 @@ class RollingCharts:
 @dataclass(frozen=True)
 class Option:
     value: str
-    label: str
+    label: str  # the ticker, or "the portfolio"
     selected: bool
+    # The benchmark, offered though it isn't in the mix. A flag, not part of the label: the page
+    # puts the instrument's name between the two, "SPY — SPDR S&P 500 (benchmark)" (UX-3).
+    benchmark: bool = False
 
 
 @dataclass(frozen=True)
@@ -243,8 +246,9 @@ def _options(choices: Sequence[str], benchmark: str, selected: str) -> tuple[Opt
     return tuple(
         Option(
             value=value,
-            label=f"{value} (benchmark)" if value == benchmark and value not in choices else value,
+            label=value,
             selected=value == selected,
+            benchmark=value == benchmark and value not in choices,
         )
         for value in values
     )
