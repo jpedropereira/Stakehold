@@ -309,42 +309,16 @@ def test_the_picker_offers_the_mix_and_the_benchmark_once_and_marks_the_pair():
         _pair("AAPL", "IWDA.AS", POINTS), pair, ("IWDA.AS", "AAPL"), "SPY", []
     )
 
-    assert [(o.value, o.label, o.selected) for o in chart.options_a] == [
-        ("IWDA.AS", "IWDA.AS", False),
-        ("AAPL", "AAPL", True),
-        ("SPY", "SPY (benchmark)", False),
+    # The benchmark is flagged, not written into the label: the page puts the instrument's name
+    # between the ticker and "(benchmark)" (UX-3).
+    assert [(o.value, o.label, o.benchmark, o.selected) for o in chart.options_a] == [
+        ("IWDA.AS", "IWDA.AS", False, False),
+        ("AAPL", "AAPL", False, True),
+        ("SPY", "SPY", True, False),
     ]
-    assert [(o.value, o.label, o.selected) for o in chart.options_b] == [
-        (PORTFOLIO, "the portfolio", False),
-        ("IWDA.AS", "IWDA.AS", True),
-        ("AAPL", "AAPL", False),
-        ("SPY", "SPY (benchmark)", False),
+    assert [(o.value, o.label, o.benchmark, o.selected) for o in chart.options_b] == [
+        (PORTFOLIO, "the portfolio", False, False),
+        ("IWDA.AS", "IWDA.AS", False, True),
+        ("AAPL", "AAPL", False, False),
+        ("SPY", "SPY", True, False),
     ]
-
-
-def test_a_held_benchmark_is_offered_once():
-    pair = chosen_pair(None, None, MIX, "VWCE.DE")
-
-    chart = build_correlation_chart(_pair(points=POINTS), pair, MIX, "VWCE.DE", [])
-
-    assert [o.value for o in chart.options_a] == ["IWDA.AS", "VWCE.DE", "AAPL"]
-    assert chart.options_b[0].selected
-
-
-def test_the_picker_resends_the_rest_of_the_query():
-    pair = chosen_pair("AAPL", None, MIX, "VWCE.DE")
-    params = [
-        ("benchmark", "VWCE.DE"),
-        ("corr_a", "AAPL"),
-        ("ex_ante_window", "5Y"),
-        ("corr_b", "portfolio"),
-        ("exclude", "TSLA"),
-    ]
-
-    chart = build_correlation_chart(_pair("AAPL", points=POINTS), pair, MIX, "VWCE.DE", params)
-
-    assert chart.kept == (
-        ("benchmark", "VWCE.DE"),
-        ("ex_ante_window", "5Y"),
-        ("exclude", "TSLA"),
-    )

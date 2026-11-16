@@ -370,7 +370,7 @@
     {% endif %}
 
     {{ rolling_block(ex_ante_rolling.charts, "today's mix", "risk-ex-ante-rolling") }}
-    {{ pair_block(ex_ante_rolling.correlation) }}
+    {{ pair_block(ex_ante_rolling.correlation, ticker_names) }}
     {{ regime_block(ex_ante_regimes, "Today's mix", "today's mix", "risk-ex-ante-regimes", ticker_names) }}
 
     {% if ex_ante.left_out %}

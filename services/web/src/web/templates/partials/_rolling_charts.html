@@ -1,4 +1,5 @@
 {% from "partials/_term.html" import term %}
+{% from "partials/_ticker.html" import ticker %}
 {# /risk's rolling charts (RK-25), built by risk_rolling_view.py and drawn by
    static/risk_rolling_chart.js from each canvas's data island. Ink lines only: a volatility, a
    Sharpe or a correlation isn't a gain or a loss. A gap's reason can't show on the canvas, so
@@ -48,13 +49,22 @@
 {% endif %}
 {%- endmacro %}
 
+{# One side of the pair in its <select>. A select can't hold the name tooltip, so the name goes
+   in the option's text, "AAPL — Apple Inc." (UX-3); the value stays the bare ticker. #}
+{% macro pair_option(o, names) -%}
+{%- set name = names.get(o.value) if names else none -%}
+<option value="{{ o.value }}"{% if o.selected %} selected{% endif %}>{{ o.label }}{% if name %} — {{ name }}{% endif %}{% if o.benchmark %} (benchmark){% endif %}</option>
+{%- endmacro %}
+
 {# The rolling correlation of a pair, with the GET form that picks it. The form re-sends the
-   rest of the query, so changing the pair changes nothing else. #}
-{% macro pair_block(chart) -%}
+   rest of the query, so changing the pair changes nothing else. `names` is the page's
+   ticker_names: the chart's one line is "Correlation", so the note above it is what names the
+   pair (UX-3). #}
+{% macro pair_block(chart, names=none) -%}
 {% if chart %}
 <div class="risk-rolling" id="risk-rolling-correlation">
   <h3>{{ term("Correlation over time", "rolling-correlation") }}</h3>
-  <p class="labs-note"><span class="mono">{{ chart.a }}</span> against {% if chart.b_label == "the portfolio" %}the portfolio{% else %}<span class="mono">{{ chart.b_label }}</span>{% endif %}, over the 52 weeks ending each Friday, in euros, historically. Over 52 weeks it is noisy, about ± <span class="mono">0.14</span> (1 s.e.); correlations tend to rise in sell-offs.</p>
+  <p class="labs-note">{{ ticker(chart.a, names) }} against {% if chart.b_label == "the portfolio" %}the portfolio{% else %}{{ ticker(chart.b_label, names) }}{% endif %}, over the 52 weeks ending each Friday, in euros, historically. Over 52 weeks it is noisy, about ± <span class="mono">0.14</span> (1 s.e.); correlations tend to rise in sell-offs.</p>
   {% if chart.dropped %}
   <p class="labs-note">The pair in the link wasn't used: {{ chart.dropped }}, so this is the default.</p>
   {% endif %}
@@ -67,7 +77,7 @@
         <label for="risk-corr-a">Holding</label>
         <select id="risk-corr-a" name="corr_a" class="mono">
           {% for o in chart.options_a %}
-          <option value="{{ o.value }}"{% if o.selected %} selected{% endif %}>{{ o.label }}</option>
+          {{ pair_option(o, names) }}
           {% endfor %}
         </select>
       </div>
@@ -75,7 +85,7 @@
         <label for="risk-corr-b">Against</label>
         <select id="risk-corr-b" name="corr_b" class="mono">
           {% for o in chart.options_b %}
-          <option value="{{ o.value }}"{% if o.selected %} selected{% endif %}>{{ o.label }}</option>
+          {{ pair_option(o, names) }}
           {% endfor %}
         </select>
       </div>

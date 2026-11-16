@@ -349,6 +349,58 @@ def test_the_picker_marks_the_pair_and_resends_the_rest_of_the_query(client):
     assert picker.count('type="hidden" name="corr_') == 0
 
 
+def _pair_block(html):
+    block = html[html.index('id="risk-rolling-correlation"') :]
+    return block[: block.index("</form>")]
+
+
+def test_the_picker_flags_a_benchmark_outside_the_mix(client):
+    test_client, _ = client
+
+    picker = _pair_block(test_client.get("/risk?benchmark=VWCE.DE").text)
+
+    assert '<option value="VWCE.DE">VWCE.DE (benchmark)</option>' in picker
+    assert '<option value="AAPL">AAPL</option>' in picker
+
+
+def test_the_pair_and_its_picker_name_each_ticker(client):
+    """UX-3: the note above the chart is what names its line, so both sides carry their full
+    name. A select can't hold the tooltip, so each option's text does; its value is still the
+    bare ticker, which is what the form sends."""
+    test_client, fake = client
+    fake.tracked_names = {
+        "AAPL": "Apple Inc.",
+        "VWCE.DE": "Vanguard FTSE All-World",
+    }
+
+    block = _pair_block(test_client.get("/risk?benchmark=VWCE.DE&corr_a=AAPL&corr_b=VWCE.DE").text)
+    note = block[: block.index("<form")]
+
+    for symbol, name in fake.tracked_names.items():
+        assert f'<span class="ticker" tabindex="0"><span class="mono">{symbol}</span>' in note
+        assert name in note
+    assert '<option value="AAPL" selected>AAPL — Apple Inc.</option>' in block
+    assert (
+        '<option value="VWCE.DE" selected>VWCE.DE — Vanguard FTSE All-World (benchmark)</option>'
+        in block
+    )
+    # No name: the ticker alone. "the portfolio" is no ticker.
+    assert '<option value="IWDA.AS">IWDA.AS</option>' in block
+    assert '<option value="portfolio">the portfolio</option>' in block
+
+
+def test_a_failed_name_lookup_leaves_the_pair_with_bare_tickers(client):
+    test_client, fake = client
+    fake.tracked_names = {"IWDA.AS": "iShares Core MSCI World"}
+    fake.tracked_error = PortfolioUnavailable("down")
+
+    block = _pair_block(test_client.get("/risk").text)
+
+    assert "iShares Core MSCI World" not in block
+    assert "IWDA.AS</span> against the portfolio" in block
+    assert '<option value="IWDA.AS" selected>IWDA.AS</option>' in block
+
+
 def test_the_benchmark_form_keeps_the_pair(client):
     test_client, _ = client
 
