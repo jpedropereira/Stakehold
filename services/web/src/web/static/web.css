@@ -46,6 +46,7 @@
      - split (1480px): /portfolio's holdings table and its chart share a row (.split);
      - split-account (1240px): an account's holdings table and its chart do (.split-account);
      - overview-split (980px): Overview's accounts list and its chart do (.split-overview);
+     - labs-split (1600px): the Labs mix editor and its returns table do (.split-labs);
      - tall (640px of height): the chart card in a .split row stays in view (.split-aside);
      - stack (600px): tables stack into labelled rows (.stack-table);
      - phone (480px): the header and page give the content the width rather than the padding. */
@@ -440,6 +441,21 @@ img.logo-on-dark {
     aspect-ratio: 4 / 3;
     min-height: 320px;
     max-height: 560px;
+  }
+}
+
+/* The Labs mix editor beside its returns table (UX-8), editor first as in the markup. The
+   editor's minimum is 400px, the table's about 1000px plus 64px of padding: 1488px with the
+   gap, a window of about 1598px with 3vw gutters and a scrollbar (labs-ui.md). Later than
+   .split's rules, so it wins where both apply. Breakpoint: labs-split. */
+@media (min-width: 1600px) {
+  .split-labs {
+    grid-template-columns: minmax(400px, 2fr) minmax(1064px, 5fr);
+    align-items: start;
+  }
+
+  .split-labs > .labs-editor {
+    max-width: none;
   }
 }
 
@@ -1444,6 +1460,34 @@ img.logo-on-dark {
 /* The drawdown chart (RK-9), under the growth chart and its asset boxes. */
 .labs-drawdown {
   margin-top: var(--space-5);
+}
+
+/* The results card opens with the growth chart; its own top margin is the card's padding. */
+.labs-results > :first-child {
+  margin-top: 0;
+}
+
+/* A long mix scrolls here (UX-8): about eight rows, then the box, not the card, grows. */
+.labs-rows {
+  max-height: 34rem;
+  overflow-y: auto;
+}
+
+/* A hairline where a scrolling box cuts its rows, so the cut reads as more to come. */
+.labs-rows[role="region"] {
+  border-bottom: 1px solid var(--border);
+  margin-bottom: var(--space-3);
+}
+
+/* The risk figures' fold (UX-8): its summary reads as a line under the Risk heading. */
+.labs-risk-fold > summary {
+  cursor: pointer;
+  font: var(--text-caption);
+  font-weight: 600;
+}
+
+.labs-risk-fold[open] > summary {
+  margin-bottom: var(--space-3);
 }
 
 /* The rows space themselves; the card's form gap would double it. */

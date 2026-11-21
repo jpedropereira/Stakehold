@@ -643,7 +643,8 @@ Every route `web` serves, with what it requires and which upstream calls it make
   and currency need), `password_toggle.js` (UI-12), `confirm_dialog.js` (opens a delete's
   confirmation as a dialog in place of its page), and `holdings_breakdown.js` (shows and hides a
   `/portfolio` holding's per-account breakdown from its ticker), and `labs_form.js` (LB-7, adds
-  rows to the Labs mix form in place).
+  rows to the Labs mix form in place; UX-8, scrolls an added row into view in a long mix's box
+  and makes that box a keyboard-scrollable region).
 - `cli.py` — `web serve` only, mirroring `auth serve`'s lazy-import-uvicorn shape.
 - `scripts/review_pages.py` (UI-13) — a developer tool, not part of the package and not an
   entry point of the service. It screenshots every page against fake clients and checks

@@ -304,7 +304,8 @@ described here updates this file in the same change.
     560px) and full (`.card-wide`, `max-width: none`, the content width). The account header,
     as-of line and tiles are always the content width. Full is the page's default, and a card
     opts into it: a full-width table sits in a `.card-wide` card, and form and narrow cards keep
-    their own width on the same page (the admin mappings form).
+    their own width on the same page (the admin mappings form). In a `.split` column a form card
+    fills its column (Labs' editor, UX-8) and keeps the 560px cap only when stacked.
   - *No per-page switch (LY-7)*: from LY-2 to LY-6 a page opted into full width through
     `base.html`'s `page_width` block, which added `page-full` to `<main>` and lifted a
     `--page-wide` variable from its 880px default, the old single column. That kept the holdings
@@ -337,7 +338,9 @@ described here updates this file in the same change.
   `/portfolio` the as-of line and tiles span the page, and below them a `.split` grid holds the
   Holdings card and the Returns card. Account holdings reuses it with a modifier,
   `.split-account` (LY-5, below), and Overview with another, `.split-overview` (LY-6, after
-  this entry).
+  this entry). Labs puts its mix editor beside its returns table with `.split-labs` (UX-8,
+  breakpoint `labs-split`; its arithmetic is in [`labs-ui.md`](labs-ui.md)): the editor first,
+  as the page's main action, and a form card in the narrow column.
   - *Grid, not markup order*: the cards are in the markup in reading order, tiles then table
     then chart, and the grid places the columns. A screen reader or keyboard meets the page in
     the same order at every width, which moving the chart's markup to put it first would

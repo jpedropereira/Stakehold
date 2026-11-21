@@ -1273,7 +1273,7 @@ def test_errors_with_no_last_mix_show_no_table(client):
 
     assert fake_portfolio.calls == []
     assert "<table" not in html
-    assert "Fix the rows marked below to see figures." in html
+    assert "Fix the marked rows in the mix to see figures." in html
     assert _hidden_last(html) == []
 
 
@@ -1315,7 +1315,7 @@ def test_removing_the_last_asset_leaves_an_empty_mix_not_the_default(client):
     assert response.headers["location"] == "/labs?ticker="
     html = _get(test_client, "ticker=")
     assert fake_portfolio.calls == []
-    assert "Add an asset below to backtest it." in html
+    assert "Add an asset to the mix to backtest it." in html
     assert "<table" not in html
     assert _form_rows(html) == [("", "")]
 
@@ -1402,3 +1402,95 @@ def test_remove_keeps_the_chosen_period(client):
     )
 
     assert response.headers["location"] == "/labs?ticker=AAPL&weight=60&period=5Y"
+
+
+# --- the editor first (UX-8) ------------------------------------------------------------------
+
+
+def _split(html):
+    match = re.search(r'<div class="split split-labs">(.*?)<!-- /split-labs -->', html, re.S)
+    assert match, "no split-labs container"
+    return match.group(1)
+
+
+def test_the_mix_editor_comes_before_the_results(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_backtest(fake_portfolio)
+
+    html = _page(test_client)
+
+    assert html.index('id="labs-form"') < html.index("<table")
+    assert html.index('id="edit-mix"') < html.index("<table")
+
+
+def test_the_editor_and_the_returns_table_share_the_split_in_that_order(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_backtest(fake_portfolio)
+
+    split = _split(_page(test_client))
+
+    assert 'id="labs-form"' in split and "<table" in split
+    assert split.index('id="labs-form"') < split.index("<table")
+    assert '<section class="labs-growth"' not in split
+
+
+def test_the_returns_card_is_headed(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_backtest(fake_portfolio)
+
+    split = _split(_page(test_client))
+
+    assert re.search(r'<h2 id="labs-returns-title">Returns</h2>', split)
+
+
+def test_the_empty_states_sit_in_the_split_beside_the_editor(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+
+    split = _split(_get(test_client, "ticker="))
+
+    assert "Add an asset to the mix to backtest it." in split
+
+
+def test_no_holdings_offers_a_mix_of_your_own(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+
+    html = _page(test_client)
+
+    assert "or try a mix of your own." in html
+    assert "below" not in _text(_split(html))
+
+
+def _rows_box(html):
+    match = re.search(r'<div class="labs-rows"[^>]*>', _form(html))
+    assert match, "no rows box"
+    return match.group(0)
+
+
+def test_a_short_mix_has_no_scrolling_rows_region(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_backtest(fake_portfolio)
+
+    box = _rows_box(_page(test_client))
+
+    assert "tabindex" not in box and "role=" not in box
+
+
+def test_a_long_mix_scrolls_in_a_labelled_focusable_region(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_backtest(fake_portfolio)
+    fake_portfolio.tickers = [f"T{i:02d}" for i in range(9)]
+
+    html = _get(test_client, "&".join(f"ticker=T{i:02d}&weight=1" for i in range(9)))
+
+    box = _rows_box(html)
+    assert 'tabindex="0"' in box
+    assert 'role="region"' in box
+    assert 'aria-label="Mix rows"' in box
+    assert "data-labs-rows" in html

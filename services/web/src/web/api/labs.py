@@ -67,6 +67,7 @@ from web.labs_view import (
 from web.portfolio_client.base import (
     BACKTEST_PERIODS,
     BACKTEST_RISK_WINDOWS,
+    DEFAULT_BENCHMARK,
     Backtest,
     BacktestRisk,
     PortfolioClient,
@@ -134,6 +135,17 @@ def _benchmark_kept(request: Request) -> list[tuple[str, str]]:
     """The query the benchmark form re-sends as hidden inputs: everything but `benchmark`, which
     its field sends. Not `remove`, which the route answers with a redirect before rendering."""
     return [(k, v) for k, v in request.query_params.multi_items() if k != "benchmark"]
+
+
+def _risk_open(risk_window: str, benchmark: str, benchmark_error: str | None) -> bool:
+    """Whether the risk section's fold (UX-8) starts open: when the reader chose a window or a
+    benchmark other than the default, or the benchmark field has an error to show. Not on the
+    parameters' mere presence, since the mix form and the period links always carry both."""
+    return (
+        risk_window != _DEFAULT_RISK_WINDOW
+        or benchmark != DEFAULT_BENCHMARK
+        or benchmark_error is not None
+    )
 
 
 def _log_risk(risk: BacktestRisk) -> None:
@@ -346,6 +358,7 @@ async def labs(
             "benchmark": benchmark,
             "benchmark_error": benchmark_error,
             "benchmark_kept": _benchmark_kept(request),
+            "risk_open": _risk_open(risk_window, benchmark, benchmark_error),
             "risk_window_links": _risk_window_links(request),
             "drawdown": (
                 None

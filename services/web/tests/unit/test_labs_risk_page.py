@@ -916,3 +916,70 @@ def test_no_benchmark_line_disables_its_box_and_says_why(client):
     ).group(0)
     assert "disabled" in box and "checked" not in box
     assert "No benchmark line: benchmark history too short (from 2019-07-29)." in _text(html)
+
+
+# --- the results order and the risk fold (UX-8) -----------------------------------------------
+
+
+def _fold(html):
+    match = re.search(r'<details class="labs-risk-fold"[^>]*>', _section(html))
+    assert match, "no risk fold"
+    return match.group(0)
+
+
+def test_results_run_returns_growth_drawdown_then_risk(client):
+    test_client, fake_portfolio = client
+    _with_risk(fake_portfolio)
+
+    html = _page(test_client)
+
+    order = [
+        html.index("<table"),
+        html.index('<section class="labs-growth"'),
+        html.index('class="labs-drawdown"'),
+        html.index('<section class="labs-risk"'),
+    ]
+    assert order == sorted(order)
+
+
+def test_the_risk_figures_are_folded_under_their_heading(client):
+    test_client, fake_portfolio = client
+    _with_risk(fake_portfolio)
+
+    section = _section(_page(test_client))
+
+    assert section.index('<h2 id="labs-risk-title">Risk</h2>') < section.index("<details")
+    summary = _text(re.search(r"<summary[^>]*>(.*?)</summary>", section, re.S).group(1))
+    assert summary == "By window and per asset, against VWCE.DE"
+    # Every table and the benchmark form are inside the fold.
+    inside = section.split("<details", 1)[1]
+    assert inside.count("<table") == 2
+    assert 'class="benchmark-form' in inside or "benchmark-form" in inside
+
+
+def test_the_risk_fold_is_closed_by_default(client):
+    test_client, fake_portfolio = client
+    _with_risk(fake_portfolio)
+
+    assert " open" not in _fold(_page(test_client))
+
+
+def test_the_risk_fold_stays_closed_for_the_mix_forms_default_fields(client):
+    test_client, fake_portfolio = client
+    _with_risk(fake_portfolio)
+
+    html = _page(test_client, "?period=3M&risk_window=1Y&benchmark=VWCE.DE")
+
+    assert " open" not in _fold(html)
+
+
+@pytest.mark.parametrize(
+    "query",
+    ["?risk_window=3Y", "?benchmark=IWDA.AS", "?benchmark=" + "A" * 21],
+    ids=["window", "benchmark", "benchmark-error"],
+)
+def test_the_risk_fold_opens_for_a_chosen_window_benchmark_or_error(client, query):
+    test_client, fake_portfolio = client
+    _with_risk(fake_portfolio)
+
+    assert " open" in _fold(_page(test_client, query))
