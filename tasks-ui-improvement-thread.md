@@ -99,7 +99,7 @@ Earlier chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archive/):
 | UX-8 | [Labs: mix editor first](#ux-8-labs-mix-editor-first) | UX-0 | done |
 | UX-9 | [Copy density pass](#ux-9-copy-density-pass) | UX-6, UX-7, UX-8 | ready |
 | UX-10 | [Period switches without a page reload](#ux-10-period-switches-without-a-page-reload) | UX-0 | done |
-| UX-11 | [Forms beside the list they add to](#ux-11-forms-beside-the-list-they-add-to) | UX-0 | ready |
+| UX-11 | [Forms beside the list they add to](#ux-11-forms-beside-the-list-they-add-to) | UX-0 | done |
 
 ## Tasks
 
@@ -620,7 +620,7 @@ Done as:
 
 ### UX-11. Forms beside the list they add to
 
-**Status:** ready
+**Status:** done
 
 This item was carried over from the screen-layout chunk's Deferred list, where it was left out
 by choice. It is taken on here because of UX-0. Today every form keeps its narrow card. On a
@@ -663,6 +663,29 @@ Files:
 - `static/web.css`
 - `docs/ui-architecture.md`, whose "forms keep their narrow cards" statement is rewritten
 - `scripts/review_pages.py`, to add page states if needed
+
+Done as:
+- **Reading order as assumed** (confirmed). `.split-form` puts the list first (Accounts, Admin
+  mappings), `.split-form-start` the form (Add transaction, Add a ticker). A column holding two
+  cards (mappings' tables; the lookup and its result) is a `.split-form-column`. Both are
+  `.split` modifiers: none of the existing ones sizes a form column.
+- **Breakpoint `form-split`, 1100px.** The list column's minimum is the mappings table's 559px
+  plus padding, the form's 360–440px. A list-first form is sticky in a tall window.
+- **`web.css` was 62.7KB.** A preparatory step moved the `.split*` rules into a new
+  `static/layout.css`, linked after it. The template tests read both files.
+- **Accounts (agreed):** the New account form is always open in its own card; the `<details>`
+  went. "Create an account below" lost its direction.
+- **Admin mappings:** the section headings became `h2`, under the page's one `h1`.
+- **Add transaction (agreed):** the 10 newest transactions (date, type, named instrument,
+  amount), no Delete, and a link to the Transactions tab.
+- **Add a ticker (agreed):** the tickers the viewer added, admins included, with status and a
+  link to `/tickers`. `POST /tickers` now redirects back to `/tickers/new?added=` (or
+  `already=`), whose banner `/tickers` used to show; admin changes still land on `/tickers`.
+- **Each side list loads on its own**, and lazily on a full-page error re-render.
+- **Checked.** `review_pages.py` gained `tickers-new-added`. Every affected page, and the pages
+  whose CSS moved, passed at every width in both themes (100 of 100). The breakpoint was
+  probed at 1099px and 1100px. Not covered by a review state: more than 10 transactions (the
+  fake account has 4; a unit test covers the cap) and an Accounts first run.
 
 ## Deferred
 

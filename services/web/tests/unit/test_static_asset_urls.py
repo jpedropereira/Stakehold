@@ -74,6 +74,15 @@ def test_every_asset_on_a_page_carries_a_version(client):
         assert re.fullmatch(r"/(static|brand)/[\w./-]+\?v=[0-9a-f]{12}", ref), ref
 
 
+def test_layout_css_is_linked_after_web_css(client):
+    """layout.css holds the page grids (UX-11). Its rules override .card's width inside a grid
+    column, so it has to come after web.css in the cascade."""
+    paths = [ref.split("?")[0] for ref in _asset_refs(client.get("/login").text)]
+
+    assert "/static/layout.css" in paths
+    assert paths.index("/static/web.css") < paths.index("/static/layout.css")
+
+
 def test_a_versioned_url_serves_the_file(client):
     html = client.get("/login").text
 

@@ -150,17 +150,17 @@ described here updates this file in the same change.
     twice. Signup states the 12-character minimum (auth's own) up front.
     `password_toggle.js` reveals a show/hide button rendered `hidden`, so no-JS pages show no
     dead control.
-- **The accounts page lists accounts first and folds the create form into a `<details>`
-  (UI-10).** Creating an account is rare once there is one, so the form starts collapsed then.
-  It renders `open` in two cases. The first is a first run (no accounts, and the list loaded),
-  which also shows the two first steps. The second is any re-render carrying a create-form
-  `error`: a no-JS post that fails lands back on this page, and the message sits inside the form.
-  The list outage notice moved out of the form into its own `list_error`, above the list. As one
-  shared `error`, it would have been hidden in the collapsed form, and its presence would have
-  opened the form. A failed list is not a first run: no steps, form collapsed, notice shown. Each
-  row's primary action is the account name itself, a link to its holdings. Transactions, Add and
-  Import are `.btn-secondary` beside it. *Rejected: a gold `.btn-primary` per row*, since five
-  accounts would mean five gold buttons competing with the one accent (charter, chapter II).
+- **The accounts page lists accounts first, and the create form is a card beside the list
+  (UI-10, UX-11).** UI-10 folded the form into a `<details>` under the list, collapsed once the
+  visitor had accounts, since creating one is rare by then. UX-11 gave the form its own card in
+  a `.split-form` row (below), and the fold went: collapsed, the card would waste the column it
+  was given. A first run (no accounts, and the list loaded) shows the two first steps in the
+  list's card. A create error shows in the form's card. The list outage notice is its own
+  `list_error`, in the list's card, never in the form's. A failed list is not a first run: no
+  steps, notice shown. Each row's primary action is the account name itself, a link to its
+  holdings. Transactions, Add and Import are `.btn-secondary` beside it. *Rejected: a gold
+  `.btn-primary` per row*, since five accounts would mean five gold buttons competing with the
+  one accent (charter, chapter II).
 - **The import drop zone is the file input itself, enlarged and dashed; no script (UI-10).**
   Browsers accept a dropped file on a file input natively, and the input's own text names the
   chosen file, so a CSS-only zone keeps the strict CSP and works without JS. The cost: there's
@@ -304,8 +304,9 @@ described here updates this file in the same change.
     560px) and full (`.card-wide`, `max-width: none`, the content width). The account header,
     as-of line and tiles are always the content width. Full is the page's default, and a card
     opts into it: a full-width table sits in a `.card-wide` card, and form and narrow cards keep
-    their own width on the same page (the admin mappings form). In a `.split` column a form card
-    fills its column (Labs' editor, UX-8) and keeps the 560px cap only when stacked.
+    their own width on the same page. In a `.split` column a form card fills its column (Labs'
+    editor, UX-8; the form pages' `.split-form-card`, UX-11) and keeps the 560px cap only when
+    stacked.
   - *No per-page switch (LY-7)*: from LY-2 to LY-6 a page opted into full width through
     `base.html`'s `page_width` block, which added `page-full` to `<main>` and lifted a
     `--page-wide` variable from its 880px default, the old single column. That kept the holdings
@@ -319,9 +320,10 @@ described here updates this file in the same change.
     column, so a 560px card under a 1600px header would float in the middle of the page, under
     nothing. `.account-header ~ .card` aligns it to the start instead. It's a sibling selector,
     so it reaches only cards placed directly after the header; `test_responsive_a11y.py` checks
-    the four form templates still do. Full-width cards fill the row, so the rule changes nothing
-    on Holdings or Transactions, and pages without an account header (Accounts, auth, errors,
-    Tickers' add form) stay centred. *Rejected:* the card centred under the full-width header,
+    the form templates still do. Full-width cards fill the row, so the rule changes nothing
+    on Holdings or Transactions, and pages without an account header (auth, errors) stay
+    centred. Add transaction's card is in a `.split` beside its recent transactions (UX-11); the
+    split fills the row, so it starts at the header's edge without the rule. *Rejected:* the card centred under the full-width header,
     and a narrower header tier for the form pages, which would have kept 880px alive.
   - *Breakpoints* are listed once, by name, in a comment by `--content-max`, because a custom
     property can't be used in `@media`; each media query's comment cites the name.
@@ -411,6 +413,40 @@ described here updates this file in the same change.
     card and the list and tiles still show. Before LY-6 an account-list failure was a banner
     alone on the page. The first run (the list loaded and empty) is still the narrow welcome
     card alone, with no chart.
+- **A form beside the list it adds to: `.split-form` (UX-11).** On four pages a form changed a
+  list the reader couldn't see while filling it in. Each now shares a row with that list from
+  the "form-split" breakpoint (1100px), and stacks below it:
+  - *Order is reading order, per page*: the list comes first where it is what the page is for
+    and the form changes it: Accounts and Admin mappings, `.split-form`. The form comes first
+    where the page is for the form and the list is context: Add transaction and Add a ticker,
+    `.split-form-start`. The modifier only mirrors the columns, so a phone stacks the cards in
+    the same order a screen reader meets them. Mappings' two tables share one column, and Add a
+    ticker's lookup and its result share the other, each in a `.split-form-column`.
+  - *Breakpoint, measured*: the list column's minimum is the widest list at its natural width,
+    the six-column mappings table, 559px, plus 64px of padding. The form's is 360px; it grows to
+    440px before the list takes the rest. With the gap that is 1008px of content, a window of
+    about 1088px with 3vw gutters and a classic 15px scrollbar; the breakpoint leaves a few
+    pixels more. One breakpoint serves all four pages: the other lists are narrower (an account
+    row is 420px and wraps, the recent transactions 407px, the user's tickers 365px).
+  - *The form stays in view beside a long list*, as `.split-aside` does, where the list comes
+    first, in a window at least 640px tall: the tallest such form, mappings', is about 600px.
+    Where the form comes first it is the long column, so nothing is pinned.
+  - *The side lists load on their own*: the add pages' lists are new fetches, from existing
+    client methods (`list_transactions`, `list_tracked_tickers`), and each failure is a notice
+    in the list's card with the form still working. Add transaction shows the account's 10
+    newest transactions: date, type, instrument (named, UX-2) and amount, no Delete, and a link
+    to the Transactions tab. Add a ticker shows the tickers the viewer added, admins included:
+    an admin's `/tickers` lists every ticker, but beside the form only their own adds are
+    context, and the default list would bury them. A full-page error re-render loads the list
+    too, lazily, so a success never pays for it.
+  - *After an add, the new row is beside the form*: Add transaction already redirected back to
+    itself. Add a ticker redirected to `/tickers`; it now redirects back to `/tickers/new` with
+    `added=` or `already=`, and that page shows the banner `/tickers` showed.
+  - *Two stylesheets*: the `.split` rules moved from `web.css`, then about 62.7KB, into
+    `layout.css`, so neither nears the repo's 64KB limit. `layout.css` is linked after
+    `web.css`: its grid columns lift `.card`'s width cap, so it has to win the cascade. The
+    breakpoint names are still listed in one place, by `--content-max` in `web.css`. The
+    template tests read both files.
 - **App shell (UI-4): the current page is marked on the server, and the account pages share one
   header.** Each route passes `nav_active` (`overview` / `portfolio` / `labs` / `risk` / `accounts` / `tickers` / `admin`) and, on the four
   account-scoped pages, `account_nav_active` (`holdings` / `transactions` / `add` / `import`). The templates turn these into `aria-current="page"`, and `web.css` styles

@@ -1,0 +1,176 @@
+/* Stakehold web -- page grids: the two-column rows that put a page's cards side by side on a
+   wide screen (.split and its modifiers). Apart from web.css, which styles components and holds
+   the theme aliases, so neither file nears the repo's 64KB limit (UX-11). Linked after web.css:
+   a grid column lifts .card's width cap, so these rules must come later in the cascade. The
+   breakpoint names are listed in web.css, by --content-max. Like web.css, no hardcoded colour. */
+
+/* A holdings table beside its returns chart (LY-4; .split-account and .split-overview below).
+   One column, the cards stacked in reading order, until the split breakpoint; then two, placed
+   by the grid, not by reordering the markup, so a screen reader or keyboard meets the table
+   first at every width. The gap is the only space between the cards, stacked or not. The
+   stacked column is explicit: left auto, it grows to the card's min-content width, which counts
+   the table inside its .table-scroll box, and the page scrolls sideways at tablet and phone
+   width. */
+.split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-5);
+  width: 100%;
+  margin-bottom: var(--space-5);
+}
+
+.split > .card {
+  margin-bottom: 0;
+}
+
+/* The table column's minimum is /portfolio's ten-column table in its card (875px plus 64px of
+   padding), the chart's is 420px. With the gap that is 1384px of content, a window of about
+   1473px once the 3vw gutters are taken off; the breakpoint leaves a few pixels of slack.
+   Wider than that, the spare width splits 3:2. Both cards align to the top: the chart card
+   doesn't stretch to the table's height, which an open breakdown makes much taller, and stays
+   in view while the table scrolls past (.split-aside, below). Breakpoint: split. */
+@media (min-width: 1480px) {
+  .split {
+    grid-template-columns: minmax(940px, 3fr) minmax(420px, 2fr);
+    align-items: start;
+  }
+
+  /* A column is narrower than a stacked card, so 2:1 would make the chart squat (about 315px
+     at 1920px); 4:3 gives it about 470px there, still from its own width, not the table's. */
+  .split .chart-frame {
+    aspect-ratio: 4 / 3;
+    min-height: 320px;
+    max-height: 560px;
+  }
+}
+
+/* The chart card is about 580px tall at most (its frame stops growing with the content), so a
+   window this tall shows all of it while it's pinned. In a shorter one a pinned card would hide
+   its own bottom until the table ran out, so it scrolls with the page. Breakpoints: split, tall. */
+@media (min-width: 1480px) and (min-height: 640px) {
+  .split-aside {
+    position: sticky;
+    top: var(--space-5);
+  }
+}
+
+/* An account's holdings (LY-5): the same two columns, sooner. Its table has seven cells, not
+   /portfolio's ten, and is 640px at its natural width, so its column's minimum is 704px with
+   padding. With the gap and the chart's 420px that is 1148px of content, a window of about
+   1221px once the 3vw gutters are taken off; the breakpoint adds room for a classic 15px
+   scrollbar, so a 1280px laptop gets two columns. These rules come after the split ones on
+   purpose: the container is also a .split, so from 1480px both apply and these must win. The
+   chart frame and sticky declarations repeat .split's, because a breakpoint can't be a custom
+   property and each needs its own query. Breakpoint: split-account. */
+@media (min-width: 1240px) {
+  .split-account {
+    grid-template-columns: minmax(704px, 3fr) minmax(420px, 2fr);
+    align-items: start;
+  }
+
+  .split-account .chart-frame {
+    aspect-ratio: 4 / 3;
+    min-height: 320px;
+    max-height: 560px;
+  }
+}
+
+/* As .split-aside above: the chart card is about 450-580px tall here. Breakpoints:
+   split-account, tall. */
+@media (min-width: 1240px) and (min-height: 640px) {
+  .split-account > .split-aside {
+    position: sticky;
+    top: var(--space-5);
+  }
+}
+
+/* Overview's accounts list beside its chart (LY-6). The list is short and its rows wrap, so it
+   needs far less than a holdings table: two columns come in at their own, lower breakpoint,
+   the chart wider (2:3), since it's the page's one figure. The accounts column's minimum keeps
+   a row on one line: label, broker and three figures are about 386px, 450px with the card's
+   padding. The chart's is 420px, as on /portfolio. With the gap that is 894px of content, a
+   window of about 951px once the 3vw gutters are taken off, 967px with a classic 15px
+   scrollbar; the breakpoint leaves a few pixels more. A longer label or larger figures wrap the
+   row, never the page. No .split-aside: the list is shorter than the chart, so there's nothing
+   for the chart to stay in view beside. Like .split-account's, these rules come after .split's
+   so they win from 1480px, where both apply. Breakpoint: overview-split. */
+@media (min-width: 980px) {
+  .split-overview {
+    grid-template-columns: minmax(450px, 2fr) minmax(420px, 3fr);
+    align-items: start;
+  }
+
+  .split-overview .chart-frame {
+    aspect-ratio: 4 / 3;
+    min-height: 320px;
+    max-height: 560px;
+  }
+}
+
+/* The Labs mix editor beside its returns table (UX-8), editor first as in the markup. The
+   editor's minimum is 400px, the table's about 1000px plus 64px of padding: 1488px with the
+   gap, a window of about 1598px with 3vw gutters and a scrollbar (labs-ui.md). Later than
+   .split's rules, so it wins where both apply. Breakpoint: labs-split. */
+@media (min-width: 1600px) {
+  .split-labs {
+    grid-template-columns: minmax(400px, 2fr) minmax(1064px, 5fr);
+    align-items: start;
+  }
+
+  .split-labs > .labs-editor {
+    max-width: none;
+  }
+}
+
+/* A form beside the list it adds to (UX-11). .split-form puts the list first (Accounts, Admin
+   mappings), .split-form-start the form (Add transaction, Add a ticker); DOM order decides, so
+   a phone stacks them the same way. A column can hold several cards (.split-form-column).
+   Stacked, the form card keeps .card's 560px. The list column's minimum is the widest list at
+   its natural width: the mappings table, 559px, plus 64px of padding. The form's is 360px, and
+   it grows to 440px before the list takes the rest. With the gap that is 1008px of content, a
+   window of about 1088px with 3vw gutters and a classic 15px scrollbar; the breakpoint leaves a
+   few pixels more. Breakpoint: form-split. */
+.split-form-column {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  min-width: 0;
+}
+
+.split-form-column > .card {
+  margin-bottom: 0;
+}
+
+/* A card in these rows opens on its h2 (the page's h1 is in another card), so the heading
+   doesn't take the space it has between sections inside a card. */
+.split-form .card > h2:first-child,
+.split-form-start .card > h2:first-child {
+  margin-top: 0;
+}
+
+@media (min-width: 1100px) {
+  .split-form {
+    grid-template-columns: minmax(624px, 1fr) minmax(360px, 440px);
+    align-items: start;
+  }
+
+  .split-form-start {
+    grid-template-columns: minmax(360px, 440px) minmax(624px, 1fr);
+    align-items: start;
+  }
+
+  .split-form .split-form-card,
+  .split-form-start .split-form-card {
+    max-width: none;
+  }
+}
+
+/* Beside a long list, the form stays in view, as .split-aside does; the tallest, the mappings
+   form, is about 600px. Only where the list comes first: where the form does, it is the long
+   column. Breakpoints: form-split, tall. */
+@media (min-width: 1100px) and (min-height: 640px) {
+  .split-form > .split-form-card {
+    position: sticky;
+    top: var(--space-5);
+  }
+}

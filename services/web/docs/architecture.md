@@ -637,7 +637,8 @@ Every route `web` serves, with what it requires and which upstream calls it make
   naming what a delete takes, which a dialog and its confirmation page
   (`transaction_delete.html`, `account_delete.html`) both show;
   `account_not_found.html`, their shared 404; and `error.html`, every other error page) and
-  `web.css` plus vendored `htmx.min.js`. Same-origin scripts: `htmx-error-swap.js` (also the
+  `web.css` and `layout.css` (UX-11, the page grids, split off to keep both under 64KB) plus
+  vendored `htmx.min.js`. Same-origin scripts: `htmx-error-swap.js` (also the
   generic failure banner, UI-12), `chart_theme.js` (LB-8, the theme colors and redraw both charts share), `portfolio_chart.js`,
   `labs_chart.js` (LB-8, the Labs growth chart), `labs_drawdown_chart.js` (RK-9, the mix's
   drawdown under it; both take `formatPct` from `chart_theme.js`), `risk_rolling_chart.js`

@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% from "partials/_banner.html" import banner %}
+{% from "partials/_ticker.html" import ticker %}
 {% block title %}Add transaction — Stakehold{% endblock %}
 {#- Marks a field with the types it applies to (and requires it for), from routes.py's
     _FIELD_TYPES. static/transaction_form.js hides the field for any other type; without JS it
@@ -10,7 +11,11 @@ data-types="{{ field_types[name] | join(' ') }}"
 {%- endmacro %}
 {% block content %}
 {% include "partials/_account_header.html" %}
-<section class="card">
+{# The form, then the account's newest transactions (UX-11): side by side on a wide screen,
+   stacked in this order below the form-split breakpoint. The page is for the form, so it comes
+   first; the list is context, and shows the new row after the save redirects back here. #}
+<div class="split split-form-start">
+<section class="card split-form-card">
   <h1>Add transaction</h1>
   {% if saved == 0 %}
   {% call banner("success") %}<strong>Nothing new to save</strong> — that transaction was already recorded.{% endcall %}
@@ -111,5 +116,43 @@ data-types="{{ field_types[name] | join(' ') }}"
     <span class="htmx-indicator busy" role="status">Saving…</span>
   </form>
 </section>
+
+{% set account_query = "?account=" ~ (account_label | urlencode) %}
+<section class="card card-wide" aria-labelledby="recent-transactions">
+  <h2 id="recent-transactions">Recent transactions</h2>
+  {% if recent_error %}{% call banner("error") %}<strong>Couldn't load the transactions.</strong> {{ recent_error }}{% endcall %}{% endif %}
+  {% if recent_transactions %}
+  {# The Transactions tab's cells, four of its nine columns; it stacks the same way at phone
+     width. No Delete: that is the Transactions tab's job. #}
+  <div class="table-scroll" tabindex="0" role="region" aria-label="Recent transactions">
+  <table class="positions-table transactions-table stack-table" role="table">
+    <thead role="rowgroup">
+      <tr role="row">
+        <th role="columnheader">Date</th>
+        <th role="columnheader">Type</th>
+        <th role="columnheader">Instrument</th>
+        <th class="num" role="columnheader">Amount</th>
+      </tr>
+    </thead>
+    <tbody role="rowgroup">
+      {% for txn in recent_transactions %}
+      {% set currency = txn.native_currency %}
+      <tr role="row">
+        <td class="date" role="cell"><span class="mono">{{ txn.trade_datetime | date }}</span></td>
+        <td role="cell" data-label="Type"><span class="badge">{{ txn.transaction_type }}</span></td>
+        <td role="cell" data-label="Instrument">{% if txn.instrument_identifier_kind == "TICKER" %}{{ ticker(txn.instrument_identifier, ticker_names) }}{% elif txn.instrument_identifier %}<span class="mono">{{ txn.instrument_identifier_kind }} {{ txn.instrument_identifier }}</span>{% else %}<span class="mono">—</span>{% endif %}</td>
+        <td class="num" role="cell" data-label="Amount"><span class="mono">{{ txn.native_amount | native_money(currency) }}</span>{% if currency != "EUR" %}
+          <span class="mono eur-amount">{{ txn.eur_amount | money }}</span>{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% elif recent_transactions is not none %}
+  <p class="entry-empty">No transactions yet.</p>
+  {% endif %}
+  <p class="card-more"><a href="/transactions{{ account_query }}">All transactions</a></p>
+</section>
+</div>
 <script src="{{ asset_url('/static/transaction_form.js') }}" defer></script>
 {% endblock %}

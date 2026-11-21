@@ -2,9 +2,15 @@
 {% from "partials/_banner.html" import banner %}
 {% block title %}Add a ticker — Stakehold{% endblock %}
 {% block content %}
+{# The lookup and its result, then the viewer's own tickers (UX-11): side by side on a wide
+   screen, stacked in this order below the form-split breakpoint. The page is for the form, so
+   it comes first; the list is context, and shows a new row after the add redirects back. #}
+<div class="split split-form-start">
+<div class="split-form-column">
 <section class="card">
   <h1>Add a ticker</h1>
   <p class="entry-subtitle">Look a symbol up as Yahoo Finance shows it, such as ASML.AS or BTC-USD. Once added, its price history loads in the background, usually within a few minutes, and every user can pick it.</p>
+  {% if outcome %}{% call banner("success") %}<strong>{{ outcome }}</strong>{% endcall %}{% endif %}
   {% include "partials/_form_errors.html" %}
   {# A GET form: a lookup changes nothing, works without JS, and its result can be bookmarked. #}
   <form method="get" action="/tickers/new">
@@ -53,4 +59,40 @@
   {% endif %}
 </section>
 {% endif %}
+</div>
+
+<section class="card card-wide" aria-labelledby="your-tickers">
+  <h2 id="your-tickers">Your tickers</h2>
+  {% if list_error %}{% call banner("error") %}<strong>Couldn't load your tickers.</strong> {{ list_error }}{% endcall %}{% endif %}
+  {% if tickers is none %}
+  {% elif tickers %}
+  {# Focusable, so a keyboard can scroll it if it is ever wider than its column. #}
+  <div class="table-scroll" tabindex="0" role="region" aria-label="Your tickers">
+    <table class="positions-table">
+      <thead>
+        <tr><th>Ticker</th><th>Name</th><th>Status</th></tr>
+      </thead>
+      <tbody>
+        {% for t in tickers %}
+        <tr>
+          <td class="mono">{{ t.ticker }}</td>
+          <td>{{ t.display_name }}</td>
+          <td>
+            <span class="badge">{{ status_label(t.status) }}</span>
+            {% if not t.enabled %} <span class="badge">Off</span>{% endif %}
+            {% if t.status == "failed" %}
+              {% if user.is_admin %}{% if t.last_error %}<p class="field-hint">{{ t.last_error }}</p>{% endif %}{% else %}<p class="field-hint">An admin can retry it.</p>{% endif %}
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="entry-empty">You haven't added any tickers yet.</p>
+  {% endif %}
+  <p class="card-more"><a href="/tickers">{{ "Every ticker" if user.is_admin else "Your tickers" }} on the Tickers page</a></p>
+</section>
+</div>
 {% endblock %}

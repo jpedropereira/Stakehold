@@ -1078,6 +1078,40 @@ async def _load_tickers(portfolio_client: PortfolioClient) -> tuple[list[str], s
         return [], _TICKERS_UNAVAILABLE
 
 
+# How many of the account's newest transactions sit beside the add form (UX-11): enough to see
+# what is already recorded, and the row just saved, without growing a second transactions page.
+_RECENT_TRANSACTIONS = 10
+
+
+async def _recent_transactions_context(
+    portfolio_client: PortfolioClient, user_id: str, account_label: str
+) -> dict:
+    """The add form's side list: the account's newest transactions, and their tickers' names.
+    It loads on its own: a failure leaves the form working beside a notice, and None (not [])
+    so the card never reads an outage as "no transactions yet". An unknown account is the
+    header's 404 to report, so it shows no list and no notice."""
+    try:
+        transactions = await portfolio_client.list_transactions(
+            user_id=user_id, account_label=account_label
+        )
+    except AccountNotFound:
+        return {"recent_transactions": None, "recent_error": None, "ticker_names": {}}
+    except PortfolioClientError as exc:
+        logger.exception("portfolio service unavailable listing transactions.", exc_info=exc)
+        return {
+            "recent_transactions": None,
+            "recent_error": _TRANSACTIONS_UNAVAILABLE,
+            "ticker_names": {},
+        }
+    recent = transactions[::-1][:_RECENT_TRANSACTIONS]
+    has_tickers = any(t.instrument_identifier_kind == "TICKER" for t in recent)
+    return {
+        "recent_transactions": recent,
+        "recent_error": None,
+        "ticker_names": await load_names(portfolio_client) if has_tickers else {},
+    }
+
+
 def _query_int(request: Request, name: str) -> int | None:
     raw = request.query_params.get(name, "")
     return int(raw) if raw.isdigit() else None
@@ -1152,7 +1186,7 @@ async def transaction_new_form(
     portfolio_client: PortfolioClient = Depends(get_portfolio_client),
 ):
     csrf_token = ensure_csrf_cookie(request, response, cookie_secure=settings.cookie_secure)
-    header, form = await asyncio.gather(
+    header, form, recent = await asyncio.gather(
         _account_header_context(portfolio_client, user.user_id, account),
         _transaction_new_context(
             portfolio_client,
@@ -1160,6 +1194,7 @@ async def transaction_new_form(
             saved=_query_int(request, "saved"),
             outcome=_write_outcome(request),
         ),
+        _recent_transactions_context(portfolio_client, user.user_id, account),
     )
     if header["account_known"] is False:
         return _render_account_not_found(
@@ -1177,6 +1212,7 @@ async def transaction_new_form(
             **_account_page_context("add"),
             **header,
             **form,
+            **recent,
         },
     )
 
@@ -1260,8 +1296,13 @@ async def transaction_new_submit(
     }
 
     async def load_account_header() -> dict:
-        # Lazy, like accounts_submit's loader: only a full-page error re-render shows the header.
-        return await _account_header_context(portfolio_client, user.user_id, account_label)
+        # Lazy, like accounts_submit's loader: only a full-page error re-render shows the header
+        # and the recent transactions beside the form.
+        header, recent = await asyncio.gather(
+            _account_header_context(portfolio_client, user.user_id, account_label),
+            _recent_transactions_context(portfolio_client, user.user_id, account_label),
+        )
+        return {**header, **recent}
 
     csrf_error = await _check_csrf(
         request,

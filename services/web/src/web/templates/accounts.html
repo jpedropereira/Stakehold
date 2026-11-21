@@ -6,7 +6,10 @@
 {% block content %}
 {# First run only when the list actually loaded: an outage must never read as "no accounts". #}
 {% set first_run = not accounts|default([]) and not list_error %}
-<section class="card">
+{# The list, then the form that adds to it (UX-11): side by side on a wide screen, stacked in
+   this order below the form-split breakpoint. #}
+<div class="split split-form">
+<section class="card card-wide">
   <h1>Your accounts</h1>
   {% if list_error %}{% call banner("error") %}<strong>Couldn't load your accounts.</strong> {{ list_error }}{% endcall %}{% endif %}
   {% if deleted == 1 %}
@@ -37,43 +40,42 @@
   {% elif first_run %}
   <p class="entry-subtitle">No accounts yet. To get started:</p>
   <ol class="first-run-steps">
-    <li>Create an account below, one for each broker account you hold.</li>
+    <li>Create an account, one for each broker account you hold.</li>
     <li>Add its transactions by hand, or import your broker's export file.</li>
   </ol>
   {% endif %}
-
-  {# Collapsed once the visitor has accounts. Open on first run, and on any re-render with an
-     error, since a no-JS post that failed lands back here and the message is inside. #}
-  <details class="new-account"{% if first_run or error %} open{% endif %}>
-    <summary>New account</summary>
-    <form class="account-form" hx-post="/accounts" hx-target="#form-errors" hx-swap="innerHTML" hx-disabled-elt="find button[type='submit']" method="post" action="/accounts">
-      <div id="form-errors" aria-live="polite">
-        {% include "partials/_form_errors.html" %}
-      </div>
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <div class="field">
-        <label for="broker">Broker</label>
-        <select id="broker" name="broker" required>
-          {% for broker in brokers|default([]) %}
-          <option value="{{ broker.broker }}">{{ broker.broker }}</option>
-          {% endfor %}
-          {# "__custom__" must match routes.CUSTOM_BROKER. #}
-          <option value="__custom__"{% if not brokers|default([]) %} selected{% endif %}>Custom</option>
-        </select>
-      </div>
-      <div class="field field-custom-broker">
-        <label for="custom_broker">Custom broker name</label>
-        <input type="text" id="custom_broker" name="custom_broker" aria-describedby="custom-broker-hint">
-        <p class="field-hint" id="custom-broker-hint">For a broker not in the list. Its transactions are
-          added manually; files can't be imported.</p>
-      </div>
-      <div class="field">
-        <label for="account_label">Label</label>
-        <input type="text" id="account_label" name="account_label" required>
-      </div>
-      <button type="submit" class="btn btn-primary">Create account</button>
-      <span class="htmx-indicator busy" role="status">Creating…</span>
-    </form>
-  </details>
 </section>
+
+<section class="card split-form-card">
+  <h2>New account</h2>
+  <form class="account-form" hx-post="/accounts" hx-target="#form-errors" hx-swap="innerHTML" hx-disabled-elt="find button[type='submit']" method="post" action="/accounts">
+    <div id="form-errors" aria-live="polite">
+      {% include "partials/_form_errors.html" %}
+    </div>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="field">
+      <label for="broker">Broker</label>
+      <select id="broker" name="broker" required>
+        {% for broker in brokers|default([]) %}
+        <option value="{{ broker.broker }}">{{ broker.broker }}</option>
+        {% endfor %}
+        {# "__custom__" must match routes.CUSTOM_BROKER. #}
+        <option value="__custom__"{% if not brokers|default([]) %} selected{% endif %}>Custom</option>
+      </select>
+    </div>
+    <div class="field field-custom-broker">
+      <label for="custom_broker">Custom broker name</label>
+      <input type="text" id="custom_broker" name="custom_broker" aria-describedby="custom-broker-hint">
+      <p class="field-hint" id="custom-broker-hint">For a broker not in the list. Its transactions are
+        added manually; files can't be imported.</p>
+    </div>
+    <div class="field">
+      <label for="account_label">Label</label>
+      <input type="text" id="account_label" name="account_label" required>
+    </div>
+    <button type="submit" class="btn btn-primary">Create account</button>
+    <span class="htmx-indicator busy" role="status">Creating…</span>
+  </form>
+</section>
+</div>
 {% endblock %}
