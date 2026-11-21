@@ -1,39 +1,41 @@
-"""GET /risk (RK-12): how risky the user's portfolio has been, and whether the risk was worth it.
+"""The Risk pages (RK-12, split into sub-pages by UX-6): how risky the user's portfolio has
+been, and whether the risk was worth it. Four routes under one sub-nav, each loading only its
+own sections, each section loaded on its own and failing on its own, as /labs's holdings and
+backtest do. A section that can't load shows its notice in its place; the page still renders.
 
-The page is built of sections, each loaded on its own and failing on its own, as /labs's
-holdings and backtest do. A section that can't load shows its notice in its place; the others,
-and the page around them, still render. Five so far, gathered concurrently where neither
-needs the other's answer:
-- the ex-post summary: portfolio's GET /risk/ex-post, the standard windows' figures measured on
-  the TWR of invested positions (RK-11);
-- the ex-ante section (RK-18): portfolio's POST /risk/ex-ante on today's holdings at their
+- GET /risk, ex-post: portfolio's GET /risk/ex-post, the standard windows' figures measured on
+  the TWR of invested positions (RK-11).
+- GET /risk/ex-ante (RK-18): portfolio's POST /risk/ex-ante on today's holdings at their
   weights. `?ex_ante_window=` picks the window (3Y by default) and `?exclude=` (repeatable)
-  leaves holdings out, typically the one that limits the window (R12);
-- the concentration section (RK-23): portfolio's POST /risk/look-through on the same mix,
-  always whole: `?exclude=` is ex-ante's, and concentration has no window;
-- the what-if section (RK-20): portfolio's POST /risk/what-if on the same mix, with the
-  candidate, weight and funding from its GET form (`?candidate=`, `?candidate_weight=`,
-  `?funding=`; risk_what_if_view.py checks them). Its window and exclusions are ex-ante's, so
-  "before" is the mix that section measures. An empty form or one with errors sends nothing;
-- the candidate ranking (RK-29): portfolio's POST /risk/what-if/ranking on the same mix, every
-  tracked ticker scored at the weight its GET form sends (`?rank_weight=`), in the order its
-  links pick (`?rank_by=`; risk_ranking_view.py checks both). Its window and exclusions are
-  ex-ante's too. Only a sent form calls portfolio: the ranking costs about two data-store calls
-  per tracked ticker, so it isn't run on every view.
-The last four measure today's mix, so they share one GET /holdings
-(labs_view.build_default_mix), then call portfolio concurrently. A failed holdings call shows
-its notice in all four.
+  leaves holdings out, typically the one that limits the window (R12).
+- GET /risk/what-if: the what-if (RK-20), portfolio's POST /risk/what-if with the candidate,
+  weight and funding from its GET form (`?candidate=`, `?candidate_weight=`, `?funding=`;
+  risk_what_if_view.py checks them), and the candidate ranking (RK-29), POST
+  /risk/what-if/ranking, every tracked ticker scored at the weight its GET form sends
+  (`?rank_weight=`), in the order its links pick (`?rank_by=`; risk_ranking_view.py checks
+  both). Both use ex-ante's window and exclusions, so "before" is the mix that page measures;
+  the page names them and links there to change them. Only a sent form calls portfolio: the
+  ranking costs about two data-store calls per tracked ticker.
+- GET /risk/concentration (RK-23): portfolio's POST /risk/look-through on the same mix, always
+  whole: `?exclude=` is ex-ante's, and concentration has no window.
+Every page but ex-post measures today's mix, so each starts with GET /holdings
+(labs_view.build_default_mix, `_load_mix`); a failed holdings call shows its notice in each
+section of that page.
 
-The rolling charts (RK-25) come with the first two sections' own calls, so nothing more is
-fetched and each section's charts fail with it: ex-post's and ex-ante's rolling 1Y volatility
-and Sharpe, and ex-ante's rolling correlation of the pair `?corr_a=&corr_b=` names (the heaviest
-holding against the portfolio by default; risk_rolling_view.chosen_pair has the rule). So do
-the regime tables (RK-28, risk_regime_view.py): each section's `regimes`, how its series and
-the benchmark did in each market regime.
+The sub-nav carries the whole query string, so every control's state survives a trip between
+sub-pages, as it did when they were one page. Each GET form re-sends the others' fields for the
+same reason.
 
-`?benchmark=` (RK-14) picks what the summary's relative figures measure against, portfolio's
-VWCE.DE by default (benchmark_param.py has the rule). The field suggests the tracked tickers,
-fetched alongside the figures; a failed list leaves the field usable, as on /labs.
+The rolling charts (RK-25) come with ex-post's and ex-ante's own calls, so nothing more is
+fetched and each section's charts fail with it: rolling 1Y volatility and Sharpe on both, and on
+ex-ante the rolling correlation of the pair `?corr_a=&corr_b=` names (the heaviest holding
+against the portfolio by default; risk_rolling_view.chosen_pair has the rule). So do the regime
+tables (RK-28, risk_regime_view.py): each section's `regimes`, how its series and the benchmark
+did in each market regime.
+
+`?benchmark=` (RK-14) picks what ex-post's relative figures, and ex-ante's heatmap row, regimes
+and pair, measure against: portfolio's VWCE.DE by default (benchmark_param.py has the rule). Both
+pages have the field, which suggests the tracked tickers; a failed list leaves it usable.
 
 On its own router, like labs.py, because routes.py is close to the repo's 64KB file limit; it
 renders through routes.py's _render, so a cookie set earlier in the request still reaches the
@@ -228,51 +230,31 @@ class _RankingAsk:
     rank_by: str | None
 
 
-async def _load_holdings_sections(
-    portfolio_client: PortfolioClient,
-    user_id: str,
-    benchmark: str,
-    window: str,
-    exclude: list[str],
-    params: list[tuple[str, str]],
-    ask: _WhatIfAsk,
-    rank_ask: _RankingAsk,
-) -> tuple[
-    tuple[ExAnteSection | None, str | None, _Extras],
-    tuple[ConcentrationSection | None, str | None],
-    _WhatIfParts,
-    _RankingParts,
-]:
-    """The ex-ante and concentration sections, each as (section, None) or (None, the message to
-    show in its place), ex-ante's with its rolling charts and regime table, and the what-if's
-    and the ranking's parts. (None, None): no holding to measure yet."""
+@dataclass(frozen=True)
+class _Mix:
+    """Today's mix and its holdings, which every sub-page but ex-post measures. No mix: no
+    holding to measure yet, or, with `error`, the holdings couldn't load."""
+
+    mix: DefaultMix | None = None
+    holdings: tuple[Holding, ...] = ()
+    error: str | None = None
+
+
+async def _load_mix(portfolio_client: PortfolioClient, user_id: str, page: str) -> _Mix:
     try:
         holdings = await portfolio_client.list_holdings(user_id=user_id)
     except PortfolioClientError:
         logger.exception("risk: portfolio service unavailable listing holdings.")
-        return (
-            (None, _UNAVAILABLE, _Extras()),
-            (None, _UNAVAILABLE),
-            _WhatIfParts(error=_UNAVAILABLE),
-            _RankingParts(error=_UNAVAILABLE),
-        )
+        return _Mix(error=_UNAVAILABLE)
     mix = build_default_mix(holdings.holdings)
     if not mix.assets:
         logger.info(
-            "risk: ex-ante, look-through, what-if and ranking have nothing to measure, %d "
-            "holdings, none priced and worth something.",
+            "risk: %s has nothing to measure, %d holdings, none priced and worth something.",
+            page,
             len(holdings.holdings),
         )
-        return (None, None, _Extras()), (None, None), _WhatIfParts(), _RankingParts()
-    sent = _sent_exclusions(mix, exclude)
-    form = parse_what_if(ask.candidate, ask.weight, ask.funding, mix, sent)
-    rank_form = parse_ranking(rank_ask.weight, rank_ask.rank_by, window)
-    return await asyncio.gather(
-        _load_ex_ante(portfolio_client, mix, holdings.holdings, benchmark, window, sent, params),
-        _load_concentration(portfolio_client, mix),
-        _load_what_if(portfolio_client, mix, window, sent, form),
-        _load_ranking(portfolio_client, mix, window, sent, rank_form, params),
-    )
+        return _Mix()
+    return _Mix(mix, holdings.holdings)
 
 
 def _sent_exclusions(mix: DefaultMix, exclude: list[str]) -> list[str]:
@@ -593,6 +575,67 @@ def _fx_summary(section: ExAnteSection) -> str:
     return f"{len(rows)} holdings, {greyed} of {len(cells)} figures greyed"
 
 
+# The sub-nav (UX-6): each sub-page's key, path and label, in reading order.
+_SUBPAGES = (
+    ("ex-post", "/risk", "Ex-post"),
+    ("ex-ante", "/risk/ex-ante", "Ex-ante"),
+    ("what-if", "/risk/what-if", "What if"),
+    ("concentration", "/risk/concentration", "Concentration"),
+)
+
+
+def _with_query(path: str, request: Request) -> str:
+    """`path` with this request's query as it was sent: the sub-nav carries every control's
+    state, so a trip to another sub-page and back changes nothing."""
+    query = request.url.query
+    return f"{path}?{query}" if query else path
+
+
+@dataclass(frozen=True)
+class _Page:
+    """What every sub-page works out before loading anything."""
+
+    benchmark: str
+    window: str
+    params: list[tuple[str, str]]
+    context: dict
+
+
+def _page(
+    request: Request,
+    response: Response,
+    settings: Settings,
+    user: AuthUser,
+    current: str,
+    benchmark: str | None = None,
+    ex_ante_window: str | None = None,
+) -> _Page:
+    # The header's logout and theme forms need the token, as on every other page.
+    csrf_token = ensure_csrf_cookie(request, response, cookie_secure=settings.cookie_secure)
+    chosen, benchmark_error = chosen_benchmark(benchmark)
+    if benchmark_error:
+        logger.info("risk: benchmark field over the length limit, measuring against %s.", chosen)
+    window = chosen_ex_ante_window(ex_ante_window)
+    if ex_ante_window is not None and window != ex_ante_window:
+        logger.info("risk: unknown ex-ante window %r, showing %s.", ex_ante_window, window)
+    params = request.query_params.multi_items()
+    context = {
+        "user": user,
+        "csrf_token": csrf_token,
+        "nav_active": "risk",
+        "risk_nav": [(key, _with_query(path, request), label) for key, path, label in _SUBPAGES],
+        "risk_nav_active": current,
+        "benchmark": chosen,
+        "benchmark_error": benchmark_error,
+        "ex_ante_window": window,
+        # Each form re-sends the others' fields, so submitting one changes nothing else.
+        "benchmark_kept": [(k, v) for k, v in params if k in _BENCHMARK_KEPT],
+        "what_if_kept": [(k, v) for k, v in params if k in _WHAT_IF_KEPT],
+        "ranking_kept": [(k, v) for k, v in params if k in _RANKING_KEPT],
+    }
+    return _Page(chosen, window, params, context)
+
+
 @router.get("/risk")
 async def risk(
     request: Request,
@@ -602,6 +645,123 @@ async def risk(
     user: AuthUser = Depends(require_user),
     portfolio_client: PortfolioClient = Depends(get_portfolio_client),
     benchmark: str | None = None,
+):
+    """Ex-post: how the invested holdings have actually behaved."""
+    page = _page(request, response, settings, user, "ex-post", benchmark)
+    (ex_post, ex_post_error, extras), (tickers, tickers_notice), ticker_names = (
+        await asyncio.gather(
+            _load_ex_post(portfolio_client, user.user_id, page.benchmark),
+            _load_tickers(portfolio_client),
+            load_names(portfolio_client),
+        )
+    )
+    return _render(
+        request,
+        response,
+        templates,
+        "risk.html",
+        {
+            **page.context,
+            "ex_post": ex_post,
+            "ex_post_error": ex_post_error,
+            "ex_post_rolling": extras,
+            "ex_post_regimes": extras.regimes,
+            "tickers": tickers,
+            "tickers_notice": tickers_notice,
+            "ticker_names": ticker_names,
+        },
+    )
+
+
+async def _ex_ante_with_mix(
+    portfolio_client: PortfolioClient,
+    user_id: str,
+    benchmark: str,
+    window: str,
+    exclude: list[str],
+    params: list[tuple[str, str]],
+) -> tuple[ExAnteSection | None, str | None, _Extras]:
+    loaded = await _load_mix(portfolio_client, user_id, "ex-ante")
+    if loaded.mix is None:
+        return None, loaded.error, _Extras()
+    sent = _sent_exclusions(loaded.mix, exclude)
+    return await _load_ex_ante(
+        portfolio_client, loaded.mix, loaded.holdings, benchmark, window, sent, params
+    )
+
+
+@router.get("/risk/ex-ante")
+async def risk_ex_ante(
+    request: Request,
+    response: Response,
+    settings: Settings = Depends(get_settings),
+    templates=Depends(get_templates),
+    user: AuthUser = Depends(require_user),
+    portfolio_client: PortfolioClient = Depends(get_portfolio_client),
+    benchmark: str | None = None,
+    ex_ante_window: str | None = None,
+    exclude: list[str] = Query(default=[]),
+):
+    """Ex-ante: today's mix held at constant weights through one window."""
+    page = _page(request, response, settings, user, "ex-ante", benchmark, ex_ante_window)
+    (ex_ante, ex_ante_error, extras), (tickers, tickers_notice), ticker_names = (
+        await asyncio.gather(
+            _ex_ante_with_mix(
+                portfolio_client, user.user_id, page.benchmark, page.window, exclude, page.params
+            ),
+            _load_tickers(portfolio_client),
+            load_names(portfolio_client),
+        )
+    )
+    return _render(
+        request,
+        response,
+        templates,
+        "risk_ex_ante.html",
+        {
+            **page.context,
+            "ex_ante": ex_ante,
+            "ex_ante_error": ex_ante_error,
+            "ex_ante_rolling": extras,
+            "ex_ante_regimes": extras.regimes,
+            "tickers": tickers,
+            "tickers_notice": tickers_notice,
+            "ticker_names": ticker_names,
+        },
+    )
+
+
+async def _what_if_with_mix(
+    portfolio_client: PortfolioClient,
+    user_id: str,
+    window: str,
+    exclude: list[str],
+    params: list[tuple[str, str]],
+    ask: _WhatIfAsk,
+    rank_ask: _RankingAsk,
+) -> tuple[_WhatIfParts, _RankingParts, list[str] | None]:
+    """The what-if's and the ranking's parts, then the exclusions both sent (None: no mix)."""
+    loaded = await _load_mix(portfolio_client, user_id, "what-if and ranking")
+    if loaded.mix is None:
+        return _WhatIfParts(error=loaded.error), _RankingParts(error=loaded.error), None
+    sent = _sent_exclusions(loaded.mix, exclude)
+    form = parse_what_if(ask.candidate, ask.weight, ask.funding, loaded.mix, sent)
+    rank_form = parse_ranking(rank_ask.weight, rank_ask.rank_by, window)
+    what_if, ranking = await asyncio.gather(
+        _load_what_if(portfolio_client, loaded.mix, window, sent, form),
+        _load_ranking(portfolio_client, loaded.mix, window, sent, rank_form, params),
+    )
+    return what_if, ranking, sent
+
+
+@router.get("/risk/what-if")
+async def risk_what_if(
+    request: Request,
+    response: Response,
+    settings: Settings = Depends(get_settings),
+    templates=Depends(get_templates),
+    user: AuthUser = Depends(require_user),
+    portfolio_client: PortfolioClient = Depends(get_portfolio_client),
     ex_ante_window: str | None = None,
     exclude: list[str] = Query(default=[]),
     candidate: str | None = None,
@@ -610,34 +770,16 @@ async def risk(
     rank_weight: str | None = None,
     rank_by: str | None = None,
 ):
-    # The header's logout and theme forms need the token, as on every other page.
-    csrf_token = ensure_csrf_cookie(request, response, cookie_secure=settings.cookie_secure)
-    benchmark, benchmark_error = chosen_benchmark(benchmark)
-    if benchmark_error:
-        logger.info("risk: benchmark field over the length limit, measuring against %s.", benchmark)
-    window = chosen_ex_ante_window(ex_ante_window)
-    if ex_ante_window is not None and window != ex_ante_window:
-        logger.info("risk: unknown ex-ante window %r, showing %s.", ex_ante_window, window)
-    params = request.query_params.multi_items()
-    (
-        (ex_post, ex_post_error, ex_post_extras),
-        (
-            (ex_ante, ex_ante_error, ex_ante_extras),
-            (concentration, concentration_error),
-            what_if,
-            ranking,
-        ),
-        (tickers, tickers_notice),
-        ticker_names,
-    ) = await asyncio.gather(
-        _load_ex_post(portfolio_client, user.user_id, benchmark),
-        _load_holdings_sections(
+    """What if: a candidate added to today's mix, and every tracked ticker ranked as one, over
+    ex-ante's window and exclusions."""
+    page = _page(request, response, settings, user, "what-if", None, ex_ante_window)
+    (what_if, ranking, sent), (tickers, tickers_notice), ticker_names = await asyncio.gather(
+        _what_if_with_mix(
             portfolio_client,
             user.user_id,
-            benchmark,
-            window,
+            page.window,
             exclude,
-            params,
+            page.params,
             _WhatIfAsk(candidate, candidate_weight, funding),
             _RankingAsk(rank_weight, rank_by),
         ),
@@ -648,36 +790,57 @@ async def risk(
         request,
         response,
         templates,
-        "risk.html",
+        "risk_what_if.html",
         {
-            "user": user,
-            "csrf_token": csrf_token,
-            "nav_active": "risk",
-            "ex_post": ex_post,
-            "ex_post_error": ex_post_error,
-            "ex_post_rolling": ex_post_extras,
-            "ex_post_regimes": ex_post_extras.regimes,
-            "ex_ante": ex_ante,
-            "ex_ante_error": ex_ante_error,
-            "ex_ante_window": window,
-            "ex_ante_rolling": ex_ante_extras,
-            "ex_ante_regimes": ex_ante_extras.regimes,
-            "concentration": concentration,
-            "concentration_error": concentration_error,
+            **page.context,
+            "excluded": sent,
+            "ex_ante_link": _with_query("/risk/ex-ante", request) + "#risk-ex-ante",
             "what_if_form": what_if.form,
             "what_if": what_if.section,
             "what_if_error": what_if.error,
             "ranking_form": ranking.form,
             "ranking": ranking.section,
             "ranking_error": ranking.error,
-            # Each form re-sends the others' fields, so submitting one changes nothing else.
-            "benchmark_kept": [(k, v) for k, v in params if k in _BENCHMARK_KEPT],
-            "what_if_kept": [(k, v) for k, v in params if k in _WHAT_IF_KEPT],
-            "ranking_kept": [(k, v) for k, v in params if k in _RANKING_KEPT],
-            "benchmark": benchmark,
-            "benchmark_error": benchmark_error,
             "tickers": tickers,
             "tickers_notice": tickers_notice,
+            "ticker_names": ticker_names,
+        },
+    )
+
+
+async def _concentration_with_mix(
+    portfolio_client: PortfolioClient, user_id: str
+) -> tuple[ConcentrationSection | None, str | None]:
+    loaded = await _load_mix(portfolio_client, user_id, "look-through")
+    if loaded.mix is None:
+        return None, loaded.error
+    return await _load_concentration(portfolio_client, loaded.mix)
+
+
+@router.get("/risk/concentration")
+async def risk_concentration(
+    request: Request,
+    response: Response,
+    settings: Settings = Depends(get_settings),
+    templates=Depends(get_templates),
+    user: AuthUser = Depends(require_user),
+    portfolio_client: PortfolioClient = Depends(get_portfolio_client),
+):
+    """Concentration: today's whole mix, looked through its funds. No window, no exclusions."""
+    page = _page(request, response, settings, user, "concentration")
+    (concentration, concentration_error), ticker_names = await asyncio.gather(
+        _concentration_with_mix(portfolio_client, user.user_id),
+        load_names(portfolio_client),
+    )
+    return _render(
+        request,
+        response,
+        templates,
+        "risk_concentration.html",
+        {
+            **page.context,
+            "concentration": concentration,
+            "concentration_error": concentration_error,
             "ticker_names": ticker_names,
         },
     )

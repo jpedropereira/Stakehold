@@ -259,7 +259,7 @@ def _section(page: str) -> str:
 
 
 def _get(test_client, query=""):
-    response = test_client.get(f"/risk{query}")
+    response = test_client.get(f"/risk/what-if{query}")
     assert response.status_code == 200
     return _section(response.text)
 
@@ -298,7 +298,7 @@ def test_no_candidate_shows_the_empty_form_and_calls_nothing(client):
 
     assert _what_if_calls(fake) == []
     form = _form(section, "risk-what-if-form")
-    assert 'method="get" action="/risk#risk-what-if"' in form
+    assert 'method="get" action="/risk/what-if#risk-what-if"' in form
     assert re.search(
         r'<input type="text" id="risk-what-if-candidate" name="candidate" value=""', form
     )
@@ -333,7 +333,11 @@ def test_a_valid_form_sends_the_mix_candidate_window_and_exclusions(client):
 def test_stale_exclusions_are_dropped_for_the_what_if_as_for_ex_ante(client):
     test_client, fake = client
 
-    _get(test_client, f"{WHAT_IF_QUERY}&exclude=SOLD&exclude=TSLA&exclude=TSLA")
+    query = f"{WHAT_IF_QUERY}&exclude=SOLD&exclude=TSLA&exclude=TSLA"
+
+    _get(test_client, query)
+    # UX-6: ex-ante is its own page; the same query sends it the same exclusions.
+    test_client.get(f"/risk/ex-ante{query}")
 
     assert _what_if_calls(fake)[0][-1] == ("TSLA",)
     assert [c[-1] for c in fake.calls if c[0] == "ex_ante_risk"] == [("TSLA",)]
@@ -560,7 +564,7 @@ def test_a_failed_what_if_shows_a_notice_in_its_section_only(client):
     test_client, fake = client
     fake.what_if_error = PortfolioUnavailable("down")
 
-    page = test_client.get(f"/risk{WHAT_IF_QUERY}").text
+    page = test_client.get(f"/risk/what-if{WHAT_IF_QUERY}").text
 
     section = _section(page)
     assert "Couldn't compare." in _text(section)
@@ -569,13 +573,14 @@ def test_a_failed_what_if_shows_a_notice_in_its_section_only(client):
     assert "Couldn't load the ex-ante figures." not in page
 
 
-def test_a_failed_ex_ante_leaves_the_what_if(client):
+def test_a_failed_ex_ante_never_reaches_the_what_if_page(client):
+    """UX-6: ex-ante is its own page, so the what-if page doesn't call it."""
     test_client, fake = client
     fake.ex_ante_error = PortfolioUnavailable("down")
 
-    page = test_client.get(f"/risk{WHAT_IF_QUERY}").text
+    page = test_client.get(f"/risk/what-if{WHAT_IF_QUERY}").text
 
-    assert "Couldn't load the ex-ante figures." in page
+    assert "Couldn't load the ex-ante figures." not in page
     assert "<table" in _section(page)
 
 

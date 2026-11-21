@@ -68,7 +68,7 @@
   {% if chart.dropped %}
   <p class="labs-note">The pair in the link wasn't used: {{ chart.dropped }}, so this is the default.</p>
   {% endif %}
-  <form method="get" action="/risk#risk-rolling-correlation" class="benchmark-form rolling-pair" id="risk-rolling-pair">
+  <form method="get" action="/risk/ex-ante#risk-rolling-correlation" class="benchmark-form rolling-pair" id="risk-rolling-pair">
     {% for name, value in chart.kept %}
     <input type="hidden" name="{{ name }}" value="{{ value }}">
     {% endfor %}

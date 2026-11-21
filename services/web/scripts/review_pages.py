@@ -136,6 +136,9 @@ PAGES = [
     # RK-12: 1Y, 3Y and Max measured, 5Y and 10Y greyed, flags and their legend, a greyed
     # Sharpe, and a holding left out.
     Page("risk", "/risk", "user"),
+    # UX-6: a link to an old in-page section goes on to its sub-page (risk_anchor.js), so this
+    # one should show Concentration, not ex-post.
+    Page("risk-old-anchor", "/risk#risk-concentration", "user"),
     # RK-14: the benchmark field, IWDA.AS's long history covering every relative figure, a
     # ticker the fake doesn't track (the group says why once), and an over-long field.
     Page("risk-benchmark", "/risk?benchmark=IWDA.AS", "user"),
@@ -146,29 +149,38 @@ PAGES = [
     # IWDA.AS adds the benchmark as its own row; 10Y is the fake's failure. RK-26's FX table
     # has AAPL's row on 3Y, its correlation greyed on 1Y, and the all-EUR note once AAPL is
     # excluded.
-    Page("risk-ex-ante-1y", "/risk?ex_ante_window=1Y#risk-ex-ante", "user"),
-    Page("risk-ex-ante-max", "/risk?ex_ante_window=Max#risk-ex-ante", "user"),
-    Page("risk-ex-ante-excluded", "/risk?ex_ante_window=Max&exclude=AAPL#risk-ex-ante", "user"),
-    Page("risk-ex-ante-benchmark", "/risk?benchmark=IWDA.AS#risk-ex-ante", "user"),
-    Page("risk-ex-ante-unavailable", "/risk?ex_ante_window=10Y#risk-ex-ante", "user"),
+    Page("risk-ex-ante", "/risk/ex-ante", "user"),
+    Page("risk-ex-ante-1y", "/risk/ex-ante?ex_ante_window=1Y#risk-ex-ante", "user"),
+    Page("risk-ex-ante-max", "/risk/ex-ante?ex_ante_window=Max#risk-ex-ante", "user"),
+    Page(
+        "risk-ex-ante-excluded",
+        "/risk/ex-ante?ex_ante_window=Max&exclude=AAPL#risk-ex-ante",
+        "user",
+    ),
+    Page("risk-ex-ante-benchmark", "/risk/ex-ante?benchmark=IWDA.AS#risk-ex-ante", "user"),
+    Page("risk-ex-ante-unavailable", "/risk/ex-ante?ex_ante_window=10Y#risk-ex-ante", "user"),
     # RK-25: the rolling charts. Ex-post's with two greyed months; ex-ante's with the default
     # pair (the heaviest holding against the portfolio); a pair against a ticker; a pair whose
     # benchmark side isn't tracked (its reason, no chart); a stale link whose holding is
     # excluded (the default, and a note); and 5Y's rolling Sharpe greyed throughout.
     Page("risk-rolling", "/risk#risk-ex-post-rolling", "user"),
-    Page("risk-rolling-ex-ante", "/risk#risk-ex-ante-rolling", "user"),
-    Page("risk-rolling-pair", "/risk?corr_a=AAPL&corr_b=VWCE.DE#risk-rolling-correlation", "user"),
+    Page("risk-rolling-ex-ante", "/risk/ex-ante#risk-ex-ante-rolling", "user"),
+    Page(
+        "risk-rolling-pair",
+        "/risk/ex-ante?corr_a=AAPL&corr_b=VWCE.DE#risk-rolling-correlation",
+        "user",
+    ),
     Page(
         "risk-rolling-pair-unavailable",
-        "/risk?benchmark=NOPE.XX&corr_a=AAPL&corr_b=NOPE.XX#risk-rolling-correlation",
+        "/risk/ex-ante?benchmark=NOPE.XX&corr_a=AAPL&corr_b=NOPE.XX#risk-rolling-correlation",
         "user",
     ),
     Page(
         "risk-rolling-stale-pair",
-        "/risk?ex_ante_window=Max&exclude=AAPL&corr_a=AAPL#risk-rolling-correlation",
+        "/risk/ex-ante?ex_ante_window=Max&exclude=AAPL&corr_a=AAPL#risk-rolling-correlation",
         "user",
     ),
-    Page("risk-rolling-no-rf", "/risk?ex_ante_window=5Y#risk-ex-ante-rolling", "user"),
+    Page("risk-rolling-no-rf", "/risk/ex-ante?ex_ante_window=5Y#risk-ex-ante-rolling", "user"),
     # RK-28: the regime tables, each dimension a group closed by default; then ex-post's first
     # two groups and ex-ante's first opened. Ex-post's since 2023, partial and ongoing regimes
     # among them; ex-ante's since AAPL's 2015 start, older regimes greyed for VWCE.DE's 2019
@@ -182,20 +194,25 @@ PAGES = [
         click=(
             "#risk-ex-post-regimes .risk-regime-group:nth-of-type(1) summary",
             "#risk-ex-post-regimes .risk-regime-group:nth-of-type(2) summary",
-            "#risk-ex-ante-regimes .risk-regime-group:nth-of-type(1) summary",
         ),
     ),
-    Page("risk-regimes-ex-ante", "/risk?ex_ante_window=Max#risk-ex-ante-regimes", "user"),
-    Page("risk-regimes-iwda", "/risk?benchmark=IWDA.AS#risk-ex-ante-regimes", "user"),
+    Page(
+        "risk-regimes-ex-ante-open",
+        "/risk/ex-ante#risk-ex-ante-regimes",
+        "user",
+        click="#risk-ex-ante-regimes .risk-regime-group:nth-of-type(1) summary",
+    ),
+    Page("risk-regimes-ex-ante", "/risk/ex-ante?ex_ante_window=Max#risk-ex-ante-regimes", "user"),
+    Page("risk-regimes-iwda", "/risk/ex-ante?benchmark=IWDA.AS#risk-ex-ante-regimes", "user"),
     Page("risk-regimes-unavailable", "/risk?benchmark=NOPE.XX#risk-ex-post-regimes", "user"),
     Page("risk-regimes-failed", "/risk?benchmark=REGIMES.FAIL#risk-ex-post-regimes", "user"),
     Page("risk-regimes-none-loaded", "/risk?benchmark=REGIMES.NONE#risk-ex-post-regimes", "user"),
     # RK-23: the concentration section, with the unmapped note, the currency table's two views
     # and greyed buckets; then with every "show all" open.
-    Page("risk-concentration", "/risk#risk-concentration", "user"),
+    Page("risk-concentration", "/risk/concentration", "user"),
     Page(
         "risk-concentration-all",
-        "/risk#risk-concentration",
+        "/risk/concentration",
         "user",
         # Each click opens the first one still closed: currency, sector, country and names.
         click=(".lt-more:not([open]) > summary",) * 4,
@@ -204,49 +221,53 @@ PAGES = [
     # with more than it weighs (capped, no threshold); MSFT, priced through a fund, which
     # shortens the window (R14's warning and markers on every after figure); a candidate that
     # can't be measured; inline errors on every field; and the fake's failure.
-    Page("risk-what-if-empty", "/risk#risk-what-if", "user"),
+    Page("risk-what-if-empty", "/risk/what-if#risk-what-if", "user"),
     Page(
         "risk-what-if-pro-rata",
-        "/risk?candidate=EGLN.L&candidate_weight=10&funding=pro_rata#risk-what-if",
+        "/risk/what-if?candidate=EGLN.L&candidate_weight=10&funding=pro_rata#risk-what-if",
         "user",
     ),
     Page(
         "risk-what-if-replace-capped",
-        "/risk?candidate=EGLN.L&candidate_weight=60&funding=replace:AAPL#risk-what-if",
+        "/risk/what-if?candidate=EGLN.L&candidate_weight=60&funding=replace:AAPL#risk-what-if",
         "user",
     ),
     Page(
         "risk-what-if-survivorship-shortened",
-        "/risk?candidate=MSFT&candidate_weight=5#risk-what-if",
+        "/risk/what-if?candidate=MSFT&candidate_weight=5#risk-what-if",
         "user",
     ),
-    Page("risk-what-if-nothing", "/risk?candidate=0700.HK&candidate_weight=5#risk-what-if", "user"),
+    Page(
+        "risk-what-if-nothing",
+        "/risk/what-if?candidate=0700.HK&candidate_weight=5#risk-what-if",
+        "user",
+    ),
     Page(
         "risk-what-if-form-error",
-        "/risk?candidate=AAPL&candidate_weight=150&funding=replace:MSFT#risk-what-if",
+        "/risk/what-if?candidate=AAPL&candidate_weight=150&funding=replace:MSFT#risk-what-if",
         "user",
     ),
     Page(
         "risk-what-if-unavailable",
-        "/risk?candidate=FAIL.XX&candidate_weight=5#risk-what-if",
+        "/risk/what-if?candidate=FAIL.XX&candidate_weight=5#risk-what-if",
         "user",
     ),
     # RK-29: the ranking. The unsent form; 5% ranked by volatility and by diversification ratio
     # (a gap-flagged row, a greyed one, a too-young and an unmeasurable ticker, three past the
     # cap); 3% without a risk-free rate; 1Y's note; an inline error; nothing to rank (2%); and
     # the fake's failure (9%).
-    Page("risk-ranking-empty", "/risk#risk-ranking", "user"),
-    Page("risk-ranking", "/risk?rank_weight=5#risk-ranking", "user"),
+    Page("risk-ranking-empty", "/risk/what-if#risk-ranking", "user"),
+    Page("risk-ranking", "/risk/what-if?rank_weight=5#risk-ranking", "user"),
     Page(
         "risk-ranking-by-ratio",
-        "/risk?rank_weight=5&rank_by=diversification_ratio#risk-ranking",
+        "/risk/what-if?rank_weight=5&rank_by=diversification_ratio#risk-ranking",
         "user",
     ),
-    Page("risk-ranking-no-rf", "/risk?rank_weight=3#risk-ranking", "user"),
-    Page("risk-ranking-1y", "/risk?rank_weight=5&ex_ante_window=1Y#risk-ranking", "user"),
-    Page("risk-ranking-form-error", "/risk?rank_weight=150#risk-ranking", "user"),
-    Page("risk-ranking-nothing", "/risk?rank_weight=2#risk-ranking", "user"),
-    Page("risk-ranking-unavailable", "/risk?rank_weight=9#risk-ranking", "user"),
+    Page("risk-ranking-no-rf", "/risk/what-if?rank_weight=3#risk-ranking", "user"),
+    Page("risk-ranking-1y", "/risk/what-if?rank_weight=5&ex_ante_window=1Y#risk-ranking", "user"),
+    Page("risk-ranking-form-error", "/risk/what-if?rank_weight=150#risk-ranking", "user"),
+    Page("risk-ranking-nothing", "/risk/what-if?rank_weight=2#risk-ranking", "user"),
+    Page("risk-ranking-unavailable", "/risk/what-if?rank_weight=9#risk-ranking", "user"),
     # RK-9: the risk comparison over 3Y (AAPL's volatility has a gap note), over 10Y (not
     # covered, so no table), a mix the fake answers with no risk-free data, and the drawdown
     # chart over Max.

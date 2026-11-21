@@ -10,8 +10,36 @@ file in the same change. The server side of `/risk` (its router, the upstream ca
 
 ## Key decisions
 
+- **Sub-pages under one sub-nav (UX-6).** `/risk` held five sections and was about 12,500px tall
+  on a desktop, and every view loaded all of them. It is now four routes: `/risk` (ex-post),
+  `/risk/ex-ante`, `/risk/what-if` (the what-if and the ranking, which both add to today's mix)
+  and `/risk/concentration`. Each loads only its own sections, can be linked and bookmarked,
+  and is headed by `partials/_risk_header.html`: the title, the glossary link and the sub-nav,
+  whose current link carries `aria-current="page"` (the account sub-nav's pattern and styles).
+  *Rejected: collapsible sections on one URL*, which still load every section's data, *and JS
+  tabs*, which need a separate no-JS fallback. Decisions (agreed):
+  - *The sub-nav carries the whole query string.* Every control's state survives a trip
+    between sub-pages, as it did on one page: a what-if candidate is still there after a look
+    at Ex-ante. One rule, so there are no per-page lists to drift. *Known cost:* a URL can
+    carry parameters its own page ignores. *Rejected: carrying only the benchmark*, which
+    would put the what-if back on 3Y with no exclusions, so its "before" could differ from the
+    ex-ante figures just seen.
+  - *The what-if page names ex-ante's window and exclusions and links there to change them*
+    ("Over the ex-ante window, 5Y, excluding TSLA. Change it on Ex-ante."). It keeps one
+    control per parameter, as RK-20 decided. *Rejected: repeating the window switch*, a second
+    copy of one control and a second UX-10 swap target.
+  - *The benchmark field is on both ex-post and ex-ante*, since ex-ante sends the benchmark too
+    (the heatmap's row, the regimes, the pair). It is one `?benchmark=`, so the two can't
+    disagree.
+  - *Section ids are unchanged*, so a link's `#anchor` still lands on its section. A link to
+    an old in-page section (`/risk#risk-ranking`) reaches `/risk`, since a fragment never
+    reaches the server, and `static/risk_anchor.js` sends it on to its sub-page with its query
+    and anchor (`location.replace`, so Back doesn't bounce). *Known cost:* without JS it lands
+    on ex-post, with the sub-nav one click away.
+  - *Copy that said "above"* now names the other page or drops the word. UX-9 does the full
+    copy pass.
 - **Risk page (RK-12): one table per section, measures down and windows across.** `/risk`'s
-  first section is the ex-post summary: twelve measures × five windows (1Y, 3Y, 5Y, 10Y, Max).
+  first section, now its own sub-page (UX-6), is the ex-post summary: twelve measures × five windows (1Y, 3Y, 5Y, 10Y, Max).
   Measures are the rows, because there are more of them than windows and their labels are long.
   At phone width, then, each measure stacks into a block of five labelled figures (`.stack-table`),
   as a Labs row does. Between that and the width all six columns fit, it scrolls in its own
@@ -60,7 +88,7 @@ file in the same change. The server side of `/risk` (its router, the upstream ca
     covered". Each cell's `title` ends "· against <ticker>". *Rejected: a separate table*, which
     would repeat the five window headers for four rows. *Rejected: checking the ticker against
     the list in web*, a second copy of portfolio's rule that could drift from it.
-  - **Ex-ante · constant weights (RK-18).** The second section: today's mix (the holdings at
+  - **Ex-ante · constant weights (RK-18).** The second section, now `/risk/ex-ante`: today's mix (the holdings at
     their market-value weights, `labs_view.build_default_mix`) held through one window, labelled
     apart from the ex-post figures (R2). `risk_ex_ante_view.py` builds it. Decisions (agreed):
     - *One column, the measured window.* The window links (`?ex_ante_window=`, 3Y by default,
@@ -119,7 +147,7 @@ file in the same change. The server side of `/risk` (its router, the upstream ca
       a derived "currency share of risk"*, which reads easily but doesn't add up, because the
       euro variance has a correlation term and a cross term. The table needs no CSS of its own:
       it's a `.risk-table.stack-table`, so a phone stacks each holding into labelled lines.
-  - **Concentration · look-through (RK-23).** The third section: portfolio's look-through
+  - **Concentration · look-through (RK-23).** The third section, now `/risk/concentration`: portfolio's look-through
     (RK-22, spec §8) of the same default mix as ex-ante, built by `risk_concentration_view.py`.
     Decisions (agreed):
     - *The unmapped share comes first.* A fund with no holdings data can't be looked through,
@@ -226,7 +254,7 @@ file in the same change. The server side of `/risk` (its router, the upstream ca
       and a gap, and 5Y answering with no risk-free series. There are six `risk-rolling*`
       pages, covering the default pair, a ticker pair, an untracked benchmark side and a stale
       link.
-  - **What if · adding a candidate (RK-20).** The section after ex-ante: today's mix before
+  - **What if · adding a candidate (RK-20).** The section after ex-ante, now on `/risk/what-if`: today's mix before
     and after adding a candidate (spec §7.2), from portfolio's what-if (RK-19), built by
     `risk_what_if_view.py`. Decisions (agreed):
     - *A GET form, as LB-7's is.* It has a candidate ticker, a weight and a funding `<select>`,
@@ -237,7 +265,7 @@ file in the same change. The server side of `/risk` (its router, the upstream ca
       holding chosen. Each form re-sends the others' fields, and the ex-ante window and
       exclude links keep the what-if's, so changing one control changes nothing else.
     - *Ex-ante's window and exclusions.* `?ex_ante_window=` and `?exclude=` are sent as
-      ex-ante sends them, so "before" is exactly the mix the section above measures. *Rejected:
+      ex-ante sends them, so "before" is exactly the mix the ex-ante page measures. *Rejected:
       a window of its own*, a second set of window links whose "before" could disagree with
       the ex-ante figures beside it.
     - *Checked for what portfolio would 422, and no more.* That means an empty or over-long
@@ -271,7 +299,7 @@ file in the same change. The server side of `/risk` (its router, the upstream ca
       since there's no mix to compare against.
     - *Not shown:* the before/after weights of every holding. Pro-rata scales them all evenly,
       and the one surprise (a capped replace) has its note.
-  - **What if · ranking the tracked tickers (RK-29).** The section after the what-if: every
+  - **What if · ranking the tracked tickers (RK-29).** The section after the what-if, on the same sub-page: every
     tracked ticker the user doesn't hold, scored as a pro-rata what-if candidate at one weight
     (portfolio's `POST /risk/what-if/ranking`), on the ex-ante window and exclusions, so each
     candidate joins the mix that section measures.
@@ -299,7 +327,7 @@ file in the same change. The server side of `/risk` (its router, the upstream ca
       and a note names the tracked tickers past the cap. Nothing is dropped silently.
     - *Every form keeps the others.* The ranking form re-sends every other control and its own
       order. The benchmark and what-if forms re-send `rank_weight` and `rank_by`, and the
-      ex-ante links keep the whole query, so changing one section never clears the ranking.
+      ex-ante links keep the whole query, so changing one section never clears the ranking, on any sub-page.
 - **Regime tables (RK-28): one per section, grouped by dimension.** portfolio serves each
   section's `regimes`: ex-post's on the TWR and ex-ante's on today's mix over its whole history.
   `risk_regime_view.py` turns each into a "Market regimes" block, after ex-post's rolling charts

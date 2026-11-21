@@ -235,7 +235,7 @@ def client():
 
 
 def _page(test_client, query=""):
-    response = test_client.get(f"/risk{query}")
+    response = test_client.get(f"/risk/what-if{query}")
     assert response.status_code == 200
     return response.text
 
@@ -286,7 +286,7 @@ def test_an_unsent_form_shows_five_percent_and_calls_nothing(client):
 
     assert _ranks(fake) == []
     form = _form(section, "risk-ranking-form")
-    assert 'method="get" action="/risk#risk-ranking"' in form
+    assert 'method="get" action="/risk/what-if#risk-ranking"' in form
     assert re.search(
         r'<input type="text" id="risk-ranking-weight" name="rank_weight" value="5"', form
     )
@@ -369,7 +369,7 @@ def test_the_order_links_mark_the_current_one(client):
     section = _get(test_client, f"{RANK_QUERY}&benchmark=IWDA.AS")
 
     group = _order_group(section)
-    orders = re.findall(r'<a [^>]*href="/risk\?[^"]*rank_by=(\w+)#risk-ranking"', group)
+    orders = re.findall(r'<a [^>]*href="/risk/what-if\?[^"]*rank_by=(\w+)#risk-ranking"', group)
     assert orders == ["sigma_p", "diversification_ratio"]
     current = re.findall(r'<a [^>]*href="([^"]*)" aria-current="true"', group)
     assert len(current) == 1 and "rank_by=sigma_p" in html.unescape(current[0])

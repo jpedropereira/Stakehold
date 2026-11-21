@@ -258,7 +258,7 @@ def _island(html, data_id) -> dict:
 def test_the_default_pair_is_the_heaviest_holding_against_the_portfolio(client):
     test_client, fake = client
 
-    test_client.get("/risk")
+    test_client.get("/risk/ex-ante")
 
     assert fake.pairs == [("IWDA.AS", None)]
 
@@ -266,7 +266,7 @@ def test_the_default_pair_is_the_heaviest_holding_against_the_portfolio(client):
 def test_a_requested_pair_is_sent(client):
     test_client, fake = client
 
-    test_client.get("/risk?corr_a=AAPL&corr_b=VWCE.DE")
+    test_client.get("/risk/ex-ante?corr_a=AAPL&corr_b=VWCE.DE")
 
     assert fake.pairs == [("AAPL", "VWCE.DE")]
 
@@ -276,7 +276,7 @@ def test_a_stale_pair_falls_back_to_the_default_and_says_so(client, caplog):
     test_client, fake = client
 
     with caplog.at_level(logging.INFO, logger="web.api.risk"):
-        response = test_client.get("/risk?exclude=AAPL&corr_a=AAPL")
+        response = test_client.get("/risk/ex-ante?exclude=AAPL&corr_a=AAPL")
 
     assert response.status_code == 200
     assert fake.pairs == [("IWDA.AS", None)]
@@ -316,7 +316,7 @@ def test_ex_post_rolling_has_a_summary_and_its_gap_note(client):
 def test_ex_ante_draws_its_own_rolling_charts_and_the_pair(client):
     test_client, _ = client
 
-    html = _section(test_client.get("/risk").text, "risk-ex-ante")
+    html = _section(test_client.get("/risk/ex-ante").text, "risk-ex-ante")
 
     assert _island(html, "risk-ex-ante-rolling-volatility-data")["values"][0] == 0.2011
     correlation = _island(html, "risk-ex-ante-rolling-correlation-data")
@@ -328,16 +328,17 @@ def test_ex_ante_draws_its_own_rolling_charts_and_the_pair(client):
 def test_the_chart_scripts_load_once(client):
     test_client, _ = client
 
-    html = test_client.get("/risk").text
-
-    for script in ("vendor/chart.min.js", "chart_theme.js", "risk_rolling_chart.js"):
-        assert len(re.findall(rf'<script src="/static/{script}\?v=\w+" defer></script>', html)) == 1
+    for path in ("/risk", "/risk/ex-ante"):
+        html = test_client.get(path).text
+        for script in ("vendor/chart.min.js", "chart_theme.js", "risk_rolling_chart.js"):
+            found = re.findall(rf'<script src="/static/{script}\?v=\w+" defer></script>', html)
+            assert len(found) == 1, (path, script)
 
 
 def test_the_picker_marks_the_pair_and_resends_the_rest_of_the_query(client):
     test_client, _ = client
 
-    html = test_client.get("/risk?benchmark=VWCE.DE&ex_ante_window=5Y&corr_a=AAPL").text
+    html = test_client.get("/risk/ex-ante?benchmark=VWCE.DE&ex_ante_window=5Y&corr_a=AAPL").text
     picker = html[html.index('id="risk-rolling-pair"') :]
     picker = picker[: picker.index("</form>")]
 
@@ -357,7 +358,7 @@ def _pair_block(html):
 def test_the_picker_flags_a_benchmark_outside_the_mix(client):
     test_client, _ = client
 
-    picker = _pair_block(test_client.get("/risk?benchmark=VWCE.DE").text)
+    picker = _pair_block(test_client.get("/risk/ex-ante?benchmark=VWCE.DE").text)
 
     assert '<option value="VWCE.DE">VWCE.DE (benchmark)</option>' in picker
     assert '<option value="AAPL">AAPL</option>' in picker
@@ -373,7 +374,9 @@ def test_the_pair_and_its_picker_name_each_ticker(client):
         "VWCE.DE": "Vanguard FTSE All-World",
     }
 
-    block = _pair_block(test_client.get("/risk?benchmark=VWCE.DE&corr_a=AAPL&corr_b=VWCE.DE").text)
+    block = _pair_block(
+        test_client.get("/risk/ex-ante?benchmark=VWCE.DE&corr_a=AAPL&corr_b=VWCE.DE").text
+    )
     note = block[: block.index("<form")]
 
     for symbol, name in fake.tracked_names.items():
@@ -394,7 +397,7 @@ def test_a_failed_name_lookup_leaves_the_pair_with_bare_tickers(client):
     fake.tracked_names = {"IWDA.AS": "iShares Core MSCI World"}
     fake.tracked_error = PortfolioUnavailable("down")
 
-    block = _pair_block(test_client.get("/risk").text)
+    block = _pair_block(test_client.get("/risk/ex-ante").text)
 
     assert "iShares Core MSCI World" not in block
     assert "IWDA.AS</span> against the portfolio" in block
@@ -404,8 +407,8 @@ def test_a_failed_name_lookup_leaves_the_pair_with_bare_tickers(client):
 def test_the_benchmark_form_keeps_the_pair(client):
     test_client, _ = client
 
-    html = test_client.get("/risk?corr_a=AAPL&corr_b=portfolio").text
-    form = html[html.index('id="risk-benchmark-form"') :]
+    html = test_client.get("/risk/ex-ante?corr_a=AAPL&corr_b=portfolio").text
+    form = html[html.index('id="risk-ex-ante-benchmark-form"') :]
     form = form[: form.index("</form>")]
 
     assert '<input type="hidden" name="corr_a" value="AAPL">' in form
@@ -443,7 +446,7 @@ def test_a_pair_portfolio_couldnt_measure_shows_its_reason(client):
     test_client, fake = client
     fake.ex_ante = _ex_ante(rolling_correlation=_pair(reason="IWDA.AS left out: no history"))
 
-    html = _section(test_client.get("/risk").text, "risk-ex-ante")
+    html = _section(test_client.get("/risk/ex-ante").text, "risk-ex-ante")
 
     assert "IWDA.AS left out: no history" in html
     assert "risk-ex-ante-rolling-correlation-data" not in html
@@ -454,26 +457,28 @@ def test_a_failed_ex_ante_call_leaves_ex_post_rolling_in_place(client):
     test_client, fake = client
     fake.ex_ante_error = PortfolioUnavailable("down")
 
-    html = test_client.get("/risk").text
+    ex_ante = test_client.get("/risk/ex-ante").text
+    ex_post = test_client.get("/risk").text
 
-    assert 'id="risk-ex-post-rolling-volatility"' in html
-    assert "risk-ex-ante-rolling" not in html
+    assert "risk-ex-ante-rolling" not in ex_ante
+    assert 'id="risk-ex-post-rolling-volatility"' in ex_post
 
 
 def test_a_failed_ex_post_call_leaves_ex_ante_rolling_in_place(client):
     test_client, fake = client
     fake.ex_post_error = PortfolioUnavailable("down")
 
-    html = test_client.get("/risk").text
+    ex_post = test_client.get("/risk").text
+    ex_ante = test_client.get("/risk/ex-ante").text
 
-    assert "risk-ex-post-rolling" not in html
-    assert 'id="risk-ex-ante-rolling-volatility"' in html
+    assert "risk-ex-post-rolling" not in ex_post
+    assert 'id="risk-ex-ante-rolling-volatility"' in ex_ante
 
 
 def test_the_rolling_glossary_links_land_on_entries(client):
     test_client, _ = client
 
-    html = test_client.get("/risk").text
+    html = test_client.get("/risk/ex-ante").text
     glossary = test_client.get("/glossary").text
 
     for anchor in ("rolling-window", "rolling-correlation"):
@@ -489,6 +494,7 @@ def test_the_rolling_outcomes_are_logged(client, caplog):
 
     with caplog.at_level(logging.INFO, logger="web.api.risk"):
         test_client.get("/risk")
+        test_client.get("/risk/ex-ante")
 
     assert (
         "risk: ex-post rolling 1Y: 5 monthly point(s), 1 volatility greyed, 1 sharpe greyed."

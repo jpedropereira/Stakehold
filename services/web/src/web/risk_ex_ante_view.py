@@ -214,8 +214,8 @@ def ex_ante_url(
     window: str | None = None,
     exclude: Sequence[str] | None = None,
 ) -> str:
-    """/risk with this page's query, `ex_ante_window` and/or `exclude` replaced, back at the
-    section."""
+    """/risk/ex-ante with this page's query, `ex_ante_window` and/or `exclude` replaced, back
+    at the section."""
     replaced = {"ex_ante_window"} if window is not None else set()
     if exclude is not None:
         replaced.add("exclude")
@@ -223,7 +223,7 @@ def ex_ante_url(
     if window is not None:
         query.append(("ex_ante_window", window))
     query.extend(("exclude", ticker) for ticker in exclude or ())
-    return "/risk?" + urlencode(query) + "#" + _ANCHOR
+    return "/risk/ex-ante?" + urlencode(query) + "#" + _ANCHOR
 
 
 def bucket(value: float | None) -> int | None:

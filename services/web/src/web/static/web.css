@@ -215,7 +215,8 @@ img.logo-on-dark {
 }
 
 .site-nav a,
-.account-subnav a {
+.account-subnav a,
+.risk-subnav a {
   font: var(--text-caption);
   text-decoration: none;
   padding-block: var(--space-1);
@@ -224,7 +225,7 @@ img.logo-on-dark {
 
 /* The current page, set by the route. Gold is the one accent (charter, chapter II); the weight
    change means the mark doesn't rely on color alone. */
-:is(.site-nav, .account-subnav) a[aria-current="page"] {
+:is(.site-nav, .account-subnav, .risk-subnav) a[aria-current="page"] {
   font-weight: 600;
   border-bottom-color: var(--accent);
 }
@@ -492,7 +493,9 @@ img.logo-on-dark {
   margin: 0;
 }
 
-.account-subnav {
+/* The Risk sub-pages' nav (UX-6) is the account one's. */
+.account-subnav,
+.risk-subnav {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-1) var(--space-5);

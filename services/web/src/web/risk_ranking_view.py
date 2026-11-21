@@ -131,10 +131,10 @@ def parse_ranking(weight: str | None, rank_by: str | None, window: str) -> Ranki
 
 
 def ranking_url(params: Sequence[tuple[str, str]], rank_by: str) -> str:
-    """/risk with this page's query and `rank_by` replaced, back at the ranking."""
+    """/risk/what-if with this page's query and `rank_by` replaced, back at the ranking."""
     query = [(k, v) for k, v in params if k != "rank_by"]
     query.append(("rank_by", rank_by))
-    return "/risk?" + urlencode(query) + "#" + _ANCHOR
+    return "/risk/what-if?" + urlencode(query) + "#" + _ANCHOR
 
 
 def build_ranking_section(

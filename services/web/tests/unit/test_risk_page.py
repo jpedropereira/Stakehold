@@ -361,8 +361,11 @@ def _ex_post_calls(fake_portfolio):
     return [call for call in fake_portfolio.calls if call[0] == "ex_post_risk"]
 
 
-def _page(test_client):
-    response = test_client.get("/risk")
+EX_ANTE = "/risk/ex-ante"
+
+
+def _page(test_client, path="/risk"):
+    response = test_client.get(path)
     assert response.status_code == 200
     return response.text
 
@@ -763,7 +766,9 @@ def _relative_group(html):
 
 
 def _benchmark_form(html):
-    return re.search(r'<form[^>]*id="risk-benchmark-form".*?</form>', html, re.S).group(0)
+    return re.search(
+        r'<form[^>]*id="risk(?:-ex-ante)?-benchmark-form".*?</form>', html, re.S
+    ).group(0)
 
 
 def test_the_benchmark_is_asked_for_and_kept_in_the_field(client):
@@ -925,7 +930,7 @@ def test_ex_ante_sends_the_holdings_mix_over_3y_by_default(client):
     test_client, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)
 
-    _page(test_client)
+    _page(test_client, EX_ANTE)
 
     ((_, assets, window, benchmark, exclude),) = _ex_ante_calls(fake_portfolio)
     assert [ticker for ticker, _ in assets] == ["IWDA.AS", "AAPL", "TSLA"]
@@ -937,7 +942,7 @@ def test_ex_ante_window_and_exclusions_reach_portfolio(client):
     test_client, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)
 
-    test_client.get("/risk?ex_ante_window=5Y&exclude=TSLA&benchmark=IWDA.AS")
+    test_client.get("/risk/ex-ante?ex_ante_window=5Y&exclude=TSLA&benchmark=IWDA.AS")
 
     ((_, _, window, benchmark, exclude),) = _ex_ante_calls(fake_portfolio)
     assert (window, benchmark, exclude) == ("5Y", "IWDA.AS", ("TSLA",))
@@ -947,7 +952,7 @@ def test_an_unknown_window_falls_back_to_3y(client):
     test_client, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)
 
-    test_client.get("/risk?ex_ante_window=2Y")
+    test_client.get("/risk/ex-ante?ex_ante_window=2Y")
 
     assert _ex_ante_calls(fake_portfolio)[0][2] == "3Y"
 
@@ -956,7 +961,7 @@ def test_an_exclusion_not_in_the_mix_isnt_sent(client):
     test_client, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)
 
-    test_client.get("/risk?exclude=NOPE.XX&exclude=TSLA")
+    test_client.get("/risk/ex-ante?exclude=NOPE.XX&exclude=TSLA")
 
     assert _ex_ante_calls(fake_portfolio)[0][4] == ("TSLA",)
 
@@ -965,7 +970,7 @@ def test_excluding_every_holding_sends_no_exclusion(client):
     test_client, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)
 
-    test_client.get("/risk?exclude=IWDA.AS&exclude=AAPL&exclude=TSLA")
+    test_client.get("/risk/ex-ante?exclude=IWDA.AS&exclude=AAPL&exclude=TSLA")
 
     # portfolio would reject it with a 422; the page measures the whole mix instead.
     assert _ex_ante_calls(fake_portfolio)[0][4] == ()
@@ -975,7 +980,7 @@ def test_the_ex_ante_section_is_labelled_and_historical(client):
     test_client, fake_auth, _ = client
     _logged_in(test_client, fake_auth)
 
-    section = _ex_ante_html(_page(test_client))
+    section = _ex_ante_html(_page(test_client, EX_ANTE))
 
     assert "Ex-ante · constant weights" in section
     assert "historical" in section
@@ -986,7 +991,7 @@ def test_the_ex_ante_summary_shows_sigma_p_and_the_diversification_ratio(client)
     test_client, fake_auth, _ = client
     _logged_in(test_client, fake_auth)
 
-    section = _ex_ante_html(_page(test_client))
+    section = _ex_ante_html(_page(test_client, EX_ANTE))
 
     assert '<span class="mono">14.2%</span>' in section  # σ_p
     assert '<span class="mono">1.23</span>' in section  # diversification ratio
@@ -998,7 +1003,7 @@ def test_the_decomposition_shows_weight_beside_risk(client):
     test_client, fake_auth, _ = client
     _logged_in(test_client, fake_auth)
 
-    section = _ex_ante_html(_page(test_client))
+    section = _ex_ante_html(_page(test_client, EX_ANTE))
 
     table = re.search(r"<table[^>]*risk-decomposition.*?</table>", section, re.S).group(0)
     tsla = re.search(r"<tr[^>]*>(?:(?!</tr>).)*TSLA.*?</tr>", table, re.S).group(0)
@@ -1009,7 +1014,7 @@ def test_an_outsized_holding_is_named_in_a_note(client):
     test_client, fake_auth, _ = client
     _logged_in(test_client, fake_auth)
 
-    section = _ex_ante_html(_page(test_client))
+    section = _ex_ante_html(_page(test_client, EX_ANTE))
 
     note = re.search(r'<p class="risk-insight">.*?</p>', section, re.S).group(0)
     assert "TSLA" in note and "10.0%" in note and "16.1%" in note
@@ -1027,7 +1032,7 @@ def test_no_note_when_risk_follows_weight(client):
         )
     )
 
-    assert 'class="risk-insight"' not in _ex_ante_html(_page(test_client))
+    assert 'class="risk-insight"' not in _ex_ante_html(_page(test_client, EX_ANTE))
 
 
 def test_a_greyed_decomposition_says_why_once(client):
@@ -1042,7 +1047,7 @@ def test_a_greyed_decomposition_says_why_once(client):
         ),
     )
 
-    section = _ex_ante_html(_page(test_client))
+    section = _ex_ante_html(_page(test_client, EX_ANTE))
 
     assert section.count(reason) >= 1
     assert "70.0%" in section  # the weights are still shown
@@ -1052,7 +1057,7 @@ def test_the_euro_var_is_on_the_measured_holdings_value(client):
     test_client, fake_auth, _ = client
     _logged_in(test_client, fake_auth)
 
-    section = _ex_ante_html(_page(test_client))
+    section = _ex_ante_html(_page(test_client, EX_ANTE))
 
     # var_95 is 0.0213 / 2 on €10,000.
     assert "1 in 20" in section
@@ -1064,7 +1069,7 @@ def test_the_heatmap_has_a_square_per_pair_with_its_bucket(client):
     test_client, fake_auth, _ = client
     _logged_in(test_client, fake_auth)
 
-    section = _ex_ante_html(_page(test_client))
+    section = _ex_ante_html(_page(test_client, EX_ANTE))
 
     heatmap = re.search(r"<table[^>]*risk-heatmap.*?</table>", section, re.S).group(0)
     assert heatmap.count("0.97") == 2  # mirrored
@@ -1080,10 +1085,10 @@ def test_the_limiting_holding_can_be_excluded(client):
         window=ExAnteWindow("Max", date(2009, 9, 25), date(2015, 3, 6), END, ("TSLA",))
     )
 
-    section = _ex_ante_html(test_client.get("/risk?ex_ante_window=Max").text)
+    section = _ex_ante_html(test_client.get("/risk/ex-ante?ex_ante_window=Max").text)
 
     assert "limited by" in section.lower()
-    assert 'href="/risk?ex_ante_window=Max&amp;exclude=TSLA#risk-ex-ante"' in section
+    assert 'href="/risk/ex-ante?ex_ante_window=Max&amp;exclude=TSLA#risk-ex-ante"' in section
 
 
 def test_an_excluded_holding_can_be_included_again(client):
@@ -1097,9 +1102,9 @@ def test_an_excluded_holding_can_be_included_again(client):
         )
     )
 
-    section = _ex_ante_html(test_client.get("/risk?exclude=TSLA").text)
+    section = _ex_ante_html(test_client.get("/risk/ex-ante?exclude=TSLA").text)
 
-    assert 'href="/risk?#risk-ex-ante"' in section
+    assert 'href="/risk/ex-ante?#risk-ex-ante"' in section
     assert "Include" in section
 
 
@@ -1107,10 +1112,10 @@ def test_the_window_links_mark_the_current_one(client):
     test_client, fake_auth, _ = client
     _logged_in(test_client, fake_auth)
 
-    section = _ex_ante_html(test_client.get("/risk?benchmark=IWDA.AS").text)
+    section = _ex_ante_html(test_client.get("/risk/ex-ante?benchmark=IWDA.AS").text)
 
     assert re.search(r'href="[^"]*ex_ante_window=3Y[^"]*" aria-current="true"', section)
-    assert 'href="/risk?benchmark=IWDA.AS&amp;ex_ante_window=5Y#risk-ex-ante"' in section
+    assert 'href="/risk/ex-ante?benchmark=IWDA.AS&amp;ex_ante_window=5Y#risk-ex-ante"' in section
 
 
 def test_the_window_switch_is_a_segmented_control(client):
@@ -1118,7 +1123,7 @@ def test_the_window_switch_is_a_segmented_control(client):
     test_client, fake_auth, _ = client
     _logged_in(test_client, fake_auth)
 
-    section = _ex_ante_html(test_client.get("/risk?ex_ante_window=5Y").text)
+    section = _ex_ante_html(test_client.get("/risk/ex-ante?ex_ante_window=5Y").text)
 
     group = re.search(
         r'<div class="segmented[^"]*" role="group" aria-label="Ex-ante window">.*?</div>',
@@ -1134,7 +1139,7 @@ def test_the_benchmark_form_keeps_the_ex_ante_choices(client):
     test_client, fake_auth, _ = client
     _logged_in(test_client, fake_auth)
 
-    html = test_client.get("/risk?ex_ante_window=5Y&exclude=TSLA").text
+    html = test_client.get("/risk/ex-ante?ex_ante_window=5Y&exclude=TSLA").text
 
     form = _benchmark_form(html)
     assert '<input type="hidden" name="ex_ante_window" value="5Y">' in form
@@ -1145,7 +1150,9 @@ def test_the_benchmark_form_and_ex_ante_links_keep_the_what_if(client):
     test_client, fake_auth, _ = client
     _logged_in(test_client, fake_auth)
 
-    html = test_client.get("/risk?candidate=EGLN.L&candidate_weight=10&funding=pro_rata").text
+    html = test_client.get(
+        "/risk/ex-ante?candidate=EGLN.L&candidate_weight=10&funding=pro_rata"
+    ).text
 
     assert _hidden(_benchmark_form(html)) == [
         ("candidate", "EGLN.L"),
@@ -1153,7 +1160,7 @@ def test_the_benchmark_form_and_ex_ante_links_keep_the_what_if(client):
         ("funding", "pro_rata"),
     ]
     assert (
-        'href="/risk?candidate=EGLN.L&amp;candidate_weight=10&amp;funding=pro_rata'
+        'href="/risk/ex-ante?candidate=EGLN.L&amp;candidate_weight=10&amp;funding=pro_rata'
         '&amp;ex_ante_window=5Y#risk-ex-ante"' in html
     )
 
@@ -1162,14 +1169,14 @@ def test_the_benchmark_form_and_ex_ante_links_keep_the_ranking(client):
     test_client, fake_auth, _ = client
     _logged_in(test_client, fake_auth)
 
-    html = test_client.get("/risk?rank_weight=5&rank_by=diversification_ratio").text
+    html = test_client.get("/risk/ex-ante?rank_weight=5&rank_by=diversification_ratio").text
 
     assert _hidden(_benchmark_form(html)) == [
         ("rank_weight", "5"),
         ("rank_by", "diversification_ratio"),
     ]
     assert (
-        'href="/risk?rank_weight=5&amp;rank_by=diversification_ratio&amp;ex_ante_window=5Y'
+        'href="/risk/ex-ante?rank_weight=5&amp;rank_by=diversification_ratio&amp;ex_ante_window=5Y'
         '#risk-ex-ante"' in html
     )
 
@@ -1189,20 +1196,23 @@ def test_ex_ante_left_out_holdings_are_named(client):
         )
     )
 
-    section = _ex_ante_html(_page(test_client))
+    section = _ex_ante_html(_page(test_client, EX_ANTE))
 
     assert "no FX series for USD" in section
 
 
-def test_an_ex_ante_failure_leaves_the_ex_post_summary(client):
+def test_an_ex_ante_failure_shows_its_notice_and_leaves_the_ex_post_page(client):
+    """UX-6: ex-ante is its own page, so its failure never reaches the ex-post one."""
     test_client, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)
     fake_portfolio.ex_ante_error = PortfolioUnavailable("down")
 
-    html = _page(test_client)
+    ex_ante = _page(test_client, EX_ANTE)
+    ex_post = _page(test_client)
 
-    assert "Couldn't load the ex-ante figures." in _ex_ante_html(html)
-    assert 'aria-label="Ex-post risk figures"' in html
+    assert "Couldn't load the ex-ante figures." in _ex_ante_html(ex_ante)
+    assert "Couldn't load the ex-ante figures." not in ex_post
+    assert 'aria-label="Ex-post risk figures"' in ex_post
 
 
 def test_a_holdings_failure_shows_the_ex_ante_notice(client):
@@ -1210,20 +1220,36 @@ def test_a_holdings_failure_shows_the_ex_ante_notice(client):
     _logged_in(test_client, fake_auth)
     fake_portfolio.holdings_error = PortfolioUnavailable("down")
 
-    html = _page(test_client)
+    html = _page(test_client, EX_ANTE)
 
     assert "Couldn't load the ex-ante figures." in _ex_ante_html(html)
     assert _ex_ante_calls(fake_portfolio) == []
 
 
-def test_an_ex_post_failure_leaves_the_ex_ante_section(client):
+def test_the_ex_ante_page_makes_no_ex_post_call(client):
     test_client, fake_auth, fake_portfolio = client
     _logged_in(test_client, fake_auth)
     fake_portfolio.ex_post_error = PortfolioUnavailable("down")
 
-    section = _ex_ante_html(_page(test_client))
+    section = _ex_ante_html(_page(test_client, EX_ANTE))
 
+    assert _ex_post_calls(fake_portfolio) == []
     assert '<span class="mono">14.2%</span>' in section
+
+
+def test_the_ex_ante_page_has_its_own_benchmark_form(client):
+    """UX-6: ex-ante sends the benchmark too, so its page can change it without leaving."""
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+
+    html = _page(test_client, EX_ANTE + "?benchmark=IWDA.AS")
+
+    form = _ex_ante_html(html)
+    form = re.search(r'<form[^>]*id="risk-ex-ante-benchmark-form".*?</form>', form, re.S).group(0)
+    assert 'action="/risk/ex-ante#risk-ex-ante"' in form
+    assert 'id="risk-ex-ante-benchmark" name="benchmark" value="IWDA.AS"' in form
+    ((_, _, _, benchmark, _),) = _ex_ante_calls(fake_portfolio)
+    assert benchmark == "IWDA.AS"
 
 
 def test_no_holdings_means_no_ex_ante_call(client):
@@ -1231,7 +1257,7 @@ def test_no_holdings_means_no_ex_ante_call(client):
     _logged_in(test_client, fake_auth)
     fake_portfolio.holdings = Holdings(holdings=(), totals=None)
 
-    section = _ex_ante_html(_page(test_client))
+    section = _ex_ante_html(_page(test_client, EX_ANTE))
 
     assert _ex_ante_calls(fake_portfolio) == []
     assert "Nothing to measure yet" in section
@@ -1245,7 +1271,7 @@ def test_logs_the_ex_ante_outcome(client, caplog):
     )
 
     with caplog.at_level(logging.INFO, logger="web.api.risk"):
-        test_client.get("/risk?ex_ante_window=Max&exclude=NOPE.XX")
+        test_client.get("/risk/ex-ante?ex_ante_window=Max&exclude=NOPE.XX")
 
     messages = _messages(caplog)
     assert any("ex-ante" in m and "3 holdings" in m and "Max" in m for m in messages), messages
@@ -1264,7 +1290,7 @@ def test_the_fx_decomposition_shows_each_usd_holdings_four_figures(client):
     test_client, fake_auth, _ = client
     _logged_in(test_client, fake_auth)
 
-    section = _ex_ante_html(_page(test_client))
+    section = _ex_ante_html(_page(test_client, EX_ANTE))
 
     table = _fx_html(section)
     aapl = re.search(r"<tr[^>]*>(?:(?!</tr>).)*AAPL.*?</tr>", table, re.S).group(0)
@@ -1281,7 +1307,7 @@ def test_a_greyed_fx_correlation_shows_its_reason(client):
     row = replace(_FX_ROWS[0], correlation=_ex_ante_figure(None, reason=reason))
     fake_portfolio.ex_ante = _ex_ante(fx_decomposition=(row,))
 
-    assert reason in _fx_html(_ex_ante_html(_page(test_client)))
+    assert reason in _fx_html(_ex_ante_html(_page(test_client, EX_ANTE)))
 
 
 def test_an_all_eur_mix_says_there_is_no_currency_risk(client):
@@ -1289,7 +1315,7 @@ def test_an_all_eur_mix_says_there_is_no_currency_risk(client):
     _logged_in(test_client, fake_auth)
     fake_portfolio.ex_ante = _ex_ante(fx_decomposition=())
 
-    section = _ex_ante_html(_page(test_client))
+    section = _ex_ante_html(_page(test_client, EX_ANTE))
 
     assert 'aria-label="FX decomposition"' not in section
     assert "Every holding measured is in euros" in section
@@ -1300,7 +1326,7 @@ def test_logs_the_fx_decomposition_count(client, caplog):
     _logged_in(test_client, fake_auth)
 
     with caplog.at_level(logging.INFO, logger="web.api.risk"):
-        test_client.get("/risk")
+        test_client.get("/risk/ex-ante")
 
     messages = _messages(caplog)
     assert any(
@@ -1313,7 +1339,7 @@ def test_the_ex_ante_terms_link_to_the_glossary(client):
     test_client, fake_auth, _ = client
     _logged_in(test_client, fake_auth)
 
-    anchors = {anchor for anchor, _ in _glossary_links(_page(test_client))}
+    anchors = {anchor for anchor, _ in _glossary_links(_page(test_client, EX_ANTE))}
 
     assert {
         "ex-ante",
@@ -1363,7 +1389,7 @@ def test_the_decomposition_and_its_note_name_each_holding(client):
     _logged_in(test_client, fake_auth)
     fake_portfolio.tracked_names = {"TSLA": "Tesla, Inc."}
 
-    section = _ex_ante_html(_page(test_client))
+    section = _ex_ante_html(_page(test_client, EX_ANTE))
 
     table = re.search(r"<table[^>]*risk-decomposition.*?</table>", section, re.S).group(0)
     header = re.search(r'<th role="rowheader"[^>]*>(?:(?!</th>).)*TSLA.*?</th>', table, re.S)
@@ -1382,7 +1408,7 @@ def test_the_exclude_link_hosts_the_tickers_name(client):
     )
     fake_portfolio.tracked_names = {"TSLA": "Tesla, Inc."}
 
-    section = _ex_ante_html(test_client.get("/risk?ex_ante_window=Max").text)
+    section = _ex_ante_html(test_client.get("/risk/ex-ante?ex_ante_window=Max").text)
 
     link = re.search(r"<a [^>]*exclude=TSLA[^>]*>.*?</a>", section, re.S).group(0)
     assert f"Exclude {_NAMED_IN_HOST.format('TSLA')}" in link
@@ -1401,7 +1427,7 @@ def test_an_excluded_holding_is_named_and_its_include_link_hosts_the_name(client
     )
     fake_portfolio.tracked_names = {"TSLA": "Tesla, Inc."}
 
-    section = _ex_ante_html(test_client.get("/risk?exclude=TSLA").text)
+    section = _ex_ante_html(test_client.get("/risk/ex-ante?exclude=TSLA").text)
 
     note = re.search(r"Excluded at your request:.*?</p>", section, re.S).group(0)
     assert _NAMED.format("TSLA") in note
@@ -1421,7 +1447,7 @@ def test_a_holding_left_out_of_ex_ante_is_named(client):
     )
     fake_portfolio.tracked_names = {"TSLA": "Tesla, Inc."}
 
-    section = _ex_ante_html(_page(test_client))
+    section = _ex_ante_html(_page(test_client, EX_ANTE))
 
     item = re.search(r"<li>(?:(?!</li>).)*no FX series for USD.*?</li>", section, re.S).group(0)
     assert _NAMED.format("TSLA") in item
@@ -1433,7 +1459,7 @@ def test_a_failed_name_lookup_leaves_risk_with_bare_tickers(client):
     fake_portfolio.tracked_names = {"TSLA": "Tesla, Inc.", "VWCE.DE": "Vanguard FTSE All-World"}
     fake_portfolio.tracked_error = PortfolioUnavailable("down")
 
-    html = _page(test_client)
+    html = _page(test_client, EX_ANTE)
 
     assert "Tesla, Inc." not in html and "Vanguard FTSE All-World" not in html
     assert '<span class="mono">TSLA</span>' in _ex_ante_html(html)

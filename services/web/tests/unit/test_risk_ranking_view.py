@@ -203,13 +203,14 @@ def test_the_order_links_keep_the_query_and_change_only_the_order():
     section = build_ranking_section(_ranking(), PARAMS)
 
     assert section.sort_links == {
-        "sigma_p": "/risk?benchmark=IWDA.AS&rank_weight=5&rank_by=sigma_p#risk-ranking",
+        "sigma_p": "/risk/what-if?benchmark=IWDA.AS&rank_weight=5&rank_by=sigma_p#risk-ranking",
         "diversification_ratio": (
-            "/risk?benchmark=IWDA.AS&rank_weight=5&rank_by=diversification_ratio#risk-ranking"
+            "/risk/what-if?benchmark=IWDA.AS&rank_weight=5"
+            "&rank_by=diversification_ratio#risk-ranking"
         ),
     }
     assert ranking_url([("exclude", "A"), ("exclude", "B")], "sigma_p") == (
-        "/risk?exclude=A&exclude=B&rank_by=sigma_p#risk-ranking"
+        "/risk/what-if?exclude=A&exclude=B&rank_by=sigma_p#risk-ranking"
     )
 
 
