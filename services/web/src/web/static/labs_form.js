@@ -34,12 +34,25 @@
     return button;
   }
 
+  // A long mix scrolls in its own box (UX-8). The server makes a box that starts long a
+  // labelled tab stop; one that becomes long here gets the same, so a keyboard can scroll it.
+  function markScrolling() {
+    if (rows.hasAttribute("tabindex") || rows.scrollHeight <= rows.clientHeight) {
+      return;
+    }
+    rows.tabIndex = 0;
+    rows.setAttribute("role", "region");
+    rows.setAttribute("aria-label", "Mix rows");
+  }
+
   addButton.addEventListener("click", function () {
     const row = template.content.firstElementChild.cloneNode(true);
     added += 1;
     renumber(row, "added-" + added);
     row.appendChild(removeButton(row));
     rows.appendChild(row);
+    markScrolling();
+    row.scrollIntoView({ block: "nearest" });
     row.querySelector("input[name='ticker']").focus();
   });
   addButton.hidden = false;
