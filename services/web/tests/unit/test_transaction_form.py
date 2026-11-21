@@ -67,6 +67,10 @@ class FakePortfolioClient:
     async def list_tickers(self):
         return ["IWDA.AS"]
 
+    # The add page lists the account's recent transactions beside the form (UX-11).
+    async def list_transactions(self, *, user_id, account_label):
+        return []
+
 
 def _settings() -> Settings:
     return Settings(

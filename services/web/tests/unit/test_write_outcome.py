@@ -39,6 +39,10 @@ class FakePortfolioClient:
     async def list_tickers(self):
         return []
 
+    # The add page lists the account's recent transactions beside the form (UX-11).
+    async def list_transactions(self, *, user_id, account_label):
+        return []
+
     async def list_brokers(self):
         return [Broker(broker="acme", imports=("transactions",))]
 

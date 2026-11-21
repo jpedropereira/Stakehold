@@ -20,6 +20,8 @@
   <link rel="icon" href="{{ asset_url('/brand/logos/app-icon.svg') }}">
   <link rel="stylesheet" href="{{ asset_url('/brand/tokens.css') }}">
   <link rel="stylesheet" href="{{ asset_url('/static/web.css') }}">
+  {# After web.css: its grid columns lift .card's width cap (UX-11). #}
+  <link rel="stylesheet" href="{{ asset_url('/static/layout.css') }}">
   {# htmx otherwise injects an inline <style> for its indicators, which the strict CSP blocks;
      web.css carries those rules instead. Read by htmx itself, so no inline script. #}
   <meta name="htmx-config" content='{"includeIndicatorStyles": false}'>

@@ -83,13 +83,18 @@ def client():
         yield test_client, fake_portfolio
 
 
-_DETAILS = re.compile(r'<details class="new-account"( open)?>')
+# The two cards in the split (UX-11): the list's, then the new-account form's.
+_SPLIT = re.compile(
+    r'<div class="split split-form">\s*(<section class="[^"]*">.*?</section>)\s*'
+    r'(<section class="[^"]*">.*?</section>)\s*</div>',
+    re.DOTALL,
+)
 
 
-def _disclosure_open(html: str) -> bool:
-    match = _DETAILS.search(html)
-    assert match, "no new-account disclosure in page"
-    return match.group(1) is not None
+def _cards(html: str) -> tuple[str, str]:
+    match = _SPLIT.search(html)
+    assert match, "no list-and-form split in page"
+    return match.group(1), match.group(2)
 
 
 def _post_account(test_client, **data):
@@ -145,36 +150,42 @@ def test_account_links_encode_the_label(client):
     assert 'href="/transactions/import?account=joint%20%26%20co"' in html
 
 
-# --- accounts: the new-account disclosure ------------------------------------------------
+# --- accounts: the list and the new-account form, side by side (UX-11) ------------------
 
 
-def test_new_account_form_is_collapsed_once_the_user_has_accounts(client):
+def test_list_and_form_are_two_cards_in_the_split_list_first(client):
+    test_client, _ = client
+
+    accounts, form = _cards(test_client.get("/accounts").text)
+
+    assert 'class="account-list"' in accounts
+    assert "<h1>Your accounts</h1>" in accounts
+    assert '<form class="account-form"' in form
+    assert "<h2>New account</h2>" in form
+
+
+def test_new_account_form_is_shown_once_the_user_has_accounts(client):
+    """In its own card the form isn't folded: a collapsed card beside the list would waste
+    the column it was given."""
     test_client, _ = client
 
     html = test_client.get("/accounts").text
 
-    assert _disclosure_open(html) is False
-    assert "<summary>New account</summary>" in html
-
-
-def test_new_account_form_is_open_on_first_run(client):
-    test_client, fake_portfolio = client
-    fake_portfolio.list_accounts_result = []
-
-    html = test_client.get("/accounts").text
-
-    assert _disclosure_open(html) is True
+    assert "<details" not in html.split("<main", 1)[1]
+    assert 'id="account_label"' in _cards(html)[1]
 
 
 def test_first_run_explains_the_steps(client):
     test_client, fake_portfolio = client
     fake_portfolio.list_accounts_result = []
 
-    html = test_client.get("/accounts").text
+    accounts, form = _cards(test_client.get("/accounts").text)
 
-    assert 'class="first-run-steps"' in html
-    assert "Create an account" in html
-    assert "import" in html.lower()
+    assert 'class="first-run-steps"' in accounts
+    assert "Create an account" in accounts
+    assert "below" not in accounts
+    assert "import" in accounts.lower()
+    assert '<form class="account-form"' in form
 
 
 def test_first_run_steps_are_not_shown_once_the_user_has_accounts(client):
@@ -190,45 +201,35 @@ def test_an_outage_is_not_a_first_run(client):
     test_client, fake_portfolio = client
     fake_portfolio.list_accounts_error = PortfolioUnavailable("boom")
 
-    html = test_client.get("/accounts").text
+    accounts, form = _cards(test_client.get("/accounts").text)
 
-    assert 'class="first-run-steps"' not in html
-    assert _disclosure_open(html) is False
-
-
-def test_an_outage_notice_is_outside_the_collapsed_form(client):
-    test_client, fake_portfolio = client
-    fake_portfolio.list_accounts_error = PortfolioUnavailable("boom")
-
-    html = test_client.get("/accounts").text
-
-    notice = html.index("Can&#39;t reach the portfolio service")
-    assert notice < html.index('<details class="new-account"')
+    assert 'class="first-run-steps"' not in accounts
+    assert "Can&#39;t reach the portfolio service" in accounts
+    assert '<form class="account-form"' in form
 
 
-def test_new_account_form_is_open_on_an_error_rerender(client):
-    """A plain (no-JS) post that fails re-renders the page; a collapsed form would hide the
-    message the visitor needs."""
+def test_an_error_rerender_shows_the_message_in_the_form_card(client):
     test_client, fake_portfolio = client
     fake_portfolio.create_account_error = AccountLabelConflict("taken")
 
     response = _post_account(test_client)
 
     assert response.status_code == 409
-    assert _disclosure_open(response.text) is True
-    assert "That label is already used with a different broker." in response.text
+    accounts, form = _cards(response.text)
+    assert 'class="account-list"' in accounts
+    assert "That label is already used with a different broker." in form
 
 
-def test_new_account_form_is_open_on_a_custom_broker_error(client):
+def test_a_custom_broker_error_shows_in_the_form_card(client):
     test_client, _ = client
 
     response = _post_account(test_client, broker="__custom__", custom_broker="")
 
     assert response.status_code == 422
-    assert _disclosure_open(response.text) is True
+    assert "Enter a name for the custom broker." in _cards(response.text)[1]
 
 
-def test_new_account_form_is_open_on_a_csrf_failure(client):
+def test_a_csrf_failure_shows_in_the_form_card(client):
     test_client, _ = client
     test_client.get("/accounts")
 
@@ -239,7 +240,7 @@ def test_new_account_form_is_open_on_a_csrf_failure(client):
     )
 
     assert response.status_code == 400
-    assert _disclosure_open(response.text) is True
+    assert "Refresh the page and try again." in _cards(response.text)[1]
 
 
 def test_an_error_rerender_still_lists_the_accounts(client):

@@ -547,7 +547,6 @@ def test_a_card_under_the_account_header_lines_up_with_its_left_edge():
 @pytest.mark.parametrize(
     "template",
     [
-        "transactions_new.html",
         "transactions_import.html",
         "account_delete.html",
         "transaction_delete.html",
@@ -560,6 +559,36 @@ def test_account_form_cards_are_siblings_of_the_account_header(template):
     after_header = source.split('{% include "partials/_account_header.html" %}', 1)[1]
     before_card = after_header.split('<section class="card">', 1)[0]
     assert "<div" not in before_card and "<section" not in before_card
+
+
+def test_the_add_transaction_split_sits_directly_under_the_account_header():
+    """Add transaction's form card is in a split beside the recent transactions (UX-11), so the
+    left-alignment rule doesn't reach it: the split fills the row instead, and it must be the
+    header's next sibling to start at its edge."""
+    source = (_WEB_DIR / "src" / "web" / "templates" / "transactions_new.html").read_text()
+    after_header = source.split('{% include "partials/_account_header.html" %}', 1)[1]
+    before_split = after_header.split('<div class="split split-form-start">', 1)[0]
+    assert "<div" not in before_split and "<section" not in before_split
+
+
+def test_admin_mappings_lists_come_before_the_form_beside_them(client):
+    """UX-11: the two tables in one column, then the form that changes them. The intro card,
+    with the outcome and any error, spans the page above both."""
+    test_client, fake_auth, _ = client
+    _logged_in(test_client, fake_auth, is_admin=True)
+
+    page_html = test_client.get("/admin/mappings").text
+
+    split = page_html.index('<div class="split split-form">')
+    column = page_html.index('<div class="split-form-column">')
+    assert page_html.index("<h1>Ticker mappings</h1>") < split < column
+    assert (
+        column
+        < page_html.index("<h2>Waiting for a mapping</h2>")
+        < page_html.index("<h2>Mappings</h2>")
+        < page_html.index('<section class="card split-form-card">')
+        < page_html.index("<h2>Add or change a mapping</h2>")
+    )
 
 
 def test_admin_tables_scroll_in_a_keyboard_reachable_region(client):
@@ -593,7 +622,9 @@ def test_admin_tables_scroll_in_a_keyboard_reachable_region(client):
 
 
 def _css():
-    return re.sub(r"/\*.*?\*/", "", _WEB_CSS_PATH.read_text(), flags=re.S)
+    """web.css and layout.css, the page grids (UX-11), without comments."""
+    text = "\n".join(p.read_text() for p in sorted(_WEB_CSS_PATH.parent.glob("*.css")))
+    return re.sub(r"/\*.*?\*/", "", text, flags=re.S)
 
 
 def test_web_css_stacks_tables_at_phone_width():

@@ -17,8 +17,12 @@
   </datalist>
 </section>
 
+{# The lists, then the form that changes them (UX-11): side by side on a wide screen, stacked in
+   this order below the form-split breakpoint. The two tables share the first column. #}
+<div class="split split-form">
+<div class="split-form-column">
 <section class="card card-wide">
-  <h1>Waiting for a mapping</h1>
+  <h2>Waiting for a mapping</h2>
   {% if unmapped is none %}
   {% elif unmapped %}
   <p class="entry-subtitle">These instruments block positions until they're mapped.</p>
@@ -55,7 +59,7 @@
 </section>
 
 <section class="card card-wide">
-  <h1>Mappings</h1>
+  <h2>Mappings</h2>
   {% if mappings is none %}
   {% elif mappings %}
   <div class="table-scroll" tabindex="0" role="region" aria-label="Mappings">
@@ -86,9 +90,10 @@
   <p class="entry-empty">No mappings yet.</p>
   {% endif %}
 </section>
+</div>
 
-<section class="card">
-  <h1>Add or change a mapping</h1>
+<section class="card split-form-card">
+  <h2>Add or change a mapping</h2>
   <p class="entry-subtitle">Saving a mapping for an instrument that already has one points it at the new ticker.</p>
   <form method="post" action="/admin/mappings">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -114,4 +119,5 @@
     <button type="submit" class="btn btn-primary">Save mapping</button>
   </form>
 </section>
+</div>
 {% endblock %}

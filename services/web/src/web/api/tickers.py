@@ -117,17 +117,22 @@ def _outcome(request: Request) -> str | None:
     return None
 
 
-async def _list_context(portfolio_client: PortfolioClient, user: AuthUser) -> dict:
-    """The list tickers.html shows: every ticker for an admin, the user's own otherwise. None
-    (not []) when it couldn't be loaded, so the page never says "none added" during an outage."""
+async def _list_context(portfolio_client: PortfolioClient, requested_by: str | None) -> dict:
+    """A list of tracked tickers: every one when `requested_by` is None, else those that user
+    added. None (not []) when it couldn't be loaded, so the page never says "none added" during
+    an outage. tickers.html shows an admin every ticker, a user their own; tickers_new.html
+    shows everyone their own (UX-11), as context for the add, not a second admin list."""
     try:
-        tickers = await portfolio_client.list_tracked_tickers(
-            requested_by=None if user.is_admin else user.user_id
-        )
+        tickers = await portfolio_client.list_tracked_tickers(requested_by=requested_by)
     except PortfolioClientError as exc:
         logger.exception("portfolio service unavailable listing tracked tickers.", exc_info=exc)
         return {"tickers": None, "list_error": _PORTFOLIO_LIST_ERROR}
     return {"tickers": tickers, "list_error": None}
+
+
+def _shown_on_tickers(user: AuthUser) -> str | None:
+    """Whose tickers /tickers lists: an admin's is every ticker."""
+    return None if user.is_admin else user.user_id
 
 
 def _page(user: AuthUser, csrf_token: str) -> dict:
@@ -159,7 +164,7 @@ async def tickers_page(
             **_page(user, csrf_token),
             "error": None,
             "outcome": _outcome(request),
-            **await _list_context(portfolio_client, user),
+            **await _list_context(portfolio_client, _shown_on_tickers(user)),
         },
     )
 
@@ -177,7 +182,15 @@ async def tickers_new_page(
     """The lookup is a GET form, so it works without JS and a result can be bookmarked. Adding
     is the separate POST below, from the confirmation the lookup shows."""
     csrf_token = ensure_csrf_cookie(request, response, cookie_secure=settings.cookie_secure)
-    context = {**_page(user, csrf_token), "symbol": symbol.strip(), "lookup": None, "error": None}
+    context = {
+        **_page(user, csrf_token),
+        "symbol": symbol.strip(),
+        "lookup": None,
+        "error": None,
+        # Set by tickers_add's redirect back here, so the new row shows beside the form.
+        "outcome": _outcome(request),
+        **await _list_context(portfolio_client, user.user_id),
+    }
     status_code = status.HTTP_200_OK
     if context["symbol"]:
         try:
@@ -206,17 +219,31 @@ async def tickers_add(
     user: AuthUser = Depends(require_user),
     portfolio_client: PortfolioClient = Depends(get_portfolio_client),
 ):
-    page = {**_page(user, csrf_token), "symbol": symbol.strip(), "lookup": None}
+    page = {**_page(user, csrf_token), "symbol": symbol.strip(), "lookup": None, "outcome": None}
     page.pop("csrf_token")
+
+    async def load_list() -> dict:
+        # Lazy: only an error re-render shows the list; a success redirects.
+        return await _list_context(portfolio_client, user.user_id)
+
     csrf_error = await _check_csrf(
-        request, response, settings, templates, "tickers_new.html", "add_ticker", csrf_token, **page
+        request,
+        response,
+        settings,
+        templates,
+        "tickers_new.html",
+        "add_ticker",
+        csrf_token,
+        extra_context_loader=load_list,
+        **page,
     )
     if csrf_error is not None:
         return csrf_error
 
     def added(result) -> Response:
         key = "added" if result.created else "already"
-        return _redirect(request, response, f"/tickers?{key}={quote(result.ticker.ticker)}")
+        # Back to the add page, whose list beside the form now holds the new row (UX-11).
+        return _redirect(request, response, f"/tickers/new?{key}={quote(result.ticker.ticker)}")
 
     return await _submit_portfolio_form(
         request,
@@ -230,6 +257,7 @@ async def tickers_add(
         ),
         error_messages=_ADD_ERRORS,
         on_success=added,
+        extra_context_loader=load_list,
         **page,
     )
 
@@ -254,7 +282,7 @@ async def tickers_change(
     page.pop("csrf_token")
 
     async def load_list() -> dict:
-        return {"outcome": None, **await _list_context(portfolio_client, user)}
+        return {"outcome": None, **await _list_context(portfolio_client, _shown_on_tickers(user))}
 
     csrf_error = await _check_csrf(
         request,

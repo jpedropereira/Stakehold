@@ -6,6 +6,7 @@ fakes, like test_portfolio_page.py.
 """
 
 import html
+import re
 from datetime import datetime, timezone
 
 import pytest
@@ -191,7 +192,8 @@ def test_the_add_page_starts_with_an_empty_lookup_form(client):
     assert response.status_code == 200
     assert 'action="/tickers/new"' in text(response)
     assert 'name="symbol"' in text(response)
-    assert fake_portfolio.calls == []
+    # No lookup until a symbol is given; the only call is the list beside the form (UX-11).
+    assert [c for c in fake_portfolio.calls if c[0] != "list"] == []
 
 
 def test_an_available_symbol_is_shown_for_confirmation(client):
@@ -200,7 +202,7 @@ def test_an_available_symbol_is_shown_for_confirmation(client):
 
     response = test_client.get("/tickers/new", params={"symbol": "asml.as"})
 
-    assert fake_portfolio.calls == [("lookup", "asml.as")]
+    assert [c for c in fake_portfolio.calls if c[0] == "lookup"] == [("lookup", "asml.as")]
     assert "ASML Holding N.V." in text(response)
     assert "Amsterdam" in text(response)
     assert '<span class="mono">EUR</span>' in text(response)
@@ -284,7 +286,8 @@ def test_adding_sends_the_user_and_the_limit_then_lists_it(client):
     )
 
     assert response.status_code == 303
-    assert response.headers["location"] == "/tickers?added=ASML.AS"
+    # Back to the add page, so the new row shows in the list beside the form (UX-11).
+    assert response.headers["location"] == "/tickers/new?added=ASML.AS"
     assert fake_portfolio.calls[-1] == ("add", "ASML.AS", "u1", True)
 
 
@@ -310,7 +313,7 @@ def test_adding_a_tracked_ticker_says_it_was_already_there(client):
         "/tickers", data={"symbol": "ASML.AS", "csrf_token": token}, follow_redirects=False
     )
 
-    assert response.headers["location"] == "/tickers?already=ASML.AS"
+    assert response.headers["location"] == "/tickers/new?already=ASML.AS"
 
 
 def test_adding_without_a_csrf_token_is_refused(client):
@@ -495,3 +498,124 @@ def test_the_admin_mappings_page_links_to_adding_a_ticker(client):
     response = test_client.get("/admin/mappings")
 
     assert 'href="/tickers/new"' in response.text
+
+
+# --- the add page: the lookup beside the user's own tickers (UX-11) ------------------------------
+
+# The two grid children: the form column (the lookup, then its result), then the list's card.
+_SPLIT = re.compile(
+    r'<div class="split split-form-start">\s*<div class="split-form-column">(.*?)</div>\s*'
+    r'(<section class="card card-wide"[^>]*>.*?</section>)\s*</div>',
+    re.DOTALL,
+)
+
+
+def _columns(response) -> tuple[str, str]:
+    match = _SPLIT.search(response.text)
+    assert match, "no form-and-list split on the add page"
+    return match.group(1), match.group(2)
+
+
+def test_the_add_page_puts_the_lookup_before_the_users_tickers(client):
+    test_client, fake_auth, fake_portfolio = client
+    _log_in(test_client, fake_auth)
+    fake_portfolio.list_result = [tracked("ASML.AS", status="backfilling")]
+
+    form, tickers = _columns(test_client.get("/tickers/new", params={"symbol": "ASML.AS"}))
+
+    assert 'action="/tickers/new"' in form
+    assert "Add ASML.AS" in form
+    assert '<h2 id="your-tickers">Your tickers</h2>' in tickers
+    assert "ASML.AS Holding" in tickers
+    assert ">Loading<" in tickers
+    assert 'href="/tickers"' in tickers
+
+
+@pytest.mark.parametrize("admin", [False, True])
+def test_the_add_page_lists_only_the_tickers_the_viewer_added(client, admin):
+    """An admin too: their /tickers lists every ticker, but beside the form only their own add
+    is the context, and the default list would bury it."""
+    test_client, fake_auth, fake_portfolio = client
+    _log_in(test_client, fake_auth, admin=admin)
+
+    test_client.get("/tickers/new")
+
+    assert ("list", "u1", None, None) in fake_portfolio.calls
+
+
+def test_a_failed_ticker_on_the_add_page_says_an_admin_can_retry(client):
+    test_client, fake_auth, fake_portfolio = client
+    _log_in(test_client, fake_auth)
+    fake_portfolio.list_result = [tracked("GHOST", status="failed", error="no price history")]
+
+    _, tickers = _columns(test_client.get("/tickers/new"))
+
+    assert ">Couldn&#39;t load<" in tickers
+    assert "An admin can retry it." in tickers
+    assert "/retry" not in tickers
+
+
+def test_the_add_page_says_when_the_user_has_added_none(client):
+    test_client, fake_auth, _ = client
+    _log_in(test_client, fake_auth)
+
+    _, tickers = _columns(test_client.get("/tickers/new"))
+
+    assert "You haven't added any tickers yet." in tickers
+
+
+def test_the_add_page_keeps_the_form_when_the_list_fails(client):
+    test_client, fake_auth, fake_portfolio = client
+    _log_in(test_client, fake_auth)
+    fake_portfolio.list_error = PortfolioUnavailable("down")
+
+    response = test_client.get("/tickers/new", params={"symbol": "ASML.AS"})
+
+    assert response.status_code == 200
+    form, tickers = _columns(response)
+    assert "Add ASML.AS" in form
+    assert "Can&#39;t reach the portfolio service" in tickers
+    assert "haven't added" not in tickers
+
+
+@pytest.mark.parametrize(
+    "param, says",
+    [
+        ("added", "ASML.AS added. Prices usually load within a few minutes."),
+        ("already", "ASML.AS was already in Stakehold. Nothing new was added."),
+    ],
+)
+def test_the_add_page_confirms_an_add(client, param, says):
+    test_client, fake_auth, fake_portfolio = client
+    _log_in(test_client, fake_auth)
+    fake_portfolio.list_result = [tracked("ASML.AS")]
+
+    response = test_client.get("/tickers/new", params={param: "ASML.AS"})
+
+    form, tickers = _columns(response)
+    assert says in text(response)
+    assert "ASML.AS" in tickers
+
+
+def test_the_add_page_banner_only_echoes_a_ticker_shaped_value(client):
+    test_client, fake_auth, _ = client
+    _log_in(test_client, fake_auth)
+
+    response = test_client.get("/tickers/new", params={"added": "<script>"})
+
+    assert "added." not in text(response)
+
+
+def test_a_failed_add_keeps_the_list_beside_the_form(client):
+    test_client, fake_auth, fake_portfolio = client
+    _log_in(test_client, fake_auth)
+    fake_portfolio.add_error = TickerLimitReached("x")
+    fake_portfolio.list_result = [tracked("ASML.AS")]
+    token = _csrf(test_client)
+
+    response = test_client.post("/tickers", data={"symbol": "NEW.AS", "csrf_token": token})
+
+    assert response.status_code == 429
+    form, tickers = _columns(response)
+    assert "Try again tomorrow" in form
+    assert "ASML.AS Holding" in tickers

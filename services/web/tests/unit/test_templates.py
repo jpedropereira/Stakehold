@@ -5,6 +5,9 @@ _HEX_COLOR = re.compile(r"#[0-9a-fA-F]{3,8}\b")
 _SCRIPT_TAG = re.compile(r"<script\b([^>]*)>(.*?)</script>", re.DOTALL | re.IGNORECASE)
 _SRC_DIR = Path(__file__).resolve().parents[2] / "src" / "web"
 _CSS_PATH = _SRC_DIR / "static" / "web.css"
+# Every stylesheet the site serves: web.css (components and theme) and layout.css (page grids).
+# The brand and class checks cover both; the theme-block checks only ever find web.css's.
+_CSS_PATHS = sorted((_SRC_DIR / "static").glob("*.css"))
 _TEMPLATES_DIR = _SRC_DIR / "templates"
 _TOKENS_PATH = _SRC_DIR.parents[3] / "brand" / "tokens.css"
 
@@ -33,11 +36,17 @@ _RULE = re.compile(r"([^{}]+)\{([^{}]*)\}")
 def test_web_css_has_no_hardcoded_hex_colors():
     """CLAUDE.md's brand rule: import brand/tokens.css and use its custom properties, never
     hardcode hex values. Enforced mechanically here rather than only by review."""
-    css = _CSS_PATH.read_text()
+    css = _all_css()
 
     matches = _HEX_COLOR.findall(css)
 
-    assert matches == [], f"web.css hardcodes hex color(s): {matches}"
+    assert matches == [], f"a stylesheet hardcodes hex color(s): {matches}"
+
+
+def test_both_stylesheets_are_checked():
+    """layout.css holds the page grids (UX-11), so a check that read web.css alone would let a
+    hex value or a dead class in it through."""
+    assert {p.name for p in _CSS_PATHS} >= {"web.css", "layout.css"}
 
 
 def test_templates_have_no_hardcoded_hex_colors():
@@ -73,8 +82,12 @@ def test_templates_have_no_inline_executable_script():
     assert offenders == {}, f"template(s) have inline executable <script>: {offenders}"
 
 
+def _all_css():
+    return "\n".join(p.read_text() for p in _CSS_PATHS)
+
+
 def _css_without_comments():
-    return _CSS_COMMENT.sub("", _CSS_PATH.read_text())
+    return _CSS_COMMENT.sub("", _all_css())
 
 
 def _semantic_alias_block(css):

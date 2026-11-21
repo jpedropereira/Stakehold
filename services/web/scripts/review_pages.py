@@ -92,6 +92,8 @@ PAGES = [
     Page("tickers", "/tickers", "admin"),
     Page("tickers-user", "/tickers", "user"),
     Page("tickers-new", "/tickers/new?symbol=SXR8.DE", "user"),
+    # Back from an add (UX-11): the banner, and the new row in the list beside the form.
+    Page("tickers-new-added", "/tickers/new?added=NEWCO.DE", "user"),
     Page("labs", "/labs", "user"),
     # LB-7: an edited mix whose weights add up to 120%, a form with an error of every kind
     # (the table keeps the last mix that worked), and a row added in place by labs_form.js.
