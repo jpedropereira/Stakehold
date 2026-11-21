@@ -55,6 +55,9 @@ class Page:
     # Clicked once the page has loaded, for a state only a click reaches (an open dialog). A
     # tuple is clicked in order.
     click: str | tuple[str, ...] | None = None
+    # UX-7: after the clicks and any swap, open every fold (`details.fold`) as a reader would,
+    # by clicking each visible closed summary, outer before inner, until none is left.
+    open_folds: bool = False
     # A section switch's option, clicked after `click` (UX-10): it swaps only its own section,
     # and the swap is checked (_swap_problems). The screenshot shows the swapped page.
     swap: str | None = None
@@ -122,6 +125,13 @@ PAGES = [
     ),
     # UX-8: the risk figures' fold opened by hand on the default page.
     Page("labs-risk-open", "/labs", "user", click=".labs-risk-fold > summary"),
+    # UX-7: every fold open, with NEWCO.DE, which the fake can't backtest over every period.
+    Page(
+        "labs-folds-open",
+        "/labs?ticker=VWCE.DE&weight=60&ticker=NEWCO.DE&weight=40",
+        "user",
+        open_folds=True,
+    ),
     # The longest period, and an asset's line shown beside the mix's (LB-8).
     Page("labs-max", "/labs?period=Max", "user"),
     # AAPL doesn't cover 5Y, so the mix's figure and line leave it out, and say so (LB-10).
@@ -141,6 +151,14 @@ PAGES = [
         "/risk/ex-ante",
         "user",
         swap='#risk-ex-ante .segmented a[href*="ex_ante_window=5Y"]',
+    ),
+    # UX-7: the same swap, then every fold opened, so the swapped-in charts draw on opening.
+    Page(
+        "risk-ex-ante-window-swap-folds-open",
+        "/risk/ex-ante",
+        "user",
+        swap='#risk-ex-ante .segmented a[href*="ex_ante_window=5Y"]',
+        open_folds=True,
     ),
     Page(
         "risk-ex-ante-exclude-swap",
@@ -194,9 +212,11 @@ PAGES = [
     # RK-25: the rolling charts. Ex-post's with two greyed months; ex-ante's with the default
     # pair (the heaviest holding against the portfolio); a pair against a ticker; a pair whose
     # benchmark side isn't tracked (its reason, no chart); a stale link whose holding is
-    # excluded (the default, and a note); and 5Y's rolling Sharpe greyed throughout.
-    Page("risk-rolling", "/risk#risk-ex-post-rolling", "user"),
-    Page("risk-rolling-ex-ante", "/risk/ex-ante#risk-ex-ante-rolling", "user"),
+    # excluded (the default, and a note); and 5Y's rolling Sharpe greyed throughout. UX-7 folds
+    # them: these states open every fold, so each chart is drawn on opening; a chosen pair's fold
+    # starts open.
+    Page("risk-rolling", "/risk#risk-ex-post-rolling", "user", open_folds=True),
+    Page("risk-rolling-ex-ante", "/risk/ex-ante#risk-ex-ante-rolling", "user", open_folds=True),
     Page(
         "risk-rolling-pair",
         "/risk/ex-ante?corr_a=AAPL&corr_b=VWCE.DE#risk-rolling-correlation",
@@ -212,18 +232,24 @@ PAGES = [
         "/risk/ex-ante?ex_ante_window=Max&exclude=AAPL&corr_a=AAPL#risk-rolling-correlation",
         "user",
     ),
-    Page("risk-rolling-no-rf", "/risk/ex-ante?ex_ante_window=5Y#risk-ex-ante-rolling", "user"),
+    Page(
+        "risk-rolling-no-rf",
+        "/risk/ex-ante?ex_ante_window=5Y#risk-ex-ante-rolling",
+        "user",
+        open_folds=True,
+    ),
     # RK-28: the regime tables, each dimension a group closed by default; then ex-post's first
     # two groups and ex-ante's first opened. Ex-post's since 2023, partial and ongoing regimes
     # among them; ex-ante's since AAPL's 2015 start, older regimes greyed for VWCE.DE's 2019
     # start, and every one measured against IWDA.AS; an untracked benchmark; the fetch failing;
-    # and no regimes loaded.
+    # and no regimes loaded. UX-7 folds the block: the states that show a table open it first.
     Page("risk-regimes", "/risk#risk-ex-post-regimes", "user"),
     Page(
         "risk-regimes-open",
         "/risk#risk-ex-post-regimes",
         "user",
         click=(
+            "#risk-ex-post-regimes > .fold > summary",
             "#risk-ex-post-regimes .risk-regime-group:nth-of-type(1) summary",
             "#risk-ex-post-regimes .risk-regime-group:nth-of-type(2) summary",
         ),
@@ -232,16 +258,39 @@ PAGES = [
         "risk-regimes-ex-ante-open",
         "/risk/ex-ante#risk-ex-ante-regimes",
         "user",
-        click="#risk-ex-ante-regimes .risk-regime-group:nth-of-type(1) summary",
+        click=(
+            "#risk-ex-ante-regimes > .fold > summary",
+            "#risk-ex-ante-regimes .risk-regime-group:nth-of-type(1) summary",
+        ),
     ),
-    Page("risk-regimes-ex-ante", "/risk/ex-ante?ex_ante_window=Max#risk-ex-ante-regimes", "user"),
-    Page("risk-regimes-iwda", "/risk/ex-ante?benchmark=IWDA.AS#risk-ex-ante-regimes", "user"),
-    Page("risk-regimes-unavailable", "/risk?benchmark=NOPE.XX#risk-ex-post-regimes", "user"),
+    Page(
+        "risk-regimes-ex-ante",
+        "/risk/ex-ante?ex_ante_window=Max#risk-ex-ante-regimes",
+        "user",
+        click="#risk-ex-ante-regimes > .fold > summary",
+    ),
+    Page(
+        "risk-regimes-iwda",
+        "/risk/ex-ante?benchmark=IWDA.AS#risk-ex-ante-regimes",
+        "user",
+        click="#risk-ex-ante-regimes > .fold > summary",
+    ),
+    Page(
+        "risk-regimes-unavailable",
+        "/risk?benchmark=NOPE.XX#risk-ex-post-regimes",
+        "user",
+        click="#risk-ex-post-regimes > .fold > summary",
+    ),
     Page("risk-regimes-failed", "/risk?benchmark=REGIMES.FAIL#risk-ex-post-regimes", "user"),
     Page("risk-regimes-none-loaded", "/risk?benchmark=REGIMES.NONE#risk-ex-post-regimes", "user"),
     # RK-23: the concentration section, with the unmapped note, the currency table's two views
     # and greyed buckets; then with every "show all" open.
     Page("risk-concentration", "/risk/concentration", "user"),
+    # UX-7: every fold on each sub-page opened, so nothing folded escapes the checks.
+    Page("risk-folds-open", "/risk", "user", open_folds=True),
+    Page("risk-ex-ante-folds-open", "/risk/ex-ante?exclude=AAPL", "user", open_folds=True),
+    Page("risk-what-if-folds-open", "/risk/what-if?rank_weight=5", "user", open_folds=True),
+    Page("risk-concentration-folds-open", "/risk/concentration", "user", open_folds=True),
     Page(
         "risk-concentration-all",
         "/risk/concentration",
@@ -506,6 +555,8 @@ _CHART_SIZE_JS = """
 ([low, high]) => {
   const failures = [];
   for (const canvas of document.querySelectorAll("canvas")) {
+    // A chart in a closed fold isn't drawn until the fold opens (UX-7): nothing to size yet.
+    if (canvas.closest("details:not([open])")) continue;
     const frame = canvas.parentElement;
     const rect = canvas.getBoundingClientRect();
     if (!frame.classList.contains("chart-frame")) {
@@ -612,6 +663,8 @@ _SWAP_STATE_JS = """
     focus = "on an option that isn't the selected one";
   }
   const undrawn = [...region.querySelectorAll("canvas")]
+    // A chart in a closed fold is drawn when the fold opens (UX-7), not on the swap.
+    .filter((canvas) => !canvas.closest("details:not([open])"))
     .filter((canvas) => !(window.Chart && Chart.getChart(canvas)))
     .map((canvas) => canvas.id || canvas.dataset.rolling);
   return { focus, undrawn };
@@ -690,6 +743,11 @@ def _review(browser, base_url, page_spec, theme, width_name, out) -> list[str]:
         page.click(selector)
     problems, swapped = _swap(page, page_spec.swap) if page_spec.swap else ([], None)
     problems = [f"swap: {p}" for p in problems]
+    # After the swap, so a swapped-in chart in a fold is drawn on opening, as on a load.
+    if page_spec.open_folds:
+        closed = page.locator("details.fold:not([open]) > summary:visible")
+        while closed.count():
+            closed.first.click()
 
     # Before the checks: the focus walk scrolls whatever it tabs into.
     page.screenshot(path=out / f"{page_spec.name}-{theme}-{width_name}.png", full_page=True)

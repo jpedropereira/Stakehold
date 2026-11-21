@@ -117,6 +117,9 @@ class CorrelationChart:
     options_a: tuple[Option, ...]
     options_b: tuple[Option, ...]
     kept: tuple[tuple[str, str], ...]  # the rest of the query, re-sent by the picker
+    # The reader asked for a pair, kept or replaced: its fold starts open (UX-7), so the pair
+    # form lands on the chart it drew, or on the note saying why it was replaced.
+    open: bool = False
 
 
 def _side(ticker: str | None) -> str:
@@ -290,4 +293,5 @@ def build_correlation_chart(
             *_options(tickers, benchmark, b_selected),
         ),
         kept=tuple((k, v) for k, v in params if k not in PAIR_PARAMS),
+        open=pair.requested or pair.dropped is not None,
     )

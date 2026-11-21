@@ -1463,3 +1463,77 @@ def test_a_failed_name_lookup_leaves_risk_with_bare_tickers(client):
 
     assert "Tesla, Inc." not in html and "Vanguard FTSE All-World" not in html
     assert '<span class="mono">TSLA</span>' in _ex_ante_html(html)
+
+
+# --- secondary detail folded (UX-7) -----------------------------------------------------------
+
+
+def _details(html, after) -> str:
+    """The first <details> after `after`, whole."""
+    opening = html.index("<details", html.index(after))
+    return html[opening : html.index("</details>", opening) + len("</details>")]
+
+
+def test_the_legend_is_folded_with_its_count(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    start = _STARTS["1Y"]
+    fake_portfolio.ex_post = _risk(
+        one_y=_window(
+            "1Y", var_99=_figure("var_99", start, flags=("nonsync_daily", "tail_unstable"))
+        )
+    )
+
+    fold = _details(_page(test_client), "</table>")
+
+    assert fold.startswith('<details class="fold">')
+    assert '<summary>What the markers mean · <span class="mono">2</span> notes</summary>' in fold
+    assert fold.count("<li") == 2
+
+
+def test_left_out_is_folded_under_its_heading_with_its_count(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.ex_post = _risk(
+        excluded=(
+            ExcludedHolding("7203.T", "no_fx_rate", "no FX series for JPY"),
+            ExcludedHolding("6758.T", "no_fx_rate", "no FX series for JPY"),
+        )
+    )
+
+    html = _page(test_client)
+    fold = _details(html, "<h3>Left out</h3>")
+
+    assert html.index("<h3>Left out</h3>") < html.index(fold)
+    assert '<summary><span class="mono">2</span> holdings</summary>' in fold
+    assert '<span class="mono">7203.T</span> — no FX series for JPY' in fold
+    assert '<span class="mono">6758.T</span> — no FX series for JPY' in fold
+    assert "scaled to 100%" in fold
+
+
+def test_one_holding_left_out_reads_in_the_singular(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.ex_post = _risk(
+        excluded=(ExcludedHolding("7203.T", "no_fx_rate", "no FX series for JPY"),)
+    )
+
+    fold = _details(_page(test_client), "<h3>Left out</h3>")
+
+    assert '<summary><span class="mono">1</span> holding</summary>' in fold
+
+
+def test_ex_ante_left_out_is_folded(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.ex_ante = _ex_ante(
+        statuses=(
+            BacktestAssetStatus("IWDA.AS", "included", None),
+            BacktestAssetStatus("AAPL", "included", None),
+            BacktestAssetStatus("TSLA", "no_fx_rate", "no FX series for USD"),
+        )
+    )
+
+    section = _ex_ante_html(_page(test_client, EX_ANTE))
+
+    assert "no FX series for USD" in _details(section, "<h3>Left out</h3>")

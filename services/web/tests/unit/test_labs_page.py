@@ -10,6 +10,7 @@ Like test_portfolio_page.py, it carries its own minimal fakes: only the calls th
 import json
 import logging
 import re
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 from types import SimpleNamespace
@@ -1503,3 +1504,58 @@ def test_a_long_mix_scrolls_in_a_labelled_focusable_region(client):
     assert 'role="region"' in box
     assert 'aria-label="Mix rows"' in box
     assert "data-labs-rows" in html
+
+
+# --- secondary detail folded (UX-7) -----------------------------------------------------------
+
+
+def _fold_after(html, heading) -> str:
+    start = html.index(heading)
+    opening = html.index("<details", start)
+    return html[opening : html.index("</details>", opening) + len("</details>")]
+
+
+def test_not_backtested_is_folded_under_its_heading_with_its_count(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_backtest(fake_portfolio)
+    _with_holdings(
+        fake_portfolio,
+        _holding("IWDA.AS", "600"),
+        _holding("VWRL.AS", "200"),
+        _holding("7203.T", "200"),
+    )
+    result = fake_portfolio.backtest_result
+    fake_portfolio.backtest_result = replace(
+        result,
+        growth=None,
+        statuses=result.statuses + (_status("7203.T", "no_fx_rate", "no JPY exchange rate"),),
+    )
+
+    fold = _fold_after(_page(test_client), "<h2>Not backtested</h2>")
+
+    assert fold.startswith('<details class="fold">')
+    assert '<summary><span class="mono">1</span> asset</summary>' in fold
+    assert "7203.T" in fold and "no JPY exchange rate" in fold
+
+
+def test_the_holdings_left_out_of_the_mix_are_folded_with_their_count(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_backtest(fake_portfolio)
+    _with_holdings(
+        fake_portfolio, _holding("IWDA.AS", "750"), _holding("NEW.L", None), _holding("ZZ", None)
+    )
+
+    fold = _fold_after(_page(test_client), "<h2>Left out</h2>")
+
+    assert '<summary><span class="mono">2</span> holdings</summary>' in fold
+    assert "NEW.L" in fold and "ZZ" in fold and "no price yet" in fold
+
+
+def test_no_left_out_heading_when_every_holding_is_in_the_mix(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_backtest(fake_portfolio)
+
+    assert "<h2>Left out</h2>" not in _page(test_client)

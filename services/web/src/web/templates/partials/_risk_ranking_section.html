@@ -3,6 +3,7 @@
 {% from "partials/_ticker.html" import ticker, ticker_list, ticker_option %}
 {% from "partials/_segmented.html" import segmented_links %}
 {% from "partials/_risk_figures.html" import figure, summary_row, legend, left_out %}
+{% from "partials/_fold.html" import fold %}
 {# /risk/what-if's ranking (UX-10): what its order switch swaps. The order rides in the
    sub-nav, the window line's link and the what-if form's hidden inputs too, so the swap sends
    those again (risk_what_if_swap.html). #}
@@ -119,14 +120,19 @@
     {{ legend(rk.legend) }}
     {% if rk.unranked %}
     <h3>Not ranked</h3>
+    {% call fold("", rk.unranked | length, ("ticker", "tickers")) %}
     <ul class="labs-unavailable">
       {% for u in rk.unranked %}
       <li><span class="mono">{{ u.ticker }}</span> {{ u.name }} — {{ u.reason }}{% if u.history_start %} (history from <span class="mono">{{ u.history_start | date }}</span>){% endif %}</li>
       {% endfor %}
     </ul>
+    {% endcall %}
     {% endif %}
     {% if rk.over_cap %}
+    <h3>Not scored</h3>
+    {% call fold("", rk.over_cap | length, ("ticker", "tickers")) %}
     <p class="labs-note"><span class="mono">{{ rk.over_cap | length }}</span> more tracked tickers weren't scored: the ranking takes the first <span class="mono">{{ rk.cap }}</span> alphabetically. Not scored: {{ ticker_list(rk.over_cap, ticker_names) }}.</p>
+    {% endcall %}
     {% endif %}
     {% endif %}
     {{ left_out(rk.left_out, ticker_names) }}
