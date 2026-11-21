@@ -36,8 +36,8 @@ upstream calls) is in [`architecture.md`](architecture.md) and [`endpoints.md`](
   `max-period` (renamed in LB-10 from `longest-shared-history`, which LB-9 made untrue). Gains and losses use
   `delta`, so forest and oxblood appear only on figures. *Rejected: periods as rows and assets
   as columns*, which reads better for two assets but not for fifty.
-- **Labs mix form (LB-7): a GET form, so the mix is the URL.** Under the table and the chart,
-  "Edit the mix" has one row per asset (ticker and weight %), then an empty row that adds one. Nothing is
+- **Labs mix form (LB-7): a GET form, so the mix is the URL.** At the top of the page since
+  UX-8 (below), "Edit the mix" has one row per asset (ticker and weight %), then an empty row that adds one. Nothing is
   stored, so a lab can be bookmarked or reloaded, and "Reset to my portfolio" is plain `/labs`.
   It works without JS: submitting reloads the page with the new query string, and a hidden
   `period` field keeps the chart's period (LB-8). Each row's Remove
@@ -45,7 +45,7 @@ upstream calls) is in [`architecture.md`](architecture.md) and [`endpoints.md`](
   the mix that's left (`labs_mix.canonical_query`). Otherwise a reload would remove the next
   row as well. A visually hidden Update button comes first in the form, because Enter submits
   with the first submit button, which would otherwise be the first row's Remove. Removing every
-  row leaves `?ticker=`, an empty edited mix that reads "Add an asset below", not the default.
+  row leaves `?ticker=`, an empty edited mix that reads "Add an asset to the mix", not the default.
   - **Errors sit under their row.** The ink rule's bar and bold lead (the ticker, or
     "Weight") are used, never oxblood. Each error is tied to its input by `aria-describedby`
     and marks it `aria-invalid`. The errors are:
@@ -78,6 +78,7 @@ upstream calls) is in [`architecture.md`](architecture.md) and [`endpoints.md`](
   - *Backtesting only the valid rows on an error.* The figures would belong to a mix nobody
     asked for, since a mistyped 50% asset would vanish and the rest would be re-weighted.
   - *The form above the table.* With 50 holdings, it would push the figures a screen down.
+    *Reversed in UX-8*, which puts the form first and scrolls a long mix in its own box.
 
   *Known cost:* the URL carries the mix twice once it has been edited. Even at 50 assets, that
   is a few KB, well within what browsers and servers accept.
@@ -157,7 +158,8 @@ upstream calls) is in [`architecture.md`](architecture.md) and [`endpoints.md`](
     convention beside `portfolio_chart.js`'s `formatEur`, with no test tying them together.
     It lives in `chart_theme.js` (`StakeholdChartTheme.formatPct`, moved there before RK-9), so
     the growth and drawdown charts share one copy.
-- **The Labs risk panel and drawdown chart (RK-9).** Under the returns table, a "Risk" section
+- **The Labs risk panel and drawdown chart (RK-9).** Under the drawdown chart since UX-8 (under
+  the returns table before), a "Risk" section
   shows the backtest's `risk` section (RK-8, `labs_risk_view.py`); under the growth chart, the
   mix's drawdown over the same period.
   - *Two tables.* The first is the mix's grid: CAGR, volatility, max drawdown, Sharpe, Sortino
@@ -263,3 +265,40 @@ upstream calls) is in [`architecture.md`](architecture.md) and [`endpoints.md`](
     `?benchmark=IWDA.AS&period=Max` (the line, with and without AAPL's line on) and
     `?benchmark=NOPE.XX` (unavailable). The fake's VWCE.DE starts after Max's first day, so the
     default Max chart shows the no-line note.
+- **The mix editor first (UX-8).** The form drives every figure on the page, but it sat at the
+  bottom, after three tables and two charts. A page's main action now comes before the results
+  it produces.
+  - *Order, in the markup and on screen:* the intro card; a `.split-labs` row holding the
+    editor card, then the returns card (headed "Returns"); then one card with the growth chart,
+    its drawdown, the folded risk section, "Not backtested" and the Left-out notes. The holdings
+    error and every empty state sit in the returns card, so it is never empty.
+  - *Beside on a wide screen, stacked below it (breakpoint `labs-split`, 1600px).* The
+    editor's minimum is 400px. The table's is about 1000px, the width at which this entry's
+    LB-6 notes it stops scrolling, plus 64px of card padding. With the gap that is 1488px of
+    content, about 1598px of window with 3vw gutters and a classic scrollbar. Measured on the
+    review data the table needs 751px; with every period "Not enough history" it needs 1131px,
+    so that rare table scrolls in its box beside the editor. So review width `wide` shows two
+    columns and `laptop` stacks. Stacked, the editor keeps a form card's 560px cap.
+  - *Copy names the mix, never a direction:* the editor is beside the table on one screen and
+    above it on another, so "below" was wrong half the time. "Add an asset to the mix to
+    backtest it", "Fix the marked rows in the mix", "or try a mix of your own".
+  - *A long mix scrolls in its own box (agreed).* LB-7 rejected the form above the table
+    because 50 rows would push the figures a screen down. `.labs-rows` holds about eight rows
+    (34rem), then scrolls, with a hairline where it cuts. A box that starts with more than eight
+    rows is a labelled, focusable region (`role="region"`, "Mix rows"), so a keyboard can
+    scroll it; a short one adds no tab stop. `labs_form.js` scrolls an added row into view and
+    marks the box a region once it overflows. *Known cost:* the first row's labels head the
+    columns and scroll away in a long mix (every input keeps its accessible label), and a row's
+    error can sit below the box's visible part. *Rejected: every row shown*, LB-7's cost.
+    *Rejected: the editor folded in a `<details>`*, one more click for the page's main action.
+  - *The risk section is folded (agreed, ahead of UX-7).* Its "Risk" heading and its
+    `#labs-risk` anchor stay outside the fold, so the benchmark form's and the window links'
+    anchor lands on them. A `<details>` summarised "By window and per asset, against VWCE.DE"
+    holds everything else. It starts open when the reader chose something in it: a window
+    other than 1Y, a benchmark other than the default, or a benchmark error
+    (`api/labs._risk_open`). Not on the parameters' presence, since the mix form and the period
+    links always carry both. The section has no chart, so a closed fold has no sizing problem.
+    The summary's ticker hosts its name tooltip without a tab stop of its own
+    (`focusable=false`), since a summary is already one.
+  - The review adds `labs-long-mix` (12 untracked rows, the server's region, an error under
+    every row), `labs-long-mix-added` (nine rows added in place) and `labs-risk-open`.

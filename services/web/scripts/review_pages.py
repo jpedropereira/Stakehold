@@ -104,6 +104,19 @@ PAGES = [
         "user",
     ),
     Page("labs-added-row", "/labs", "user", click="[data-labs-add]"),
+    # UX-8: a long mix scrolls in its rows box. Rows added in place make labs_form.js mark the
+    # box a region; a 12-row URL the fake doesn't track makes the server do it, with an error
+    # under every row and the table keeping the last mix.
+    Page("labs-long-mix-added", "/labs", "user", click=("[data-labs-add]",) * 9),
+    Page(
+        "labs-long-mix",
+        "/labs?"
+        + "&".join(f"ticker=LONG{i}&weight=8" for i in range(12))
+        + "&last_ticker=VWCE.DE&last_weight=60&last_ticker=AAPL&last_weight=40",
+        "user",
+    ),
+    # UX-8: the risk figures' fold opened by hand on the default page.
+    Page("labs-risk-open", "/labs", "user", click=".labs-risk-fold > summary"),
     # The longest period, and an asset's line shown beside the mix's (LB-8).
     Page("labs-max", "/labs?period=Max", "user"),
     # AAPL doesn't cover 5Y, so the mix's figure and line leave it out, and say so (LB-10).

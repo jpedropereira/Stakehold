@@ -96,7 +96,7 @@ Earlier chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archive/):
 | UX-5 | [One segmented control for switches](#ux-5-one-segmented-control-for-switches) | UX-0 | done |
 | UX-6 | [Risk sub-pages and sub-nav](#ux-6-risk-sub-pages-and-sub-nav) | UX-0 | ready |
 | UX-7 | [Secondary detail behind disclosures](#ux-7-secondary-detail-behind-disclosures) | UX-6 | blocked |
-| UX-8 | [Labs: mix editor first](#ux-8-labs-mix-editor-first) | UX-0 | ready |
+| UX-8 | [Labs: mix editor first](#ux-8-labs-mix-editor-first) | UX-0 | done |
 | UX-9 | [Copy density pass](#ux-9-copy-density-pass) | UX-6, UX-7, UX-8 | blocked |
 | UX-10 | [Period switches without a page reload](#ux-10-period-switches-without-a-page-reload) | UX-0 | ready |
 | UX-11 | [Forms beside the list they add to](#ux-11-forms-beside-the-list-they-add-to) | UX-0 | ready |
@@ -372,14 +372,15 @@ The rules:
   2 holdings".
 - A chart that is drawn while closed must size correctly when opened. Check
   `risk_rolling_chart.js`.
-- Labs gets the same treatment for "Not backtested" and "Left out".
+- Labs gets the same treatment for "Not backtested" and "Left out". Its risk section is
+  already folded (UX-8); UX-7 brings that fold's look in line with the others.
 
 Tests: each moved block renders inside a `<details>` with its summary and count. Nothing that
 renders today is dropped.
 
 ### UX-8. Labs: mix editor first
 
-**Status:** ready
+**Status:** done
 
 - **Editor first.** "Edit the mix" moves to the top of `/labs`, right after the intro. On wide
   screens it is a compact card beside the returns table; on narrower ones it sits above it.
@@ -391,6 +392,33 @@ renders today is dropped.
 Tests: in DOM order the form comes before the results. Form behaviour tests stay green.
 
 Files: `templates/labs.html`, `static/web.css`, `docs/labs-ui.md`.
+
+Done as:
+- **Layout.**
+  - Cards in DOM order: an intro card; then a `.split-labs` row with the editor card and a
+    "Returns" card; then one card with growth, drawdown, risk, "Not backtested" and Left out.
+  - The editor and table sit side by side from 1600px (breakpoint `labs-split`): the editor
+    takes at least 400px, the table about 1000px plus padding. So review width `wide` shows
+    two columns, and `laptop` and below stack, editor first.
+- **Long mix (agreed): the rows scroll in their own box.** LB-7 had rejected "form above the
+  table" because 50 rows would push the figures down.
+  - The box holds about eight rows, then scrolls, with a hairline where it cuts off.
+  - A box that starts with more than eight rows is a labelled, focusable region, so a keyboard
+    can scroll it. `labs_form.js` does the same once added rows overflow, and scrolls the new
+    row into view.
+  - Known cost: the column labels and a row's error can scroll out of view.
+- **Risk folded now (agreed), not left for UX-7.**
+  - The "Risk" heading and `#labs-risk` stay outside a `<details>` that holds the rest.
+  - It starts open for a window other than 1Y, a benchmark other than the default, or a
+    benchmark error (`api/labs._risk_open`). The mere presence of the parameters doesn't open
+    it: the mix form and the period links always send them.
+- **Copy without directions.** The editor is beside the table on one screen and above it on
+  another, so "below" became "in the mix" or "of your own" in the empty states and the
+  subtitle.
+- **Checked.**
+  - `review_pages.py` gained `labs-long-mix`, `labs-long-mix-added` and `labs-risk-open`.
+  - Every Labs page passed at every width in both themes (190 of 190).
+  - Screenshots checked by eye at 1920px, 1280px and 360px.
 
 ### UX-9. Copy density pass
 
