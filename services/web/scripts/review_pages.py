@@ -17,7 +17,9 @@ For a person to review, not a pixel-diff gate: the screenshots land in services/
 - every summary tile figure on one line, inside its tile's content box;
 - WCAG AA contrast for every piece of visible text against what's actually behind it;
 - a visible focus indicator on everything Tab reaches, and Tab never getting stuck;
-- no console errors, CSP violations included.
+- no console errors, CSP violations included;
+- for a section switch (UX-10): the page keeps its place, the URL records the choice, focus
+  lands on the new selection, the section's charts are redrawn, and Back undoes it.
 
 The run exits non-zero if any check fails.
 
@@ -53,6 +55,12 @@ class Page:
     # Clicked once the page has loaded, for a state only a click reaches (an open dialog). A
     # tuple is clicked in order.
     click: str | tuple[str, ...] | None = None
+    # UX-7: after the clicks and any swap, open every fold (`details.fold`) as a reader would,
+    # by clicking each visible closed summary, outer before inner, until none is left.
+    open_folds: bool = False
+    # A section switch's option, clicked after `click` (UX-10): it swaps only its own section,
+    # and the swap is checked (_swap_problems). The screenshot shows the swapped page.
+    swap: str | None = None
 
 
 PAGES = [
@@ -119,11 +127,53 @@ PAGES = [
     ),
     # UX-8: the risk figures' fold opened by hand on the default page.
     Page("labs-risk-open", "/labs", "user", click=".labs-risk-fold > summary"),
+    # UX-7: every fold open, with NEWCO.DE, which the fake can't backtest over every period.
+    Page(
+        "labs-folds-open",
+        "/labs?ticker=VWCE.DE&weight=60&ticker=NEWCO.DE&weight=40",
+        "user",
+        open_folds=True,
+    ),
     # The longest period, and an asset's line shown beside the mix's (LB-8).
     Page("labs-max", "/labs?period=Max", "user"),
     # AAPL doesn't cover 5Y, so the mix's figure and line leave it out, and say so (LB-10).
     Page("labs-left-out", "/labs?period=5Y", "user"),
     Page("labs-asset-line", "/labs", "user", click='.labs-series input[data-series="AAPL"]'),
+    # UX-10: each switch swaps its own section in place.
+    Page("labs-period-swap", "/labs", "user", swap='#labs-periods a[href*="period=5Y"]'),
+    Page(
+        "labs-window-swap",
+        "/labs",
+        "user",
+        click=".labs-risk-fold > summary",
+        swap='#labs-risk-windows a[href*="risk_window=3Y"]',
+    ),
+    Page(
+        "risk-ex-ante-window-swap",
+        "/risk/ex-ante",
+        "user",
+        swap='#risk-ex-ante .segmented a[href*="ex_ante_window=5Y"]',
+    ),
+    # UX-7: the same swap, then every fold opened, so the swapped-in charts draw on opening.
+    Page(
+        "risk-ex-ante-window-swap-folds-open",
+        "/risk/ex-ante",
+        "user",
+        swap='#risk-ex-ante .segmented a[href*="ex_ante_window=5Y"]',
+        open_folds=True,
+    ),
+    Page(
+        "risk-ex-ante-exclude-swap",
+        "/risk/ex-ante?ex_ante_window=Max",
+        "user",
+        swap='#risk-ex-ante p a[hx-get*="exclude="]',
+    ),
+    Page(
+        "risk-ranking-order-swap",
+        "/risk/what-if?rank_weight=5",
+        "user",
+        swap='#risk-ranking .segmented a[href*="rank_by=diversification_ratio"]',
+    ),
     # Both assets' Max lines, labelled at their ends: AAPL's starts late, and the two end close
     # enough that their labels are pushed apart (LB-10).
     Page(
@@ -164,9 +214,11 @@ PAGES = [
     # RK-25: the rolling charts. Ex-post's with two greyed months; ex-ante's with the default
     # pair (the heaviest holding against the portfolio); a pair against a ticker; a pair whose
     # benchmark side isn't tracked (its reason, no chart); a stale link whose holding is
-    # excluded (the default, and a note); and 5Y's rolling Sharpe greyed throughout.
-    Page("risk-rolling", "/risk#risk-ex-post-rolling", "user"),
-    Page("risk-rolling-ex-ante", "/risk/ex-ante#risk-ex-ante-rolling", "user"),
+    # excluded (the default, and a note); and 5Y's rolling Sharpe greyed throughout. UX-7 folds
+    # them: these states open every fold, so each chart is drawn on opening; a chosen pair's fold
+    # starts open.
+    Page("risk-rolling", "/risk#risk-ex-post-rolling", "user", open_folds=True),
+    Page("risk-rolling-ex-ante", "/risk/ex-ante#risk-ex-ante-rolling", "user", open_folds=True),
     Page(
         "risk-rolling-pair",
         "/risk/ex-ante?corr_a=AAPL&corr_b=VWCE.DE#risk-rolling-correlation",
@@ -182,18 +234,24 @@ PAGES = [
         "/risk/ex-ante?ex_ante_window=Max&exclude=AAPL&corr_a=AAPL#risk-rolling-correlation",
         "user",
     ),
-    Page("risk-rolling-no-rf", "/risk/ex-ante?ex_ante_window=5Y#risk-ex-ante-rolling", "user"),
+    Page(
+        "risk-rolling-no-rf",
+        "/risk/ex-ante?ex_ante_window=5Y#risk-ex-ante-rolling",
+        "user",
+        open_folds=True,
+    ),
     # RK-28: the regime tables, each dimension a group closed by default; then ex-post's first
     # two groups and ex-ante's first opened. Ex-post's since 2023, partial and ongoing regimes
     # among them; ex-ante's since AAPL's 2015 start, older regimes greyed for VWCE.DE's 2019
     # start, and every one measured against IWDA.AS; an untracked benchmark; the fetch failing;
-    # and no regimes loaded.
+    # and no regimes loaded. UX-7 folds the block: the states that show a table open it first.
     Page("risk-regimes", "/risk#risk-ex-post-regimes", "user"),
     Page(
         "risk-regimes-open",
         "/risk#risk-ex-post-regimes",
         "user",
         click=(
+            "#risk-ex-post-regimes > .fold > summary",
             "#risk-ex-post-regimes .risk-regime-group:nth-of-type(1) summary",
             "#risk-ex-post-regimes .risk-regime-group:nth-of-type(2) summary",
         ),
@@ -202,16 +260,39 @@ PAGES = [
         "risk-regimes-ex-ante-open",
         "/risk/ex-ante#risk-ex-ante-regimes",
         "user",
-        click="#risk-ex-ante-regimes .risk-regime-group:nth-of-type(1) summary",
+        click=(
+            "#risk-ex-ante-regimes > .fold > summary",
+            "#risk-ex-ante-regimes .risk-regime-group:nth-of-type(1) summary",
+        ),
     ),
-    Page("risk-regimes-ex-ante", "/risk/ex-ante?ex_ante_window=Max#risk-ex-ante-regimes", "user"),
-    Page("risk-regimes-iwda", "/risk/ex-ante?benchmark=IWDA.AS#risk-ex-ante-regimes", "user"),
-    Page("risk-regimes-unavailable", "/risk?benchmark=NOPE.XX#risk-ex-post-regimes", "user"),
+    Page(
+        "risk-regimes-ex-ante",
+        "/risk/ex-ante?ex_ante_window=Max#risk-ex-ante-regimes",
+        "user",
+        click="#risk-ex-ante-regimes > .fold > summary",
+    ),
+    Page(
+        "risk-regimes-iwda",
+        "/risk/ex-ante?benchmark=IWDA.AS#risk-ex-ante-regimes",
+        "user",
+        click="#risk-ex-ante-regimes > .fold > summary",
+    ),
+    Page(
+        "risk-regimes-unavailable",
+        "/risk?benchmark=NOPE.XX#risk-ex-post-regimes",
+        "user",
+        click="#risk-ex-post-regimes > .fold > summary",
+    ),
     Page("risk-regimes-failed", "/risk?benchmark=REGIMES.FAIL#risk-ex-post-regimes", "user"),
     Page("risk-regimes-none-loaded", "/risk?benchmark=REGIMES.NONE#risk-ex-post-regimes", "user"),
     # RK-23: the concentration section, with the unmapped note, the currency table's two views
     # and greyed buckets; then with every "show all" open.
     Page("risk-concentration", "/risk/concentration", "user"),
+    # UX-7: every fold on each sub-page opened, so nothing folded escapes the checks.
+    Page("risk-folds-open", "/risk", "user", open_folds=True),
+    Page("risk-ex-ante-folds-open", "/risk/ex-ante?exclude=AAPL", "user", open_folds=True),
+    Page("risk-what-if-folds-open", "/risk/what-if?rank_weight=5", "user", open_folds=True),
+    Page("risk-concentration-folds-open", "/risk/concentration", "user", open_folds=True),
     Page(
         "risk-concentration-all",
         "/risk/concentration",
@@ -476,6 +557,8 @@ _CHART_SIZE_JS = """
 ([low, high]) => {
   const failures = [];
   for (const canvas of document.querySelectorAll("canvas")) {
+    // A chart in a closed fold isn't drawn until the fold opens (UX-7): nothing to size yet.
+    if (canvas.closest("details:not([open])")) continue;
     const frame = canvas.parentElement;
     const rect = canvas.getBoundingClientRect();
     if (!frame.classList.contains("chart-frame")) {
@@ -569,6 +652,75 @@ def _focus_problems(page) -> list[str]:
     return problems + [f"still tabbing after {_MAX_TABS} stops"]
 
 
+# Run in the page once a swap has settled: where focus went, and any canvas in the swapped
+# section left without a chart.
+_SWAP_STATE_JS = """
+(id) => {
+  const region = document.getElementById(id);
+  const focused = document.activeElement;
+  let focus = null;
+  if (!region.contains(focused)) {
+    focus = `outside the section, on ${focused.tagName.toLowerCase()}`;
+  } else if (focused.closest(".segmented") && focused.getAttribute("aria-current") !== "true") {
+    focus = "on an option that isn't the selected one";
+  }
+  const undrawn = [...region.querySelectorAll("canvas")]
+    // A chart in a closed fold is drawn when the fold opens (UX-7), not on the swap.
+    .filter((canvas) => !canvas.closest("details:not([open])"))
+    .filter((canvas) => !(window.Chart && Chart.getChart(canvas)))
+    .map((canvas) => canvas.id || canvas.dataset.rolling);
+  return { focus, undrawn };
+}
+"""
+
+# True once the swapped section is in and settled: not busy, and its change announced.
+_SWAP_DONE_JS = """
+(id) => {
+  const region = document.getElementById(id);
+  return region !== null && !region.hasAttribute("aria-busy")
+    && !region.classList.contains("htmx-request")
+    && document.getElementById("swap-status").textContent !== "";
+}
+"""
+
+
+def _swap(page, selector) -> tuple[list[str], dict]:
+    """Click a section switch's option and check the swap (UX-10). Returns the problems and what
+    _back_problems needs to check Back afterwards."""
+    option = page.locator(selector).first
+    region = option.get_attribute("hx-target").lstrip("#")
+    option.scroll_into_view_if_needed()
+    before, url_before = page.evaluate("window.scrollY"), page.url
+    option.click()
+    page.wait_for_function(_SWAP_DONE_JS, arg=region, timeout=15_000)
+    problems = []
+    after = page.evaluate("window.scrollY")
+    if abs(after - before) > 1:
+        problems.append(f"the page moved: scrollY {before} to {after}")
+    if page.url == url_before:
+        problems.append("the URL didn't record the choice")
+    state = page.evaluate(_SWAP_STATE_JS, region)
+    if state["focus"]:
+        problems.append(f"focus {state['focus']}")
+    if state["undrawn"]:
+        problems.append(f"no chart on {', '.join(state['undrawn'])}")
+    return problems, {"url": url_before, "selector": selector}
+
+
+def _back_problems(page, swapped) -> list[str]:
+    """Back after a swap: htmx keeps no snapshot (base.html), so the browser reloads the URL
+    before the switch, and the option clicked is no longer the selected one."""
+    # Back first changes the URL in place, then htmx reloads the page: wait for that load. Not
+    # by polling the page, which the reload would interrupt.
+    with page.expect_event("load", timeout=15_000):
+        page.go_back()
+    page.wait_for_load_state("networkidle")
+    if page.url != swapped["url"]:
+        return [f"Back went to {page.url}"]
+    current = page.locator(swapped["selector"]).first.get_attribute("aria-current")
+    return ["Back didn't restore the previous choice"] if current == "true" else []
+
+
 def _review(browser, base_url, page_spec, theme, width_name, out) -> list[str]:
     context = browser.new_context(
         color_scheme=theme, viewport={"width": WIDTHS[width_name], "height": 900}
@@ -591,10 +743,16 @@ def _review(browser, base_url, page_spec, theme, width_name, out) -> list[str]:
     clicks = (page_spec.click,) if isinstance(page_spec.click, str) else page_spec.click or ()
     for selector in clicks:
         page.click(selector)
+    problems, swapped = _swap(page, page_spec.swap) if page_spec.swap else ([], None)
+    problems = [f"swap: {p}" for p in problems]
+    # After the swap, so a swapped-in chart in a fold is drawn on opening, as on a load.
+    if page_spec.open_folds:
+        closed = page.locator("details.fold:not([open]) > summary:visible")
+        while closed.count():
+            closed.first.click()
 
     # Before the checks: the focus walk scrolls whatever it tabs into.
     page.screenshot(path=out / f"{page_spec.name}-{theme}-{width_name}.png", full_page=True)
-    problems = []
     if not page.evaluate("document.documentElement.scrollWidth <= window.innerWidth"):
         problems.append("scrolls sideways")
     problems += [f"table overflows its card: {f}" for f in page.evaluate(_TABLE_OVERFLOW_JS)]
@@ -603,6 +761,8 @@ def _review(browser, base_url, page_spec, theme, width_name, out) -> list[str]:
     problems += [f"tile figure: {f}" for f in page.evaluate(_TILE_FIGURE_JS)]
     problems += [f"contrast: {f}" for f in page.evaluate(_CONTRAST_JS)]
     problems += [f"focus: {p}" for p in _focus_problems(page)]
+    if swapped:
+        problems += [f"swap: {p}" for p in _back_problems(page, swapped)]
     problems += [f"console: {line}" for line in console]
     context.close()
     return problems

@@ -37,6 +37,11 @@ did in each market regime.
 and pair, measure against: portfolio's VWCE.DE by default (benchmark_param.py has the rule). Both
 pages have the field, which suggests the tracked tickers; a failed list leaves it usable.
 
+The ex-ante window and Exclude/Include links, and the ranking's order, swap their own section
+in place (UX-10): an htmx request aimed at #risk-ex-ante or #risk-ranking on its own page gets
+that section alone (risk_ex_ante_swap.html, risk_what_if_swap.html), plus out-of-band copies of
+what else carries the query, the sub-nav first. The route does the same work either way.
+
 On its own router, like labs.py, because routes.py is close to the repo's 64KB file limit; it
 renders through routes.py's _render, so a cookie set earlier in the request still reaches the
 response.
@@ -49,6 +54,7 @@ from dataclasses import dataclass
 from fastapi import APIRouter, Depends, Query, Request, Response
 from web.api.csrf import ensure_csrf_cookie
 from web.api.deps import get_portfolio_client, get_settings, get_templates, require_user
+from web.api.htmx import swap_target, vary_on_swap
 from web.api.routes import _load_tickers, _render
 from web.auth_client.base import AuthUser
 from web.benchmark_param import chosen_benchmark
@@ -713,11 +719,14 @@ async def risk_ex_ante(
             load_names(portfolio_client),
         )
     )
-    return _render(
+    target = swap_target(request, ("risk-ex-ante",))
+    if target is not None:
+        logger.info("risk: sending #%s only.", target)
+    rendered = _render(
         request,
         response,
         templates,
-        "risk_ex_ante.html",
+        "risk_ex_ante.html" if target is None else "risk_ex_ante_swap.html",
         {
             **page.context,
             "ex_ante": ex_ante,
@@ -729,6 +738,7 @@ async def risk_ex_ante(
             "ticker_names": ticker_names,
         },
     )
+    return vary_on_swap(rendered)
 
 
 async def _what_if_with_mix(
@@ -786,11 +796,14 @@ async def risk_what_if(
         _load_tickers(portfolio_client),
         load_names(portfolio_client),
     )
-    return _render(
+    target = swap_target(request, ("risk-ranking",))
+    if target is not None:
+        logger.info("risk: sending #%s only.", target)
+    rendered = _render(
         request,
         response,
         templates,
-        "risk_what_if.html",
+        "risk_what_if.html" if target is None else "risk_what_if_swap.html",
         {
             **page.context,
             "excluded": sent,
@@ -806,6 +819,7 @@ async def risk_what_if(
             "ticker_names": ticker_names,
         },
     )
+    return vary_on_swap(rendered)
 
 
 async def _concentration_with_mix(

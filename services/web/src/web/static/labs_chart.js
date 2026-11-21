@@ -1,5 +1,6 @@
-document.addEventListener("DOMContentLoaded", () => {
-  const canvas = document.getElementById("labs-chart");
+// Drawn on load and again when a period switch swaps the growth section in (UX-10).
+window.StakeholdChartTheme.mount((root) => {
+  const canvas = root.querySelector("#labs-chart");
   const dataEl = document.getElementById("labs-chart-data");
   if (!canvas || !dataEl) return;
 
@@ -295,5 +296,5 @@ document.addEventListener("DOMContentLoaded", () => {
   theme.onThemeChange(() => {
     colors = theme.readColors();
     render();
-  });
+  }, canvas);
 });

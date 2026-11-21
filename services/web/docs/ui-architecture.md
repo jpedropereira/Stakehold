@@ -631,6 +631,32 @@ described here updates this file in the same change.
     label, while Chromium and Safari show the value beside it. *Known cost:* Chromium shows the
     ticker twice. Used by the Labs and Risk benchmark fields, the Labs mix inputs and the Risk
     what-if candidate; the new-transaction and admin-mapping pickers stay bare.
+- **Secondary detail folds (UX-7): `partials/_fold.html`.** A page region carries one idea:
+  its headline figures stay open, and what qualifies them (rolling charts, market regimes,
+  marker legends, "Left out" and "Not ranked" lists) sits in a `<details class="fold">` whose
+  summary is one line naming what is inside. Decisions (agreed):
+  - *The heading stays outside the fold, above it.* A summary is a button to a screen reader,
+    which flattens a heading inside it, so heading navigation would lose the block. The
+    summary then needs only the rest: the count, "2 holdings", or what the block shows,
+    "Rolling volatility and Sharpe · 1-year window". *Known cost:* one more line per block
+    than a summary that is the heading. A legend has no heading, so its summary names it:
+    "What the markers mean · 3 notes".
+  - *A count where there is one*, in mono, singular for one (`unit` is a pair).
+  - *An empty block isn't folded.* "No rolling point yet" is already one line; a fold would
+    only add a click.
+  - *Open when the reader just chose it, decided on the server.* A fold renders `open` when the
+    request shows the reader asked for what is inside: the Risk correlation pair, the Labs risk
+    window (UX-8's `_risk_open`). No JS. Any other `#anchor` into a block lands on its heading
+    and closed summary, since every block's id stays on its wrapper outside the fold.
+    *Rejected: opening a fold from the URL fragment in a script*, one more file to keep in step
+    with the ids for a link only old bookmarks use.
+  - *A chart in a closed fold is drawn when the fold first opens* (`risk_rolling_chart.js`). A
+    closed `<details>` gives its canvas no box to size from, and the first animation would play
+    unseen. `review_pages.py` skips the size check for a canvas still in a closed fold, and its
+    `open_folds` states open every fold the way a reader would.
+  - *One look.* `.fold` styles every fold's summary: the Risk blocks', the regime groups nested
+    in theirs, and the Labs risk section's. Concentration's "Show N more" folds keep their
+    muted look: they lengthen a table, and are not detail.
 - **Labs (LB-6 to LB-10, RK-9)** has its own file, [`labs-ui.md`](labs-ui.md): the period
   table, the mix form, the growth chart, and the risk panel and drawdown chart.
 - **Display formatting (UI-5) is one fixed convention, applied by Jinja filters from a pure
@@ -664,3 +690,44 @@ described here updates this file in the same change.
 - **Risk (RK-12, RK-14, RK-18, RK-20, RK-23, RK-25, RK-28, RK-29)** has its own file,
   [`risk-ui.md`](risk-ui.md): the section tables, the heatmap, the concentration tables, the
   rolling charts, the regime tables, the what-if and the candidate ranking.
+- **Section switches swap their own section (UX-10).** Labs' growth period and comparison
+  window, Risk's ex-ante window and Exclude/Include links, and the ranking's order used to reload
+  the page and put the reader back at the top.
+  - *Still links.* Each `href` ends with its section's `#anchor`, so without JS a click reloads
+    onto the section. With htmx, the same link fetches its URL into its region
+    (`partials/_segmented.html`'s `swap_attrs`: `hx-target`/`hx-select` the region,
+    `outerHTML show:none`, `hx-push-url` the `href`). `hx-get` leaves out the anchor: htmx 1.9
+    scrolls to a request URL's anchor after swapping, the jump this avoids.
+  - *The server sends only the region.* A region is an element with an id and
+    `data-swap-region`. A route renders a `*_swap.html` template for an htmx request whose
+    `HX-Target` is one of its regions (`api/htmx.swap_target`). Anything else gets the full page,
+    a history restore included. The route's work is the same; the response varies on
+    `HX-Request` and `HX-Target`.
+  - *Nothing else goes stale.* Other elements carry the same query: the other switch, a form's
+    hidden inputs (`partials/_kept.html`) and Risk's sub-nav. A swap response sends each again
+    with `hx-swap-oob`, server-rendered. *Rejected: JS rewriting the links*, which would copy the
+    server's URL rules into JS, and *the full page with `hx-select-oob`*, which sends every byte
+    for a section.
+  - *No script inside a region.* htmx runs the scripts in what it swaps in, so the chart scripts
+    load at the foot of the page. `chart_theme.js`'s `mount` draws on load and again for each
+    swapped-in region. A theme listener drops itself once its canvas is gone.
+  - *Focus, announcement, busy state* (`static/section_swap.js`).
+    - Focus returns to what the reader used, now replaced: the selected option of the same group,
+      or the link for the same ticker (Exclude X becomes "Include X again"), else the heading.
+    - A polite `#swap-status` in `base.html` reads the region's server-written
+      `data-swap-announce` ("Growth over 5Y").
+    - While busy, the region is `aria-busy` and dimmed below its heading and switch. A second
+      click replaces the request (`hx-sync`); the switch isn't disabled.
+    - A failed request keeps the old region and puts the generic banner in its
+      `[data-swap-error]` slot (`htmx-error-swap.js`).
+  - *Three htmx settings* in `base.html`'s `htmx-config`.
+    - `historyCacheSize: 0`: no snapshot of the page in `localStorage`, where its figures would
+      outlive logout.
+    - `refreshOnHistoryMiss`: Back reloads the previous URL rather than restoring a snapshot with
+      blank charts.
+    - `attributesToSettle: ["class"]`: htmx would otherwise `setAttribute("style")` on a
+      swapped-in canvas, which the CSP blocks.
+  - *Scroll anchoring off on regions* (`overflow-anchor: none`). htmx inserts the new region
+    before removing the old, and Chrome followed an old node down: 2,800px on the phone ranking.
+  - `review_pages.py` checks each swap. Its `*-swap` states assert the scroll, the URL, focus,
+    the charts and Back.

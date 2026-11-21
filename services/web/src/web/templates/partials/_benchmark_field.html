@@ -1,16 +1,16 @@
 {% from "partials/_term.html" import term %}
 {% from "partials/_ticker.html" import ticker_option %}
+{% from "partials/_kept.html" import kept_inputs %}
 {# The benchmark field (RK-14) on /labs and /risk: a GET form, so the choice is the URL and
    nothing is stored. `kept` is the rest of the page's query, as (name, value) pairs re-sent as
    hidden inputs, so applying a benchmark changes nothing else (Labs' mix, period and window).
    `error` comes from benchmark_param.chosen_benchmark; the field then shows the default it fell
    back to. Suggestions are the tracked tickers, each with its name from `names` (UX-2); with no
-   list, the field still takes any ticker. #}
+   list, the field still takes any ticker. The hidden inputs sit in #<prefix>-benchmark-kept, so
+   a section swap on the same page can send them again (UX-10). #}
 {% macro benchmark_form(action, prefix, benchmark, error, tickers, tickers_notice, names, kept=(), anchor="") -%}
 <form method="get" action="{{ action }}{{ anchor }}" class="benchmark-form" id="{{ prefix }}-benchmark-form">
-  {% for name, value in kept %}
-  <input type="hidden" name="{{ name }}" value="{{ value }}">
-  {% endfor %}
+  {{ kept_inputs(prefix ~ "-benchmark-kept", kept) }}
   <div class="benchmark-row">
     <div class="field">
       <label for="{{ prefix }}-benchmark">Benchmark</label>

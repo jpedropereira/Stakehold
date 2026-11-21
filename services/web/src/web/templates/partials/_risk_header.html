@@ -3,8 +3,4 @@
    risk.py), and risk_nav_active, the current key. #}
 <h1>Risk</h1>
 <p class="glossary-link"><a href="/glossary">What these figures mean</a></p>
-<nav class="risk-subnav" aria-label="Risk">
-  {% for key, href, label in risk_nav %}
-  <a href="{{ href }}"{% if risk_nav_active == key %} aria-current="page"{% endif %}>{{ label }}</a>
-  {% endfor %}
-</nav>
+{% include "partials/_risk_subnav.html" %}

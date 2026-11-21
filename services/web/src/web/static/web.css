@@ -609,6 +609,17 @@ img.logo-on-dark {
   text-align: center;
 }
 
+/* A section a switch swaps (UX-10). htmx puts the new one in before taking the old one out, and
+   scroll anchoring would follow an old node down past it: out of anchoring, the page stays put.
+   Dimmed below its heading and switch while the request runs; brief, so no transition. */
+[data-swap-region] {
+  overflow-anchor: none;
+}
+
+[data-swap-region].htmx-request > :not(h2, h3, .segmented) {
+  opacity: 0.5;
+}
+
 /* ---- password field ---- */
 
 .password-row {
@@ -1356,14 +1367,20 @@ img.logo-on-dark {
   margin-bottom: var(--space-3);
 }
 
-/* The risk figures' fold (UX-8): its summary reads as a line under the Risk heading. */
-.labs-risk-fold > summary {
+/* A fold (UX-7, partials/_fold.html): secondary detail behind one summary line, under the
+   heading it belongs to. One look for every fold: the Risk blocks', the regime groups nested in
+   theirs, and the Labs risk section's (UX-8). */
+.fold {
+  margin-top: var(--space-2);
+}
+
+.fold > summary {
   cursor: pointer;
   font: var(--text-caption);
   font-weight: 600;
 }
 
-.labs-risk-fold[open] > summary {
+.fold[open] > summary {
   margin-bottom: var(--space-3);
 }
 
@@ -1500,18 +1517,12 @@ img.logo-on-dark {
   }
 }
 
-/* Each dimension's group, closed by default: its summary is the group's heading. */
+/* Each dimension's group, closed by default, nested in the regimes' fold (UX-7). */
 .risk-regime-group {
   margin-top: var(--space-3);
 }
 
-.risk-regime-group summary {
-  cursor: pointer;
-  font: var(--text-caption);
-  font-weight: 600;
-}
-
-.risk-regime-group[open] summary {
+.risk-regime-group[open] > summary {
   margin-bottom: var(--space-2);
 }
 

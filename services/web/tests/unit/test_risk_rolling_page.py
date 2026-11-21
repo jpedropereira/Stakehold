@@ -504,3 +504,80 @@ def test_the_rolling_outcomes_are_logged(client, caplog):
     assert "risk: rolling correlation IWDA.AS vs the portfolio: 3 weekly point(s), 1 greyed." in (
         caplog.text
     )
+
+
+# --- folded behind a disclosure (UX-7) ---
+
+
+def _fold_after(html, heading) -> str:
+    """The <details> right after a block's heading: the heading stays outside it."""
+    start = html.index(heading)
+    opening = html.index("<details", start)
+    assert "</h3>" in html[start:opening], "the heading isn't outside the fold"
+    return html[opening : html.index("</details>", opening) + len("</details>")]
+
+
+def test_rolling_charts_are_folded_under_their_heading(client):
+    test_client, _ = client
+
+    html = _section(test_client.get("/risk").text, "risk-ex-post")
+    fold = _fold_after(html, "<h3>Over time</h3>")
+
+    assert fold.startswith('<details class="fold">')
+    assert "<summary>Rolling volatility and Sharpe · 1-year window</summary>" in fold
+    assert 'id="risk-ex-post-rolling-volatility"' in fold
+    assert "risk-ex-post-rolling-sharpe-data" in fold
+    assert "No point for the window ending" in fold
+
+
+def test_the_rolling_block_keeps_its_id_outside_the_fold(client):
+    test_client, _ = client
+
+    html = test_client.get("/risk").text
+
+    assert html.index('id="risk-ex-post-rolling"') < html.index("<h3>Over time</h3>")
+
+
+def test_no_rolling_point_yet_is_one_line_with_nothing_to_fold(client):
+    test_client, fake = client
+    fake.ex_post = _ex_post(rolling=RollingRisk("1Y", "monthly", (), ()))
+
+    html = _section(test_client.get("/risk").text, "risk-ex-post")
+    block = html[html.index('id="risk-ex-post-rolling"') :]
+    block = block[: block.index("</div>")]
+
+    assert "No rolling point yet: the history is under a year." in block
+    assert "<details" not in block
+
+
+def test_the_pair_is_folded_and_closed_by_default(client):
+    test_client, _ = client
+
+    html = _section(test_client.get("/risk/ex-ante").text, "risk-ex-ante")
+    fold = _fold_after(html, "Correlation over time")
+
+    assert fold.startswith('<details class="fold">')
+    summary = re.search(r"<summary>(.*?)</summary>", fold, re.S).group(1)
+    assert summary.startswith("<span") and "&lt;" not in summary  # markup, not escaped text
+    assert re.search(r">IWDA\.AS</span>.* against the portfolio · 52 weeks$", summary, re.S)
+    assert "tabindex" not in summary  # a summary is a button: no tab stop inside it
+    assert 'id="risk-rolling-pair"' in fold
+    assert "risk-ex-ante-rolling-correlation-data" in fold
+
+
+def test_a_chosen_pair_opens_its_fold(client):
+    test_client, _ = client
+
+    html = test_client.get("/risk/ex-ante?corr_a=AAPL&corr_b=VWCE.DE").text
+
+    assert _fold_after(html, "Correlation over time").startswith('<details class="fold" open>')
+
+
+def test_a_stale_pair_opens_its_fold_to_say_so(client):
+    test_client, _ = client
+
+    html = test_client.get("/risk/ex-ante?exclude=AAPL&corr_a=AAPL").text
+    fold = _fold_after(html, "Correlation over time")
+
+    assert fold.startswith('<details class="fold" open>')
+    assert "wasn't used" in fold

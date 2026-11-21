@@ -292,13 +292,28 @@ upstream calls) is in [`architecture.md`](architecture.md) and [`endpoints.md`](
     error can sit below the box's visible part. *Rejected: every row shown*, LB-7's cost.
     *Rejected: the editor folded in a `<details>`*, one more click for the page's main action.
   - *The risk section is folded (agreed, ahead of UX-7).* Its "Risk" heading and its
-    `#labs-risk` anchor stay outside the fold, so the benchmark form's and the window links'
-    anchor lands on them. A `<details>` summarised "By window and per asset, against VWCE.DE"
+    `#labs-risk` anchor stay outside the fold, so the benchmark form's anchor lands on them (the
+    window links land on `#labs-risk-compare` since UX-10). A `<details>` summarised "By window and per asset, against VWCE.DE"
     holds everything else. It starts open when the reader chose something in it: a window
     other than 1Y, a benchmark other than the default, or a benchmark error
     (`api/labs._risk_open`). Not on the parameters' presence, since the mix form and the period
     links always carry both. The section has no chart, so a closed fold has no sizing problem.
     The summary's ticker hosts its name tooltip without a tab stop of its own
-    (`focusable=false`), since a summary is already one.
+    (`focusable=false`), since a summary is already one. UX-7 moved it onto the shared fold
+    (`partials/_fold.html`, `.fold labs-risk-fold`), so it looks like every other fold.
+- **"Not backtested" and "Left out" are folded (UX-7)**, each under its heading and summarised
+  by its count: "1 asset", "2 holdings". "Left out" gained an `<h2>` to fold under; its notes
+  still say "Left out:", a repeat that UX-9's copy pass owns. *Not folded:* the notes under the
+  returns table and the growth chart saying what a period's figures leave out. They qualify the
+  figure right beside them, so they stay where they're read.
   - The review adds `labs-long-mix` (12 untracked rows, the server's region, an error under
     every row), `labs-long-mix-added` (nine rows added in place) and `labs-risk-open`.
+- **The period and window switches swap their own section (UX-10).** The growth period swaps
+  `#labs-growth`, the growth and drawdown charts together; the comparison window swaps
+  `#labs-risk-compare`, inside the risk fold. Their links now end with that anchor, not
+  `#labs-risk`. Each swap response also carries out-of-band copies of the other switch, the
+  benchmark form's hidden inputs and the mix form's (`#labs-form-kept`), which all hold both
+  choices. The regions live in `partials/_labs_growth.html` and `partials/_labs_compare.html`,
+  and the macros both they and the page use in `partials/_labs_figures.html`. A failed
+  backtest in a swap shows its banner in the region, since the page's own notice isn't sent.
+  The pattern: "Section switches" in [`ui-architecture.md`](ui-architecture.md).

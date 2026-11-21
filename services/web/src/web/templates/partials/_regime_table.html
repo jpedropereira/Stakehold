@@ -1,12 +1,14 @@
 {% from "partials/_term.html" import term %}
 {% from "partials/_ticker.html" import ticker %}
+{% from "partials/_fold.html" import fold %}
 {# /risk's regime tables (RK-28), built by risk_regime_view.py: for each market regime the
    section's history overlaps, the series' and the benchmark's cumulative return and max
    drawdown inside it. A return is coloured as a gain or a loss; a drawdown is plain ink, as on
    the ex-post table. Each dimension is a table of its own, so a long list scans by kind, inside
    a group closed by default whose summary names it and counts its regimes: today's mix over its
    whole history can overlap 60+ regimes. No JS. Stacks at phone width (.stack-table), each
-   figure labelled with its column. #}
+   figure labelled with its column. The whole block folds under its heading (UX-7), summarised
+   by its totals, with the groups nested inside: closed, one line; open, one line per group. #}
 
 {% macro regime_figure(cell, kind, label) -%}
 <td class="num" role="cell" data-label="{{ label }}" title="{{ cell.title }}">
@@ -32,10 +34,13 @@
   <p class="entry-empty">{{ regimes.empty_reason }}</p>
   {% else %}
   {% set bench = regimes.benchmark %}
+  {% set n_regimes = regimes.groups | map(attribute="lines") | map("length") | sum %}
+  {% set n_groups = regimes.groups | length %}
+  {% set totals %}<span class="mono">{{ n_regimes }}</span> regime{% if n_regimes != 1 %}s{% endif %} in {{ n_groups }} group{% if n_groups != 1 %}s{% endif %}{% endset %}
+  {% call fold(totals) %}
   <p class="labs-note">How {{ what }} and {{ ticker(bench.ticker, names) }} did, historically, during each market {{ term("regime", "regime") }} in this history: the {{ term("cumulative return", "cumulative-return") }} and the {{ term("max drawdown", "max-drawdown") }} from each regime's start to its end, on daily returns. Open a group to see its regimes. A regime that began before this history, or hasn't ended, is measured on the part inside it.{% if not bench.available %} <span class="mono">{{ bench.ticker }}</span> is unavailable: {{ bench.reason }}.{% elif bench.first_date %} <span class="mono">{{ bench.ticker }}</span>'s history starts <span class="mono">{{ bench.first_date | date }}</span>.{% endif %}</p>
   {% for group in regimes.groups %}
-  <details class="risk-regime-group">
-  <summary>{{ group.label }} <span class="mono">{{ group.lines | length }}</span> regime{% if group.lines | length != 1 %}s{% endif %}</summary>
+  {% call fold(group.label, group.lines | length, ("regime", "regimes"), class_="risk-regime-group") %}
   <div class="table-scroll" tabindex="0" role="region" aria-label="{{ group.label }}: {{ series | lower }} and {{ bench.ticker }}">
   <table class="positions-table holdings-table risk-table stack-table" role="table">
     <thead role="rowgroup">
@@ -60,7 +65,7 @@
     </tbody>
   </table>
   </div>
-  </details>
+  {% endcall %}
   {% endfor %}
   {% if regimes.legend %}
   <ol class="risk-legend">
@@ -69,6 +74,7 @@
     {% endfor %}
   </ol>
   {% endif %}
+  {% endcall %}
   {% endif %}
 </div>
 {% endif %}

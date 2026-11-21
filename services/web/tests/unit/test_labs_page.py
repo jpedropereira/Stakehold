@@ -10,6 +10,7 @@ Like test_portfolio_page.py, it carries its own minimal fakes: only the calls th
 import json
 import logging
 import re
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 from types import SimpleNamespace
@@ -742,7 +743,10 @@ def test_period_links_run_1m_to_max_and_mark_the_current_one(client):
     links = _period_links(_page(test_client, "?period=5Y"))
 
     assert [label for label, _, _ in links] == list(BACKTEST_PERIODS)
-    assert [href for _, href, _ in links] == [f"/labs?period={p}" for p in BACKTEST_PERIODS]
+    # Back at the growth chart, for a click that reloads the page (UX-10).
+    assert [href for _, href, _ in links] == [
+        f"/labs?period={p}#labs-growth" for p in BACKTEST_PERIODS
+    ]
     assert [label for label, _, current in links if current] == ["5Y"]
 
 
@@ -754,7 +758,7 @@ def test_period_links_keep_the_rest_of_the_query_string(client):
 
     links = _period_links(_page(test_client, "?a=1&period=3M&b=x+y&a=2"))
 
-    assert links[0][1] == "/labs?a=1&b=x+y&a=2&period=1M"
+    assert links[0][1] == "/labs?a=1&b=x+y&a=2&period=1M#labs-growth"
 
 
 def test_the_growth_section_follows_the_table(client):
@@ -806,18 +810,24 @@ def test_the_canvas_sits_alone_in_its_sizing_frame_and_the_scripts_load_in_order
     _logged_in(test_client, fake_auth)
     _with_a_backtest(fake_portfolio)
 
-    section = _growth_section(_page(test_client))
+    html = _page(test_client)
+    section = _growth_section(html)
 
     assert re.search(
         r'<div class="chart-frame">\s*<canvas id="labs-chart"[^>]*></canvas>\s*</div>', section
     )
+    # After the section, not in it: a period switch swaps the section in place, and htmx runs
+    # the scripts in what it swaps in (UX-10).
+    after = html.split(section, 1)[1]
     scripts = [
-        src.split("?v=")[0] for src in re.findall(r'<script src="([^"]+)" defer></script>', section)
+        src.split("?v=")[0] for src in re.findall(r'<script src="([^"]+)" defer></script>', after)
     ]
-    assert scripts == [
+    assert "<script src" not in section
+    assert scripts[:4] == [
         "/static/vendor/chart.min.js",
         "/static/chart_theme.js",
         "/static/labs_chart.js",
+        "/static/labs_drawdown_chart.js",
     ]
 
 
@@ -1494,3 +1504,58 @@ def test_a_long_mix_scrolls_in_a_labelled_focusable_region(client):
     assert 'role="region"' in box
     assert 'aria-label="Mix rows"' in box
     assert "data-labs-rows" in html
+
+
+# --- secondary detail folded (UX-7) -----------------------------------------------------------
+
+
+def _fold_after(html, heading) -> str:
+    start = html.index(heading)
+    opening = html.index("<details", start)
+    return html[opening : html.index("</details>", opening) + len("</details>")]
+
+
+def test_not_backtested_is_folded_under_its_heading_with_its_count(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_backtest(fake_portfolio)
+    _with_holdings(
+        fake_portfolio,
+        _holding("IWDA.AS", "600"),
+        _holding("VWRL.AS", "200"),
+        _holding("7203.T", "200"),
+    )
+    result = fake_portfolio.backtest_result
+    fake_portfolio.backtest_result = replace(
+        result,
+        growth=None,
+        statuses=result.statuses + (_status("7203.T", "no_fx_rate", "no JPY exchange rate"),),
+    )
+
+    fold = _fold_after(_page(test_client), "<h2>Not backtested</h2>")
+
+    assert fold.startswith('<details class="fold">')
+    assert '<summary><span class="mono">1</span> asset</summary>' in fold
+    assert "7203.T" in fold and "no JPY exchange rate" in fold
+
+
+def test_the_holdings_left_out_of_the_mix_are_folded_with_their_count(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_backtest(fake_portfolio)
+    _with_holdings(
+        fake_portfolio, _holding("IWDA.AS", "750"), _holding("NEW.L", None), _holding("ZZ", None)
+    )
+
+    fold = _fold_after(_page(test_client), "<h2>Left out</h2>")
+
+    assert '<summary><span class="mono">2</span> holdings</summary>' in fold
+    assert "NEW.L" in fold and "ZZ" in fold and "no price yet" in fold
+
+
+def test_no_left_out_heading_when_every_holding_is_in_the_mix(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_backtest(fake_portfolio)
+
+    assert "<h2>Left out</h2>" not in _page(test_client)
