@@ -1,0 +1,10 @@
+{# Heads every Risk sub-page (UX-6), as _account_header.html heads every account page. Expects
+   risk_nav, (key, href, label) per sub-page with the current query already on its href (api/
+   risk.py), and risk_nav_active, the current key. #}
+<h1>Risk</h1>
+<p class="glossary-link"><a href="/glossary">What these figures mean</a></p>
+<nav class="risk-subnav" aria-label="Risk">
+  {% for key, href, label in risk_nav %}
+  <a href="{{ href }}"{% if risk_nav_active == key %} aria-current="page"{% endif %}>{{ label }}</a>
+  {% endfor %}
+</nav>

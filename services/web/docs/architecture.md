@@ -527,27 +527,27 @@ Every route `web` serves, with what it requires and which upstream calls it make
   (`MAX_BACKTEST_ASSETS`) so a large portfolio is cut to its largest holdings, not rejected.
   LB-8 added `build_growth_payload`, the growth chart's data island, rounded to six
   significant digits. RK-14 added the benchmark's line to it, or the reason it has none.
-- `api/risk.py` (RK-12) — `GET /risk`, the risk page, on its own router for the same file-size
-  reason. The page is a stack of sections, each with its own loader returning its data or the
-  notice to show in its place, so one failing section never takes the page down. Three so far:
-  the ex-post summary, (RK-18) the ex-ante section and (RK-23) the concentration section. The
-  last two measure today's mix, so `_load_holdings_sections` makes one `GET /holdings`
-  (`labs_view.build_default_mix`, so the weights are worked out in one place), then calls
-  `POST /risk/ex-ante` and `POST /risk/look-through` concurrently, each failing on its own; a
-  failed holdings call shows its notice in both. *Rejected: a holdings call per section*, which
-  doubles the call and could show the two sections two different mixes. Ex-post runs
-  alongside, since it needs neither. A stale or all-covering `?exclude=` is dropped in web and
-  logged, so an old link never becomes portfolio's 422; it is ex-ante's only, and the
-  look-through always gets the whole mix. RK-20's what-if is a third loader on the same
-  holdings call and mix, beside ex-ante and the look-through. It shares ex-ante's window and
-  exclusions, which are resolved once (`_sent_exclusions`) for both, so "before" is the mix the
-  ex-ante section shows. The form is checked first (`risk_what_if_view.parse_what_if`), and
-  an empty form or one with errors makes no call: a 422 would show as a failed section, not as
-  the field to fix. RK-29's ranking is a fourth loader on the same holdings call, window and
-  exclusions, and runs only when its form is sent: it costs two data-store calls per tracked
-  ticker. RK-14
-  added `?benchmark=` and the ticker list for its field, fetched concurrently with the figures
-  and failing on its own, as on `/labs`.
+- `api/risk.py` (RK-12) — the Risk pages, on their own router for the same file-size reason.
+  UX-6 split the one page into four routes under one sub-nav: `/risk` (ex-post),
+  `/risk/ex-ante`, `/risk/what-if` (the what-if and the ranking) and `/risk/concentration`.
+  Each loads only its own sections, so a view no longer pays for all five; *rejected: one page
+  with collapsible sections*, which still loads every section, *and JS tabs*, which need a
+  separate no-JS fallback (see [`risk-ui.md`](risk-ui.md)). Each section has its own loader
+  returning its data or the notice to show in its place, so one failing section never takes
+  its page down. Every page but ex-post measures today's mix, so each starts with one
+  `GET /holdings` (`_load_mix`, through `labs_view.build_default_mix`, so the weights are
+  worked out in one place); a failed holdings call shows its notice in each of that page's
+  sections. The what-if page's two loaders then run concurrently on that one mix. A stale or
+  all-covering `?exclude=` is dropped in web and logged (`_sent_exclusions`), so an old link
+  never becomes portfolio's 422. It is ex-ante's, and the what-if and the ranking resolve it
+  the same way, so their "before" is the mix the ex-ante page shows; the look-through always
+  gets the whole mix. The what-if form is checked first (`risk_what_if_view.parse_what_if`),
+  and an empty form or one with errors makes no call: a 422 would show as a failed section,
+  not as the field to fix. RK-29's ranking runs only when its form is sent: it costs two
+  data-store calls per tracked ticker. RK-14 added `?benchmark=` and the ticker list for its
+  field, fetched concurrently with the figures and failing on its own, as on `/labs`. The
+  sub-nav carries the whole query (`_with_query`), so each page's controls survive a trip to
+  another, as they did on one page.
 - `risk_view.py` (RK-12) — pure: `build_ex_post_table`, the ex-post summary table (measures as
   rows, windows as columns) with each figure's greyed reason, its metadata `title` and its flag
   markers, plus the legend of the flags present. The template only lays it out. RK-14 added
@@ -637,7 +637,8 @@ Every route `web` serves, with what it requires and which upstream calls it make
   generic failure banner, UI-12), `chart_theme.js` (LB-8, the theme colors and redraw both charts share), `portfolio_chart.js`,
   `labs_chart.js` (LB-8, the Labs growth chart), `labs_drawdown_chart.js` (RK-9, the mix's
   drawdown under it; both take `formatPct` from `chart_theme.js`), `risk_rolling_chart.js`
-  (RK-25, every `/risk` rolling chart, from its data island), `theme.js` (UI-3, applies a theme
+  (RK-25, every Risk rolling chart, from its data island), `risk_anchor.js` (UX-6, sends an
+  old `/risk#section` link on to its sub-page; a fragment never reaches the server), `theme.js` (UI-3, applies a theme
   switch in place), `ticker_tooltip.js` (UX-1, Escape closes a ticker's name tooltip), `account_menu.js` (UX-4, closes the header's account menu on Escape, an outside click or focus leaving it), `transaction_form.js` (UI-9, shows the manual-entry fields the chosen type
   and currency need), `password_toggle.js` (UI-12), `confirm_dialog.js` (opens a delete's
   confirmation as a dialog in place of its page), and `holdings_breakdown.js` (shows and hides a

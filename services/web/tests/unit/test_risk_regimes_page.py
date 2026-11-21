@@ -368,10 +368,8 @@ def test_ex_post_shows_its_regimes_grouped_by_dimension(client):
 def test_ex_ante_shows_its_own_regimes_apart_from_ex_post(client):
     test_client, _ = client
 
-    html = test_client.get("/risk").text
-
-    ex_post = unescape(_block(html, "risk-ex-post-regimes"))
-    ex_ante = unescape(_block(html, "risk-ex-ante-regimes"))
+    ex_post = unescape(_block(test_client.get("/risk").text, "risk-ex-post-regimes"))
+    ex_ante = unescape(_block(test_client.get("/risk/ex-ante").text, "risk-ex-ante-regimes"))
     assert "Global financial crisis" in ex_ante and "Global financial crisis" not in ex_post
     assert "2025 tariff selloff" not in ex_ante
     assert "today's mix" in ex_ante
@@ -410,10 +408,11 @@ def test_each_figure_title_names_its_regime_window_and_label(client):
 def test_copy_says_historical_never_expected(client):
     test_client, _ = client
 
-    html = test_client.get("/risk").text
-
-    for block_id in ("risk-ex-post-regimes", "risk-ex-ante-regimes"):
-        block = unescape(_block(html, block_id)).lower()
+    for path, block_id in (
+        ("/risk", "risk-ex-post-regimes"),
+        ("/risk/ex-ante", "risk-ex-ante-regimes"),
+    ):
+        block = unescape(_block(test_client.get(path).text, block_id)).lower()
         assert "historical" in block
         assert "expected" not in block
 
@@ -470,20 +469,16 @@ def test_ex_ante_without_a_regime_view_has_no_block(client):
     test_client, fake = client
     fake.ex_ante = _ex_ante(regimes=None)
 
-    html = test_client.get("/risk").text
-
-    assert 'id="risk-ex-ante-regimes"' not in html
-    assert 'id="risk-ex-post-regimes"' in html
+    assert 'id="risk-ex-ante-regimes"' not in test_client.get("/risk/ex-ante").text
+    assert 'id="risk-ex-post-regimes"' in test_client.get("/risk").text
 
 
 def test_a_failed_ex_post_load_takes_only_its_own_regimes(client):
     test_client, fake = client
     fake.ex_post_error = PortfolioUnavailable("down")
 
-    html = test_client.get("/risk").text
-
-    assert 'id="risk-ex-post-regimes"' not in html
-    assert 'id="risk-ex-ante-regimes"' in html
+    assert 'id="risk-ex-post-regimes"' not in test_client.get("/risk").text
+    assert 'id="risk-ex-ante-regimes"' in test_client.get("/risk/ex-ante").text
 
 
 def test_each_section_logs_its_regimes(client, caplog):
@@ -491,6 +486,7 @@ def test_each_section_logs_its_regimes(client, caplog):
 
     with caplog.at_level(logging.INFO, logger="web.api.risk"):
         test_client.get("/risk")
+        test_client.get("/risk/ex-ante")
 
     assert "risk: ex-post regimes: 2 shown in 2 group(s), benchmark greyed on 0." in caplog.text
     assert "risk: ex-ante regimes: 1 shown in 1 group(s), benchmark greyed on 1." in caplog.text

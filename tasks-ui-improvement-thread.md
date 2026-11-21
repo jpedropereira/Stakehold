@@ -94,8 +94,8 @@ Earlier chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archive/):
 | UX-3 | [Ticker names in charts](#ux-3-ticker-names-in-charts) | UX-1 | done |
 | UX-4 | [Quieter site header](#ux-4-quieter-site-header) | UX-0 | done |
 | UX-5 | [One segmented control for switches](#ux-5-one-segmented-control-for-switches) | UX-0 | done |
-| UX-6 | [Risk sub-pages and sub-nav](#ux-6-risk-sub-pages-and-sub-nav) | UX-0 | ready |
-| UX-7 | [Secondary detail behind disclosures](#ux-7-secondary-detail-behind-disclosures) | UX-6 | blocked |
+| UX-6 | [Risk sub-pages and sub-nav](#ux-6-risk-sub-pages-and-sub-nav) | UX-0 | done |
+| UX-7 | [Secondary detail behind disclosures](#ux-7-secondary-detail-behind-disclosures) | UX-6 | ready |
 | UX-8 | [Labs: mix editor first](#ux-8-labs-mix-editor-first) | UX-0 | ready |
 | UX-9 | [Copy density pass](#ux-9-copy-density-pass) | UX-6, UX-7, UX-8 | blocked |
 | UX-10 | [Period switches without a page reload](#ux-10-period-switches-without-a-page-reload) | UX-0 | ready |
@@ -327,7 +327,7 @@ Done as:
 
 ### UX-6. Risk sub-pages and sub-nav
 
-**Status:** ready
+**Status:** done
 
 Split `/risk` into four routes, each loading only its own data:
 
@@ -353,9 +353,29 @@ parameter survives navigation.
 Files: `api/risk.py`, `api/routes.py`, `templates/risk*.html`, new sub-nav partial,
 `docs/endpoints.md`, `docs/architecture.md`, `docs/risk-ui.md`.
 
+Done as:
+- **Four routes, four templates.** `risk.html`, `risk_ex_ante.html`, `risk_what_if.html` and
+  `risk_concentration.html`, each headed by `partials/_risk_header.html`. Macros more than one
+  page needs (`figure`, `summary_row`, and new `legend` and `left_out`, for the blocks UX-7
+  wraps) are in `partials/_risk_figures.html`. `api/routes.py` didn't change.
+- **The sub-nav carries the whole query, not only the benchmark** (agreed). The what-if and
+  ranking use ex-ante's window and exclusions, so carrying only the benchmark would have
+  changed their "before" on the way over. A URL can carry params its page ignores.
+- **The what-if page names ex-ante's window and exclusions** and links to Ex-ante to change
+  them (agreed), rather than repeating the window switch.
+- **The benchmark field is also on `/risk/ex-ante`.** Not in the task text: that section sends
+  the benchmark too.
+- **Old links need JS.** A fragment never reaches the server, so `static/risk_anchor.js` on
+  `/risk` sends `/risk#risk-ranking` and the other old section anchors on to their sub-page.
+  Without JS they land on ex-post.
+- **Copy.** Only what the split made false ("the ex-post ones above", "the ex-ante window
+  above"); the rest is UX-9's.
+- **For UX-10.** Section and region ids are unchanged. The ex-ante window switch exists only
+  on `/risk/ex-ante`, and the ranking's sort only on `/risk/what-if`.
+
 ### UX-7. Secondary detail behind disclosures
 
-**Status:** blocked
+**Status:** ready
 
 Each Risk sub-page keeps its headline table open. Secondary detail moves into `<details>`
 blocks, each with a one-line summary that names what is inside, such as "Rolling volatility ·

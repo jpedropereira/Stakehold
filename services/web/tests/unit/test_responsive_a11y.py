@@ -509,6 +509,9 @@ def test_wide_table_pages_take_the_full_content_width(client, path, is_admin):
         "/transactions/import?account=main",
         "/tickers",
         "/risk",
+        "/risk/ex-ante",
+        "/risk/what-if",
+        "/risk/concentration",
     ],
 )
 def test_no_page_sets_a_width_of_its_own(client, path):

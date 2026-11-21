@@ -258,7 +258,7 @@ def client():
         yield test_client, fake_portfolio
 
 
-def _section(test_client, url="/risk"):
+def _section(test_client, url="/risk/concentration"):
     response = test_client.get(url)
     assert response.status_code == 200
     return re.search(
@@ -301,22 +301,22 @@ def test_sends_the_default_mix_and_shows_the_section(client):
     assert "Concentration · look-through" in section
 
 
-def test_the_holdings_are_fetched_once_for_both_sections(client):
+def test_the_holdings_are_fetched_once_and_ex_ante_isnt_called(client):
     test_client, fake = client
 
     _section(test_client)
 
+    # UX-6: its own page, so no ex-ante call; the holdings call is its own.
     assert len(_calls(fake, "list_holdings")) == 1
-    assert len(_calls(fake, "ex_ante_risk")) == 1
+    assert _calls(fake, "ex_ante_risk") == []
     assert len(_calls(fake, "look_through")) == 1
 
 
 def test_exclude_is_ex_antes_and_leaves_the_look_through_whole(client):
     test_client, fake = client
 
-    _section(test_client, "/risk?exclude=VWCE.DE")
+    _section(test_client, "/risk/concentration?exclude=VWCE.DE")
 
-    assert _calls(fake, "ex_ante_risk")[0][2] == ("VWCE.DE",)
     assert len(_calls(fake, "look_through")[0][1]) == 4
 
 
@@ -437,18 +437,17 @@ def test_a_look_through_failure_shows_its_notice_and_leaves_the_rest(client):
     test_client, fake = client
     fake.look_through_error = PortfolioUnavailable("down")
 
-    response = test_client.get("/risk")
     section = _section(test_client)
 
     assert "Couldn't load the concentration figures." in section
-    assert 'id="risk-ex-ante-title"' in response.text
+    assert 'id="risk-ex-ante-title"' in test_client.get("/risk/ex-ante").text
 
 
 def test_a_holdings_failure_shows_both_sections_notices(client):
     test_client, fake = client
     fake.holdings_error = PortfolioUnavailable("down")
 
-    response = test_client.get("/risk")
+    response = test_client.get("/risk/ex-ante")
 
     assert "Couldn't load the ex-ante figures." in response.text
     assert "Couldn't load the concentration figures." in _section(test_client)
@@ -459,7 +458,7 @@ def test_logs_the_look_through_outcome(client, caplog):
     test_client, _ = client
 
     with caplog.at_level(logging.INFO, logger="web.api.risk"):
-        test_client.get("/risk")
+        test_client.get("/risk/concentration")
 
     messages = [r.getMessage() for r in caplog.records if r.name == "web.api.risk"]
     assert "risk: loading the look-through for 4 holdings." in messages
@@ -477,7 +476,7 @@ def test_logs_a_look_through_with_nothing_included(client, caplog):
     )
 
     with caplog.at_level(logging.INFO, logger="web.api.risk"):
-        test_client.get("/risk")
+        test_client.get("/risk/concentration")
 
     messages = [r.getMessage() for r in caplog.records if r.name == "web.api.risk"]
     assert (

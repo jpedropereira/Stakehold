@@ -510,7 +510,7 @@ def test_ex_ante_url_changes_only_the_window_and_keeps_the_rest():
 
     path, query, fragment = _query(ex_ante_url(params, window="Max"))
 
-    assert path == "/risk"
+    assert path == "/risk/ex-ante"
     assert query == [("benchmark", "IWDA.AS"), ("exclude", "AAPL"), ("ex_ante_window", "Max")]
     assert fragment == "risk-ex-ante"
 

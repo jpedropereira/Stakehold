@@ -421,7 +421,9 @@ described here updates this file in the same change.
   and the label isn't in it. If `portfolio` can't be reached, the page renders with a label-only
   header and no switcher, because an outage must not tell the visitor a real account doesn't
   exist. POST routes load the header lazily (`extra_context_loader`), so only a full-page error
-  re-render pays for that call, never a successful write.
+  re-render pays for that call, never a successful write. The Risk sub-pages (UX-6) share
+  `partials/_risk_header.html` the same way: `risk_nav_active` marks the current sub-page, and
+  `.risk-subnav` takes the account sub-nav's styles. See [`risk-ui.md`](risk-ui.md).
 - **Site header (UX-4): six sections in the nav, the rest in an account menu.** The header
   had grown to seven nav links, the user's name, Log out and the three theme buttons on one
   row. The main nav now holds only the sections: Overview, Portfolio, Labs, Risk, Accounts and
