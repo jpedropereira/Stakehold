@@ -1,9 +1,10 @@
-document.addEventListener("DOMContentLoaded", () => {
+// Drawn on load and again when a switch swaps the ex-ante section in (UX-10).
+window.StakeholdChartTheme.mount((root) => {
   // Every /risk rolling chart (RK-25): a canvas[data-rolling] names its data island,
   // risk_rolling_view's payload: {kind, label, dates, starts, n_obs, values, lower, upper}, one
   // entry per window, plotted at the window's end. A null value is a window below its minimum
   // (R9), drawn as a break in the line; its reason is in the notes under the chart.
-  const canvases = document.querySelectorAll("canvas[data-rolling]");
+  const canvases = root.querySelectorAll("canvas[data-rolling]");
   if (!canvases.length) return;
 
   // Theme colors, the percentage format, the soft fill and the redraw on a theme change:
@@ -163,8 +164,9 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  // Every canvas under root goes with the section, so the first stands for them all.
   theme.onThemeChange(() => {
     colors = theme.readColors();
     for (const render of renders) render();
-  });
+  }, canvases[0]);
 });

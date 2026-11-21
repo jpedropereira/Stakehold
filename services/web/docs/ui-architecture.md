@@ -654,3 +654,44 @@ described here updates this file in the same change.
 - **Risk (RK-12, RK-14, RK-18, RK-20, RK-23, RK-25, RK-28, RK-29)** has its own file,
   [`risk-ui.md`](risk-ui.md): the section tables, the heatmap, the concentration tables, the
   rolling charts, the regime tables, the what-if and the candidate ranking.
+- **Section switches swap their own section (UX-10).** Labs' growth period and comparison
+  window, Risk's ex-ante window and Exclude/Include links, and the ranking's order used to reload
+  the page and put the reader back at the top.
+  - *Still links.* Each `href` ends with its section's `#anchor`, so without JS a click reloads
+    onto the section. With htmx, the same link fetches its URL into its region
+    (`partials/_segmented.html`'s `swap_attrs`: `hx-target`/`hx-select` the region,
+    `outerHTML show:none`, `hx-push-url` the `href`). `hx-get` leaves out the anchor: htmx 1.9
+    scrolls to a request URL's anchor after swapping, the jump this avoids.
+  - *The server sends only the region.* A region is an element with an id and
+    `data-swap-region`. A route renders a `*_swap.html` template for an htmx request whose
+    `HX-Target` is one of its regions (`api/htmx.swap_target`). Anything else gets the full page,
+    a history restore included. The route's work is the same; the response varies on
+    `HX-Request` and `HX-Target`.
+  - *Nothing else goes stale.* Other elements carry the same query: the other switch, a form's
+    hidden inputs (`partials/_kept.html`) and Risk's sub-nav. A swap response sends each again
+    with `hx-swap-oob`, server-rendered. *Rejected: JS rewriting the links*, which would copy the
+    server's URL rules into JS, and *the full page with `hx-select-oob`*, which sends every byte
+    for a section.
+  - *No script inside a region.* htmx runs the scripts in what it swaps in, so the chart scripts
+    load at the foot of the page. `chart_theme.js`'s `mount` draws on load and again for each
+    swapped-in region. A theme listener drops itself once its canvas is gone.
+  - *Focus, announcement, busy state* (`static/section_swap.js`).
+    - Focus returns to what the reader used, now replaced: the selected option of the same group,
+      or the link for the same ticker (Exclude X becomes "Include X again"), else the heading.
+    - A polite `#swap-status` in `base.html` reads the region's server-written
+      `data-swap-announce` ("Growth over 5Y").
+    - While busy, the region is `aria-busy` and dimmed below its heading and switch. A second
+      click replaces the request (`hx-sync`); the switch isn't disabled.
+    - A failed request keeps the old region and puts the generic banner in its
+      `[data-swap-error]` slot (`htmx-error-swap.js`).
+  - *Three htmx settings* in `base.html`'s `htmx-config`.
+    - `historyCacheSize: 0`: no snapshot of the page in `localStorage`, where its figures would
+      outlive logout.
+    - `refreshOnHistoryMiss`: Back reloads the previous URL rather than restoring a snapshot with
+      blank charts.
+    - `attributesToSettle: ["class"]`: htmx would otherwise `setAttribute("style")` on a
+      swapped-in canvas, which the CSP blocks.
+  - *Scroll anchoring off on regions* (`overflow-anchor: none`). htmx inserts the new region
+    before removing the old, and Chrome followed an old node down: 2,800px on the phone ranking.
+  - `review_pages.py` checks each swap. Its `*-swap` states assert the scroll, the URL, focus,
+    the charts and Back.

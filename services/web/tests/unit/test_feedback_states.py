@@ -5,6 +5,7 @@ test files, it carries its own minimal fakes: only the calls these pages make.
 """
 
 import html as html_lib
+import json
 import re
 
 import pytest
@@ -306,7 +307,8 @@ def test_htmx_is_told_not_to_inject_its_indicator_styles(client):
     # web.css carries those rules instead.
     html = client.get("/login").text
 
-    assert """<meta name="htmx-config" content='{"includeIndicatorStyles": false}'>""" in html
+    config = re.search(r"""<meta name="htmx-config" content='([^']*)'>""", html).group(1)
+    assert json.loads(config)["includeIndicatorStyles"] is False
 
 
 def test_every_page_carries_the_request_failed_banner_template(client):

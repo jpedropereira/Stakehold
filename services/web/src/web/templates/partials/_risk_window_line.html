@@ -1,0 +1,6 @@
+{% from "partials/_ticker.html" import ticker_list %}
+{# /risk/what-if's line naming ex-ante's window and exclusions (UX-6). Its link carries the
+   whole query, so a ranking swap sends it again out of band (UX-10). #}
+  {% if excluded is not none %}
+  <p class="labs-note" id="risk-window-line"{% if oob %} hx-swap-oob="true"{% endif %}>Over the ex-ante window, <span class="mono">{{ ex_ante_window }}</span>{% if excluded %}, excluding {{ ticker_list(excluded, ticker_names) }}{% endif %}. <a href="{{ ex_ante_link }}">Change it on Ex-ante</a>.</p>
+  {% endif %}

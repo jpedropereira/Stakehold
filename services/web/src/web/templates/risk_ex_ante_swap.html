@@ -1,0 +1,4 @@
+{# The answer to an ex-ante switch's htmx request (UX-10, api/risk.py): the section, then the
+   sub-nav out of band, since its links carry the window and the exclusions. #}
+{% include "partials/_risk_ex_ante_section.html" %}
+{% with oob = true %}{% include "partials/_risk_subnav.html" %}{% endwith %}

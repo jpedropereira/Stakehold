@@ -720,6 +720,17 @@ img.logo-on-dark {
   text-align: center;
 }
 
+/* A section a switch swaps (UX-10). htmx puts the new one in before taking the old one out, and
+   scroll anchoring would follow an old node down past it: out of anchoring, the page stays put.
+   Dimmed below its heading and switch while the request runs; brief, so no transition. */
+[data-swap-region] {
+  overflow-anchor: none;
+}
+
+[data-swap-region].htmx-request > :not(h2, h3, .segmented) {
+  opacity: 0.5;
+}
+
 /* ---- password field ---- */
 
 .password-row {

@@ -18,13 +18,20 @@ links keep the rest of the query string, so they work with whatever mix it holds
 The backtest also carries risk figures (RK-9): a grid of the mix's measures by window, and
 the mix and its assets compared over one window, `?risk_window=` (1Y by default, and in place of
 anything that isn't a window). Every window is in the one response, so a window link changes
-only what is shown; it still reruns the page, as the period links do, so the page works without
-JS. labs_risk_view.py words the figures.
+only what is shown; it still reruns the backtest, as the period links do, so the page works
+without JS (with it, only the comparison is sent back, UX-10). labs_risk_view.py words the
+figures.
 
 `?benchmark=` (RK-14) is what the relative figures and the growth chart's benchmark line measure
 against, VWCE.DE by default (benchmark_param.py has the rule). Its form, in the risk section,
 re-sends the rest of the query as hidden inputs, so it changes nothing else; every other link
 and form on the page keeps it, as they keep the period and the risk window.
+
+The period and window switches swap their own region in place (UX-10): an htmx request aimed
+at #labs-growth or #labs-risk-compare gets that region alone, from labs_swap.html, plus
+out-of-band copies of whatever else carries the choice in its query. The route does the same
+work either way; only the template differs. Every link keeps its region's #anchor, so without
+JS a click reloads onto its section.
 
 On its own router, like portfolio.py, because routes.py is close to the repo's 64KB file limit;
 it renders through routes.py's _render, so a cookie set earlier in the request still reaches
@@ -39,6 +46,7 @@ from urllib.parse import urlencode
 from fastapi import APIRouter, Depends, Request, Response
 from web.api.csrf import ensure_csrf_cookie
 from web.api.deps import get_portfolio_client, get_settings, get_templates, require_user
+from web.api.htmx import swap_target, vary_on_swap
 from web.api.routes import _load_tickers, _redirect, _render
 from web.auth_client.base import AuthUser
 from web.benchmark_param import chosen_benchmark
@@ -83,6 +91,8 @@ router = APIRouter()
 _UNAVAILABLE = "Can't reach the portfolio service right now, so it can't be shown."
 _DEFAULT_PERIOD = "1Y"
 _DEFAULT_RISK_WINDOW = "1Y"
+# The regions a switch swaps (UX-10), each its links' #anchor.
+_GROWTH, _COMPARE = "labs-growth", "labs-risk-compare"
 
 
 async def _load_mix(portfolio_client: PortfolioClient, user_id: str) -> DefaultMix | None:
@@ -123,10 +133,10 @@ def _chosen_risk_window(requested: str | None) -> str:
 
 def _risk_window_links(request: Request) -> dict[str, str]:
     """Each risk window's URL: this page's query string with only `risk_window` changed, back
-    at the risk section, since the page reloads."""
+    at the comparison, for a click that reloads the page."""
     kept = [(k, v) for k, v in request.query_params.multi_items() if k != "risk_window"]
     return {
-        w: "/labs?" + urlencode(kept + [("risk_window", w)]) + "#labs-risk"
+        w: "/labs?" + urlencode(kept + [("risk_window", w)]) + f"#{_COMPARE}"
         for w in BACKTEST_RISK_WINDOWS
     }
 
@@ -180,9 +190,12 @@ def _log_risk(risk: BacktestRisk) -> None:
 
 
 def _period_links(request: Request) -> dict[str, str]:
-    """Each period's URL: this page's query string with only `period` changed."""
+    """Each period's URL: this page's query string with only `period` changed, back at the
+    growth chart, for a click that reloads the page."""
     kept = [(k, v) for k, v in request.query_params.multi_items() if k != "period"]
-    return {p: "/labs?" + urlencode(kept + [("period", p)]) for p in BACKTEST_PERIODS}
+    return {
+        p: "/labs?" + urlencode(kept + [("period", p)]) + f"#{_GROWTH}" for p in BACKTEST_PERIODS
+    }
 
 
 async def _run_backtest(
@@ -311,12 +324,16 @@ async def labs(
     risk = None if backtest is None else backtest.risk
     if risk is not None:
         _log_risk(risk)
-    return _render(
+    target = swap_target(request, (_GROWTH, _COMPARE))
+    if target is not None:
+        logger.info("labs: sending #%s only.", target)
+    page = _render(
         request,
         response,
         templates,
-        "labs.html",
+        "labs.html" if target is None else "labs_swap.html",
         {
+            "swap_target": target,
             "user": user,
             "csrf_token": csrf_token,
             "nav_active": "labs",
@@ -370,3 +387,4 @@ async def labs(
             ),
         },
     )
+    return vary_on_swap(page)

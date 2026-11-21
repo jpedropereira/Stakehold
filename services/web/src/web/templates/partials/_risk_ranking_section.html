@@ -1,0 +1,141 @@
+{% from "partials/_banner.html" import banner %}
+{% from "partials/_term.html" import term %}
+{% from "partials/_ticker.html" import ticker, ticker_list, ticker_option %}
+{% from "partials/_segmented.html" import segmented_links %}
+{% from "partials/_risk_figures.html" import figure, summary_row, legend, left_out %}
+{% from "partials/_fold.html" import fold %}
+{# /risk/what-if's ranking (UX-10): what its order switch swaps. The order rides in the
+   sub-nav, the window line's link and the what-if form's hidden inputs too, so the swap sends
+   those again (risk_what_if_swap.html). #}
+  {# RK-29: every tracked ticker scored as a what-if candidate at one weight (spec §7.2), from a
+     GET form, so it works without JS. risk_ranking_view.py decides what is sent and shown. The
+     window and exclusions are ex-ante's; the form re-sends every other control. Ordered by the
+     risk changes only: ΔSharpe is shown, never an order. No change is coloured. #}
+  {% macro ranking_change(d, kind, column) -%}
+  <td class="num" role="cell" data-label="{{ column }}" title="{{ d.cell.title }}"><span class="risk-value">
+    {%- if d.delta is not none -%}
+    <span class="mono">{% if kind == "pct1" %}{{ d.delta | signed_points1 }}{% else %}{{ d.delta | signed_ratio }}{% endif %}</span>
+    {%- if d.delta_se is not none %} <span class="risk-se">± <span class="mono">{{ d.delta_se | ratio }}</span></span>{% endif -%}
+    {%- else -%}
+    <span class="risk-greyed">{{ d.cell.reason or "—" }}</span>
+    {%- endif -%}
+    {%- if d.cell.markers %}<sup class="risk-flag">{{ d.cell.markers | join(", ") }}</sup>{% endif -%}
+  </span></td>
+  {%- endmacro %}
+  {% macro ranking_figure(cell, kind, column) -%}
+  <td class="num" role="cell" data-label="{{ column }}" title="{{ cell.title }}"><span class="risk-value">
+    {%- if cell.value is not none -%}{{ figure(cell.value, kind) }}{%- else -%}<span class="risk-greyed">{{ cell.reason }}</span>{%- endif -%}
+    {%- if cell.markers %}<sup class="risk-flag">{{ cell.markers | join(", ") }}</sup>{% endif -%}
+  </span></td>
+  {%- endmacro %}
+  {% macro ranking_row(line) -%}
+  <tr role="row" class="ranking-row{% if line.rank is none %} ranking-row-greyed{% endif %}">
+    <td class="num" role="cell" data-label="Rank"><span class="mono">{{ line.rank if line.rank is not none else "—" }}</span></td>
+    <th role="rowheader" scope="row"><span class="mono">{{ line.ticker }}</span> <span class="period-start">{{ line.name }}</span></th>
+    <td class="num" role="cell" data-label="History from"><span class="mono">{{ line.history_start | date }}</span><span class="period-start"><span class="mono">{{ line.n_weeks }}</span> weeks</span></td>
+    {{ ranking_change(line.sigma_p, "pct1", "Volatility change") }}
+    {{ ranking_change(line.diversification_ratio, "ratio", "Diversification ratio change") }}
+    {{ ranking_figure(line.share_of_risk, "pct1", "Share of risk") }}
+    {{ ranking_figure(line.correlation, "ratio", "Correlation with the mix") }}
+    {{ ranking_change(line.sharpe, "ratio", "Sharpe ratio change") }}
+  </tr>
+  {%- endmacro %}
+  <section class="risk-section" aria-labelledby="risk-ranking-title" id="risk-ranking" data-swap-region data-swap-announce="{% if ranking and not ranking.nothing %}Ranked by {{ 'volatility' if ranking.rank_by == 'sigma_p' else 'diversification ratio' }}{% else %}Ranking{% endif %}">
+    <h2 id="risk-ranking-title" tabindex="-1">What if · ranking the tracked tickers</h2>
+    <div data-swap-error></div>
+    <p class="entry-subtitle">Every ticker you track that you don't hold, each added to today's
+      mix at the same weight and funded pro-rata, ranked by how it would have changed the mix's
+      risk over the ex-ante window: historical figures, not a forecast.</p>
+    {% if ranking_form is none %}
+    {% if ranking_error %}
+    {% call banner("error") %}<strong>Couldn't load your holdings to rank against.</strong> {{ ranking_error }}{% endcall %}
+    {% else %}
+    <p class="entry-empty">Nothing to rank against yet — the ranking starts once a holding has a
+      price. <a href="/accounts">Add transactions to an account</a>.</p>
+    {% endif %}
+    {% else %}
+    {% set rform = ranking_form %}
+    <form method="get" action="/risk/what-if#risk-ranking" class="what-if-form" id="risk-ranking-form">
+      {% for name, value in ranking_kept %}
+      <input type="hidden" name="{{ name }}" value="{{ value }}">
+      {% endfor %}
+      <div class="what-if-fields">
+        <div class="field">
+          <label for="risk-ranking-weight">Weight, % of the mix after</label>
+          <input type="text" id="risk-ranking-weight" name="rank_weight" value="{{ rform.weight }}" inputmode="decimal" autocomplete="off" class="mono"{% if rform.error %} aria-invalid="true" aria-describedby="risk-ranking-weight-error"{% endif %}>
+        </div>
+        <button type="submit" class="btn btn-secondary">Rank</button>
+      </div>
+      {% if rform.error %}<p class="form-row-error" id="risk-ranking-weight-error"><strong>Weight:</strong> {{ rform.error }}</p>{% endif %}
+      <p class="field-hint">Scores up to 50 tracked tickers you don't hold, so it can take a few seconds. Not saved.</p>
+    </form>
+    {% if rform.window_note %}
+    <p class="labs-note">{{ rform.window_note }}</p>
+    {% endif %}
+    {% if ranking_error %}
+    {% call banner("error") %}<strong>Couldn't rank the candidates.</strong> {{ ranking_error }}{% endcall %}
+    {% elif ranking %}
+    {% set rk = ranking %}
+    {% if rk.nothing %}
+    <p class="entry-empty">Nothing to rank: {{ rk.nothing }}</p>
+    {% else %}
+    {% if not rk.rf_available %}
+    {% call banner("warning") %}<strong>No risk-free rate.</strong> Without it, the Sharpe ratio can't be measured, so its change is greyed.{% endcall %}
+    {% endif %}
+    <p class="as-of">Each ticker at <span class="mono">{{ rk.weight | pct1 }}</span> of the mix, measured {% if rk.window.start %}from <span class="mono">{{ rk.window.start | date }}</span> {% endif %}to <span class="mono">{{ rk.window.end | date }}</span>, your holdings' {{ rk.window.label }} window. Hover a figure for its window and number of returns.</p>
+    {{ segmented_links("Order by", rk.sort_links, rk.rank_by, labels={"sigma_p": "Volatility", "diversification_ratio": "Diversification ratio"}, swap="risk-ranking") }}
+    <p class="labs-note">Ordered by the change in {{ "volatility" if rk.rank_by == "sigma_p" else "diversification ratio" }}:
+      the risk changes are the reliable ones. The change in the historical Sharpe ratio is shown
+      with its standard error but never ordered by: the best of many noisy Sharpe changes is
+      mostly luck.</p>
+    {% if rk.lines or rk.greyed %}
+    <div class="table-scroll" tabindex="0" role="region" aria-label="Candidate ranking">
+    <table class="positions-table holdings-table risk-table stack-table" role="table">
+      <thead role="rowgroup">
+        <tr role="row">
+          <th class="num" role="columnheader" scope="col">#</th>
+          <th role="columnheader" scope="col">Candidate</th>
+          <th class="num" role="columnheader" scope="col">History from</th>
+          <th class="num" role="columnheader" scope="col">{{ term("Volatility", "volatility") }} change</th>
+          <th class="num" role="columnheader" scope="col">{{ term("Diversification ratio", "diversification-ratio") }} change</th>
+          <th class="num" role="columnheader" scope="col">{{ term("Share of risk", "share-of-risk") }}</th>
+          <th class="num" role="columnheader" scope="col">{{ term("Correlation", "correlation") }} with the mix</th>
+          <th class="num" role="columnheader" scope="col">{{ term("Sharpe ratio", "sharpe") }} change<span class="period-start">± 1 s.e.</span></th>
+        </tr>
+      </thead>
+      <tbody role="rowgroup">
+        {% for line in rk.lines %}
+        {{ ranking_row(line) }}
+        {% endfor %}
+        {% for line in rk.greyed %}
+        {{ ranking_row(line) }}
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    {% endif %}
+    {% if rk.greyed %}
+    <p class="labs-note">Unnumbered rows have too many missing weeks for a figure the ranking orders by.</p>
+    {% endif %}
+    {{ legend(rk.legend) }}
+    {% if rk.unranked %}
+    <h3>Not ranked</h3>
+    {% call fold("", rk.unranked | length, ("ticker", "tickers")) %}
+    <ul class="labs-unavailable">
+      {% for u in rk.unranked %}
+      <li><span class="mono">{{ u.ticker }}</span> {{ u.name }} — {{ u.reason }}{% if u.history_start %} (history from <span class="mono">{{ u.history_start | date }}</span>){% endif %}</li>
+      {% endfor %}
+    </ul>
+    {% endcall %}
+    {% endif %}
+    {% if rk.over_cap %}
+    <h3>Not scored</h3>
+    {% call fold("", rk.over_cap | length, ("ticker", "tickers")) %}
+    <p class="labs-note"><span class="mono">{{ rk.over_cap | length }}</span> more tracked tickers weren't scored: the ranking takes the first <span class="mono">{{ rk.cap }}</span> alphabetically. Not scored: {{ ticker_list(rk.over_cap, ticker_names) }}.</p>
+    {% endcall %}
+    {% endif %}
+    {% endif %}
+    {{ left_out(rk.left_out, ticker_names) }}
+    {% endif %}
+    {% endif %}
+  </section>

@@ -743,7 +743,10 @@ def test_period_links_run_1m_to_max_and_mark_the_current_one(client):
     links = _period_links(_page(test_client, "?period=5Y"))
 
     assert [label for label, _, _ in links] == list(BACKTEST_PERIODS)
-    assert [href for _, href, _ in links] == [f"/labs?period={p}" for p in BACKTEST_PERIODS]
+    # Back at the growth chart, for a click that reloads the page (UX-10).
+    assert [href for _, href, _ in links] == [
+        f"/labs?period={p}#labs-growth" for p in BACKTEST_PERIODS
+    ]
     assert [label for label, _, current in links if current] == ["5Y"]
 
 
@@ -755,7 +758,7 @@ def test_period_links_keep_the_rest_of_the_query_string(client):
 
     links = _period_links(_page(test_client, "?a=1&period=3M&b=x+y&a=2"))
 
-    assert links[0][1] == "/labs?a=1&b=x+y&a=2&period=1M"
+    assert links[0][1] == "/labs?a=1&b=x+y&a=2&period=1M#labs-growth"
 
 
 def test_the_growth_section_follows_the_table(client):
@@ -807,18 +810,24 @@ def test_the_canvas_sits_alone_in_its_sizing_frame_and_the_scripts_load_in_order
     _logged_in(test_client, fake_auth)
     _with_a_backtest(fake_portfolio)
 
-    section = _growth_section(_page(test_client))
+    html = _page(test_client)
+    section = _growth_section(html)
 
     assert re.search(
         r'<div class="chart-frame">\s*<canvas id="labs-chart"[^>]*></canvas>\s*</div>', section
     )
+    # After the section, not in it: a period switch swaps the section in place, and htmx runs
+    # the scripts in what it swaps in (UX-10).
+    after = html.split(section, 1)[1]
     scripts = [
-        src.split("?v=")[0] for src in re.findall(r'<script src="([^"]+)" defer></script>', section)
+        src.split("?v=")[0] for src in re.findall(r'<script src="([^"]+)" defer></script>', after)
     ]
-    assert scripts == [
+    assert "<script src" not in section
+    assert scripts[:4] == [
         "/static/vendor/chart.min.js",
         "/static/chart_theme.js",
         "/static/labs_chart.js",
+        "/static/labs_drawdown_chart.js",
     ]
 
 

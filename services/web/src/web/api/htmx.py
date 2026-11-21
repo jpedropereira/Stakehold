@@ -18,3 +18,25 @@ def htmx_or_redirect(request: Request, url: str) -> Response:
     if is_htmx(request):
         return Response(status_code=status.HTTP_200_OK, headers={"HX-Redirect": url})
     return RedirectResponse(url=url, status_code=status.HTTP_303_SEE_OTHER)
+
+
+# Varied on by every response that can be either a section or a page (UX-10): one URL answers
+# both, so a cache must keep them apart.
+SWAP_VARY = ("HX-Request", "HX-Target")
+
+
+def swap_target(request: Request, regions: tuple[str, ...]) -> str | None:
+    """The region an htmx switch asked for, if it is one of this page's `regions` (UX-10): the
+    route then renders that region alone. None for anything else, which gets the full page: a
+    plain request, another target, and a history restore, which htmx sends with HX-Request but
+    swaps into the whole body."""
+    if not is_htmx(request) or request.headers.get("HX-History-Restore-Request") is not None:
+        return None
+    target = request.headers.get("HX-Target")
+    return target if target in regions else None
+
+
+def vary_on_swap(response: Response) -> Response:
+    for header in SWAP_VARY:
+        response.headers.add_vary_header(header)
+    return response

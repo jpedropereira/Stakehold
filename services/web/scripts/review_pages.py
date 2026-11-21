@@ -17,7 +17,9 @@ For a person to review, not a pixel-diff gate: the screenshots land in services/
 - every summary tile figure on one line, inside its tile's content box;
 - WCAG AA contrast for every piece of visible text against what's actually behind it;
 - a visible focus indicator on everything Tab reaches, and Tab never getting stuck;
-- no console errors, CSP violations included.
+- no console errors, CSP violations included;
+- for a section switch (UX-10): the page keeps its place, the URL records the choice, focus
+  lands on the new selection, the section's charts are redrawn, and Back undoes it.
 
 The run exits non-zero if any check fails.
 
@@ -53,9 +55,12 @@ class Page:
     # Clicked once the page has loaded, for a state only a click reaches (an open dialog). A
     # tuple is clicked in order.
     click: str | tuple[str, ...] | None = None
-    # UX-7: after the clicks, open every fold (`details.fold`) as a reader would, by clicking
-    # each visible closed summary, outer before inner, until none is left.
+    # UX-7: after the clicks and any swap, open every fold (`details.fold`) as a reader would,
+    # by clicking each visible closed summary, outer before inner, until none is left.
     open_folds: bool = False
+    # A section switch's option, clicked after `click` (UX-10): it swaps only its own section,
+    # and the swap is checked (_swap_problems). The screenshot shows the swapped page.
+    swap: str | None = None
 
 
 PAGES = [
@@ -132,6 +137,41 @@ PAGES = [
     # AAPL doesn't cover 5Y, so the mix's figure and line leave it out, and say so (LB-10).
     Page("labs-left-out", "/labs?period=5Y", "user"),
     Page("labs-asset-line", "/labs", "user", click='.labs-series input[data-series="AAPL"]'),
+    # UX-10: each switch swaps its own section in place.
+    Page("labs-period-swap", "/labs", "user", swap='#labs-periods a[href*="period=5Y"]'),
+    Page(
+        "labs-window-swap",
+        "/labs",
+        "user",
+        click=".labs-risk-fold > summary",
+        swap='#labs-risk-windows a[href*="risk_window=3Y"]',
+    ),
+    Page(
+        "risk-ex-ante-window-swap",
+        "/risk/ex-ante",
+        "user",
+        swap='#risk-ex-ante .segmented a[href*="ex_ante_window=5Y"]',
+    ),
+    # UX-7: the same swap, then every fold opened, so the swapped-in charts draw on opening.
+    Page(
+        "risk-ex-ante-window-swap-folds-open",
+        "/risk/ex-ante",
+        "user",
+        swap='#risk-ex-ante .segmented a[href*="ex_ante_window=5Y"]',
+        open_folds=True,
+    ),
+    Page(
+        "risk-ex-ante-exclude-swap",
+        "/risk/ex-ante?ex_ante_window=Max",
+        "user",
+        swap='#risk-ex-ante p a[hx-get*="exclude="]',
+    ),
+    Page(
+        "risk-ranking-order-swap",
+        "/risk/what-if?rank_weight=5",
+        "user",
+        swap='#risk-ranking .segmented a[href*="rank_by=diversification_ratio"]',
+    ),
     # Both assets' Max lines, labelled at their ends: AAPL's starts late, and the two end close
     # enough that their labels are pushed apart (LB-10).
     Page(
@@ -610,6 +650,75 @@ def _focus_problems(page) -> list[str]:
     return problems + [f"still tabbing after {_MAX_TABS} stops"]
 
 
+# Run in the page once a swap has settled: where focus went, and any canvas in the swapped
+# section left without a chart.
+_SWAP_STATE_JS = """
+(id) => {
+  const region = document.getElementById(id);
+  const focused = document.activeElement;
+  let focus = null;
+  if (!region.contains(focused)) {
+    focus = `outside the section, on ${focused.tagName.toLowerCase()}`;
+  } else if (focused.closest(".segmented") && focused.getAttribute("aria-current") !== "true") {
+    focus = "on an option that isn't the selected one";
+  }
+  const undrawn = [...region.querySelectorAll("canvas")]
+    // A chart in a closed fold is drawn when the fold opens (UX-7), not on the swap.
+    .filter((canvas) => !canvas.closest("details:not([open])"))
+    .filter((canvas) => !(window.Chart && Chart.getChart(canvas)))
+    .map((canvas) => canvas.id || canvas.dataset.rolling);
+  return { focus, undrawn };
+}
+"""
+
+# True once the swapped section is in and settled: not busy, and its change announced.
+_SWAP_DONE_JS = """
+(id) => {
+  const region = document.getElementById(id);
+  return region !== null && !region.hasAttribute("aria-busy")
+    && !region.classList.contains("htmx-request")
+    && document.getElementById("swap-status").textContent !== "";
+}
+"""
+
+
+def _swap(page, selector) -> tuple[list[str], dict]:
+    """Click a section switch's option and check the swap (UX-10). Returns the problems and what
+    _back_problems needs to check Back afterwards."""
+    option = page.locator(selector).first
+    region = option.get_attribute("hx-target").lstrip("#")
+    option.scroll_into_view_if_needed()
+    before, url_before = page.evaluate("window.scrollY"), page.url
+    option.click()
+    page.wait_for_function(_SWAP_DONE_JS, arg=region, timeout=15_000)
+    problems = []
+    after = page.evaluate("window.scrollY")
+    if abs(after - before) > 1:
+        problems.append(f"the page moved: scrollY {before} to {after}")
+    if page.url == url_before:
+        problems.append("the URL didn't record the choice")
+    state = page.evaluate(_SWAP_STATE_JS, region)
+    if state["focus"]:
+        problems.append(f"focus {state['focus']}")
+    if state["undrawn"]:
+        problems.append(f"no chart on {', '.join(state['undrawn'])}")
+    return problems, {"url": url_before, "selector": selector}
+
+
+def _back_problems(page, swapped) -> list[str]:
+    """Back after a swap: htmx keeps no snapshot (base.html), so the browser reloads the URL
+    before the switch, and the option clicked is no longer the selected one."""
+    # Back first changes the URL in place, then htmx reloads the page: wait for that load. Not
+    # by polling the page, which the reload would interrupt.
+    with page.expect_event("load", timeout=15_000):
+        page.go_back()
+    page.wait_for_load_state("networkidle")
+    if page.url != swapped["url"]:
+        return [f"Back went to {page.url}"]
+    current = page.locator(swapped["selector"]).first.get_attribute("aria-current")
+    return ["Back didn't restore the previous choice"] if current == "true" else []
+
+
 def _review(browser, base_url, page_spec, theme, width_name, out) -> list[str]:
     context = browser.new_context(
         color_scheme=theme, viewport={"width": WIDTHS[width_name], "height": 900}
@@ -632,6 +741,9 @@ def _review(browser, base_url, page_spec, theme, width_name, out) -> list[str]:
     clicks = (page_spec.click,) if isinstance(page_spec.click, str) else page_spec.click or ()
     for selector in clicks:
         page.click(selector)
+    problems, swapped = _swap(page, page_spec.swap) if page_spec.swap else ([], None)
+    problems = [f"swap: {p}" for p in problems]
+    # After the swap, so a swapped-in chart in a fold is drawn on opening, as on a load.
     if page_spec.open_folds:
         closed = page.locator("details.fold:not([open]) > summary:visible")
         while closed.count():
@@ -639,7 +751,6 @@ def _review(browser, base_url, page_spec, theme, width_name, out) -> list[str]:
 
     # Before the checks: the focus walk scrolls whatever it tabs into.
     page.screenshot(path=out / f"{page_spec.name}-{theme}-{width_name}.png", full_page=True)
-    problems = []
     if not page.evaluate("document.documentElement.scrollWidth <= window.innerWidth"):
         problems.append("scrolls sideways")
     problems += [f"table overflows its card: {f}" for f in page.evaluate(_TABLE_OVERFLOW_JS)]
@@ -648,6 +759,8 @@ def _review(browser, base_url, page_spec, theme, width_name, out) -> list[str]:
     problems += [f"tile figure: {f}" for f in page.evaluate(_TILE_FIGURE_JS)]
     problems += [f"contrast: {f}" for f in page.evaluate(_CONTRAST_JS)]
     problems += [f"focus: {p}" for p in _focus_problems(page)]
+    if swapped:
+        problems += [f"swap: {p}" for p in _back_problems(page, swapped)]
     problems += [f"console: {line}" for line in console]
     context.close()
     return problems

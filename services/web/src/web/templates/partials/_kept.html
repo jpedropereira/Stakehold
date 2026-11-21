@@ -1,0 +1,12 @@
+{# A GET form's hidden inputs that re-send the rest of the page's query, so submitting it
+   changes nothing else. Wrapped, with an id, where a section swap (UX-10) can change that
+   query: the swap response sends the wrapper again out of band (oob), so the form doesn't
+   undo the switch. Hidden, so it adds no gap to a flex or grid form; its inputs are still
+   sent. #}
+{% macro kept_inputs(id, pairs, oob=false) -%}
+<div id="{{ id }}"{% if oob %} hx-swap-oob="true"{% endif %} hidden>
+  {%- for name, value in pairs %}
+  <input type="hidden" name="{{ name }}" value="{{ value }}">
+  {%- endfor %}
+</div>
+{%- endmacro %}

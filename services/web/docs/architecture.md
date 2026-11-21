@@ -621,7 +621,10 @@ Every route `web` serves, with what it requires and which upstream calls it make
   `require_admin`, `optional_user`, `client_ip`, `get_auth_client`/`get_portfolio_client`, and friends), the route
   handlers, the CSRF helpers, the security-headers middleware, and `htmx.py`'s
   `is_htmx`/`htmx_or_redirect` (shared by `routes.py`'s redirects and `app.py`'s `AuthRequired`
-  handler, so every redirect in the app picks htmx-partial vs. full-navigation the same way).
+  handler, so every redirect in the app picks htmx-partial vs. full-navigation the same way, and `swap_target`/`vary_on_swap`
+  (UX-10: `/labs`, `/risk/ex-ante` and `/risk/what-if` answer a section switch with that
+  section and its out-of-band carriers, from a `*_swap.html` template; see "Section switches"
+  in [`ui-architecture.md`](ui-architecture.md)).
 - `templates/`, `static/` — Jinja2 templates (`base.html`, which holds the skip link, the
   top nav and the theme toggle, plus one per page; `partials/_form_errors.html` for the htmx swap
   target; `partials/_banner.html`, the message macro, and `partials/_logo.html`, the two-logo
@@ -640,7 +643,7 @@ Every route `web` serves, with what it requires and which upstream calls it make
   drawdown under it; both take `formatPct` from `chart_theme.js`), `risk_rolling_chart.js`
   (RK-25, every Risk rolling chart, from its data island; one in a closed fold is drawn when
   the fold first opens, UX-7), `risk_anchor.js` (UX-6, sends an
-  old `/risk#section` link on to its sub-page; a fragment never reaches the server), `theme.js` (UI-3, applies a theme
+  old `/risk#section` link on to its sub-page; a fragment never reaches the server), `section_swap.js` (UX-10, focus, announcement and busy state for a section swap), `theme.js` (UI-3, applies a theme
   switch in place), `ticker_tooltip.js` (UX-1, Escape closes a ticker's name tooltip), `account_menu.js` (UX-4, closes the header's account menu on Escape, an outside click or focus leaving it), `transaction_form.js` (UI-9, shows the manual-entry fields the chosen type
   and currency need), `password_toggle.js` (UI-12), `confirm_dialog.js` (opens a delete's
   confirmation as a dialog in place of its page), and `holdings_breakdown.js` (shows and hides a

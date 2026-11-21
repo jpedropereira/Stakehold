@@ -18,13 +18,21 @@ document.body.addEventListener("htmx:beforeSwap", function (event) {
 // generic banner in its form's error slot (UI-12). The copy is base.html's
 // #request-failed-banner template, server-rendered, so no message lives in this file. Requests
 // that target anything other than a form's #form-errors (the theme toggle) are left alone.
+// A section switch's request (UX-10) gets the banner in its section's error slot instead, under
+// its heading: the section keeps what it showed, and the rest of the page is untouched.
 function showRequestFailed(event) {
   const target = event.detail.target;
   const template = document.getElementById("request-failed-banner");
-  if (!target || target.id !== "form-errors" || !template) {
+  if (!target || !template) {
     return;
   }
-  target.replaceChildren(template.content.cloneNode(true));
+  const slot =
+    target.id === "form-errors"
+      ? target
+      : target.hasAttribute("data-swap-region") && target.querySelector("[data-swap-error]");
+  if (slot) {
+    slot.replaceChildren(template.content.cloneNode(true));
+  }
 }
 
 document.body.addEventListener("htmx:responseError", showRequestFailed);
