@@ -95,9 +95,9 @@ Earlier chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archive/):
 | UX-4 | [Quieter site header](#ux-4-quieter-site-header) | UX-0 | done |
 | UX-5 | [One segmented control for switches](#ux-5-one-segmented-control-for-switches) | UX-0 | done |
 | UX-6 | [Risk sub-pages and sub-nav](#ux-6-risk-sub-pages-and-sub-nav) | UX-0 | done |
-| UX-7 | [Secondary detail behind disclosures](#ux-7-secondary-detail-behind-disclosures) | UX-6 | ready |
+| UX-7 | [Secondary detail behind disclosures](#ux-7-secondary-detail-behind-disclosures) | UX-6 | done |
 | UX-8 | [Labs: mix editor first](#ux-8-labs-mix-editor-first) | UX-0 | done |
-| UX-9 | [Copy density pass](#ux-9-copy-density-pass) | UX-6, UX-7, UX-8 | blocked |
+| UX-9 | [Copy density pass](#ux-9-copy-density-pass) | UX-6, UX-7, UX-8 | ready |
 | UX-10 | [Period switches without a page reload](#ux-10-period-switches-without-a-page-reload) | UX-0 | ready |
 | UX-11 | [Forms beside the list they add to](#ux-11-forms-beside-the-list-they-add-to) | UX-0 | ready |
 
@@ -375,7 +375,7 @@ Done as:
 
 ### UX-7. Secondary detail behind disclosures
 
-**Status:** ready
+**Status:** done
 
 Each Risk sub-page keeps its headline table open. Secondary detail moves into `<details>`
 blocks, each with a one-line summary that names what is inside, such as "Rolling volatility ·
@@ -397,6 +397,44 @@ The rules:
 
 Tests: each moved block renders inside a `<details>` with its summary and count. Nothing that
 renders today is dropped.
+
+Done as:
+- **One macro, `partials/_fold.html`**, and one `.fold` style for every fold, the Labs risk
+  fold and the regime groups included. Concentration's "Show N more" folds keep their look:
+  they lengthen a table, and aren't detail.
+- **Heading outside, fold below (agreed).** Each block keeps its heading. A summary is a
+  button to a screen reader, which flattens a heading inside it. So summaries are short:
+  "2 holdings", "Rolling volatility and Sharpe · 1-year window". The legend has no heading,
+  so it reads "What the markers mean · 3 notes".
+- **Folded:** legends, rolling charts, the correlation pair, market regimes, Left out, Not
+  ranked, and the ranking's over-cap list. The over-cap list was a sentence, so it gained a
+  "Not scored" heading. On Labs, "Not backtested" and "Left out"; Left out gained a heading.
+- **Stays open:** the ex-ante VaR lines, the heatmap and its shade key, the effective-number
+  and threshold notes, and the Labs notes on what a period's figures leave out. Each is a
+  figure, or what you need to read the one beside it.
+- **Regimes: one outer fold (agreed)**, "9 regimes in 4 groups", with the groups nested and
+  closed inside it.
+- **An empty block isn't folded.** "No rolling point yet" is already one line.
+- **Deep links (agreed).** The server opens the pair's fold when the URL names a pair, so the
+  pair form lands on its chart. Any other anchor lands on its heading and closed summary,
+  since block ids stay outside the folds. No JS.
+- **Charts.** `risk_rolling_chart.js` draws a chart in a closed fold when the fold first
+  opens. A closed fold gives the canvas no box to size from.
+- **`review_pages.py`.**
+  - It gained an `open_folds` flag, which clicks every visible closed fold.
+  - New states: `*-folds-open` per Risk sub-page, and `labs-folds-open`.
+  - The rolling states open their folds; the regime states open the outer fold first.
+  - The chart-size check skips a canvas still in a closed fold.
+- **Page height.** Ex-post `/risk` at 1280px is 2,194px closed and 4,944px with every fold
+  open.
+- **Checked.** `review_pages.py` passed 949 of 950. The miss was `labs-long-mix-added`, whose
+  drawdown chart was 0px wide. That was an existing flake: it failed on 3 of 4 runs on `main`
+  without this change.
+  - Screenshots checked by eye: `/risk` closed at 1280px, opened charts and nested regimes at
+    360px in dark, and the open Labs folds at 1280px.
+- **For UX-10.** A swap replaces the folds inside its region, so they come back in their
+  rendered state. The Labs comparison region holds the risk fold: the swapped partial must
+  keep `risk_open`, or the fold closes under the switch the reader just clicked.
 
 ### UX-8. Labs: mix editor first
 
@@ -442,7 +480,7 @@ Done as:
 
 ### UX-9. Copy density pass
 
-**Status:** blocked
+**Status:** ready
 
 Done last, once the structure has settled.
 

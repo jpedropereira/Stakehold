@@ -628,6 +628,7 @@ Every route `web` serves, with what it requires and which upstream calls it make
   pair (UI-12); `partials/_account_header.html`, included by the four account-scoped pages;
   `partials/_delta.html`, the gain/loss-colored figure macro shared by home and portfolio;
   `partials/_ticker.html` (UX-1), a ticker with its full name in a tooltip;
+  `partials/_fold.html` (UX-7), the `<details>` that folds secondary detail;
   `partials/_delete_dialog.html`, the confirmation dialog macro, and
   `partials/_transaction_summary.html` and `partials/_account_summary.html`, the one line
   naming what a delete takes, which a dialog and its confirmation page
@@ -637,7 +638,8 @@ Every route `web` serves, with what it requires and which upstream calls it make
   generic failure banner, UI-12), `chart_theme.js` (LB-8, the theme colors and redraw both charts share), `portfolio_chart.js`,
   `labs_chart.js` (LB-8, the Labs growth chart), `labs_drawdown_chart.js` (RK-9, the mix's
   drawdown under it; both take `formatPct` from `chart_theme.js`), `risk_rolling_chart.js`
-  (RK-25, every Risk rolling chart, from its data island), `risk_anchor.js` (UX-6, sends an
+  (RK-25, every Risk rolling chart, from its data island; one in a closed fold is drawn when
+  the fold first opens, UX-7), `risk_anchor.js` (UX-6, sends an
   old `/risk#section` link on to its sub-page; a fragment never reaches the server), `theme.js` (UI-3, applies a theme
   switch in place), `ticker_tooltip.js` (UX-1, Escape closes a ticker's name tooltip), `account_menu.js` (UX-4, closes the header's account menu on Escape, an outside click or focus leaving it), `transaction_form.js` (UI-9, shows the manual-entry fields the chosen type
   and currency need), `password_toggle.js` (UI-12), `confirm_dialog.js` (opens a delete's

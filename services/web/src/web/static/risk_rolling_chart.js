@@ -135,10 +135,32 @@ document.addEventListener("DOMContentLoaded", () => {
   };
 
   const renders = [];
-  for (const canvas of canvases) {
+  const drawCanvas = (canvas) => {
+    // Once per canvas: a fold that opens again keeps its chart.
+    if (Chart.getChart(canvas)) return;
     const dataEl = document.getElementById(canvas.dataset.rolling);
-    if (!dataEl) continue;
+    if (!dataEl) return;
     renders.push(draw(canvas, JSON.parse(dataEl.textContent)));
+  };
+
+  // A chart in a closed fold (UX-7) has no box to size from, and its first animation would
+  // play unseen, so it is drawn when its fold first opens. A fold the server opened (a chosen
+  // correlation pair) draws now, like any chart in view.
+  const waiting = new Set();
+  for (const canvas of canvases) {
+    const closed = canvas.closest("details:not([open])");
+    if (!closed) {
+      drawCanvas(canvas);
+    } else if (!waiting.has(closed)) {
+      waiting.add(closed);
+      const onToggle = () => {
+        // Draw only once every enclosing fold is open: a closed outer fold still has no box.
+        if (!closed.open || closed.parentElement.closest("details:not([open])")) return;
+        closed.removeEventListener("toggle", onToggle);
+        for (const inner of closed.querySelectorAll("canvas[data-rolling]")) drawCanvas(inner);
+      };
+      closed.addEventListener("toggle", onToggle);
+    }
   }
 
   theme.onThemeChange(() => {

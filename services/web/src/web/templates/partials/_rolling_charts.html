@@ -1,10 +1,14 @@
 {% from "partials/_term.html" import term %}
 {% from "partials/_ticker.html" import ticker %}
+{% from "partials/_fold.html" import fold %}
 {# /risk's rolling charts (RK-25), built by risk_rolling_view.py and drawn by
    static/risk_rolling_chart.js from each canvas's data island. Ink lines only: a volatility, a
    Sharpe or a correlation isn't a gain or a loss. A gap's reason can't show on the canvas, so
    each run of gaps is a note under its chart, and the summary says the chart in words for a
-   screen reader or with no JS. #}
+   screen reader or with no JS. Each block folds under its heading (UX-7); its id stays outside
+   the fold, on the wrapper, so an old link still lands on it. static/risk_rolling_chart.js draws
+   a chart in a closed fold when the fold first opens. An empty block is one line, so it isn't
+   folded. #}
 
 {% macro figure(value, kind, se=none) -%}
 <span class="mono">{% if kind == "pct1" %}{{ value | pct1 }}{% else %}{{ value | ratio }}{% if se is not none %} ± {{ se | ratio }}{% endif %}{% endif %}</span>
@@ -40,10 +44,12 @@
   {% if charts.empty_reason %}
   <p class="entry-empty">{{ charts.empty_reason }}</p>
   {% else %}
+  {% call fold("Rolling volatility and Sharpe · 1-year window") %}
   <p class="labs-note">Each point is the {{ term("1-year window", "rolling-window") }} ending that month, measured on weekly returns: how {{ what }} behaved at different times, historically. A break in a line is a window with too few returns.{% if charts.series | selectattr("key", "equalto", "sharpe") | selectattr("payload") | list %} The shaded band around the Sharpe is ± 1 s.e.{% endif %}</p>
   {% for series in charts.series %}
   {{ series_block(series, what) }}
   {% endfor %}
+  {% endcall %}
   {% endif %}
 </div>
 {% endif %}
@@ -64,6 +70,9 @@
 {% if chart %}
 <div class="risk-rolling" id="risk-rolling-correlation">
   <h3>{{ term("Correlation over time", "rolling-correlation") }}</h3>
+  {#- The summary is a button to a screen reader, so its tickers are no tab stops of their own. #}
+  {% set pair_summary %}{{ ticker(chart.a, names, focusable=false) }} against {% if chart.b_label == "the portfolio" %}the portfolio{% else %}{{ ticker(chart.b_label, names, focusable=false) }}{% endif %} · 52 weeks{% endset %}
+  {% call fold(pair_summary, open=chart.open) %}
   <p class="labs-note">{{ ticker(chart.a, names) }} against {% if chart.b_label == "the portfolio" %}the portfolio{% else %}{{ ticker(chart.b_label, names) }}{% endif %}, over the 52 weeks ending each Friday, in euros, historically. Over 52 weeks it is noisy, about ± <span class="mono">0.14</span> (1 s.e.); correlations tend to rise in sell-offs.</p>
   {% if chart.dropped %}
   <p class="labs-note">The pair in the link wasn't used: {{ chart.dropped }}, so this is the default.</p>
@@ -97,6 +106,7 @@
   {% else %}
   <p class="entry-empty">No rolling correlation: {{ chart.reason }}.</p>
   {% endif %}
+  {% endcall %}
 </div>
 {% endif %}
 {%- endmacro %}

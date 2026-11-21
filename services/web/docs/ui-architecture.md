@@ -595,6 +595,32 @@ described here updates this file in the same change.
     label, while Chromium and Safari show the value beside it. *Known cost:* Chromium shows the
     ticker twice. Used by the Labs and Risk benchmark fields, the Labs mix inputs and the Risk
     what-if candidate; the new-transaction and admin-mapping pickers stay bare.
+- **Secondary detail folds (UX-7): `partials/_fold.html`.** A page region carries one idea:
+  its headline figures stay open, and what qualifies them (rolling charts, market regimes,
+  marker legends, "Left out" and "Not ranked" lists) sits in a `<details class="fold">` whose
+  summary is one line naming what is inside. Decisions (agreed):
+  - *The heading stays outside the fold, above it.* A summary is a button to a screen reader,
+    which flattens a heading inside it, so heading navigation would lose the block. The
+    summary then needs only the rest: the count, "2 holdings", or what the block shows,
+    "Rolling volatility and Sharpe · 1-year window". *Known cost:* one more line per block
+    than a summary that is the heading. A legend has no heading, so its summary names it:
+    "What the markers mean · 3 notes".
+  - *A count where there is one*, in mono, singular for one (`unit` is a pair).
+  - *An empty block isn't folded.* "No rolling point yet" is already one line; a fold would
+    only add a click.
+  - *Open when the reader just chose it, decided on the server.* A fold renders `open` when the
+    request shows the reader asked for what is inside: the Risk correlation pair, the Labs risk
+    window (UX-8's `_risk_open`). No JS. Any other `#anchor` into a block lands on its heading
+    and closed summary, since every block's id stays on its wrapper outside the fold.
+    *Rejected: opening a fold from the URL fragment in a script*, one more file to keep in step
+    with the ids for a link only old bookmarks use.
+  - *A chart in a closed fold is drawn when the fold first opens* (`risk_rolling_chart.js`). A
+    closed `<details>` gives its canvas no box to size from, and the first animation would play
+    unseen. `review_pages.py` skips the size check for a canvas still in a closed fold, and its
+    `open_folds` states open every fold the way a reader would.
+  - *One look.* `.fold` styles every fold's summary: the Risk blocks', the regime groups nested
+    in theirs, and the Labs risk section's. Concentration's "Show N more" folds keep their
+    muted look: they lengthen a table, and are not detail.
 - **Labs (LB-6 to LB-10, RK-9)** has its own file, [`labs-ui.md`](labs-ui.md): the period
   table, the mix form, the growth chart, and the risk panel and drawdown chart.
 - **Display formatting (UI-5) is one fixed convention, applied by Jinja filters from a pure

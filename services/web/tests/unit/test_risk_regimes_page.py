@@ -463,6 +463,7 @@ def test_a_view_without_rows_says_why(client, view, text):
 
     assert text in block
     assert "<table" not in block
+    assert "<details" not in block  # one line: nothing to fold (UX-7)
 
 
 def test_ex_ante_without_a_regime_view_has_no_block(client):
@@ -513,12 +514,46 @@ def test_each_dimension_is_a_closed_group_naming_its_count(client):
 
     block = unescape(_block(test_client.get("/risk").text, "risk-ex-post-regimes"))
 
-    assert block.count('<details class="risk-regime-group">') == 2
+    assert block.count('<details class="fold risk-regime-group">') == 2
     assert " open" not in block
-    assert 'Drawdowns <span class="mono">2</span> regimes</summary>' in block
-    assert 'Events <span class="mono">1</span> regime</summary>' in block
-    # The legend stays outside the groups, so it shows while they are closed.
-    assert block.rindex("</details>") < block.index('class="risk-legend"')
+    assert 'Drawdowns · <span class="mono">2</span> regimes</summary>' in block
+    assert 'Events · <span class="mono">1</span> regime</summary>' in block
+
+
+def test_the_regimes_fold_under_their_heading_with_their_totals(client):
+    """UX-7: one outer fold, closed, holding the note, the groups and the legend."""
+    test_client, fake = client
+    rows = (
+        _regime("a", "drawdown", "Crash A", date(2024, 2, 5), date(2024, 3, 1)),
+        _regime("b", "drawdown", "Crash B", date(2025, 2, 19), date(2025, 4, 8)),
+        _regime("c", "event", "Shock C", date(2024, 8, 5), date(2024, 8, 9)),
+    )
+    fake.ex_post = _ex_post(regimes=_regimes(rows))
+
+    block = unescape(_block(test_client.get("/risk").text, "risk-ex-post-regimes"))
+
+    heading = block.index("<h3>Market regimes</h3>")
+    outer = block.index('<details class="fold">')
+    assert heading < outer
+    assert '<summary><span class="mono">3</span> regimes in 2 groups</summary>' in block
+    assert (
+        outer
+        < block.index("historically, during each market")
+        < block.index('class="fold risk-regime-group"')
+    )
+    # The legend comes after the groups and closes the outer fold, so the groups stay nested.
+    assert block.rindex('class="fold risk-regime-group"') < block.index('class="risk-legend"')
+    assert block.index('class="risk-legend"') < block.rindex("</details>")
+
+
+def test_one_regime_in_one_group_reads_in_the_singular(client):
+    test_client, fake = client
+    rows = (_regime("c", "event", "Shock C", date(2024, 8, 5), date(2024, 8, 9)),)
+    fake.ex_post = _ex_post(regimes=_regimes(rows))
+
+    block = unescape(_block(test_client.get("/risk").text, "risk-ex-post-regimes"))
+
+    assert '<summary><span class="mono">1</span> regime in 1 group</summary>' in block
 
 
 # --- ticker names (UX-2) ---

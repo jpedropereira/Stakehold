@@ -299,6 +299,12 @@ upstream calls) is in [`architecture.md`](architecture.md) and [`endpoints.md`](
     (`api/labs._risk_open`). Not on the parameters' presence, since the mix form and the period
     links always carry both. The section has no chart, so a closed fold has no sizing problem.
     The summary's ticker hosts its name tooltip without a tab stop of its own
-    (`focusable=false`), since a summary is already one.
+    (`focusable=false`), since a summary is already one. UX-7 moved it onto the shared fold
+    (`partials/_fold.html`, `.fold labs-risk-fold`), so it looks like every other fold.
+- **"Not backtested" and "Left out" are folded (UX-7)**, each under its heading and summarised
+  by its count: "1 asset", "2 holdings". "Left out" gained an `<h2>` to fold under; its notes
+  still say "Left out:", a repeat that UX-9's copy pass owns. *Not folded:* the notes under the
+  returns table and the growth chart saying what a period's figures leave out. They qualify the
+  figure right beside them, so they stay where they're read.
   - The review adds `labs-long-mix` (12 untracked rows, the server's region, an error under
     every row), `labs-long-mix-added` (nine rows added in place) and `labs-risk-open`.

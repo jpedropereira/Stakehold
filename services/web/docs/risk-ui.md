@@ -38,6 +38,24 @@ file in the same change. The server side of `/risk` (its router, the upstream ca
     on ex-post, with the sub-nav one click away.
   - *Copy that said "above"* now names the other page or drops the word. UX-9 does the full
     copy pass.
+- **Secondary detail is folded (UX-7)**, per `ui-architecture.md`'s fold rule. Each sub-page
+  keeps its headline table open. Folded, each under its heading: the marker legend
+  ("What the markers mean · N notes"), the rolling charts ("Rolling volatility and Sharpe ·
+  1-year window"), the correlation pair ("AAPL against the portfolio · 52 weeks"), the market
+  regimes ("N regimes in M groups"), Left out ("N holdings"), and the ranking's Not ranked and
+  Not scored ("N tickers"; Not scored was a sentence, so it gained a heading to fold under).
+  Decisions (agreed):
+  - *Open stays open:* the ex-ante VaR lines, the heatmap and its shade key (the key is needed
+    to read the squares), the effective-number note and the what-if threshold. They are
+    figures, or the way to read one.
+  - *The regimes fold once, around the groups* ("9 regimes in 4 groups"), which stay nested and
+    closed. Closed, the block is one line; open, a line per group. *Rejected: flattening the
+    groups into the outer fold*, which opens onto 60+ rows; *and folding only the intro note*,
+    which leaves a line per group on the page.
+  - *The pair's fold opens when the URL names a pair* (`corr_a` or `corr_b`, kept or replaced):
+    the pair form lands on the chart it asked for, or on the note saying why it was replaced.
+    *Known cost:* the sub-nav carries the whole query, so a pair chosen once keeps the fold open
+    on later visits to Ex-ante. It is the reader's own choice.
 - **Risk page (RK-12): one table per section, measures down and windows across.** `/risk`'s
   first section, now its own sub-page (UX-6), is the ex-post summary: twelve measures × five windows (1Y, 3Y, 5Y, 10Y, Max).
   Measures are the rows, because there are more of them than windows and their labels are long.
@@ -357,7 +375,8 @@ file in the same change. The server side of `/risk` (its router, the upstream ca
     market regime overlaps this history", each in place of the tables. No view (nothing
     measured) means no block.
   - *Each dimension is a group closed by default* (agreed after RK-28's first build), a
-    `<details>` whose summary is its heading and its count ("Events 4 regimes"). With real
+    `<details>` whose summary is its heading and its count ("Events · 4 regimes"). With real
     data, ex-ante's Max can overlap 60+ regimes, which open tables would turn into a page of
     their own. The legend stays outside the groups, so it shows while they are closed. No JS.
+    UX-7 nests the groups, the note and the legend in one fold for the whole block.
     *Rejected: opening the first group*, which would favour one dimension for no reason.

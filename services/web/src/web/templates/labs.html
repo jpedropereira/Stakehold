@@ -5,6 +5,7 @@
 {% from "partials/_benchmark_field.html" import benchmark_form %}
 {% from "partials/_ticker.html" import ticker, ticker_list, ticker_option %}
 {% from "partials/_segmented.html" import segmented_links %}
+{% from "partials/_fold.html" import fold %}
 {% block title %}Labs — Stakehold{% endblock %}
 {# The holdings the default mix left out, one line per reason (labs_view.DefaultMix). Shown
    whatever the backtest did, since it says what the figures don't cover. #}
@@ -212,7 +213,9 @@ Against {{ ticker(bench.ticker, ticker_names) }}{% if not bench.available %}: un
 </section>
 </div><!-- /split-labs -->
 {# The results the table leads (UX-8): the growth chart and its drawdown, then the risk
-   section folded under its heading, then what wasn't backtested and what the mix left out. #}
+   section folded under its heading, then what wasn't backtested and what the mix left out,
+   each folded under its heading too (UX-7). The notes on what a period's figures leave out
+   stay open beside the table and the chart they qualify. #}
 {% set figures = sent and not backtest_error and backtest.mix is not none %}
 {% set notes = mix and (mix.unpriced or mix.unweighted or mix.dropped) %}
 {% if figures or (sent and unavailable) or notes %}
@@ -288,8 +291,8 @@ Against {{ ticker(bench.ticker, ticker_names) }}{% if not bench.available %}: un
   {% if risk %}
   <section class="labs-risk" id="labs-risk" aria-labelledby="labs-risk-title">
     <h2 id="labs-risk-title">Risk</h2>
-    <details class="labs-risk-fold"{% if risk_open %} open{% endif %}>
-    <summary>By window and per asset, against {{ ticker(risk.benchmark.ticker, ticker_names, focusable=false) }}</summary>
+    {% set risk_summary %}By window and per asset, against {{ ticker(risk.benchmark.ticker, ticker_names, focusable=false) }}{% endset %}
+    {% call fold(risk_summary, open=risk_open, class_="labs-risk-fold") %}
     <p class="entry-subtitle">Historical risk of the mix and its assets, measured on the same
       {{ term(risk.label, "buy-and-hold") }} backtest, in euros, to
       <span class="mono">{{ risk.end_date | date }}</span>. How they behaved, not a forecast.</p>
@@ -389,19 +392,26 @@ Against {{ ticker(bench.ticker, ticker_names) }}{% if not bench.available %}: un
     {% else %}
     <p class="labs-note">Over {{ risk_comparison.window }}: {{ risk_comparison.reason }}.</p>
     {% endif %}
-    </details>
+    {% endcall %}
   </section>
   {% endif %}
   {% endif %}
   {% if unavailable %}
   <h2>Not backtested</h2>
+  {% call fold("", unavailable | length, ("asset", "assets")) %}
   <ul class="labs-unavailable">
     {% for status in unavailable %}
     <li>{{ ticker(status.ticker, ticker_names) }} — {{ status.reason }}</li>
     {% endfor %}
   </ul>
+  {% endcall %}
   {% endif %}
-  {% if mix %}{{ left_out_notes(mix) }}{% endif %}
+  {% if notes %}
+  <h2>Left out</h2>
+  {% call fold("", (mix.unpriced | length) + (mix.unweighted | length) + (mix.dropped | length), ("holding", "holdings")) %}
+  {{ left_out_notes(mix) }}
+  {% endcall %}
+  {% endif %}
 </section>
 {% endif %}
 <script src="{{ asset_url('/static/labs_form.js') }}" defer></script>

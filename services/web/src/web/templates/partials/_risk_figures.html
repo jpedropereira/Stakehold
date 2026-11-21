@@ -1,7 +1,8 @@
 {% from "partials/_term.html" import term %}
 {% from "partials/_ticker.html" import ticker %}
+{% from "partials/_fold.html" import fold %}
 {# What more than one Risk sub-page (UX-6) shows: a figure, a summary row, a legend and a "Left
-   out" list. #}
+   out" list. The legend and the list are secondary detail, folded (UX-7). #}
 {# One figure, formatted by its row's kind (risk_view.SUMMARY_ROWS): only a return is coloured as a gain
    or a loss, to 1 decimal like the Labs risk panel's CAGR (RK-9). #}
 {% macro figure(value, kind) -%}
@@ -36,14 +37,17 @@
   {% endfor %}
 </tr>
 {%- endmacro %}
-{# A section's flag legend: one sentence per marker present (risk_view.FLAG_NOTES). #}
+{# A section's flag legend: one sentence per marker present (risk_view.FLAG_NOTES). Folded
+   under the table its markers sit in, with no heading of its own (UX-7). #}
 {% macro legend(notes) -%}
 {% if notes %}
+{% call fold("What the markers mean", notes | length, ("note", "notes")) %}
 <ol class="risk-legend">
   {% for note in notes %}
   <li><sup class="risk-flag">{{ note.marker }}</sup> {{ note.text }}</li>
   {% endfor %}
 </ol>
+{% endcall %}
 {% endif %}
 {%- endmacro %}
 {# The holdings a section couldn't include, each with its reason. `scaled`: the others' weights
@@ -51,11 +55,13 @@
 {% macro left_out(holdings, names, scaled=true) -%}
 {% if holdings %}
 <h3>Left out</h3>
+{% call fold("", holdings | length, ("holding", "holdings")) %}
 <ul class="labs-unavailable">
   {% for holding in holdings %}
   <li>{{ ticker(holding.ticker, names) }} — {{ holding.reason }}</li>
   {% endfor %}
 </ul>
 {% if scaled %}<p class="labs-note">The other holdings' weights were scaled to 100%.</p>{% endif %}
+{% endcall %}
 {% endif %}
 {%- endmacro %}

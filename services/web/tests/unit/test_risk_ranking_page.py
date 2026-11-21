@@ -532,3 +532,32 @@ def test_logs_an_unsent_form(client, caplog):
         _get(test_client)
 
     assert "risk: ranking not asked for, nothing sent." in caplog.text
+
+
+# --- secondary detail folded (UX-7) -----------------------------------------------------------
+
+
+def _fold_after(section, heading) -> str:
+    start = section.index(heading)
+    opening = section.index("<details", start)
+    return section[opening : section.index("</details>", opening) + len("</details>")]
+
+
+def test_not_ranked_is_folded_under_its_heading_with_its_count(client):
+    test_client, _ = client
+
+    fold = _fold_after(_get(test_client, RANK_QUERY), "<h3>Not ranked</h3>")
+
+    assert fold.startswith('<details class="fold">')
+    assert '<summary><span class="mono">2</span> tickers</summary>' in fold
+    assert "LATE.DE" in fold and "0700.HK" in fold
+
+
+def test_the_tickers_past_the_cap_are_folded_under_not_scored(client):
+    test_client, _ = client
+
+    fold = _fold_after(_get(test_client, RANK_QUERY), "<h3>Not scored</h3>")
+
+    assert '<summary><span class="mono">3</span> tickers</summary>' in fold
+    assert 'the first <span class="mono">50</span> alphabetically' in fold
+    assert "ZPRV.DE" in fold and "ZSIL.L" in fold

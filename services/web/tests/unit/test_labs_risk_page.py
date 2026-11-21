@@ -922,7 +922,8 @@ def test_no_benchmark_line_disables_its_box_and_says_why(client):
 
 
 def _fold(html):
-    match = re.search(r'<details class="labs-risk-fold"[^>]*>', _section(html))
+    # The shared fold look (UX-7), named for its section.
+    match = re.search(r'<details class="fold labs-risk-fold"[^>]*>', _section(html))
     assert match, "no risk fold"
     return match.group(0)
 

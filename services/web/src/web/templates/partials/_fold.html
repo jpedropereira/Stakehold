@@ -1,0 +1,13 @@
+{# A fold (UX-7): secondary detail behind a <details>, which opens and closes without JS. The
+   block's heading stays outside it, above, so heading navigation still finds the block: a
+   summary is a button to a screen reader, which flattens a heading inside it. The summary is one
+   line naming what is inside, then the count where there is one: `unit` is its (singular,
+   plural) pair, "· 2 holdings", or the count alone when `summary` is empty, "2 holdings".
+   `open` starts it open, for a block the reader just chose (the correlation pair, the Labs risk
+   window). Call it with a body: {% call fold("…") %}…{% endcall %}. #}
+{% macro fold(summary, count=none, unit=none, open=false, class_="") -%}
+<details class="fold{% if class_ %} {{ class_ }}{% endif %}"{% if open %} open{% endif %}>
+<summary>{{ summary }}{% if count is not none %}{% if summary %} · {% endif %}<span class="mono">{{ count }}</span> {{ unit[0] if count == 1 else unit[1] }}{% endif %}</summary>
+{{ caller() }}
+</details>
+{%- endmacro %}
