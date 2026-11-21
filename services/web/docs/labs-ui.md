@@ -173,7 +173,7 @@ upstream calls) is in [`architecture.md`](architecture.md) and [`endpoints.md`](
     synthetic worst case. *Rejected: a `<details>` per asset*, which makes comparing assets mean
     opening several. *Rejected: the mix only*, which would leave the assets' figures unused.
   - *Spec §10's metadata is shown, not hovered.* `title` tooltips were rejected for the
-    glossary ("Glossary" in `ui-architecture.md`): they don't show on touch, and screen readers
+    glossary ("Glossary" in `copy-ui.md`): they don't show on touch, and screen readers
     announce them inconsistently. So each window's start is under its column header (and in
     the stacked label, through the same `data-start` as Max's), each measure's frequency under
     its name (Sharpe's also says "± 1 s.e."), and a "Returns used" row or column gives the

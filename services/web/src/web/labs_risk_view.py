@@ -6,7 +6,7 @@ labs_view.py because it owns a different thing: how a statistical estimate is wo
 format, its greyed reason, its flags), where labs_view.py owns which holdings go in the mix.
 
 Spec §10's metadata is shown, not hovered (title tooltips don't show on touch, see
-ui-architecture.md, "Glossary"): each window's dates and the returns it used are on its
+copy-ui.md, "Glossary"): each window's dates and the returns it used are on its
 column, each measure's frequency on its label, a greyed figure's reason in its cell (R9) and
 its flags as notes under it.
 
