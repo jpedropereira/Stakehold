@@ -4,7 +4,7 @@
 {% from "partials/_term.html" import term %}
 {% from "partials/_benchmark_field.html" import benchmark_form %}
 {% from "partials/_ticker.html" import ticker, ticker_list, ticker_option %}
-{% from "partials/_segmented.html" import segmented_links %}
+{% from "partials/_labs_figures.html" import mix_leaves_out, risk_cell, measure_label, against_heading, form_kept with context %}
 {% block title %}Labs — Stakehold{% endblock %}
 {# The holdings the default mix left out, one line per reason (labs_view.DefaultMix). Shown
    whatever the backtest did, since it says what the figures don't cover. #}
@@ -22,38 +22,6 @@
 {# One row of the mix form. `row` is a labs_mix.CheckedRow, or none for the empty row that adds
    an asset; `i` is its place in the form, which a remove button sends back. Each field's error
    sits under the row and is tied to its input by aria-describedby. #}
-{# The mix's figures and line cover only the assets whose history covers the period (LB-9);
-   this names the rest, for `first` to `last` of the periods. #}
-{% macro mix_leaves_out(first, last, tickers) -%}
-{% if first == last %}Over {{ first }}{% else %}From {{ first }} to {{ last }}{% endif %} the mix leaves out {{ ticker_list(tickers, ticker_names) }}: not enough history.
-{%- endmacro %}
-{# A risk figure (labs_risk_view.RiskCell): its value in mono, with a Sharpe's standard error
-   and any flags as notes; greyed, its reason (R9); none, a window that isn't covered. One
-   .risk-value around it all, so a stacked row keeps the figure, its ± and its notes together
-   opposite the label. #}
-{% macro risk_cell(cell) -%}
-<span class="risk-value">
-{%- if cell is none -%}
-<span class="entry-empty">Not enough history</span>
-{%- elif cell.text is none -%}
-<span class="entry-empty risk-reason">{{ cell.reason }}</span>
-{%- else -%}
-<span class="mono{% if cell.css_class %} {{ cell.css_class }}{% endif %}">{{ cell.text }}</span>
-{%- if cell.standard_error %} <span class="mono risk-se">{{ cell.standard_error }}</span>{% endif %}
-{%- for note in cell.notes %} <span class="risk-note">{{ note }}</span>{% endfor %}
-{%- endif -%}
-</span>
-{%- endmacro %}
-{# A measure's label: its glossary link, then its frequency (spec §10), and for a Sharpe what
-   its ± is. #}
-{% macro measure_label(measure) -%}
-{{ term(measure.label, measure.anchor) }}<span class="risk-frequency">{{ measure.frequency }}{% if measure.kind == "sharpe" %} · ± 1 s.e.{% endif %}</span>
-{%- endmacro %}
-{# The heading of the figures against the benchmark (RK-14): its ticker and first date, or why
-   it couldn't be used at all, said once for every cell under it. #}
-{% macro against_heading(bench) -%}
-Against {{ ticker(bench.ticker, ticker_names) }}{% if not bench.available %}: unavailable, {{ bench.reason }}{% elif bench.first_date %}, history from <span class="mono">{{ bench.first_date | date }}</span>{% endif %}
-{%- endmacro %}
 {% macro mix_row(i, row=none) -%}
 <div class="labs-row">
   <div class="field">
@@ -126,11 +94,7 @@ Against {{ ticker(bench.ticker, ticker_names) }}{% if not bench.available %}: un
     {% if checked and checked.rows %}
     <p class="labs-total">Total <span class="mono">{{ checked.total | share }}</span>{% if checked.total != 1 %} — weights are scaled to 100%, and the table shows the weights used.{% endif %}</p>
     {% endif %}
-    {# The chart's period, the risk comparison's window and the benchmark stay chosen across an
-       update. #}
-    <input type="hidden" name="period" value="{{ period }}">
-    <input type="hidden" name="risk_window" value="{{ risk_window }}">
-    <input type="hidden" name="benchmark" value="{{ benchmark }}">
+    {{ form_kept() }}
     {% for row in shown %}
     <input type="hidden" name="last_ticker" value="{{ row.ticker }}">
     <input type="hidden" name="last_weight" value="{{ row.weight }}">
@@ -218,68 +182,7 @@ Against {{ ticker(bench.ticker, ticker_names) }}{% if not bench.available %}: un
 {% if figures or (sent and unavailable) or notes %}
 <section class="card card-wide labs-results">
   {% if figures %}
-  {# The growth chart (LB-8, static/labs_chart.js) for one period. The periods are links, not
-     client-side buttons: buy and hold re-bases each period, so the server computes each one.
-     The asset toggles ship hidden, since they'd do nothing without the script. #}
-  <section class="labs-growth" aria-labelledby="labs-growth-title">
-    <h2 id="labs-growth-title">Growth</h2>
-    {{ segmented_links("Growth period", period_links, period, mono=true, class_="labs-periods") }}
-    {# The mix has a line whenever any asset covers the period (LB-9), so no mix line means no
-       line at all. #}
-    {% if growth is none or growth.mix is none %}
-    <p class="entry-empty">No asset's history covers {{ period }}.</p>
-    {% else %}
-    {% if growth.left_out %}
-    <p class="chart-note">{{ mix_leaves_out(period, period, growth.left_out) }}</p>
-    {% endif %}
-    {% if growth.benchmark and growth.benchmark["values"] is none %}
-    <p class="chart-note">No benchmark line: {{ growth.benchmark.reason }}.</p>
-    {% endif %}
-    <div class="chart-frame">
-      <canvas id="labs-chart" role="img" aria-label="Cumulative growth over {{ period }}"></canvas>
-    </div>
-    <fieldset class="labs-series" hidden>
-      <legend>Assets on the chart</legend>
-      <p class="chart-note">The heavier line is the mix{% if growth.benchmark and growth.benchmark["values"] is not none %}; the dashed line is the benchmark{% endif %}.</p>
-      {# The benchmark first, and on: the line the mix is read against (RK-14). Each label hosts
-         its ticker's name tooltip (UX-3): the box is the tab stop, so the ticker isn't one. #}
-      {% if growth.benchmark %}
-      {% if growth.benchmark["values"] is none %}
-      <label><input type="checkbox" data-series="__benchmark" disabled> {{ ticker(growth.benchmark.ticker, ticker_names, focusable=false) }} (benchmark) <span class="entry-empty">No line</span></label>
-      {% else %}
-      <label><input type="checkbox" data-series="__benchmark" checked> {{ ticker(growth.benchmark.ticker, ticker_names, focusable=false) }} (benchmark)</label>
-      {% endif %}
-      {% endif %}
-      {% for asset in growth.assets %}
-      {% if asset["values"] is none %}
-      <label><input type="checkbox" data-series="{{ asset.ticker }}" disabled> {{ ticker(asset.ticker, ticker_names, focusable=false) }} <span class="entry-empty">Not enough history</span></label>
-      {% else %}
-      <label><input type="checkbox" data-series="{{ asset.ticker }}"> {{ ticker(asset.ticker, ticker_names, focusable=false) }}</label>
-      {% endif %}
-      {% endfor %}
-    </fieldset>
-    <script id="labs-chart-data" type="application/json">{{ growth | tojson }}</script>
-    <script src="{{ asset_url('/static/vendor/chart.min.js') }}" defer></script>
-    <script src="{{ asset_url('/static/chart_theme.js') }}" defer></script>
-    <script src="{{ asset_url('/static/labs_chart.js') }}" defer></script>
-    {# The mix's drawdown (RK-9, static/labs_drawdown_chart.js) over the same period, so the
-       period links above drive both charts. Ink with a soft fill, not oxblood: a drawdown is
-       a distance below a high, not a loss figure. #}
-    <div class="labs-drawdown">
-      <h3>{{ term("Drawdown", "drawdown") }}</h3>
-      {% if drawdown is none %}
-      <p class="entry-empty">No drawdown for {{ period }}.</p>
-      {% else %}
-      <p class="chart-note">How far the mix was below its last high on each day of {{ period }}. A break in the line is a day an asset had no return.</p>
-      <div class="chart-frame">
-        <canvas id="labs-drawdown-chart" role="img" aria-label="Drawdown of the mix over {{ period }}"></canvas>
-      </div>
-      <script id="labs-drawdown-data" type="application/json">{{ drawdown | tojson }}</script>
-      <script src="{{ asset_url('/static/labs_drawdown_chart.js') }}" defer></script>
-      {% endif %}
-    </div>
-    {% endif %}
-  </section>
+  {% include "partials/_labs_growth.html" %}
   {# The risk panel (RK-9, labs_risk_view.py). Every figure's window, frequency and the
      returns it used are shown, not hovered (spec §10): the window on its column, the
      frequency on its measure, the returns used on a row of their own. Its heading and anchor
@@ -348,47 +251,7 @@ Against {{ ticker(bench.ticker, ticker_names) }}{% if not bench.available %}: un
     <p class="labs-note">{{ note.windows | join(", ") }}: {{ note.reason }}.</p>
     {% endfor %}
 
-    <h3 id="labs-risk-compare-title">Mix and assets over one window</h3>
-    {# Links, like the growth periods: the page works without JS. Every window is already in
-       the response, so this reruns the same backtest; it doesn't ask portfolio for more. #}
-    {{ segmented_links("Comparison window", risk_window_links, risk_window, mono=true, class_="labs-risk-windows") }}
-    {% if risk_comparison.covered %}
-    {# The benchmark is named once here, not under each of its four columns, which would widen
-       a table that already scrolls. #}
-    <p class="as-of">Over {{ risk_comparison.window }}, from <span class="mono">{{ risk_comparison.start | date }}</span> to <span class="mono">{{ risk_comparison.end | date }}</span>. {% if risk.benchmark.available %}Beta to information ratio are against {{ ticker(risk.benchmark.ticker, ticker_names) }}.{% else %}Beta to information ratio can't be measured against {{ ticker(risk.benchmark.ticker, ticker_names) }}: {{ risk.benchmark.reason }}.{% endif %}</p>
-    <div class="table-scroll" tabindex="0" role="region" aria-label="Risk of the mix and its assets over {{ risk_comparison.window }}">
-    <table class="positions-table holdings-table labs-table labs-risk-table stack-table" role="table">
-      <thead role="rowgroup">
-        <tr role="row">
-          <th role="columnheader">Asset</th>
-          {% for measure in risk_measures %}
-          <th class="num" role="columnheader">{{ measure_label(measure) }}</th>
-          {% endfor %}
-          {% for measure in relative_measures %}
-          <th class="num" role="columnheader">{{ measure_label(measure) }}</th>
-          {% endfor %}
-          <th class="num" role="columnheader">{{ term("Returns used", "returns-used") }}</th>
-        </tr>
-      </thead>
-      <tbody role="rowgroup">
-        {% for row in risk_comparison.rows %}
-        <tr role="row"{% if loop.first %} class="labs-mix-row"{% endif %}>
-          <td role="cell">{% if row.ticker is none %}Mix{% else %}{{ ticker(row.ticker, ticker_names) }}{% endif %}</td>
-          {% for cell in row.cells %}
-          <td class="num" role="cell" data-label="{{ risk_measures[loop.index0].label }}">{{ risk_cell(cell) }}</td>
-          {% endfor %}
-          {% for cell in row.relative_cells %}
-          <td class="num" role="cell" data-label="{{ relative_measures[loop.index0].label }}">{{ risk_cell(cell) }}</td>
-          {% endfor %}
-          <td class="num" role="cell" data-label="Returns used"><span class="risk-value">{% if row.returns_used %}<span class="mono">{{ row.returns_used }}</span>{% else %}<span class="entry-empty">Not enough history</span>{% endif %}</span></td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-    </div>
-    {% else %}
-    <p class="labs-note">Over {{ risk_comparison.window }}: {{ risk_comparison.reason }}.</p>
-    {% endif %}
+    {% include "partials/_labs_compare.html" %}
     </details>
   </section>
   {% endif %}
@@ -403,6 +266,14 @@ Against {{ ticker(bench.ticker, ticker_names) }}{% if not bench.available %}: un
   {% endif %}
   {% if mix %}{{ left_out_notes(mix) }}{% endif %}
 </section>
+{% endif %}
+{# The charts' scripts, out of the regions a switch swaps (UX-10): loaded once, they draw each
+   swapped-in canvas themselves. #}
+{% if figures %}
+<script src="{{ asset_url('/static/vendor/chart.min.js') }}" defer></script>
+<script src="{{ asset_url('/static/chart_theme.js') }}" defer></script>
+<script src="{{ asset_url('/static/labs_chart.js') }}" defer></script>
+<script src="{{ asset_url('/static/labs_drawdown_chart.js') }}" defer></script>
 {% endif %}
 <script src="{{ asset_url('/static/labs_form.js') }}" defer></script>
 {% endblock %}

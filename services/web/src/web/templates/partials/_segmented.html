@@ -5,8 +5,13 @@
    segmented_links: links maps each value to its URL, in order, as the routes' link builders
    already return them; labels maps a value to its text where the two differ. The switches the
    server answers (Labs' period and window, Risk's window and sort) stay plain links, so they
-   work without JS. The current one carries aria-current. UX-10 adds its hx-* attributes and
-   #anchor here.
+   work without JS. The current one carries aria-current.
+
+   swap (UX-10): the id of the region the switch belongs to. Each option then also fetches its
+   URL with htmx and swaps only that region (swap_attrs, below), so the page doesn't reload or
+   jump. The routes put the region's #anchor on each href, for a click without JS. id names the
+   group, so a swap response can send it out of band (oob) when it carries another region's
+   query (api/htmx.py).
 
    segmented_buttons: options are (value, text). For a client-side switch (the returns chart);
    the pressed one carries aria-pressed, and the script that owns the group flips it. Values
@@ -17,10 +22,19 @@
 {% if mono %}<span class="mono">{{ text }}</span>{% else %}{{ text }}{% endif %}
 {%- endmacro %}
 
-{% macro segmented_links(label, links, current, labels={}, mono=false, class_="") -%}
-<div class="segmented{% if class_ %} {{ class_ }}{% endif %}" role="group" aria-label="{{ label }}">
+{# The htmx attributes that make a link swap its region in place (UX-10). hx-get leaves out
+   the #anchor: htmx scrolls to a request URL's anchor once it has swapped, the jump this
+   avoids. The pushed URL keeps it, so a reload lands on the section. The region shows the
+   request (hx-indicator), and a second click replaces the first rather than racing it. focus
+   names the element static/section_swap.js focuses once the new region is in. #}
+{% macro swap_attrs(href, region, focus) -%}
+hx-get="{{ href.split('#')[0] }}" hx-target="#{{ region }}" hx-select="#{{ region }}" hx-swap="outerHTML show:none" hx-push-url="{{ href }}" hx-indicator="#{{ region }}" hx-sync="#{{ region }}:replace" data-swap-focus="{{ focus }}"
+{%- endmacro %}
+
+{% macro segmented_links(label, links, current, labels={}, mono=false, class_="", id=none, swap=none, oob=false) -%}
+<div class="segmented{% if class_ %} {{ class_ }}{% endif %}"{% if id %} id="{{ id }}"{% if oob %} hx-swap-oob="true"{% endif %}{% endif %} role="group" aria-label="{{ label }}">
   {%- for value, href in links.items() %}
-  <a class="segmented-option" href="{{ href }}"{% if value | string == current | string %} aria-current="true"{% endif %}>{{ _text(labels.get(value, value), mono) }}</a>
+  <a class="segmented-option" href="{{ href }}"{% if value | string == current | string %} aria-current="true"{% endif %}{% if swap %} {{ swap_attrs(href, swap, label) }}{% endif %}>{{ _text(labels.get(value, value), mono) }}</a>
   {%- endfor %}
 </div>
 {%- endmacro %}

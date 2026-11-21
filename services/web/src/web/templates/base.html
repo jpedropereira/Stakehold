@@ -21,10 +21,16 @@
   <link rel="stylesheet" href="{{ asset_url('/brand/tokens.css') }}">
   <link rel="stylesheet" href="{{ asset_url('/static/web.css') }}">
   {# htmx otherwise injects an inline <style> for its indicators, which the strict CSP blocks;
-     web.css carries those rules instead. Read by htmx itself, so no inline script. #}
-  <meta name="htmx-config" content='{"includeIndicatorStyles": false}'>
+     web.css carries those rules instead. Read by htmx itself, so no inline script. A section
+     swap pushes its URL (UX-10); with no history cache, htmx doesn't snapshot the page into
+     localStorage, where its figures would outlive logout, and Back reloads the page rather
+     than restoring a snapshot whose charts would be blank. And it settles only classes: by
+     default it also copies an old element's style onto its swapped-in twin with setAttribute,
+     which the CSP blocks (Chart.js styles its canvases). #}
+  <meta name="htmx-config" content='{"includeIndicatorStyles": false, "historyCacheSize": 0, "refreshOnHistoryMiss": true, "attributesToSettle": ["class"]}'>
   <script src="{{ asset_url('/static/vendor/htmx.min.js') }}" defer></script>
   <script src="{{ asset_url('/static/htmx-error-swap.js') }}" defer></script>
+  <script src="{{ asset_url('/static/section_swap.js') }}" defer></script>
   <script src="{{ asset_url('/static/theme.js') }}" defer></script>
   <script src="{{ asset_url('/static/ticker_tooltip.js') }}" defer></script>
   <script src="{{ asset_url('/static/account_menu.js') }}" defer></script>
@@ -73,8 +79,12 @@
   <main id="main" class="page" tabindex="-1">
     {% block content %}{% endblock %}
   </main>
-  {# Shown in a form's #form-errors by htmx-error-swap.js when an htmx request fails in a way
-     the app didn't render itself (a crash, a lost connection). The copy lives here, not in JS. #}
+  {# Says what a section swap changed (UX-10, static/section_swap.js), outside every region it
+     could replace, so the announcement survives the swap. #}
+  <p id="swap-status" role="status" class="visually-hidden"></p>
+  {# Shown by htmx-error-swap.js in a form's #form-errors, or a swapped section's error slot
+     (UX-10), when an htmx request fails in a way the app didn't render itself (a crash, a lost
+     connection). The copy lives here, not in JS. #}
   <template id="request-failed-banner">
     {% call banner("error") %}<strong>Something went wrong.</strong> Try again in a moment.{% endcall %}
   </template>

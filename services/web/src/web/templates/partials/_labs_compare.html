@@ -1,0 +1,56 @@
+{% from "partials/_banner.html" import banner %}
+{% from "partials/_term.html" import term %}
+{% from "partials/_ticker.html" import ticker %}
+{% from "partials/_labs_figures.html" import risk_cell, measure_label, window_switch with context %}
+{# /labs's risk comparison (UX-10): what the comparison window switch swaps. #}
+<div id="labs-risk-compare" data-swap-region data-swap-announce="Comparison over {{ risk_window }}">
+    <h3 id="labs-risk-compare-title">Mix and assets over one window</h3>
+    <div data-swap-error></div>
+    {# Links, like the growth periods, so the page works without JS. Every window is already in
+       the response, so this reruns the same backtest; it doesn't ask portfolio for more. #}
+    {{ window_switch() }}
+    {# Only a swap (UX-10) can get here without risk figures: the page leaves the region out. #}
+    {% if risk is none %}
+    {% if backtest_error %}
+    {% call banner("error") %}<strong>Couldn't run the backtest.</strong> {{ backtest_error }}{% endcall %}
+    {% else %}
+    <p class="labs-note">No risk figures for this mix.</p>
+    {% endif %}
+    {% elif risk_comparison.covered %}
+    {# The benchmark is named once here, not under each of its four columns, which would widen
+       a table that already scrolls. #}
+    <p class="as-of">Over {{ risk_comparison.window }}, from <span class="mono">{{ risk_comparison.start | date }}</span> to <span class="mono">{{ risk_comparison.end | date }}</span>. {% if risk.benchmark.available %}Beta to information ratio are against {{ ticker(risk.benchmark.ticker, ticker_names) }}.{% else %}Beta to information ratio can't be measured against {{ ticker(risk.benchmark.ticker, ticker_names) }}: {{ risk.benchmark.reason }}.{% endif %}</p>
+    <div class="table-scroll" tabindex="0" role="region" aria-label="Risk of the mix and its assets over {{ risk_comparison.window }}">
+    <table class="positions-table holdings-table labs-table labs-risk-table stack-table" role="table">
+      <thead role="rowgroup">
+        <tr role="row">
+          <th role="columnheader">Asset</th>
+          {% for measure in risk_measures %}
+          <th class="num" role="columnheader">{{ measure_label(measure) }}</th>
+          {% endfor %}
+          {% for measure in relative_measures %}
+          <th class="num" role="columnheader">{{ measure_label(measure) }}</th>
+          {% endfor %}
+          <th class="num" role="columnheader">{{ term("Returns used", "returns-used") }}</th>
+        </tr>
+      </thead>
+      <tbody role="rowgroup">
+        {% for row in risk_comparison.rows %}
+        <tr role="row"{% if loop.first %} class="labs-mix-row"{% endif %}>
+          <td role="cell">{% if row.ticker is none %}Mix{% else %}{{ ticker(row.ticker, ticker_names) }}{% endif %}</td>
+          {% for cell in row.cells %}
+          <td class="num" role="cell" data-label="{{ risk_measures[loop.index0].label }}">{{ risk_cell(cell) }}</td>
+          {% endfor %}
+          {% for cell in row.relative_cells %}
+          <td class="num" role="cell" data-label="{{ relative_measures[loop.index0].label }}">{{ risk_cell(cell) }}</td>
+          {% endfor %}
+          <td class="num" role="cell" data-label="Returns used"><span class="risk-value">{% if row.returns_used %}<span class="mono">{{ row.returns_used }}</span>{% else %}<span class="entry-empty">Not enough history</span>{% endif %}</span></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    {% else %}
+    <p class="labs-note">Over {{ risk_comparison.window }}: {{ risk_comparison.reason }}.</p>
+    {% endif %}
+</div>

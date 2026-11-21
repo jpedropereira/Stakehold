@@ -84,3 +84,73 @@ def test_button_values_are_compared_as_text():
         ("0", "true"),
     ]
     assert '<span class="mono">All</span></button>' in html
+
+
+# --- UX-10: a switch that swaps its own region -------------------------------------------------
+
+SWAP_LINKS = {"1Y": "/labs?period=1Y#labs-growth", "5Y": "/labs?period=5Y&a=b#labs-growth"}
+
+
+def _options(html: str) -> list[str]:
+    return re.findall(r"<a [^>]*>", html)
+
+
+def test_a_plain_switch_has_no_htmx_attributes():
+    html = _links("Growth period", LINKS, "1Y")
+
+    assert "hx-" not in html
+    assert "data-swap-focus" not in html
+
+
+def test_a_swap_switch_fetches_its_link_without_the_anchor_into_its_region():
+    """htmx scrolls to a request URL's #anchor after a swap, so hx-get leaves it out; the href
+    keeps it, so a click without JS lands on the section."""
+    html = _links("Growth period", SWAP_LINKS, "1Y", swap="labs-growth")
+
+    first, second = _options(html)
+    assert 'href="/labs?period=1Y#labs-growth"' in first
+    assert 'hx-get="/labs?period=1Y"' in first
+    assert 'hx-get="/labs?period=5Y&amp;a=b"' in second
+    for option in (first, second):
+        assert 'hx-target="#labs-growth"' in option
+        assert 'hx-select="#labs-growth"' in option
+        assert 'hx-swap="outerHTML show:none"' in option
+        assert 'hx-indicator="#labs-growth"' in option
+        assert 'hx-sync="#labs-growth:replace"' in option
+        assert 'data-swap-focus="Growth period"' in option
+    # The address bar records the choice, anchor and all, so a reload lands on the section.
+    assert 'hx-push-url="/labs?period=1Y#labs-growth"' in first
+
+
+def test_a_swap_switch_still_marks_only_the_current_option():
+    html = _links("Growth period", SWAP_LINKS, "5Y", swap="labs-growth")
+
+    assert html.count('aria-current="true"') == 1
+    assert 'aria-current="true"' in _options(html)[1]
+
+
+def test_a_group_can_carry_an_id_and_be_swapped_out_of_band():
+    html = _links("Growth period", LINKS, "1Y", id="labs-periods", oob=True)
+
+    assert html.startswith(
+        '<div class="segmented" id="labs-periods" hx-swap-oob="true" role="group"'
+    )
+
+
+def test_a_group_with_an_id_is_not_out_of_band_by_default():
+    html = _links("Growth period", LINKS, "1Y", id="labs-periods")
+
+    assert 'id="labs-periods"' in html
+    assert "hx-swap-oob" not in html
+
+
+def test_swap_attrs_serve_a_link_outside_a_group():
+    """Risk's Exclude and Include links swap the ex-ante section the same way."""
+    attrs = str(
+        _MODULE.swap_attrs("/risk/ex-ante?exclude=AAPL#risk-ex-ante", "risk-ex-ante", "AAPL")
+    )
+
+    assert 'hx-get="/risk/ex-ante?exclude=AAPL"' in attrs
+    assert 'hx-target="#risk-ex-ante"' in attrs
+    assert 'hx-push-url="/risk/ex-ante?exclude=AAPL#risk-ex-ante"' in attrs
+    assert 'data-swap-focus="AAPL"' in attrs
