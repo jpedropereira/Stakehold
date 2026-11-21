@@ -160,7 +160,7 @@ def _page(test_client, url):
 
 
 def _subnav(page_html):
-    nav = re.search(r'<nav class="risk-subnav" aria-label="Risk">(.*?)</nav>', page_html, re.S)
+    nav = re.search(r'<nav class="risk-subnav"[^>]* aria-label="Risk">(.*?)</nav>', page_html, re.S)
     assert nav, "no risk sub-nav"
     return [
         (html_lib.unescape(href), current, label)

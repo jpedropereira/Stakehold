@@ -1,0 +1,203 @@
+{% from "partials/_banner.html" import banner %}
+{% from "partials/_term.html" import term %}
+{% from "partials/_benchmark_field.html" import benchmark_form %}
+{% from "partials/_rolling_charts.html" import rolling_block, pair_block %}
+{% from "partials/_regime_table.html" import regime_block %}
+{% from "partials/_ticker.html" import ticker %}
+{% from "partials/_segmented.html" import segmented_links, swap_attrs %}
+{% from "partials/_risk_figures.html" import figure, summary_row, legend, left_out %}
+{# /risk/ex-ante's section (UX-10): what its window switch and its Exclude and Include links
+   swap. Each keeps the rest of the query, so the sub-nav is the one thing outside it to send
+   again (risk_ex_ante_swap.html). Focus after a swap goes to the link for the same ticker
+   (Exclude X, then "Include X again"), else to the heading. #}
+  <section class="risk-section" aria-labelledby="risk-ex-ante-title" id="risk-ex-ante" data-swap-region data-swap-announce="Ex-ante over {{ ex_ante_window }}{% if ex_ante and ex_ante.excluded %}, excluding {{ ex_ante.excluded | join(', ') }}{% endif %}">
+    <h2 id="risk-ex-ante-title" tabindex="-1">Ex-ante · constant weights</h2>
+    <div data-swap-error></div>
+    <p class="entry-subtitle">How today's mix would have behaved had you held it, at today's
+      weights, through the whole window: historical figures ({{ term("ex-ante", "ex-ante") }}),
+      in euros with dividends included. They differ from the
+      <a href="{{ risk_nav[0][1] }}">ex-post figures</a>, which follow what you actually held.</p>
+    {% if ex_ante_error %}
+    {% call banner("error") %}<strong>Couldn't load the ex-ante figures.</strong> {{ ex_ante_error }}{% endcall %}
+    {% elif ex_ante is none %}
+    <p class="entry-empty">Nothing to measure yet — ex-ante figures start once a holding has a
+      price. <a href="/accounts">Add transactions to an account</a>.</p>
+    {% else %}
+    {{ segmented_links("Ex-ante window", ex_ante.window_links, ex_ante_window, mono=true, swap="risk-ex-ante") }}
+    {# UX-6: this section sends the benchmark too (the heatmap's row, the regimes, the pair), so
+       its page has the field as well. Same ?benchmark=, so the two can't disagree. #}
+    {{ benchmark_form("/risk/ex-ante", "risk-ex-ante", benchmark, benchmark_error, tickers, tickers_notice, ticker_names, kept=benchmark_kept, anchor="#risk-ex-ante") }}
+    {% if ex_ante.column is none %}
+    <p class="entry-empty">None of your holdings could be measured, so there are no ex-ante
+      figures.</p>
+    {% else %}
+    {% if not ex_ante.rf_available %}
+    {% call banner("warning") %}<strong>No risk-free rate.</strong> Without it, downside deviation, Sharpe and Sortino can't be measured, so they're greyed.{% endcall %}
+    {% endif %}
+    {% set window = ex_ante.window %}
+    <p class="as-of">{% if window.start %}Measured from <span class="mono">{{ window.start | date }}</span> to <span class="mono">{{ window.end | date }}</span>{% if window.limited_by %}, not from <span class="mono">{{ window.requested_start | date }}</span>: the window is limited by <span class="mono">{{ window.limited_by | join(", ") }}</span>, whose history starts later{% endif %}.{% else %}The holdings' histories don't overlap, so nothing could be measured over {{ window.label }}.{% endif %}
+      Hover a figure for its window and number of returns.</p>
+    {% if ex_ante.exclude_links %}
+    <p class="labs-note">{% for symbol, url in ex_ante.exclude_links %}<a href="{{ url }}" {{ swap_attrs(url, "risk-ex-ante", symbol) }}>Exclude {{ ticker(symbol, ticker_names, focusable=false) }}</a>{% if not loop.last %} · {% endif %}{% endfor %} to measure the other holdings over the longer window.</p>
+    {% endif %}
+    {% if ex_ante.include_links %}
+    <p class="labs-note">Excluded at your request: {% for symbol, url in ex_ante.include_links %}{{ ticker(symbol, ticker_names) }} (<a href="{{ url }}" {{ swap_attrs(url, "risk-ex-ante", symbol) }}>Include {{ ticker(symbol, ticker_names, focusable=false) }} again</a>){% if not loop.last %}, {% endif %}{% endfor %}. The other weights were scaled to 100%.</p>
+    {% endif %}
+
+    <div class="table-scroll" tabindex="0" role="region" aria-label="Ex-ante risk figures">
+    <table class="positions-table holdings-table risk-table stack-table" role="table">
+      <thead role="rowgroup">
+        <tr role="row">
+          <th role="columnheader" scope="col">Measure</th>
+          {% set column = ex_ante.column %}
+          <th class="num" role="columnheader" scope="col">{{ column.label }}<span class="period-start"><span class="mono">{{ column.start | date }}</span> to <span class="mono">{{ column.end | date }}</span></span>{% if not column.covered %}<span class="period-start">{{ column.reason }}</span>{% endif %}</th>
+        </tr>
+      </thead>
+      <tbody role="rowgroup">
+        {% for row in ex_ante.summary_rows %}
+        {{ summary_row(row, [ex_ante.column]) }}
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    {% if ex_ante.effective_n is not none %}
+    <p class="labs-note">{{ term("Effective number of holdings", "effective-n") }}: <span class="mono">{{ "%.1f" | format(ex_ante.effective_n) }}</span>, from the weights alone.</p>
+    {% endif %}
+    {{ legend(ex_ante.legend) }}
+
+    {# Spec §5.5: the constant-weight 1-day VaR on the measured holdings' market value. #}
+    <h3>On a bad day</h3>
+    <ul class="risk-tail">
+      {% for tail in ex_ante.tail_euros %}
+      <li>{% if tail.euros is not none %}On a bad day ({{ tail.odds }}), today's mix would historically have lost at least <span class="mono">{{ tail.euros | money }}</span> of the <span class="mono">{{ ex_ante.measured_value | money }}</span> measured (<span class="mono">{{ tail.pct | pct1 }}</span>, 1-day {{ term("VaR", "var") }} {{ tail.level }}%).{% else %}1-day VaR {{ tail.level }}% ({{ tail.odds }}): <span class="risk-greyed">{{ tail.reason }}</span>{% endif %}</li>
+      {% endfor %}
+    </ul>
+
+    {% set dec = ex_ante.decomposition %}
+    {% if dec %}
+    <h3>Where the risk comes from</h3>
+    {% for named in dec.outsized %}
+    <p class="risk-insight">{{ ticker(named.ticker, ticker_names) }} is <span class="mono">{{ named.weight | pct1 }}</span> of the money and <span class="mono">{{ named.pcr | pct1 }}</span> of the risk.</p>
+    {% endfor %}
+    {% for named in dec.hedges %}
+    <p class="risk-hedge">{{ ticker(named.ticker, ticker_names) }} lowered the mix's volatility: its {{ term("share of risk", "share-of-risk") }} is <span class="mono">{{ named.pcr | pct1 }}</span>.</p>
+    {% endfor %}
+    {% if dec.reason %}
+    <p class="labs-note">Only the weights can be shown: {{ dec.reason }}.</p>
+    {% endif %}
+    <div class="table-scroll" tabindex="0" role="region" aria-label="Risk decomposition">
+    <table class="positions-table holdings-table risk-table risk-decomposition stack-table" role="table">
+      <thead role="rowgroup">
+        <tr role="row">
+          <th role="columnheader" scope="col">Holding</th>
+          <th class="num" role="columnheader" scope="col">Weight</th>
+          <th class="num" role="columnheader" scope="col">{{ term("Share of risk", "share-of-risk") }}</th>
+          <th class="num" role="columnheader" scope="col">Risk ÷ weight</th>
+          <th class="num" role="columnheader" scope="col">{{ term("Volatility", "volatility") }}<span class="period-start">weekly</span></th>
+          <th class="num" role="columnheader" scope="col">{{ term("Contribution", "share-of-risk") }}<span class="period-start">to σ<sub>p</sub></span></th>
+          <th class="num" role="columnheader" scope="col">Correlation<span class="period-start">with the mix</span></th>
+        </tr>
+      </thead>
+      <tbody role="rowgroup">
+        {% for row in dec.rows %}
+        <tr role="row"{% if row.outsized %} class="risk-outsized"{% endif %}>
+          <th role="rowheader" scope="row">{{ ticker(row.ticker, ticker_names) }}</th>
+          <td class="num" role="cell" data-label="Weight"><span class="mono">{{ row.weight | pct1 }}</span></td>
+          {% for value, label, fmt in ((row.pcr, "Share of risk", "pct1"), (row.risk_to_weight, "Risk ÷ weight", "ratio"), (row.volatility, "Volatility", "pct1"), (row.cr, "Contribution", "pct1"), (row.corr_with_portfolio, "Correlation", "ratio")) %}
+          <td class="num" role="cell" data-label="{{ label }}" title="{{ dec.title }}">{% if value is none %}<span class="risk-greyed">Not measured</span>{% elif fmt == "ratio" %}<span class="mono">{{ value | ratio }}</span>{% else %}<span class="mono">{{ value | pct1 }}</span>{% endif %}</td>
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    {% endif %}
+
+    {% set fx = ex_ante.fx_decomposition %}
+    {% if fx %}
+    {# RK-26, spec §6.4: each non-EUR holding's risk split into its own market's and its
+       currency's, on the decomposition's weeks. Every figure is in ink: none is a gain or a
+       loss. #}
+    <h3>How much of the risk is the currency</h3>
+    {% if fx.rows %}
+    <p class="labs-note">For each holding priced in another currency, historically: the {{ term("volatility", "volatility") }} of its weekly returns in its own currency, of that currency against the euro, how the two moved together, and the volatility you held in euros, which combines all three. A negative correlation means the currency partly offset the holding's moves. Measured over the same weeks as the share of risk above. See {{ term("FX decomposition", "fx-decomposition") }}.</p>
+    <div class="table-scroll" tabindex="0" role="region" aria-label="FX decomposition">
+    <table class="positions-table holdings-table risk-table stack-table" role="table">
+      <thead role="rowgroup">
+        <tr role="row">
+          <th role="columnheader" scope="col">Holding</th>
+          <th role="columnheader" scope="col">Currency</th>
+          {% for column in fx.columns %}
+          <th class="num" role="columnheader" scope="col">{{ column.label }}<span class="period-start">weekly · {{ column.note }}</span></th>
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody role="rowgroup">
+        {% for row in fx.rows %}
+        <tr role="row">
+          <th role="rowheader" scope="row">{{ ticker(row.ticker, ticker_names) }}</th>
+          <td role="cell" data-label="Currency"><span class="mono">{{ row.currency }}</span></td>
+          {% for cell in row.cells %}
+          {% set column = fx.columns[loop.index0] %}
+          <td class="num" role="cell" data-label="{{ column.label }}" title="{{ cell.title }}"><span class="risk-value">
+            {%- if cell.value is not none -%}{{ figure(cell.value, column.kind) }}{%- else -%}<span class="risk-greyed">{{ cell.reason }}</span>{%- endif -%}
+            {%- if cell.markers %}<sup class="risk-flag">{{ cell.markers | join(", ") }}</sup>{% endif -%}
+          </span></td>
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    {% else %}
+    <p class="labs-note">Every holding measured is in euros, so there is no currency risk to split out.</p>
+    {% endif %}
+    {% endif %}
+
+    {% set heat = ex_ante.heatmap %}
+    {% if heat %}
+    {# Pairwise, for display only (R13): each square over the weeks that pair shares inside
+       the requested window. The ink ramp shades ρ from 0 to 1; ρ at or below 0.2 is unfilled,
+       and the printed number carries its sign. #}
+    <h3>How the holdings move together</h3>
+    <p class="labs-note">The {{ term("correlation", "correlation-matrix") }} of weekly euro returns over {{ window.label }}, each pair over the weeks both have, historically. Darker squares moved more closely together. Hover a square for its weeks.</p>
+    <div class="table-scroll" tabindex="0" role="region" aria-label="Correlation matrix">
+    <table class="risk-heatmap" role="table">
+      <thead role="rowgroup">
+        <tr role="row">
+          <th role="columnheader" scope="col"><span class="visually-hidden">Holding</span></th>
+          {% for key in heat.keys %}
+          <th role="columnheader" scope="col"><span class="mono">{{ key }}</span>{% if key == heat.benchmark_key %}<span class="period-start">benchmark</span>{% endif %}</th>
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody role="rowgroup">
+        {% for row in heat.rows %}
+        <tr role="row">
+          <th role="rowheader" scope="row"><span class="mono">{{ heat.keys[loop.index0] }}</span></th>
+          {% for cell in row %}
+          <td role="cell" class="corr-cell {{ cell.css_class }}" title="{{ cell.title }}">{% if cell.value is none %}<span class="risk-greyed">n/a</span>{% else %}<span class="mono">{{ cell.value | ratio }}</span>{% endif %}</td>
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    <ul class="corr-legend" aria-label="Shades">
+      <li><span class="corr-swatch corr-0"></span> below <span class="mono">0.2</span>, or negative</li>
+      <li><span class="corr-swatch corr-1"></span> <span class="mono">0.2</span>–<span class="mono">0.4</span></li>
+      <li><span class="corr-swatch corr-2"></span> <span class="mono">0.4</span>–<span class="mono">0.6</span></li>
+      <li><span class="corr-swatch corr-3"></span> <span class="mono">0.6</span>–<span class="mono">0.8</span></li>
+      <li><span class="corr-swatch corr-4"></span> <span class="mono">0.8</span>–<span class="mono">1</span></li>
+      {% if heat.any_greyed %}<li><span class="corr-swatch corr-greyed"></span> n/a: not measured, the square's title says why</li>{% endif %}
+    </ul>
+    {% endif %}
+    {% endif %}
+
+    {{ rolling_block(ex_ante_rolling.charts, "today's mix", "risk-ex-ante-rolling") }}
+    {{ pair_block(ex_ante_rolling.correlation, ticker_names) }}
+    {{ regime_block(ex_ante_regimes, "Today's mix", "today's mix", "risk-ex-ante-regimes", ticker_names) }}
+
+    {{ left_out(ex_ante.left_out, ticker_names) }}
+    {% endif %}
+  </section>

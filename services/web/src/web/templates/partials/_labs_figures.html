@@ -1,0 +1,52 @@
+{% from "partials/_ticker.html" import ticker, ticker_list %}
+{% from "partials/_term.html" import term %}
+{% from "partials/_segmented.html" import segmented_links %}
+{% from "partials/_kept.html" import kept_inputs %}
+{# What /labs and its section swaps (UX-10, labs_swap.html) both draw. Imported with context:
+   the macros read the page's ticker_names, and the switches and hidden inputs read the
+   period, the window and their links. #}
+{# The mix's figures and line cover only the assets whose history covers the period (LB-9);
+   this names the rest, for `first` to `last` of the periods. #}
+{% macro mix_leaves_out(first, last, tickers) -%}
+{% if first == last %}Over {{ first }}{% else %}From {{ first }} to {{ last }}{% endif %} the mix leaves out {{ ticker_list(tickers, ticker_names) }}: not enough history.
+{%- endmacro %}
+{# A risk figure (labs_risk_view.RiskCell): its value in mono, with a Sharpe's standard error
+   and any flags as notes; greyed, its reason (R9); none, a window that isn't covered. One
+   .risk-value around it all, so a stacked row keeps the figure, its ± and its notes together
+   opposite the label. #}
+{% macro risk_cell(cell) -%}
+<span class="risk-value">
+{%- if cell is none -%}
+<span class="entry-empty">Not enough history</span>
+{%- elif cell.text is none -%}
+<span class="entry-empty risk-reason">{{ cell.reason }}</span>
+{%- else -%}
+<span class="mono{% if cell.css_class %} {{ cell.css_class }}{% endif %}">{{ cell.text }}</span>
+{%- if cell.standard_error %} <span class="mono risk-se">{{ cell.standard_error }}</span>{% endif %}
+{%- for note in cell.notes %} <span class="risk-note">{{ note }}</span>{% endfor %}
+{%- endif -%}
+</span>
+{%- endmacro %}
+{# A measure's label: its glossary link, then its frequency (spec §10), and for a Sharpe what
+   its ± is. #}
+{% macro measure_label(measure) -%}
+{{ term(measure.label, measure.anchor) }}<span class="risk-frequency">{{ measure.frequency }}{% if measure.kind == "sharpe" %} · ± 1 s.e.{% endif %}</span>
+{%- endmacro %}
+{# The heading of the figures against the benchmark (RK-14): its ticker and first date, or why
+   it couldn't be used at all, said once for every cell under it. #}
+{% macro against_heading(bench) -%}
+Against {{ ticker(bench.ticker, ticker_names) }}{% if not bench.available %}: unavailable, {{ bench.reason }}{% elif bench.first_date %}, history from <span class="mono">{{ bench.first_date | date }}</span>{% endif %}
+{%- endmacro %}
+{# The two switches, each swapping its own region (UX-10). Each also sits in the other's swap
+   response, out of band, since its links carry the other's choice. #}
+{% macro period_switch(oob=false) -%}
+{{ segmented_links("Growth period", period_links, period, mono=true, class_="labs-periods", id="labs-periods", swap="labs-growth", oob=oob) }}
+{%- endmacro %}
+{% macro window_switch(oob=false) -%}
+{{ segmented_links("Comparison window", risk_window_links, risk_window, mono=true, class_="labs-risk-windows", id="labs-risk-windows", swap="labs-risk-compare", oob=oob) }}
+{%- endmacro %}
+{# The mix form's hidden inputs: the chart's period, the risk comparison's window and the
+   benchmark stay chosen across an update. #}
+{% macro form_kept(oob=false) -%}
+{{ kept_inputs("labs-form-kept", [("period", period), ("risk_window", risk_window), ("benchmark", benchmark)], oob=oob) }}
+{%- endmacro %}

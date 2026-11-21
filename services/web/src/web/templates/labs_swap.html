@@ -1,0 +1,14 @@
+{% from "partials/_labs_figures.html" import period_switch, window_switch, form_kept with context %}
+{% from "partials/_kept.html" import kept_inputs %}
+{# The answer to a Labs switch's htmx request (UX-10, api/labs.py): the region it swaps, then,
+   out of band, everything outside it whose query carries the choice, so no link or form on the
+   page goes stale and undoes it. #}
+{% if swap_target == "labs-growth" %}
+{% include "partials/_labs_growth.html" %}
+{% if risk %}{{ window_switch(oob=true) }}{% endif %}
+{% else %}
+{% include "partials/_labs_compare.html" %}
+{{ period_switch(oob=true) }}
+{% endif %}
+{% if risk %}{{ kept_inputs("labs-benchmark-kept", benchmark_kept, oob=true) }}{% endif %}
+{{ form_kept(oob=true) }}

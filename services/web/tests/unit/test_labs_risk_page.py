@@ -544,7 +544,9 @@ def test_risk_window_links_keep_the_mix_and_the_period(client):
     links = _links(_page(test_client, "?ticker=AAPL&weight=100&period=5Y"), "labs-risk-windows")
 
     assert [label for label, _, _ in links] == list(BACKTEST_RISK_WINDOWS)
-    assert links[1][1] == "/labs?ticker=AAPL&weight=100&period=5Y&risk_window=3Y#labs-risk"
+    assert links[1][1] == (
+        "/labs?ticker=AAPL&weight=100&period=5Y&risk_window=3Y#labs-risk-compare"
+    )
 
 
 def test_period_links_keep_the_risk_window(client):
@@ -553,7 +555,7 @@ def test_period_links_keep_the_risk_window(client):
 
     links = _links(_page(test_client, "?risk_window=3Y"), "labs-periods")
 
-    assert links[0][1] == "/labs?risk_window=3Y&period=1M"
+    assert links[0][1] == "/labs?risk_window=3Y&period=1M#labs-growth"
 
 
 def test_the_mix_form_keeps_the_risk_window(client):

@@ -361,3 +361,13 @@ file in the same change. The server side of `/risk` (its router, the upstream ca
     data, ex-ante's Max can overlap 60+ regimes, which open tables would turn into a page of
     their own. The legend stays outside the groups, so it shows while they are closed. No JS.
     *Rejected: opening the first group*, which would favour one dimension for no reason.
+- **The ex-ante switches and the ranking's order swap their own section (UX-10).** On
+  `/risk/ex-ante` the window and the Exclude/Include links swap `#risk-ex-ante`
+  (`partials/_risk_ex_ante_section.html`). After Exclude X, focus lands on "Include X again".
+  On `/risk/what-if` the order swaps `#risk-ranking` (`partials/_risk_ranking_section.html`).
+  That reruns the what-if too, as the full page did. Out of band, each swap also sends the
+  sub-nav (`partials/_risk_subnav.html`), whose links carry the whole query. The ranking's swap
+  also sends the window line (`partials/_risk_window_line.html`) and the what-if form's hidden
+  inputs. The rolling-chart scripts now load on every `/risk/ex-ante` view: a window can bring a
+  chart the first view didn't have. The pattern: "Section switches" in
+  [`ui-architecture.md`](ui-architecture.md).

@@ -98,7 +98,7 @@ Earlier chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archive/):
 | UX-7 | [Secondary detail behind disclosures](#ux-7-secondary-detail-behind-disclosures) | UX-6 | ready |
 | UX-8 | [Labs: mix editor first](#ux-8-labs-mix-editor-first) | UX-0 | done |
 | UX-9 | [Copy density pass](#ux-9-copy-density-pass) | UX-6, UX-7, UX-8 | blocked |
-| UX-10 | [Period switches without a page reload](#ux-10-period-switches-without-a-page-reload) | UX-0 | ready |
+| UX-10 | [Period switches without a page reload](#ux-10-period-switches-without-a-page-reload) | UX-0 | done |
 | UX-11 | [Forms beside the list they add to](#ux-11-forms-beside-the-list-they-add-to) | UX-0 | ready |
 
 ## Tasks
@@ -456,7 +456,7 @@ Tests: page tests that assert copy are updated. Glossary links still land (exist
 
 ### UX-10. Period switches without a page reload
 
-**Status:** ready
+**Status:** done
 
 **Scope.** These switches reload the whole page today:
 
@@ -535,6 +535,46 @@ The approach:
 - `static/web.css`
 - `docs/ui-architecture.md` (partial-swap pattern), `docs/labs-ui.md` and `docs/risk-ui.md`
 - `docs/architecture.md`, because routes now return partials
+
+Done as:
+- **One task, Labs and Risk (agreed).** A split was planned while UX-6 was open, since the
+  ex-ante window also changed the what-if and the ranking on the one `/risk` page. UX-6 landed
+  first, so Risk came in here. The ex-ante window and Exclude/Include swap `#risk-ex-ante` on
+  `/risk/ex-ante`; the order swaps `#risk-ranking` on `/risk/what-if`.
+- **Out-of-band carriers (agreed), not in the task text.** Other elements carry the same query,
+  and would have undone a switch:
+  - the other switch
+  - the benchmark and mix forms' hidden inputs (`partials/_kept.html`)
+  - Risk's sub-nav (it carries the whole query since UX-6)
+  - `/risk/what-if`'s window line
+
+  The swap response (`*_swap.html`) sends each again with `hx-swap-oob`.
+- **`hx-get` drops the anchor**, unlike the task text's "same URL as `href`": htmx 1.9 scrolls
+  to a request URL's anchor after the swap. `hx-push-url` keeps it.
+- **Three htmx settings in `base.html`.**
+  - `historyCacheSize: 0`, so no page snapshot lands in `localStorage`, where its figures would
+    outlive logout.
+  - `refreshOnHistoryMiss`, so Back reloads the previous URL.
+  - `attributesToSettle: ["class"]`. htmx's default copies `style` onto a swapped-in canvas with
+    `setAttribute`, which the CSP blocked.
+- **`overflow-anchor: none` on regions.** htmx inserts the new region before removing the old,
+  and Chrome's scroll anchoring followed an old node: the phone ranking jumped 2,800px.
+- **Double clicks.** `hx-sync` replaces the request rather than disabling the switch; the region
+  is dimmed below its heading and switch.
+- **Focus** returns to the selected option, or to the link for the same ticker (Exclude X
+  becomes "Include X again"), else to the heading. The announcement is server-written
+  (`data-swap-announce`).
+- **Charts.** `chart_theme.js` `mount` draws on load and after each swap, so scripts load once,
+  outside the regions. The rolling-chart scripts now load on every `/risk/ex-ante` view.
+- **The ranking's order still reruns the what-if**, as the full page did. The server work is
+  unchanged everywhere; only the response shrinks.
+- **Checked.**
+  - `review_pages.py` gained five `*-swap` states. Each asserts the scroll, the URL, the focus,
+    the redrawn charts, and that Back undoes it. All 50 passed.
+  - By hand in a browser: the dimmed busy state, a 500 and a dropped connection (banner in the
+    section, old content kept), the Exclude-to-Include focus, the announcement, and a no-JS click
+    landing on its section.
+
 
 ### UX-11. Forms beside the list they add to
 

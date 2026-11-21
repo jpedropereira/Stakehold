@@ -1,0 +1,7 @@
+{# The Risk sub-nav (UX-6). Its links carry the whole query, so a section swap that changes
+   the query (UX-10) sends it again out of band (oob, set by the swap templates). #}
+<nav class="risk-subnav" id="risk-subnav"{% if oob %} hx-swap-oob="true"{% endif %} aria-label="Risk">
+  {% for key, href, label in risk_nav %}
+  <a href="{{ href }}"{% if risk_nav_active == key %} aria-current="page"{% endif %}>{{ label }}</a>
+  {% endfor %}
+</nav>

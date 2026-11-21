@@ -1,0 +1,10 @@
+{% from "partials/_kept.html" import kept_inputs %}
+{# The answer to the ranking order's htmx request (UX-10, api/risk.py): the ranking, then, out
+   of band, what else carries the order: the sub-nav, the window line and the what-if form's
+   hidden inputs. #}
+{% include "partials/_risk_ranking_section.html" %}
+{% with oob = true %}
+{% include "partials/_risk_subnav.html" %}
+{% include "partials/_risk_window_line.html" %}
+{% endwith %}
+{% if what_if_form is not none %}{{ kept_inputs("risk-what-if-kept", what_if_kept, oob=true) }}{% endif %}

@@ -391,7 +391,7 @@ def test_the_order_switch_marks_the_chosen_measure(client):
 
     group = _order_group(_get(test_client, f"{RANK_QUERY}&rank_by=diversification_ratio"))
 
-    current = re.findall(r'href="([^"]*)" aria-current="true">([^<]*)<', group)
+    current = re.findall(r'href="([^"]*)" aria-current="true"[^>]*>([^<]*)<', group)
     assert len(current) == 1
     assert "rank_by=diversification_ratio" in html.unescape(current[0][0])
     assert current[0][1] == "Diversification ratio"
