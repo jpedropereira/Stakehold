@@ -52,6 +52,9 @@ ENTRIES = (
     "correlation",
     "tracking-error",
     "information-ratio",
+    # The what-if and its ranking (UX-9), on /risk/what-if.
+    "what-if",
+    "candidate-ranking",
 )
 
 
@@ -181,3 +184,51 @@ def test_the_relative_terms_say_weekly(client):
 
     for anchor in ("beta", "correlation", "tracking-error", "information-ratio"):
         assert "weekly" in _entry(html, anchor), anchor
+
+
+# --- copy (UX-9): the detail the pages' notes left to the glossary --------------------------------
+
+
+def _words(markup):
+    return " ".join(re.sub(r"<[^>]+>", " ", markup).split())
+
+
+def test_the_intro_is_one_sentence(client):
+    test_client, fake_auth = client
+    _logged_in(test_client, fake_auth)
+
+    html = test_client.get("/glossary").text
+
+    intro = _words(re.search(r'<p class="entry-subtitle">(.*?)</p>', html, re.S).group(1))
+    assert len([s for s in re.split(r"(?<=[.!?])\s+(?=[A-Z])", intro) if s]) == 1, intro
+
+
+def test_the_what_if_says_how_the_candidate_is_funded_and_held(client):
+    test_client, fake_auth = client
+    _logged_in(test_client, fake_auth)
+
+    entry = _words(_entry(test_client.get("/glossary").text, "what-if"))
+
+    assert "pro-rata" in entry and "replac" in entry
+    assert "constant weights" in entry and "ex-ante window" in entry
+    assert "historical" in entry
+
+
+def test_the_ranking_says_why_it_never_orders_by_sharpe(client):
+    test_client, fake_auth = client
+    _logged_in(test_client, fake_auth)
+
+    entry = _words(_entry(test_client.get("/glossary").text, "candidate-ranking"))
+
+    assert "same weight" in entry and "pro-rata" in entry
+    assert "never ordered by" in entry and "mostly luck" in entry
+    assert "historical" in entry
+
+
+def test_the_rolling_window_says_weekly_returns(client):
+    test_client, fake_auth = client
+    _logged_in(test_client, fake_auth)
+
+    entry = _words(_entry(test_client.get("/glossary").text, "rolling-window"))
+
+    assert "weekly returns" in entry and "month end" in entry

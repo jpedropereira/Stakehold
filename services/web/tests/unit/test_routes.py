@@ -1997,3 +1997,15 @@ def test_a_successful_write_does_not_fetch_the_account_header(client):
 
     assert response.status_code == 303
     assert fake_portfolio.list_accounts_calls == 0
+
+
+def test_the_mappings_intro_is_one_sentence_and_the_form_says_what_saving_does(client):
+    """UX-9: one sentence per intro; what a save rebuilds is said beside the form that saves."""
+    test_client, _, fake_auth, fake_portfolio = client
+    _logged_in_as_admin(test_client, fake_auth)
+
+    html = test_client.get("/admin/mappings").text
+
+    intro, form_note = re.findall(r'<p class="entry-subtitle">(.*?)</p>', html, re.S)[:2]
+    assert len([s for s in re.split(r"(?<=[.!?])\s+(?=[A-Z])", intro) if s]) == 1, intro
+    assert "rebuilds the positions" in form_note

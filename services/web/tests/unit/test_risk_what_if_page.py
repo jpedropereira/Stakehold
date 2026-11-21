@@ -25,11 +25,13 @@ from web.auth_client.errors import SessionInvalid
 from web.portfolio_client.base import (
     BacktestAssetStatus,
     BenchmarkStatus,
+    CandidateRanking,
     ExAnteRisk,
     ExPostRisk,
     Holding,
     Holdings,
     LookThrough,
+    RankingWindow,
     RiskFigure,
     WhatIf,
     WhatIfCandidate,
@@ -179,6 +181,7 @@ class FakePortfolioClient:
         self.ex_ante_error: Exception | None = None
         self.what_if_result: WhatIf = _what_if()
         self.what_if_error: Exception | None = None
+        self.ranking_result = None
 
     async def list_tickers(self):
         return self.tickers
@@ -219,6 +222,12 @@ class FakePortfolioClient:
         if self.what_if_error:
             raise self.what_if_error
         return self.what_if_result
+
+    async def rank_candidates(self, *, assets, weight, window, exclude, rank_by):
+        # The ranking's own tests are test_risk_ranking_page.py.
+        if self.ranking_result is None:
+            raise PortfolioUnavailable("not under test here")
+        return self.ranking_result
 
 
 def _settings() -> Settings:
@@ -723,3 +732,53 @@ def test_a_holding_the_what_if_couldnt_measure_is_named(client):
 
     item = re.search(r"<li>(?:(?!</li>).)*no FX series for USD.*?</li>", section, re.S).group(0)
     assert _NAMED.format("TSLA") in item
+
+
+# --- copy (UX-9) ---------------------------------------------------------------------------------
+
+HOVER = "Hover a figure for its window and number of returns"
+
+
+def _intro(section: str) -> str:
+    return re.search(r'<p class="entry-subtitle">(.*?)</p>', section, re.S).group(1)
+
+
+def _sentences(markup: str) -> list[str]:
+    text = " ".join(html.unescape(re.sub(r"<[^>]+>", " ", markup)).split())
+    return [s for s in re.split(r"(?<=[.!?])\s+(?=[A-Z])", text) if s]
+
+
+def test_the_intro_is_one_historical_sentence_with_its_glossary_link(client):
+    test_client, _ = client
+
+    intro = _intro(_get(test_client))
+
+    assert len(_sentences(intro)) == 1, _sentences(intro)
+    assert 'href="/glossary#what-if"' in intro
+    assert "historical" in intro and "expected" not in intro
+
+
+def test_the_hover_note_shows_once_with_both_the_what_if_and_the_ranking(client):
+    test_client, fake = client
+    fake.ranking_result = CandidateRanking(
+        label=LABEL,
+        rf_available=True,
+        statuses=tuple(BacktestAssetStatus(t, "included", None) for t, _ in _MIX),
+        nothing=None,
+        universe=0,
+        cap=50,
+        over_cap=(),
+        weight=0.05,
+        rank_by="sigma_p",
+        window=RankingWindow("3Y", date(2023, 10, 16), START, END),
+        ranked=(),
+        greyed=(),
+        unranked=(),
+    )
+
+    response = test_client.get(f"/risk/what-if{WHAT_IF_QUERY}&rank_weight=5")
+
+    assert response.status_code == 200
+    assert "Measured from 2023-10-20" in _text(_section(response.text))  # the what-if ran
+    assert "Each ticker at" in _text(response.text)  # and the ranking did
+    assert _text(response.text).count(HOVER) == 1

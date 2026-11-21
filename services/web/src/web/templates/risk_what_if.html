@@ -20,9 +20,8 @@
   {% include "partials/_risk_window_line.html" %}
   <section class="risk-section" aria-labelledby="risk-what-if-title" id="risk-what-if">
     <h2 id="risk-what-if-title">What if · adding a candidate</h2>
-    <p class="entry-subtitle">How today's mix would have behaved with a candidate added, against
-      the mix as it is, both held at constant weights over the ex-ante window: historical
-      figures, not a forecast.</p>
+    <p class="entry-subtitle">How today's mix would have behaved, historically, with a candidate
+      added ({{ term("what if", "what-if") }}).</p>
     {% if what_if_form is none %}
     {% if what_if_error %}
     {% call banner("error") %}<strong>Couldn't load your holdings to compare against.</strong> {{ what_if_error }}{% endcall %}

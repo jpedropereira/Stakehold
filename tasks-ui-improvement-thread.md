@@ -97,7 +97,7 @@ Earlier chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archive/):
 | UX-6 | [Risk sub-pages and sub-nav](#ux-6-risk-sub-pages-and-sub-nav) | UX-0 | done |
 | UX-7 | [Secondary detail behind disclosures](#ux-7-secondary-detail-behind-disclosures) | UX-6 | done |
 | UX-8 | [Labs: mix editor first](#ux-8-labs-mix-editor-first) | UX-0 | done |
-| UX-9 | [Copy density pass](#ux-9-copy-density-pass) | UX-6, UX-7, UX-8 | ready |
+| UX-9 | [Copy density pass](#ux-9-copy-density-pass) | UX-6, UX-7, UX-8 | done |
 | UX-10 | [Period switches without a page reload](#ux-10-period-switches-without-a-page-reload) | UX-0 | done |
 | UX-11 | [Forms beside the list they add to](#ux-11-forms-beside-the-list-they-add-to) | UX-0 | done |
 
@@ -484,7 +484,7 @@ Done as:
 
 ### UX-9. Copy density pass
 
-**Status:** ready
+**Status:** done
 
 Done last, once the structure has settled.
 
@@ -495,6 +495,39 @@ Done last, once the structure has settled.
 - **Voice.** Copy follows chapter IV of the brand charter.
 
 Tests: page tests that assert copy are updated. Glossary links still land (existing tests).
+
+Done as:
+- **Docs first.** `ui-architecture.md` was 63.3KB. A preparatory commit moved its Glossary entry
+  to a new `docs/copy-ui.md`, which now holds UX-9's rules too.
+- **Intros.** One sentence each, with a `term()` link to the section's own entry. This covers:
+  - every Risk section, the Labs risk fold, the glossary and the first-run cards
+  - Admin mappings and Add a ticker, which get no link since they show no figures
+- **Glossary (agreed: cut, and add entries).** New `#what-if` and `#candidate-ranking` hold
+  what the what-if and ranking intros and the ranking's Sharpe note cut. Every other cut was
+  already in its entry, so the rest is one added phrase: "weekly returns" in `#rolling-window`.
+- **Method notes, one sentence each:**
+  - the rolling, pair and regime notes, which drop "Open a group to see its regimes"
+  - the FX and heatmap notes
+  - the listing-currency note
+  - the ranking's order note
+- **A chart's key stays beside it** (not in the plan). The Sharpe band and the drawdown line's
+  break became clauses rather than moving to the glossary, as the heatmap's shade key stayed
+  in UX-7.
+- **Once per page.**
+  - "Hover a figure…" sits on the what-if's as-of line when that table shows, else on the
+    ranking's. Putting it on the window line was planned and dropped: that line shows before
+    either table has figures.
+  - The holdings pages' empty return history repeats the freshness note only without an as-of
+    line.
+  - Add a ticker gives the load time once.
+  - Labs' Left out notes drop their "Left out:" prefix.
+- **R15 per block (agreed).** "historical" stays in each block's one sentence. The existing R15
+  tests are unchanged.
+- **Not changed:**
+  - the marker legends, each one the key to its own table
+  - banners
+  - the view modules' reason strings
+  - the new-transaction amount hints, which JS shows one at a time
 
 ### UX-10. Period switches without a page reload
 

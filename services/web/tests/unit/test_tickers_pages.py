@@ -619,3 +619,18 @@ def test_a_failed_add_keeps_the_list_beside_the_form(client):
     form, tickers = _columns(response)
     assert "Try again tomorrow" in form
     assert "ASML.AS Holding" in tickers
+
+
+# --- copy (UX-9) ---------------------------------------------------------------------------------
+
+
+def test_the_add_page_says_how_long_prices_take_once(client):
+    test_client, fake_auth, _ = client
+    _log_in(test_client, fake_auth)
+
+    response = test_client.get("/tickers/new", params={"symbol": "asml.as"})
+
+    assert "Add ASML.AS" in text(response)
+    assert text(response).count("within a few minutes") == 1
+    intro = re.search(r'<p class="entry-subtitle">(.*?)</p>', response.text, re.S).group(1)
+    assert len([s for s in re.split(r"(?<=[.!?])\s+(?=[A-Z])", intro) if s]) == 1, intro

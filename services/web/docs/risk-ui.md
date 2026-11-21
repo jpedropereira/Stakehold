@@ -36,8 +36,8 @@ file in the same change. The server side of `/risk` (its router, the upstream ca
     reaches the server, and `static/risk_anchor.js` sends it on to its sub-page with its query
     and anchor (`location.replace`, so Back doesn't bounce). *Known cost:* without JS it lands
     on ex-post, with the sub-nav one click away.
-  - *Copy that said "above"* now names the other page or drops the word. UX-9 does the full
-    copy pass.
+  - *Copy that said "above"* now names the other page or drops the word. UX-9 did the full
+    copy pass ("Copy density" in [`copy-ui.md`](copy-ui.md)).
 - **Secondary detail is folded (UX-7)**, per `ui-architecture.md`'s fold rule. Each sub-page
   keeps its headline table open. Folded, each under its heading: the marker legend
   ("What the markers mean · N notes"), the rolling charts ("Rolling volatility and Sharpe ·
@@ -92,7 +92,9 @@ file in the same change. The server side of `/risk` (its router, the upstream ca
     its cell with flex. Loose, the marker and the "± s.e." were separate flex items, pushed to
     the far edge away from the figure.
   - **Copy says "historical" (R15).** The section's subtitle, and every risk glossary entry,
-    describe what happened over the window, never what to expect.
+    describe what happened over the window, never what to expect. Since UX-9 each Risk block's
+    one-sentence intro or note carries the word, so a swapped or deep-linked block still says
+    it.
   - **Against the benchmark (RK-14).** A GET form above the table (`partials/_benchmark_field.html`,
     shared with `/labs`) picks the benchmark, `?benchmark=`, `VWCE.DE` by default. The choice is
     the URL, never stored, since saving it needs a settings schema (deferred). The field suggests

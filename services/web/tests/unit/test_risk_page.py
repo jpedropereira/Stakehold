@@ -5,6 +5,7 @@ the empty and error states. A failing section shows its own notice; the page sti
 Like test_labs_page.py, it carries its own minimal fakes: only the calls this one page makes.
 """
 
+import html
 import logging
 import re
 from dataclasses import replace
@@ -1537,3 +1538,49 @@ def test_ex_ante_left_out_is_folded(client):
     section = _ex_ante_html(_page(test_client, EX_ANTE))
 
     assert "no FX series for USD" in _details(section, "<h3>Left out</h3>")
+
+
+# --- copy (UX-9) ---------------------------------------------------------------------------------
+
+HOVER = "Hover a figure for its window and number of returns"
+
+
+def _intro(section):
+    return re.search(r'<p class="entry-subtitle">(.*?)</p>', section, re.S).group(1)
+
+
+def _sentences(markup):
+    text = " ".join(html.unescape(re.sub(r"<[^>]+>", " ", markup)).split())
+    return [s for s in re.split(r"(?<=[.!?])\s+(?=[A-Z])", text) if s]
+
+
+def test_the_ex_post_intro_is_one_historical_sentence_with_its_glossary_link(client):
+    test_client, fake_auth, _ = client
+    _logged_in(test_client, fake_auth)
+
+    intro = _intro(_page(test_client))
+
+    assert len(_sentences(intro)) == 1, _sentences(intro)
+    assert 'href="/glossary#ex-post"' in intro
+    assert "historical" in intro
+
+
+def test_the_ex_ante_intro_is_one_historical_sentence_with_its_glossary_link(client):
+    test_client, fake_auth, _ = client
+    _logged_in(test_client, fake_auth)
+
+    intro = _intro(_ex_ante_html(_page(test_client, EX_ANTE)))
+
+    assert len(_sentences(intro)) == 1, _sentences(intro)
+    assert 'href="/glossary#ex-ante"' in intro
+    assert "historical" in intro
+
+
+@pytest.mark.parametrize("path", ["/risk", EX_ANTE])
+def test_the_hover_note_shows_once(client, path):
+    test_client, fake_auth, _ = client
+    _logged_in(test_client, fake_auth)
+
+    page = _page(test_client, path)
+
+    assert " ".join(re.sub(r"<[^>]+>", " ", page).split()).count(HOVER) == 1

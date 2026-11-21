@@ -79,9 +79,8 @@
      ex-ante's. #}
   <section class="risk-section" aria-labelledby="risk-concentration-title" id="risk-concentration">
     <h2 id="risk-concentration-title">Concentration · look-through</h2>
-    <p class="entry-subtitle">Where today's mix is concentrated, looking through each fund to
-      what it holds ({{ term("look-through", "look-through") }}). It uses each fund's latest
-      published holdings: a snapshot, not a history.</p>
+    <p class="entry-subtitle">Where today's mix is concentrated, looking through each fund to its
+      latest published holdings ({{ term("look-through", "look-through") }}).</p>
     {% if concentration_error %}
     {% call banner("error") %}<strong>Couldn't load the concentration figures.</strong> {{ concentration_error }}{% endcall %}
     {% elif concentration is none %}
@@ -104,7 +103,7 @@
 
     {% set currency = concentration.currency %}
     <h3>By currency</h3>
-    <p class="labs-note">The {{ term("listing currency of holdings", "listing-currency") }} is what each company's shares trade in, a proxy for currency exposure, not where its revenue comes from. Beside it, the trading currency of what you hold.</p>
+    <p class="labs-note">The {{ term("listing currency of holdings", "listing-currency") }}, a proxy for currency exposure, beside the trading currency of what you hold.</p>
     {{ exposure_table(currency, "Exposure by currency") }}
     {% for table in concentration.dimensions %}
     <h3>By {{ table.label }}</h3>

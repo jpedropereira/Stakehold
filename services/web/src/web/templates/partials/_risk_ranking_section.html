@@ -43,9 +43,8 @@
   <section class="risk-section" aria-labelledby="risk-ranking-title" id="risk-ranking" data-swap-region data-swap-announce="{% if ranking and not ranking.nothing %}Ranked by {{ 'volatility' if ranking.rank_by == 'sigma_p' else 'diversification ratio' }}{% else %}Ranking{% endif %}">
     <h2 id="risk-ranking-title" tabindex="-1">What if · ranking the tracked tickers</h2>
     <div data-swap-error></div>
-    <p class="entry-subtitle">Every ticker you track that you don't hold, each added to today's
-      mix at the same weight and funded pro-rata, ranked by how it would have changed the mix's
-      risk over the ex-ante window: historical figures, not a forecast.</p>
+    <p class="entry-subtitle">Every ticker you track but don't hold, ranked by how adding it would
+      have changed the mix's risk, historically ({{ term("candidate ranking", "candidate-ranking") }}).</p>
     {% if ranking_form is none %}
     {% if ranking_error %}
     {% call banner("error") %}<strong>Couldn't load your holdings to rank against.</strong> {{ ranking_error }}{% endcall %}
@@ -82,12 +81,13 @@
     {% if not rk.rf_available %}
     {% call banner("warning") %}<strong>No risk-free rate.</strong> Without it, the Sharpe ratio can't be measured, so its change is greyed.{% endcall %}
     {% endif %}
-    <p class="as-of">Each ticker at <span class="mono">{{ rk.weight | pct1 }}</span> of the mix, measured {% if rk.window.start %}from <span class="mono">{{ rk.window.start | date }}</span> {% endif %}to <span class="mono">{{ rk.window.end | date }}</span>, your holdings' {{ rk.window.label }} window. Hover a figure for its window and number of returns.</p>
+    {# The what-if's line above says it when its table shows (UX-9): once per page. #}
+    {% set what_if_shown = what_if and not what_if_error and not what_if.nothing %}
+    <p class="as-of">Each ticker at <span class="mono">{{ rk.weight | pct1 }}</span> of the mix, measured {% if rk.window.start %}from <span class="mono">{{ rk.window.start | date }}</span> {% endif %}to <span class="mono">{{ rk.window.end | date }}</span>, your holdings' {{ rk.window.label }} window.{% if not what_if_shown %} Hover a figure for its window and number of returns.{% endif %}</p>
     {{ segmented_links("Order by", rk.sort_links, rk.rank_by, labels={"sigma_p": "Volatility", "diversification_ratio": "Diversification ratio"}, swap="risk-ranking") }}
-    <p class="labs-note">Ordered by the change in {{ "volatility" if rk.rank_by == "sigma_p" else "diversification ratio" }}:
-      the risk changes are the reliable ones. The change in the historical Sharpe ratio is shown
-      with its standard error but never ordered by: the best of many noisy Sharpe changes is
-      mostly luck.</p>
+    <p class="labs-note">Ordered by the change in {{ "volatility" if rk.rank_by == "sigma_p" else "diversification ratio" }};
+      the Sharpe change is shown with its standard error, never ordered by
+      ({{ term("why", "candidate-ranking") }}).</p>
     {% if rk.lines or rk.greyed %}
     <div class="table-scroll" tabindex="0" role="region" aria-label="Candidate ranking">
     <table class="positions-table holdings-table risk-table stack-table" role="table">

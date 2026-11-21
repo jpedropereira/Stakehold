@@ -11,13 +11,13 @@
    whatever the backtest did, since it says what the figures don't cover. #}
 {% macro left_out_notes(mix) -%}
 {% if mix.unpriced %}
-<p class="labs-note">Left out: {{ ticker_list(mix.unpriced, ticker_names) }} — no price yet, so no weight.</p>
+<p class="labs-note">{{ ticker_list(mix.unpriced, ticker_names) }} — no price yet, so no weight.</p>
 {% endif %}
 {% if mix.unweighted %}
-<p class="labs-note">Left out: {{ ticker_list(mix.unweighted, ticker_names) }} — a market value of zero, so no weight.</p>
+<p class="labs-note">{{ ticker_list(mix.unweighted, ticker_names) }} — a market value of zero, so no weight.</p>
 {% endif %}
 {% if mix.dropped %}
-<p class="labs-note">Only your largest {{ max_assets }} holdings are backtested. Left out: {{ ticker_list(mix.dropped, ticker_names) }}.</p>
+<p class="labs-note">{{ ticker_list(mix.dropped, ticker_names) }} — only your largest {{ max_assets }} holdings are backtested.</p>
 {% endif %}
 {%- endmacro %}
 {# One row of the mix form. `row` is a labs_mix.CheckedRow, or none for the empty row that adds
@@ -198,7 +198,7 @@
     {% call fold(risk_summary, open=risk_open, class_="labs-risk-fold") %}
     <p class="entry-subtitle">Historical risk of the mix and its assets, measured on the same
       {{ term(risk.label, "buy-and-hold") }} backtest, in euros, to
-      <span class="mono">{{ risk.end_date | date }}</span>. How they behaved, not a forecast.</p>
+      <span class="mono">{{ risk.end_date | date }}</span>.</p>
     {% if risk.common_start and risk.limited_by %}
     <p class="labs-note">Every window starts on or after <span class="mono">{{ risk.common_start | date }}</span>, the first day <span class="mono">{{ risk.limited_by | join(" and ") }}</span> {{ "has" if risk.limited_by | length == 1 else "have" }} a price, so every row covers the same days ({{ term("windows", "risk-windows") }}).</p>
     {% endif %}

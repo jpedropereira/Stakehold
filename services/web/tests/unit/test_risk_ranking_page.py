@@ -561,3 +561,46 @@ def test_the_tickers_past_the_cap_are_folded_under_not_scored(client):
     assert '<summary><span class="mono">3</span> tickers</summary>' in fold
     assert 'the first <span class="mono">50</span> alphabetically' in fold
     assert "ZPRV.DE" in fold and "ZSIL.L" in fold
+
+
+# --- copy (UX-9) ---------------------------------------------------------------------------------
+
+HOVER = "Hover a figure for its window and number of returns"
+
+
+def _intro(section: str) -> str:
+    return re.search(r'<p class="entry-subtitle">(.*?)</p>', section, re.S).group(1)
+
+
+def _sentences(markup: str) -> list[str]:
+    text = " ".join(html.unescape(re.sub(r"<[^>]+>", " ", markup)).split())
+    return [s for s in re.split(r"(?<=[.!?])\s+(?=[A-Z])", text) if s]
+
+
+def test_the_intro_is_one_historical_sentence_with_its_glossary_link(client):
+    test_client, _ = client
+
+    intro = _intro(_get(test_client))
+
+    assert len(_sentences(intro)) == 1, _sentences(intro)
+    assert 'href="/glossary#candidate-ranking"' in intro
+    assert "historical" in intro and "expected" not in intro
+
+
+def test_the_order_note_is_one_sentence_and_names_the_sharpe_rule(client):
+    test_client, _ = client
+
+    section = _get(test_client, RANK_QUERY)
+
+    note = re.search(r'<p class="labs-note">Ordered by.*?</p>', section, re.S).group(0)
+    assert len(_sentences(note)) == 1, _sentences(note)
+    assert "never ordered by" in _text(note)
+
+
+def test_without_a_what_if_the_ranking_carries_the_hover_note_once(client):
+    test_client, _ = client
+
+    page = _page(test_client, RANK_QUERY)
+
+    assert HOVER in _text(_section(page))
+    assert _text(page).count(HOVER) == 1

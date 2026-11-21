@@ -1559,3 +1559,23 @@ def test_no_left_out_heading_when_every_holding_is_in_the_mix(client):
     _with_a_backtest(fake_portfolio)
 
     assert "<h2>Left out</h2>" not in _page(test_client)
+
+
+# --- copy (UX-9) ---------------------------------------------------------------------------------
+
+
+def test_the_left_out_notes_dont_repeat_their_heading(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_backtest(fake_portfolio)
+    _with_holdings(
+        fake_portfolio,
+        *(_holding(f"T{i:02d}", str(100 + i)) for i in range(53)),
+        _holding("NEW.L", None),
+    )
+
+    fold = _fold_after(_page(test_client), "<h2>Left out</h2>")
+
+    notes = [_text(n) for n in re.findall(r'<p class="labs-note">(.*?)</p>', fold, re.S)]
+    assert len(notes) == 2, notes
+    assert not any("Left out" in note for note in notes), notes

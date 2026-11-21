@@ -9,7 +9,7 @@
 <div class="split-form-column">
 <section class="card">
   <h1>Add a ticker</h1>
-  <p class="entry-subtitle">Look a symbol up as Yahoo Finance shows it, such as ASML.AS or BTC-USD. Once added, its price history loads in the background, usually within a few minutes, and every user can pick it.</p>
+  <p class="entry-subtitle">Look a symbol up as Yahoo Finance shows it, such as ASML.AS or BTC-USD; once added, every user can pick it.</p>
   {% if outcome %}{% call banner("success") %}<strong>{{ outcome }}</strong>{% endcall %}{% endif %}
   {% include "partials/_form_errors.html" %}
   {# A GET form: a lookup changes nothing, works without JS, and its result can be bookmarked. #}

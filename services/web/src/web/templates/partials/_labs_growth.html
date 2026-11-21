@@ -59,7 +59,7 @@
       {% if drawdown is none %}
       <p class="entry-empty">No drawdown for {{ period }}.</p>
       {% else %}
-      <p class="chart-note">How far the mix was below its last high on each day of {{ period }}. A break in the line is a day an asset had no return.</p>
+      <p class="chart-note">How far the mix was below its last high on each day of {{ period }}; a break in the line is a day an asset had no return.</p>
       <div class="chart-frame">
         <canvas id="labs-drawdown-chart" role="img" aria-label="Drawdown of the mix over {{ period }}"></canvas>
       </div>
