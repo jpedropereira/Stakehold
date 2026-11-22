@@ -15,10 +15,8 @@
      error page. #}
   <section class="risk-section" aria-labelledby="risk-ex-post-title">
     <h2 id="risk-ex-post-title">Ex-post · invested assets</h2>
-    <p class="entry-subtitle">How your invested holdings have actually behaved: historical
-      figures ({{ term("ex-post", "ex-post") }}), measured on the daily time-weighted return of
-      what you held, in euros with dividends included. Cash isn't tracked, so it isn't part of
-      them.</p>
+    <p class="entry-subtitle">How your invested holdings have actually behaved, historically, in
+      euros with dividends included ({{ term("ex-post", "ex-post") }}).</p>
     {% if ex_post_error %}
     {% call banner("error") %}<strong>Couldn't load the ex-post figures.</strong> {{ ex_post_error }}{% endcall %}
     {% elif ex_post is none %}

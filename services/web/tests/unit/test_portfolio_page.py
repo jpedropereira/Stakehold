@@ -1066,3 +1066,31 @@ def test_holdings_card_links_to_the_glossary_for_phone_widths(client):
     holdings, _ = _split(_page(test_client))
 
     assert '<a href="/glossary">What these figures mean</a>' in holdings
+
+
+# --- copy (UX-9) ---------------------------------------------------------------------------------
+
+_FRESHNESS = "Prices update daily; returns are recalculated a few times a day."
+
+
+def test_the_freshness_note_shows_once_with_no_return_history(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    _with_a_priced_holding(fake_portfolio)
+
+    html = _page(test_client)
+
+    assert '<p class="as-of">' in html and "No return history yet" in html
+    assert html.count(_FRESHNESS) == 1
+
+
+def test_the_first_run_intro_is_one_sentence(client):
+    test_client, fake_auth, fake_portfolio = client
+    _logged_in(test_client, fake_auth)
+    fake_portfolio.list_accounts_result = []
+
+    html = _page(test_client)
+
+    intro = re.search(r'<p class="entry-subtitle">(.*?)</p>', html, re.S).group(1)
+    text = " ".join(intro.split())
+    assert len([s for s in re.split(r"(?<=[.!?])\s+(?=[A-Z])", text) if s]) == 1, text

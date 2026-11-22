@@ -986,3 +986,34 @@ def test_the_risk_fold_opens_for_a_chosen_window_benchmark_or_error(client, quer
     _with_risk(fake_portfolio)
 
     assert " open" in _fold(_page(test_client, query))
+
+
+# --- copy (UX-9) ---------------------------------------------------------------------------------
+
+
+def _sentences(markup):
+    text = " ".join(html_lib.unescape(re.sub(r"<[^>]+>", " ", markup)).split())
+    return [s for s in re.split(r"(?<=[.!?])\s+(?=[A-Z])", text) if s]
+
+
+def test_the_risk_intro_is_one_historical_sentence_with_its_glossary_link(client):
+    test_client, fake_portfolio = client
+    _with_risk(fake_portfolio)
+
+    section = _section(_page(test_client))
+
+    intro = re.search(r'<p class="entry-subtitle">(.*?)</p>', section, re.S).group(1)
+    assert len(_sentences(intro)) == 1, _sentences(intro)
+    assert 'href="/glossary#buy-and-hold"' in intro
+    assert "historical" in intro.lower()
+
+
+def test_the_drawdown_note_is_one_sentence(client):
+    test_client, fake_portfolio = client
+    _with_risk(fake_portfolio)
+    html = _page(test_client)
+
+    drawdown = html[html.index('class="labs-drawdown"') : html.index('id="labs-drawdown-chart"')]
+    note = re.search(r'<p class="chart-note">.*?</p>', drawdown, re.S).group(0)
+    assert len(_sentences(note)) == 1, _sentences(note)
+    assert "break" in note  # how to read a gap in the line stays beside the chart

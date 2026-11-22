@@ -6,7 +6,7 @@
    so. Every amount is in euros unless it says otherwise. #}
 <section class="card glossary">
   <h1>Glossary</h1>
-  <p class="entry-subtitle">What each figure on your holdings, in Labs and on Risk means. Amounts are in
+  <p class="entry-subtitle">What each figure on your holdings, in Labs and on Risk means, in
     euros unless a figure says otherwise.</p>
   <dl class="glossary-terms">
     <dt id="units">Units</dt>
@@ -179,6 +179,23 @@
       starts where every holding has prices, so a young holding shortens it; you can exclude
       that holding to measure the rest over longer.</dd>
 
+    {# The what-if and its ranking (UX-9), for /risk/what-if: the detail its intros leave here. #}
+    <dt id="what-if">What if</dt>
+    <dd>Today's mix with one ticker added at the weight you choose, against the mix as it is.
+      The weight comes from the rest either pro-rata, every holding scaled down to make room,
+      or by replacing one holding, which can give up at most its own weight. Both mixes are
+      held at constant weights over the ex-ante window, so the figures are historical: how the
+      mix would have behaved with the ticker in it, not how it will. Nothing is saved.</dd>
+
+    <dt id="candidate-ranking">Candidate ranking</dt>
+    <dd>Every ticker you track but don't hold, each added to today's mix at the same weight and
+      funded pro-rata, as a what-if, and ranked by the historical change in the mix's
+      volatility or diversification ratio. Those risk changes are the reliable ones. The change
+      in the Sharpe ratio is shown with its standard error but never ordered by: across many
+      candidates, the best of many noisy Sharpe changes is mostly luck. A ticker with too
+      little history isn't ranked; past the page's cap, only the first alphabetically are
+      scored.</dd>
+
     <dt id="diversification-ratio">Diversification ratio</dt>
     <dd>The holdings' volatilities, weighted, divided by the mix's volatility. 1 means the
       holdings moved in lockstep, so mixing them smoothed nothing; higher means their ups and
@@ -215,7 +232,8 @@
 
     <dt id="rolling-window">Rolling window</dt>
     <dd>The same figure measured again and again over a window that moves through history:
-      here, the 1-year window ending at each month end, from the first full year of history. It
+      here, the 1-year window ending at each month end, measured on weekly returns, from the
+      first full year of history. It
       shows how volatile, or how well rewarded, the holdings were at different times, where a
       single window gives one average. Each point is historical, not a forecast. A window with
       too few weekly returns has no point, and the line breaks there.</dd>

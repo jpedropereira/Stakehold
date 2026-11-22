@@ -13,10 +13,9 @@
   <section class="risk-section" aria-labelledby="risk-ex-ante-title" id="risk-ex-ante" data-swap-region data-swap-announce="Ex-ante over {{ ex_ante_window }}{% if ex_ante and ex_ante.excluded %}, excluding {{ ex_ante.excluded | join(', ') }}{% endif %}">
     <h2 id="risk-ex-ante-title" tabindex="-1">Ex-ante · constant weights</h2>
     <div data-swap-error></div>
-    <p class="entry-subtitle">How today's mix would have behaved had you held it, at today's
-      weights, through the whole window: historical figures ({{ term("ex-ante", "ex-ante") }}),
-      in euros with dividends included. They differ from the
-      <a href="{{ risk_nav[0][1] }}">ex-post figures</a>, which follow what you actually held.</p>
+    <p class="entry-subtitle">How today's mix would have behaved, historically, held at today's
+      weights through the whole window, in euros with dividends included
+      ({{ term("ex-ante", "ex-ante") }}).</p>
     {% if ex_ante_error %}
     {% call banner("error") %}<strong>Couldn't load the ex-ante figures.</strong> {{ ex_ante_error }}{% endcall %}
     {% elif ex_ante is none %}
@@ -120,7 +119,7 @@
        loss. #}
     <h3>How much of the risk is the currency</h3>
     {% if fx.rows %}
-    <p class="labs-note">For each holding priced in another currency, historically: the {{ term("volatility", "volatility") }} of its weekly returns in its own currency, of that currency against the euro, how the two moved together, and the volatility you held in euros, which combines all three. A negative correlation means the currency partly offset the holding's moves. Measured over the same weeks as the share of risk above. See {{ term("FX decomposition", "fx-decomposition") }}.</p>
+    <p class="labs-note">How much of each non-euro holding's risk came from its currency, over the same weeks as the share of risk ({{ term("FX decomposition", "fx-decomposition") }}).</p>
     <div class="table-scroll" tabindex="0" role="region" aria-label="FX decomposition">
     <table class="positions-table holdings-table risk-table stack-table" role="table">
       <thead role="rowgroup">
@@ -160,7 +159,7 @@
        the requested window. The ink ramp shades ρ from 0 to 1; ρ at or below 0.2 is unfilled,
        and the printed number carries its sign. #}
     <h3>How the holdings move together</h3>
-    <p class="labs-note">The {{ term("correlation", "correlation-matrix") }} of weekly euro returns over {{ window.label }}, each pair over the weeks both have, historically. Darker squares moved more closely together. Hover a square for its weeks.</p>
+    <p class="labs-note">The {{ term("correlation", "correlation-matrix") }} of weekly euro returns over {{ window.label }}: darker squares moved more closely together, and hovering one gives its weeks.</p>
     <div class="table-scroll" tabindex="0" role="region" aria-label="Correlation matrix">
     <table class="risk-heatmap" role="table">
       <thead role="rowgroup">

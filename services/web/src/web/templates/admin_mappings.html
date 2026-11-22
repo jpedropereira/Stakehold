@@ -4,7 +4,7 @@
 {% block content %}
 <section class="card card-wide">
   <h1>Ticker mappings</h1>
-  <p class="entry-subtitle">Broker exports name an instrument by ISIN or symbol. A mapping says which Stakehold ticker that is, for every user. Saving one rebuilds the positions it affects.</p>
+  <p class="entry-subtitle">A mapping says which Stakehold ticker an ISIN or symbol in a broker export is, for every user.</p>
   {% if outcome %}{% call banner("success") %}<strong>{{ outcome[0] }}</strong> {{ outcome[1] }}{% endcall %}{% endif %}
   {% include "partials/_form_errors.html" %}
   {% if list_error %}{% call banner("error") %}<strong>Couldn't load everything.</strong> {{ list_error }}{% endcall %}{% endif %}
@@ -94,7 +94,7 @@
 
 <section class="card split-form-card">
   <h2>Add or change a mapping</h2>
-  <p class="entry-subtitle">Saving a mapping for an instrument that already has one points it at the new ticker.</p>
+  <p class="entry-subtitle">Saving a mapping rebuilds the positions it affects; for an instrument that already has one, it points it at the new ticker.</p>
   <form method="post" action="/admin/mappings">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div class="field">

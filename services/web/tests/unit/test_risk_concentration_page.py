@@ -518,3 +518,17 @@ def test_a_fund_left_out_of_the_look_through_is_named(client):
 
     item = re.search(r"<li>(?:(?!</li>).)*not tracked.*?</li>", section, re.S).group(0)
     assert _NAMED.format("IWDA.AS") in item
+
+
+# --- copy (UX-9) ---------------------------------------------------------------------------------
+
+
+def test_the_intro_is_one_sentence_with_its_glossary_link(client):
+    test_client, _ = client
+
+    section = _section(test_client)
+
+    intro = re.search(r'<p class="entry-subtitle">(.*?)</p>', section, re.S).group(1)
+    text = " ".join(_text(intro).split())
+    assert len([s for s in re.split(r"(?<=[.!?])\s+(?=[A-Z])", text) if s]) == 1, text
+    assert 'href="/glossary#look-through"' in intro

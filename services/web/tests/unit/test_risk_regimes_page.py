@@ -572,3 +572,22 @@ def test_the_regime_tables_name_the_benchmark(client):
     assert "Vanguard FTSE All-World" in header.group(0)
     # The table's accessible name stays plain text: markup can't go in an attribute.
     assert re.search(r'aria-label="[^"]*: your holdings and VWCE\.DE"', block)
+
+
+# --- copy (UX-9) ---------------------------------------------------------------------------------
+
+
+def test_the_regime_note_is_one_sentence_and_leaves_the_method_to_the_glossary(client):
+    test_client, _ = client
+
+    block = unescape(_block(test_client.get("/risk").text, "risk-ex-post-regimes"))
+
+    note = re.search(r'<p class="labs-note">How .*?</p>', block, re.S).group(0)
+    text = " ".join(re.sub(r"<[^>]+>", " ", note).split())
+    # The method sentence, then at most the benchmark's history, which is data.
+    sentences = [s for s in re.split(r"(?<=[.!?])\s+(?=[A-Z])", text) if s]
+    assert len(sentences) <= 2, sentences
+    assert not any("history starts" not in s for s in sentences[1:]), sentences
+    assert 'href="/glossary#regime"' in note
+    assert "Open a group" not in block
+    assert "began before this history" not in block

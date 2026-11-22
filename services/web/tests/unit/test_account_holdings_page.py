@@ -734,6 +734,8 @@ def test_the_empty_returns_state_says_prices_refresh_automatically(client):
 
     assert "No return history yet" in response.text
     assert _FRESHNESS in response.text
+    # Once (UX-9): the as-of line above already says it.
+    assert response.text.count(_FRESHNESS) == 1
 
 
 # --- a holding whose ticker is still loading (ticker onboarding, TK-9) --------------------------

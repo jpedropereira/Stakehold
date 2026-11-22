@@ -309,7 +309,7 @@ def test_ex_post_rolling_has_a_summary_and_its_gap_note(client):
     assert "17.4%" in html  # the latest volatility and the highest
     assert "14.1%" in html  # the lowest
     assert "1.04 ± 0.60" in html  # the latest Sharpe with its 1 s.e.
-    assert "The shaded band around the Sharpe is ± 1 s.e." in html
+    assert "the shaded band around the Sharpe is ± 1 s.e." in html
     assert f'No point for the window ending <span class="mono">2026-07-31</span>: {GAP}' in html
 
 
@@ -581,3 +581,32 @@ def test_a_stale_pair_opens_its_fold_to_say_so(client):
 
     assert fold.startswith('<details class="fold" open>')
     assert "wasn't used" in fold
+
+
+# --- copy (UX-9) ---------------------------------------------------------------------------------
+
+
+def _sentences(markup):
+    text = " ".join(unescape(re.sub(r"<[^>]+>", " ", markup)).split())
+    return [s for s in re.split(r"(?<=[.!?])\s+(?=[A-Z])", text) if s]
+
+
+def test_the_rolling_note_is_one_historical_sentence_with_its_glossary_link(client):
+    test_client, _ = client
+
+    html = _section(test_client.get("/risk").text, "risk-ex-post")
+
+    note = re.search(r'<p class="labs-note">Each point.*?</p>', html, re.S).group(0)
+    assert len(_sentences(note)) == 1, _sentences(note)
+    assert 'href="/glossary#rolling-window"' in note
+    assert "historically" in note
+
+
+def test_the_pair_note_is_one_historical_sentence(client):
+    test_client, _ = client
+
+    block = _pair_block(test_client.get("/risk/ex-ante").text)
+
+    note = re.search(r'<p class="labs-note">.*?</p>', block, re.S).group(0)
+    assert len(_sentences(note)) == 1, _sentences(note)
+    assert "historically" in note

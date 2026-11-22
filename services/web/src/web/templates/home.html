@@ -10,8 +10,8 @@
 {% if not list_error and not rows %}
 <section class="card card-narrow">
   <h1>Welcome, {{ user.display_name }}.</h1>
-  <p class="entry-subtitle">No accounts yet. Create one for each broker account you hold, then
-    add or import its transactions. Your holdings and returns appear here.</p>
+  <p class="entry-subtitle">No accounts yet: create one for each broker account you hold and
+    add or import its transactions, and your holdings and returns appear here.</p>
   <a href="/accounts" class="btn btn-primary">Create an account</a>
 </section>
 {% else %}
@@ -79,7 +79,8 @@
   {# /portfolio's chart, from the same series across every account. #}
   {{ returns_chart(chart_payload) }}
   {% else %}
-  <p class="entry-empty">No return history yet — returns appear once Stakehold has prices for your holdings' dates. {{ freshness }}</p>
+  {# The as-of line says how fresh prices are; say it here only without one (UX-9). #}
+  <p class="entry-empty">No return history yet — returns appear once Stakehold has prices for your holdings' dates.{% if not totals %} {{ freshness }}{% endif %}</p>
   {% endif %}
 </section>
 </div>

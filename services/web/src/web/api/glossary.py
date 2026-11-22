@@ -4,7 +4,7 @@ The holdings pages link every column header and tile label to its entry here
 (/glossary#<term>), so a definition is written once, not repeated under each table. The page is
 static text: it calls no other service, so it still renders while portfolio is down. Behind the
 login like every other page, so the header shows the same nav and user. See
-docs/architecture.md, "Glossary".
+docs/copy-ui.md, "Glossary".
 """
 
 from fastapi import APIRouter, Depends, Request, Response

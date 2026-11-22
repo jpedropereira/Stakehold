@@ -86,7 +86,8 @@
   {% if return_points %}
   {{ returns_chart(chart_payload) }}
   {% else %}
-  <p class="entry-empty">No return history yet — returns appear once Stakehold has prices for your holdings' dates. {{ freshness }}</p>
+  {# The as-of line says how fresh prices are; say it here only without one (UX-9). #}
+  <p class="entry-empty">No return history yet — returns appear once Stakehold has prices for your holdings' dates.{% if not summary %} {{ freshness }}{% endif %}</p>
   {% endif %}
 </section>
 </div>

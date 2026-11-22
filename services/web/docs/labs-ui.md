@@ -173,7 +173,7 @@ upstream calls) is in [`architecture.md`](architecture.md) and [`endpoints.md`](
     synthetic worst case. *Rejected: a `<details>` per asset*, which makes comparing assets mean
     opening several. *Rejected: the mix only*, which would leave the assets' figures unused.
   - *Spec §10's metadata is shown, not hovered.* `title` tooltips were rejected for the
-    glossary ("Glossary" in `ui-architecture.md`): they don't show on touch, and screen readers
+    glossary ("Glossary" in `copy-ui.md`): they don't show on touch, and screen readers
     announce them inconsistently. So each window's start is under its column header (and in
     the stacked label, through the same `data-start` as Max's), each measure's frequency under
     its name (Sharpe's also says "± 1 s.e."), and a "Returns used" row or column gives the
@@ -302,8 +302,8 @@ upstream calls) is in [`architecture.md`](architecture.md) and [`endpoints.md`](
     (`focusable=false`), since a summary is already one. UX-7 moved it onto the shared fold
     (`partials/_fold.html`, `.fold labs-risk-fold`), so it looks like every other fold.
 - **"Not backtested" and "Left out" are folded (UX-7)**, each under its heading and summarised
-  by its count: "1 asset", "2 holdings". "Left out" gained an `<h2>` to fold under; its notes
-  still say "Left out:", a repeat that UX-9's copy pass owns. *Not folded:* the notes under the
+  by its count: "1 asset", "2 holdings". "Left out" gained an `<h2>` to fold under; UX-9
+  dropped its notes' "Left out:" prefix, which repeated the heading. *Not folded:* the notes under the
   returns table and the growth chart saying what a period's figures leave out. They qualify the
   figure right beside them, so they stay where they're read.
   - The review adds `labs-long-mix` (12 untracked rows, the server's region, an error under
