@@ -94,6 +94,33 @@ positive, mark it in the baseline:
 uv run detect-secrets audit .secrets.baseline
 ```
 
+### Claude Code guardrails
+
+`.claude/settings.json` registers two `PreToolUse` hooks that check every Bash
+command Claude Code runs in this repo. They're hooks rather than written rules
+because Claude can always decide in the moment that a command is safe, and a
+hook decides the same way every time.
+
+- `.claude/hooks/guard-credential-files.sh` **denies** any command that touches
+  `.env` (or its real variants) or `.secrets.baseline`, unless it's recognizably
+  read-only. Those files can't be rebuilt from the repo.
+- `.claude/hooks/guard-destructive-commands.sh` **asks you to confirm**
+  commands that destroy data or history: recursive `rm` outside Claude's
+  scratchpad, force pushes, `git reset --hard`, `git clean -f`,
+  `git branch -D`, SQL `DROP`/`TRUNCATE`/unscoped `DELETE` through `psql` or
+  `docker exec`, `dropdb`, `docker compose down -v`, `docker volume rm`/`prune`,
+  `docker system prune`, and `gh repo|issue|release delete`. The prompt says
+  what would be destroyed; approve it only if you mean it. In
+  `bypassPermissions` mode it denies instead, because a hook's prompt isn't
+  guaranteed to appear there. Run the command yourself if you want it.
+
+The destructive-command hook is a pattern match, not a shell parser. Its header
+lists what it doesn't catch. It only looks at commands, so text that mentions
+one (a commit message, a grep pattern) doesn't prompt, except on a line of its
+own in a heredoc. Pass that kind of text with `git commit -F <file>` or
+`gh pr create --body-file <file>`. Its tests are in
+`services/shared/tests/unit/test_guard_destructive_commands.py`.
+
 ### CI
 
 `.github/workflows/ci.yml` runs on every push to `main` and on pull requests.
