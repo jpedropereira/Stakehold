@@ -16,6 +16,8 @@ ENV WEB_BRAND_DIR=/opt/stakehold/brand
 WORKDIR /opt/stakehold
 
 COPY pyproject.toml uv.lock ./
+COPY services/agent services/agent
+COPY services/agent-evals services/agent-evals
 COPY services/auth services/auth
 COPY services/data-store services/data-store
 COPY services/portfolio services/portfolio

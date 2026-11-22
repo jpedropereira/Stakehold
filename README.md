@@ -1,28 +1,56 @@
 # Stakehold
 
-Stakehold is an application to manage different financial portfolios, calculate
-their returns, and identify possible improvements.
+Stakehold is a hobby project that helps retail value investors understand their portfolios and
+strengthen their weak spots. A typical question it answers: "How concentrated am I, how has this
+portfolio really performed, and what would make it more robust?"
 
-It's a uv workspace containing four services:
+It answers by combining three things:
 
-- `services/data-store/` — the `data_store` package: scrapes ETF holdings, ingests daily prices
-  and dividend events into Postgres, orchestrated by Airflow. See
+- **Domain knowledge.** Returns, risk measured against a benchmark, concentration and
+  look-through exposure, and backtests of "what if I added this position?", computed the way an
+  investor would reason about them.
+- **Several data sources.** Your own transactions, entered by hand or imported from a broker's
+  export file; daily prices and dividends; and the holdings of the ETFs you own, so exposure
+  is measured through the funds and not just at the ticker level.
+- **AI.** An agent named Pedro (in design, not built yet) will read the same portfolio, risk
+  metrics and backtests you see, give a plain evaluation, and suggest where to improve. Later
+  it will be able to propose changes on the page, such as a position to backtest, which you
+  confirm before anything happens.
+
+Stakehold is built for learning and personal use. It is not financial advice.
+
+## What's in the repo
+
+It's a uv workspace: five services and two library packages.
+
+- `services/data-store/`: the `data_store` package. It scrapes ETF holdings and ingests daily
+  prices and dividend events into Postgres, orchestrated by Airflow. See
   [its README](services/data-store/README.md) for setup and the ingestion commands.
-- `services/portfolio/` — the `portfolio` package (scaffolding; no business logic yet)
-- `services/web/` — the `web` package (scaffolding; no business logic yet)
-- `services/auth/` — the `auth` package (scaffolding; no business logic yet)
+- `services/portfolio/`: the `portfolio` package. It records transactions across brokerage
+  accounts and derives positions, returns, risk metrics and backtests from them. See
+  [its architecture](services/portfolio/docs/architecture.md).
+- `services/web/`: the `web` package, the browser UI (FastAPI, Jinja2 and htmx). See
+  [its architecture](services/web/docs/architecture.md).
+- `services/auth/`: the `auth` package, which owns users, credentials and sessions. See
+  [its architecture](services/auth/docs/architecture.md).
+- `services/agent/`: the `agent` package, which will host Pedro. Design only so far: see
+  [its architecture](services/agent/docs/architecture.md).
+- `services/shared/`: a library, not a service. Cross-service Postgres and logging helpers.
+- `services/agent-evals/`: a library, not a service. The offline evals for `agent`, kept
+  deliberately low-cost. Design only so far: see
+  [its architecture](services/agent-evals/docs/architecture.md).
 
 ## Development setup
 
 This project uses Python 3.14 and [uv](https://docs.astral.sh/uv/) for dependency
-management, with a shared virtual environment and lockfile across both services.
+management, with one virtual environment and lockfile shared by every workspace member.
 
 ```bash
 uv sync --all-extras --dev
 uv run pre-commit install --hook-type pre-commit --hook-type pre-push
 ```
 
-Run the test suite for both services:
+Run the test suite for every service:
 
 ```bash
 uv run pytest services                 # unit tests

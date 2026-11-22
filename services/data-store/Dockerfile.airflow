@@ -27,6 +27,8 @@ COPY pyproject.toml uv.lock ./
 # it -- the root pyproject.toml depends on every workspace member (package = false), so uv needs
 # each one's source present to build it, even members this service's code never imports at
 # runtime. Skipping one here isn't a smaller image, it's a build that fails at `uv sync`.
+COPY services/agent services/agent
+COPY services/agent-evals services/agent-evals
 COPY services/auth services/auth
 COPY services/data-store services/data-store
 COPY services/portfolio services/portfolio
