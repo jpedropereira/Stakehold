@@ -360,6 +360,12 @@ consent permits, and only when a persona declares an ordered fallback list.
   least code. But the core loop, the part every eval and every stage-2 behaviour depends on,
   would follow a fast-moving framework's release cadence. Provider features would be available
   only when and as the framework exposes them.
+
+  This rejection covers the *runtime loop* only. The eval harness, pydantic-evals, pins
+  `pydantic-ai-slim` exactly and uses it for its LLM judge, so pydantic-ai is in the workspace's
+  shared venv. A unit test asserts that no module under `src/agent` imports `pydantic_ai` (or
+  `agent_evals`), so the port can't quietly start depending on it. See the eval doc's "Harness
+  choice".
 - *LiteLLM plus our own loop.* It covers many providers at once, but it's a heavy dependency that
   normalizes everything to the OpenAI wire shape. That's exactly where provider differences
   (Anthropic's content blocks, prompt caching) get flattened.
@@ -591,7 +597,10 @@ Intended shape, mirroring the other services:
   concurrency-safe schema application.
 - **Dockerfile** built from the repo root with the multi-`COPY` of every workspace member, because
   `uv sync --frozen` resolves the whole workspace lock. Adding `agent` and `agent-evals` as
-  members already required adding their `COPY` lines to every other image's Dockerfile.
+  members already required adding their `COPY` lines to every other image's Dockerfile. The eval
+  harness's dependencies are kept out of every image by making `agent-evals` a root optional
+  extra rather than a root dependency. That's verified, and lands with the first eval code; see
+  the eval doc's "Packaging".
 - **Environment.**
   - Credentials: provider API keys and `AGENT_INTERNAL_SECRET` (shared with `web`).
   - Behaviour-changing: `AGENT_DATABASE_URL` (named per service, for the root `conftest.py`'s
@@ -610,12 +619,15 @@ Intended shape, mirroring the other services:
   - event order;
   - consent refusals;
   - "identity never comes from args".
+- **Import boundary:** a test asserts that no module under `src/agent` imports `agent_evals` or
+  `pydantic_ai` (see "Provider abstraction").
 - **Adapter conformance suite:** see "Provider abstraction". It runs on recorded responses in the
   normal unit run, with no network and no keys.
 - **Integration tests:** persistence against the disposable `app-postgres` test instance
   (`docker-compose.test.yml`), under the root `conftest.py`'s guard.
-- **Evals** are not tests. They live in `agent-evals`, cost money, are statistical, and never run
-  in pre-commit. See
+- **Evals** are not tests. They live in `agent-evals` (on pydantic-evals), cost money, are
+  statistical, and never run in pre-commit, apart from a free smoke run with the scripted fake
+  model that checks the harness wiring. See
   [`../../agent-evals/docs/architecture.md`](../../agent-evals/docs/architecture.md).
 
 ## Open questions
