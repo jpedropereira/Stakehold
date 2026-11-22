@@ -509,8 +509,19 @@ fences `agent`'s tables from `portfolio`'s and vice versa.
   - catalogue model id and adapter;
   - prompt hash;
   - status and failure reason;
-  - token usage, estimated cost and latency.
+  - latency.
   Its spans (each model call and tool call, with timings) are what "Observability" describes.
+  The run holds no token or cost totals: those are derived from its model calls.
+- **Model call:** one per call to a `ChatModel`, retries included, child of a run. It records the
+  four token counts (`input`, `output` including thinking, `cache_read`, `cache_write`, each 0 when
+  the provider lacks the concept), the cost snapshotted from the catalogue's pricing when the call
+  finished (plus the pricing version used), a status (`ok`, `error`, `aborted`) and its latency.
+  Failed and aborted calls are recorded with whatever usage the provider reported, since they can
+  still bill. *Why per call, not per run:* a per-run total can't show which step spent the tokens
+  or whether the prompt cache hit. *Why snapshot the cost:* a later price change must not rewrite
+  past spend. A run's totals and a per-user daily budget are SUMs over these rows. See
+  `.claude/rules/consumption.md` in this service. Cache-write TTL tiers (5 minute and 1 hour) are
+  priced through the catalogue; whether they need their own column is left to the schema proposal.
 - **Consent:** per user, the policy, when it was set, and the text version shown.
 
 **Async database access.** `shared` provides only a sync pool today (`shared.db.pool`). A sync
@@ -552,7 +563,9 @@ same reasoning as `auth`'s `log_parameter_max_length=0` keeping emails out of it
   figures. The eval harness checks that it says so.
 - **Persistence boundary.** The user's message is saved before the run starts. The assistant's
   message and the run record are saved when the run ends, whatever the outcome. A crash mid-run
-  leaves a visible failed or incomplete run, never a silently missing turn.
+  leaves a visible failed or incomplete run, never a silently missing turn. Partial assistant text
+  from an aborted stream (a disconnect, a tripped budget) is kept and marked incomplete, not
+  dropped, so the record shows what the user actually saw.
 - **Limits.** There are per-turn budgets (above). A per-user daily token or cost budget comes
   later, and is needed before more than one trusted user has access, since every turn costs real
   money on a cloud provider. Concurrent runs per conversation: one; a second message while a run
