@@ -9,6 +9,8 @@ resolution-markers = [
 
 [manifest]
 members = [
+    "agent",
+    "agent-evals",
     "auth",
     "data-store",
     "portfolio",
@@ -16,6 +18,22 @@ members = [
     "stakehold",
     "web",
 ]
+
+[[package]]
+name = "agent"
+version = "0.1.0"
+source = { editable = "services/agent" }
+
+[[package]]
+name = "agent-evals"
+version = "0.1.0"
+source = { editable = "services/agent-evals" }
+dependencies = [
+    { name = "agent" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "agent", editable = "services/agent" }]
 
 [[package]]
 name = "annotated-doc"
@@ -1566,6 +1584,8 @@ name = "stakehold"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "agent" },
+    { name = "agent-evals" },
     { name = "auth" },
     { name = "data-store" },
     { name = "portfolio" },
@@ -1591,6 +1611,8 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "agent", editable = "services/agent" },
+    { name = "agent-evals", editable = "services/agent-evals" },
     { name = "auth", editable = "services/auth" },
     { name = "data-store", editable = "services/data-store" },
     { name = "portfolio", editable = "services/portfolio" },

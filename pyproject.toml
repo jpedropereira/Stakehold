@@ -3,6 +3,8 @@ name = "stakehold"
 version = "0.1.0"
 requires-python = ">=3.14"
 dependencies = [
+    "agent",
+    "agent-evals",
     "auth",
     "data-store",
     "portfolio",
@@ -14,6 +16,8 @@ dependencies = [
 package = false
 
 [tool.uv.sources]
+agent = { workspace = true }
+agent-evals = { workspace = true }
 auth = { workspace = true }
 data-store = { workspace = true }
 portfolio = { workspace = true }
