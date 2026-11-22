@@ -563,7 +563,9 @@ same reasoning as `auth`'s `log_parameter_max_length=0` keeping emails out of it
   figures. The eval harness checks that it says so.
 - **Persistence boundary.** The user's message is saved before the run starts. The assistant's
   message and the run record are saved when the run ends, whatever the outcome. A crash mid-run
-  leaves a visible failed or incomplete run, never a silently missing turn.
+  leaves a visible failed or incomplete run, never a silently missing turn. Partial assistant text
+  from an aborted stream (a disconnect, a tripped budget) is kept and marked incomplete, not
+  dropped, so the record shows what the user actually saw.
 - **Limits.** There are per-turn budgets (above). A per-user daily token or cost budget comes
   later, and is needed before more than one trusted user has access, since every turn costs real
   money on a cloud provider. Concurrent runs per conversation: one; a second message while a run

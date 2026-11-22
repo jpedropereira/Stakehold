@@ -37,8 +37,8 @@ make the evals test something other than what ships.
 
 ## Rules
 
-Scoped rules live in `.claude/rules/`: prompt injection, tools, evals required, consumption. They
-apply on top of the root rules.
+Scoped rules live in `.claude/rules/`: prompt injection, tools, evals required, consumption,
+conversation recording. They apply on top of the root rules.
 
 ## Tests
 
