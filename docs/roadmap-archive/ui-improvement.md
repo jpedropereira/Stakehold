@@ -1,3 +1,12 @@
+# UI improvement roadmap (archived)
+
+Completed 2026-11, tasks UX-0 to UX-11. This is the UI-improvement chunk's thread file,
+`tasks-ui-improvement-thread.md`, moved here once all of its tasks were done. The content is
+verbatim except for relative links, adjusted for the new location. No thread was open to take
+over its Deferred list, so it stays here, for the next thread to carry forward.
+
+---
+
 # Tasks: UI improvement thread
 
 Roadmap for the UI-improvement chunk. It makes each page show less at once and makes every
@@ -20,14 +29,14 @@ chunk by chunk, and no page was ever reworked as a whole. The result:
   window and sort switches are plain links. A click reloads the whole page and loses the
   reader's place, often far below the top.
 
-Earlier chunks are archived in [`docs/roadmap-archive/`](docs/roadmap-archive/):
-[walking skeleton](docs/roadmap-archive/walking-skeleton.md),
-[UI/UX](docs/roadmap-archive/ui-ux.md),
-[ticker onboarding](docs/roadmap-archive/ticker-onboarding.md),
-[portfolio view](docs/roadmap-archive/portfolio-view.md),
-[screen layout](docs/roadmap-archive/screen-layout.md),
-[labs](docs/roadmap-archive/labs.md) and
-[risk](docs/roadmap-archive/risk.md).
+Earlier chunks are archived in [`docs/roadmap-archive/`](./):
+[walking skeleton](walking-skeleton.md),
+[UI/UX](ui-ux.md),
+[ticker onboarding](ticker-onboarding.md),
+[portfolio view](portfolio-view.md),
+[screen layout](screen-layout.md),
+[labs](labs.md) and
+[risk](risk.md).
 
 **Task IDs are prefixed `UX-`.** The prefix keeps them apart from the walking skeleton's bare
 "task N" references and from the earlier chunks' `UI-`, `TK-`, `PF-`, `LY-`, `LB-` and `RK-` IDs.
