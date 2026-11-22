@@ -266,7 +266,7 @@ def test_a_ticker_transaction_becomes_a_position_with_no_ticker_mapping(ticker_c
     user_id = uuid.uuid4()
     ticker_client.post(
         "/accounts",
-        json={"user_id": str(user_id), "broker": "Degiro", "account_label": "main"},
+        json={"user_id": str(user_id), "broker": "acme", "account_label": "main"},
         headers=_headers(),
     )
 
@@ -286,7 +286,7 @@ def test_a_ticker_data_store_does_not_know_is_rejected_and_not_saved(ticker_clie
     user_id = uuid.uuid4()
     ticker_client.post(
         "/accounts",
-        json={"user_id": str(user_id), "broker": "Degiro", "account_label": "main"},
+        json={"user_id": str(user_id), "broker": "acme", "account_label": "main"},
         headers=_headers(),
     )
 
@@ -306,7 +306,7 @@ def test_a_buy_entered_without_an_amount_is_saved_with_the_derived_one(ticker_cl
     user_id = uuid.uuid4()
     ticker_client.post(
         "/accounts",
-        json={"user_id": str(user_id), "broker": "Degiro", "account_label": "main"},
+        json={"user_id": str(user_id), "broker": "acme", "account_label": "main"},
         headers=_headers(),
     )
 

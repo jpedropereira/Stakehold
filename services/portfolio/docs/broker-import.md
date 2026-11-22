@@ -144,14 +144,14 @@ parser (one exists today) was invisible to every caller and could only be import
 CLI. Because it reads both registries, a stashed discovery error from either one is raised here,
 rather than that registry's brokers silently showing fewer imports than they have.
 
-**Worked example — adding a third broker** (e.g. Trading212): implement `BrokerParser` and
-register it under the `stakehold.broker_parsers` entry-point group as `trading212 = "...:
-Trading212Parser"` in whatever package provides it (this one, today; a separate installable
+**Worked example — adding a third broker** (e.g. Initech): implement `BrokerParser` and
+register it under the `stakehold.broker_parsers` entry-point group as `initech = "...:
+InitechParser"` in whatever package provides it (this one, today; a separate installable
 package, once the extraction below completes) — no change to `pipeline.py`'s flow function,
 `jobs.py`, or `cli.py`'s argument shape. `import-transactions --file ... --account ...` works
-against a Trading212 account as soon as that package is installed and its metadata is picked up
+against a Initech account as soon as that package is installed and its metadata is picked up
 (`entry_points()`, at next process start) — the account's own `broker` column, not a CLI flag,
-is what selects `trading212` from the registry.
+is what selects `initech` from the registry.
 
 **A plugin's own parsing rules — locale formats, id-collision handling, per-broker FX
 conventions — are documented in that plugin package's own docs, not here.** This document owns
