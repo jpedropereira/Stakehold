@@ -35,8 +35,12 @@ planned, ask the user which of those items, if any, it takes on; each one taken 
 - `In progress`: being worked on, usually with an open PR.
 - `Done`: merged and closed. The board sets this when the issue closes.
 
-Set it with `gh project item-edit --owner jpedropereira --project-id PVT_kwHOBQR6_s4BsuKy
---url <issue URL> --field Status --value "<status>"`.
+Set it with `gh project item-edit 1 --owner jpedropereira --url <issue URL> --field Status
+--value "<status>"`. The project goes by its number: `--url` doesn't work with `--project-id`.
+
+The board's auto-add workflow can add a new issue before `gh issue create --project` does. The
+create then fails with "Content already exists in this project", but the issue exists. Look it
+up rather than creating it again.
 
 ## Milestones and issues
 
