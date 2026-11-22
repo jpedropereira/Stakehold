@@ -11,20 +11,29 @@ possible improvements. It's a uv workspace containing five services plus two lib
   (Playwright + CSV), ingests daily OHLCV and dividend events from yfinance into Postgres, exposes
   a `data-store` CLI, and is orchestrated by Airflow DAGs running in a custom image. Has its own
   scoped rules under `services/data-store/.claude/rules/`.
-- `services/portfolio/` — the `portfolio` package. Still empty scaffolding, no business logic yet.
-- `services/web/` — the `web` package. Empty scaffolding, no business logic yet.
-- `services/auth/` — the `auth` package. Implemented: Postgres schema (`users`, `sessions`) and an
-  `auth db init` CLI; identity endpoints (signup/login/logout/session-validation) not built yet.
+- `services/portfolio/` — the `portfolio` package. Implemented: records transactions across
+  brokerage accounts per user, derives positions, returns and risk figures, and serves them over an
+  HTTP API and a CLI. See [`services/portfolio/docs/architecture.md`](services/portfolio/docs/architecture.md).
+- `services/web/` — the `web` package. Implemented: the user-facing FastAPI + Jinja2 + htmx app
+  (auth pages, portfolio entry and view). It owns no data and calls `portfolio`, `data-store` and
+  `auth` on the user's behalf. See [`services/web/docs/architecture.md`](services/web/docs/architecture.md).
+- `services/auth/` — the `auth` package. Implemented: Postgres schema (`users`, `sessions`), an
+  `auth db init` CLI, and the identity HTTP API (signup, login, logout, session validation).
+  See [`services/auth/docs/architecture.md`](services/auth/docs/architecture.md).
 - `services/shared/` — the `shared` package. Not a service: no entry point, no schema, no business
   logic. Cross-service infrastructure only — a Postgres connection/transaction/schema-apply helper
-  and log setup — that `data-store` and `auth` both depend on instead of each keeping its own copy.
+  and log setup — that `data-store`, `auth`, `portfolio` and `web` depend on instead of each keeping
+  its own copy.
   See [`services/shared/docs/architecture.md`](services/shared/docs/architecture.md).
 - `services/agent/` — the `agent` package, which hosts the AI agent Pedro (chat-based portfolio
   evaluation). Design only, empty skeleton: see
-  [`services/agent/docs/architecture.md`](services/agent/docs/architecture.md).
+  [`services/agent/docs/architecture.md`](services/agent/docs/architecture.md). Has its own scoped
+  rules under `services/agent/.claude/rules/` and its own `services/agent/CLAUDE.md`.
 - `services/agent-evals/` — the `agent_evals` package. Not a service: the offline eval harness
   for `agent` (depends on `agent`, never the reverse). Design only, empty skeleton: see
-  [`services/agent-evals/docs/architecture.md`](services/agent-evals/docs/architecture.md).
+  [`services/agent-evals/docs/architecture.md`](services/agent-evals/docs/architecture.md). Has its
+  own scoped rules under `services/agent-evals/.claude/rules/` and its own
+  `services/agent-evals/CLAUDE.md`.
 
 They share one virtual environment and one lockfile (`uv.lock`) at the workspace root. Python 3.14 is
 required.
@@ -45,10 +54,10 @@ Tests are split by marker. `pytest` defaults to unit tests only — the root `py
 nothing running. Don't treat a green plain run as "the suite passed".
 
 ```bash
-uv run pytest services                                                        # unit tests, both services
+uv run pytest services                                                        # unit tests, all services
 uv run pytest services -m integration                                         # integration tests (needs Postgres, below)
 uv run pytest services/portfolio                                              # one service
-uv run pytest services/portfolio/tests/test_placeholder.py::test_placeholder  # single test
+uv run pytest services/portfolio/tests/unit/test_cli.py::test_db_init_prints_the_table_count_to_stdout  # single test
 uv run pytest services --testmon --tb=short -x                                # fast, testmon-scoped (what pre-commit runs on commit)
 ```
 
@@ -104,7 +113,7 @@ boundaries, extension points and deployment topology — read it before changing
 structural there. What follows is workspace-level only.
 
 - **uv workspace, not independent projects**: root `pyproject.toml` sets `package = false` and
-  `[tool.uv.workspace] members = ["services/*"]`; both services are listed as workspace dependencies
+  `[tool.uv.workspace] members = ["services/*"]`; every workspace package is listed as a dependency
   of the root package. This is why there's a single `.venv` and `uv.lock` instead of one per service.
 - **Hook chain order is deliberate** (`.pre-commit-config.yaml`): autoflake → black → pycln → isort
   run first because they mutate files; flake8 runs last so it lints the final, formatted result.
