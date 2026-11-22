@@ -40,6 +40,13 @@ It's a uv workspace: five services and two library packages.
   deliberately low-cost. Design only so far: see
   [its architecture](services/agent-evals/docs/architecture.md).
 
+## Roadmap
+
+Planned work is tracked as [GitHub Issues](https://github.com/jpedropereira/Stakehold/issues),
+grouped into milestones, on the
+[Stakehold Roadmap](https://github.com/users/jpedropereira/projects/1) board. Work completed
+before that is recorded in [`docs/roadmap-archive/`](docs/roadmap-archive/).
+
 ## Development setup
 
 This project uses Python 3.14 and [uv](https://docs.astral.sh/uv/) for dependency

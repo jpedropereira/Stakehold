@@ -1,0 +1,42 @@
+name: Task
+description: A planned piece of roadmap work, part of a milestone.
+title: "XX-N: "
+projects: ["jpedropereira/1"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Title it `<PREFIX>-<N>: <what it does>`, e.g. `AG-3: Stream Pedro's replies to the chat panel`.
+        The prefix must not be used by any other issue or by any thread in `docs/roadmap-archive/`.
+        Set the milestone and a `service:*` label. Add any dependencies afterwards, under
+        **Relationships → Blocked by** in the sidebar.
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: What this task achieves, and why, in a few sentences.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: What is in and what is explicitly out. Note decisions already agreed.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Done when
+      description: Checks that show the task is complete, such as behaviour, tests and docs updated.
+      placeholder: |
+        - [ ] ...
+    validations:
+      required: true
+  - type: textarea
+    id: docs
+    attributes:
+      label: Related docs
+      description: Links to the architecture.md or schema.md sections this touches, if any.
+    validations:
+      required: false
