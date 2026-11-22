@@ -626,8 +626,8 @@ Intended shape, mirroring the other services:
 - **Integration tests:** persistence against the disposable `app-postgres` test instance
   (`docker-compose.test.yml`), under the root `conftest.py`'s guard.
 - **Evals** are not tests. They live in `agent-evals` (on pydantic-evals), cost money, are
-  statistical, and never run in pre-commit, apart from a free smoke run with the scripted fake
-  model that checks the harness wiring. See
+  statistical, and run only when started by hand, never in pre-commit or on a schedule. The
+  exception is a free smoke run with the scripted fake model that checks the harness wiring. See
   [`../../agent-evals/docs/architecture.md`](../../agent-evals/docs/architecture.md).
 
 ## Open questions

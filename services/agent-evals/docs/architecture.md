@@ -29,6 +29,27 @@ It answers questions unit tests can't:
 Evals exist from day one so that the first prompt and the first tool already have a number
 attached. Every later change is then a measured delta, not an impression.
 
+## Cost: kept low on purpose
+
+Stakehold is a hobby project, and every real-model eval is paid for out of pocket. So evals are
+designed to cost as little as possible, and this constraint wins when it conflicts with
+coverage. In practice:
+
+- **No paid eval runs unattended.** Real-model evals run only when someone starts them, and
+  only when a change could move Pedro's behaviour: a prompt, a model, a tool, the agent loop.
+  There is no nightly or scheduled run, because it would spend money on days nothing changed.
+- **Free checks do as much of the work as possible.** Anything that can be checked
+  deterministically is a T0/T1 test or a code grader (grounding, required tools), which costs
+  nothing. The LLM judge is used only for what code can't judge, since each judge call is one
+  more paid call per case and repeat.
+- **Small by default:** the `smoke` suite stays a handful of cases with few repeats. The spike's
+  3 repeats were enough for the made-up-figure case to fail every time.
+- **One cloud model by default.** The matrix covers several cloud models only when one is being
+  chosen. Local models cost nothing per call, so they can be added freely.
+- **A cheap judge,** pinned like any other model. A local judge, which costs nothing per call, is
+  an option once it has been calibrated (see "Open questions").
+- **A low default cost ceiling** (see "Runner"), so a bigger run needs a deliberate flag.
+
 ## Why a package, not a service, and not inside `agent`
 
 - **Not a deployed service (yet).** An offline harness has no runtime surface: no API, no
@@ -194,7 +215,7 @@ so today's root dependency costs nothing.
 |---|---|---|---|---|
 | T0 | Runner logic with a scripted fake `ChatModel` | `agent` unit tests | every commit | yes |
 | T1 | Adapter conformance on recorded provider responses | `agent` unit tests | every commit | yes |
-| T2 | **Offline evals**: real models on synthetic cases | **this package** (pydantic-evals) | on demand, CI dispatch, nightly | no, so pass rates |
+| T2 | **Offline evals**: real models on synthetic cases | **this package** (pydantic-evals) | on demand only: locally, CI dispatch or PR label | no, so pass rates |
 | T3 | Online evals: consented production traces | later, possibly a service | continuous | no |
 
 T0 and T1 are *tests*. They are listed here because the boundary matters: anything that can be
@@ -229,8 +250,8 @@ them.
 `from_file`. They're validated against the JSON Schema pydantic-evals generates, which needs our
 custom evaluator types passed in. They're grouped into **suites**:
 
-- `smoke`: a handful of cases, quick and cheap, the PR gate;
-- `core`: the full regression set;
+- `smoke`: a handful of cases, quick and cheap, run on a PR when it's labelled;
+- `core`: the full regression set, run by hand, e.g. before changing the default model;
 - one suite per concern (`grounding`, `refusals`, `voice`, `proposals`, …).
 
 A dataset version is recorded on every result. Datasets are declared with explicit generic
@@ -301,7 +322,8 @@ Rules that make a judge trustworthy:
   retries didn't absorb. `task_timeout` per case.
 - **Cost guard (ours).** A hard cost ceiling per invocation, estimated from the catalogue's
   pricing before starting, and checked against actual usage as cells finish. The runner refuses
-  to start above the ceiling without an explicit flag.
+  to start above the ceiling without an explicit flag. The default ceiling is low, sized for a
+  `smoke` run on one model (see "Cost: kept low on purpose").
 - **Local models** run through the same matrix. That grid, comparing a local model with the cloud
   reference on the same suite, is how a local model is judged good enough to offer `local_only`
   users. It's also how the Ollama-vs-LM Studio question gets settled.
@@ -334,7 +356,8 @@ Rules that make a judge trustworthy:
   anthropic:<model>`, plus `agent-evals compare <report> <baseline>`.
 - **CI:** the `smoke` suite on **manual dispatch or a PR label**, never automatically on every
   push. It costs money, needs provider keys as CI secrets, and its non-determinism would make it
-  a flaky gate. The full `core` suite runs nightly or before a release. The fake-model harness
+  a flaky gate. The full `core` suite is run by hand, never on a schedule (see "Cost: kept low
+  on purpose"). The fake-model harness
   smoke test (see "The tiers") is the exception: it's free and deterministic, and runs with the
   unit suite.
 - **Never in pre-commit**, apart from that free smoke test. Real-model evals aren't part of
