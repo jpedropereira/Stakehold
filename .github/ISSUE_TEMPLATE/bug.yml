@@ -1,0 +1,34 @@
+name: Bug
+description: Something behaves differently from what it should.
+labels: ["bug"]
+projects: ["jpedropereira/1"]
+body:
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happens
+      description: The behaviour you see, with error messages or logs.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What should happen
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. ...
+        2. ...
+    validations:
+      required: true
+  - type: input
+    id: service
+    attributes:
+      label: Service
+      description: Which service it happens in, if known, e.g. web or data-store.
+    validations:
+      required: false
