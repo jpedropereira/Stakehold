@@ -297,8 +297,14 @@ Rules that make a judge trustworthy:
   through pydantic-ai's model layer, not our `ChatModel` port. That's acceptable because the judge
   isn't the system under test, but it means judge models are configured as pydantic-ai model
   strings, separately from our catalogue.
-- a **versioned rubric** (content hash recorded);
-- scores on a fixed rubric with written anchors, not a free-form "rate 1–10";
+- a **versioned rubric** (content hash recorded), stored as `rubrics/<name>/v<N>.md` in this
+  package and never edited once a result has used it. The first is `rubrics/voice/v1.md`. Its
+  reasoning is in `agent`'s `docs/persona.md`;
+- scores on a fixed rubric with written anchors, not a free-form "rate 1–10". Each dimension is
+  **pass/fail**, with a pass anchor, a fail anchor and labelled borderline examples, and is judged
+  in its own call. Binary labels make agreement with a human labeller simple to measure, and a
+  per-dimension verdict says *which* principle failed. A 0–2 scale and a single holistic score were
+  considered: the first is harder to label consistently, and the second can't localise a failure;
 - **calibrated against a small human-labelled set**: the judge must agree with the labels above a
   threshold before its scores gate anything, re-checked whenever the judge model or rubric
   changes. pydantic-evals' report evaluators (e.g. a confusion matrix) are a candidate for the
