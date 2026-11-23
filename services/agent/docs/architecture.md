@@ -403,14 +403,26 @@ An `AgentSpec` is the unit a conversation runs under:
 - a toolset (names from the tool registry);
 - a model policy (ordered catalogue ids, sampling defaults, budgets).
 
-**Pedro** is the first.
+**Pedro** is the first. Who he is, how he speaks and how he handles edge cases are in
+[`persona.md`](persona.md). That file is the reasoning behind his prompt and the voice rubric.
 
-- **Prompts are versioned files**, not string literals in code. Each run records the prompt's
-  content hash, so a trace or an eval result always says exactly which prompt produced it. A
-  prompt change is then reviewable as a diff and measurable as an eval delta.
+- **Prompts are versioned files**, not string literals in code. They live in
+  `src/agent/personas/prompts/<persona>/v<N>.md`, inside the package so they ship in the image with
+  the code that loads them. Each run records the prompt's content hash, so a trace or an eval result
+  always says exactly which prompt produced it. A prompt change is then reviewable as a diff and
+  measurable as an eval delta. A version is **frozen once its hash is recorded somewhere that's
+  kept**: a committed eval baseline, or a run recorded by a deployed `agent`. From then on it's
+  never edited, and a change is a new `v<N+1>.md`. Editing a frozen file would leave a recorded
+  hash that no file in the repo produces. Until then the file is a draft and is edited in place.
+  Freezing earlier would turn every wording fix before the first baseline into a new version that
+  nothing ever referenced. Pedro's `v1.md` is a draft until the first baseline (PD-17) or the first
+  recorded run.
 - **Voice follows the brand charter's chapter IV** (`brand/brand-charter.html`): plain verbs, no
   hype on gains, no panic on losses, numbers doing the talking. The evals' rubric grader checks
-  this rather than trusting the prompt to have achieved it.
+  this rather than trusting the prompt to have achieved it. The rubric lives in `agent-evals`
+  (`rubrics/voice/v<N>.md`), since the harness owns its graders.
+- **v1 answers in English only.** A per-user reply-language setting is planned (PD-28). It will
+  add a prompt version rather than branching inside one.
 - A conversation is pinned to its persona at creation. History written under one persona's tools
   isn't replayed under another's.
 
@@ -657,5 +669,6 @@ Intended shape, mirroring the other services:
   callers. That's not needed for Pedro. Revisit once `portfolio` supports both.
 - **A dedicated eval service.** Not justified yet (see the eval doc). The trigger is online
   scoring of live conversations, or wanting eval history as a dashboard rather than files.
-- **Which tools Pedro has, and its prompts.** This is deliberately out of scope for this design.
-  It's the first task after the walking skeleton.
+- **Which tools Pedro has.** This is deliberately out of scope for this design (PD-4). His persona
+  and the prompt draft are in [`persona.md`](persona.md). The draft names no tools, so the tool
+  list can change without a new prompt version.
