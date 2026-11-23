@@ -197,6 +197,10 @@ set, which get fixed when `auth` builds them.
 - **`shared`:** the JWKS fetch-and-cache and verification helper is used by at least two services
   (`agent`, `portfolio`), so it belongs in `services/shared` rather than in two copies.
 - **`web`:** mints the token per chat request and forwards it.
+- **`portfolio`, for slice 2's tools:** a user-scoped read route that returns the holdings mix
+  (its assets, plus the holdings left out and why). This moves `web`'s `build_default_mix` rule into
+  `portfolio`, and `web` moves to the route in the same change so only one copy exists. `agent` then
+  passes that mix to the existing ex-ante, look-through and backtest routes (see "Tools (v1)").
 
 ## Internal layering
 
@@ -246,8 +250,10 @@ would be testing something other than what ships.
 - **`runtime/`: `AgentRunner`.** The loop: assemble context, call the model (streaming), execute
   any tool calls, append their results, and repeat until the model gives a final answer or a
   budget trips. Budgets are per turn: maximum steps, maximum input and output tokens, wall clock
-  (below the token TTL) and estimated cost. A tripped budget ends the turn with a typed
-  `budget_exceeded` event, never a silent truncation. Events are a closed, typed set:
+  (below the token TTL) and estimated cost, with the defaults in "Loop policy" below. A tripped
+  budget ends the turn with a typed `budget_exceeded` event, never a silent truncation. A
+  pre-tool guard runs before every tool call (see "Pre-tool guard"). Events are a closed, typed
+  set:
   - `run_started`;
   - `text_delta`;
   - `tool_started` / `tool_finished` (name and status only; arguments and results stay
@@ -263,7 +269,7 @@ would be testing something other than what ships.
   "whose portfolio" reads it from the context. That removes a whole class of injection escalation
   by construction: there is no argument the model could set to another user's id. Tools come in
   two kinds, *read tools* (call `portfolio`) and *proposal tools* (return an `ActionProposal`, and
-  never perform it). **Which tools exist is deliberately not designed yet.**
+  never perform it). Pedro's v1 tools are in "Tools (v1)" below.
 - **`clients/`:** `PortfolioClient` is a Protocol with one HTTP implementation that sends the
   bearer token. The eval harness substitutes a fake serving a frozen synthetic portfolio, so evals
   need no running services and no real data.
@@ -274,6 +280,205 @@ would be testing something other than what ships.
   repository commits itself.
 - **`settings.py`, `cli.py`:** `agent serve` and `agent db init`, with
   `shared.logging_config` for output.
+
+## Tools (v1)
+
+**Status: agreed design, not built.** PD-14 builds slice 1 and a later task builds slice 2.
+
+### Few tools, one per question the user asks
+
+Pedro's tools follow the questions a user asks about a portfolio, not `portfolio`'s routes. One
+tool can call several routes and return their results as sections of one result.
+
+Overlapping tools are the main cause of wrong tool choice, more than the number of tools. Two
+pairs of routes answer the same question in different ways: the value series and the TWR both
+answer "how has it done?", and ex-post and ex-ante risk both answer "how risky is it?". As separate
+tools, Pedro would first have to know how money-weighted and time-weighted returns differ to pick
+one. So each pair is one tool. Tools that answer different questions stay separate.
+
+Rejected alternatives:
+
+- *One tool per route* (seven tools). This is the most precise, but it keeps both overlapping
+  pairs. Each tool also needs its own eval cases (`.claude/rules/evals-required.md`).
+- *One router tool with a `view` argument* (`get_portfolio_data(view=...)`). This doesn't remove
+  the choice. It moves the choice from the tool's name into an enum and makes things worse in three
+  ways:
+  - some arguments are valid only for some views, which models fill less reliably and the guard
+    can't reject cleanly;
+  - one description has to explain every view;
+  - the allowlist, budgets and graders can no longer name a capability, only "the tool with this
+    argument".
+
+The cost of merging is that a merged tool always makes every call it covers, even when Pedro needs
+only one section. Traces will show whether that matters. If it does, the fix is a `sections`
+argument, not a split.
+
+### The tools
+
+| Tool | Answers | `portfolio` calls | Arguments | Slice |
+|---|---|---|---|---|
+| `get_holdings` | what do I own? | `GET /holdings` | none | 1 |
+| `get_performance` | how has it done? | `GET /returns/portfolio`, `GET /returns/portfolio/twr` | optional `start`, `end` | 1 |
+| `get_risk` | how risky is it? | `GET /risk/ex-post`; slice 2 adds ex-ante for the holdings mix | none; slice 2 adds `window` | 1 (ex-post only), 2 (ex-ante) |
+| `get_concentration` | what am I really exposed to? | look-through for the holdings mix | none | 2 |
+| `get_backtest` | how would this mix have done? | `POST /labs/backtest` for the page's mix, else the holdings mix | none | 2 |
+
+No argument names a user, an account owner or a token (`.claude/rules/tools.md`). `get_holdings`
+has no account filter, since `GET /holdings` has none: it returns every account, and each holding
+shows how it splits across accounts.
+
+**Why two slices.** Slice 1 uses only user-scoped `GET` routes. The mix-based routes (ex-ante,
+look-through, backtest) take a ticker-to-weight mix and no `user_id`, and today only `web` builds
+the user's mix (`build_default_mix` in `web/labs_view.py`). Slice 1 needs no new `portfolio`
+route, so it can be built end to end first. It answers most of what the persona covers: what's held,
+how it has done and how volatile it has been. Slice 2 waits on `portfolio` serving the holdings mix
+(see "Cross-service work").
+
+**Where a mix comes from.** It never comes from tool arguments.
+
+- *The holdings mix* comes from `portfolio`'s holdings-mix route (slice 2). Keeping the weighting
+  rule in one place means the chat and the page can't disagree about the mix. A copy in `agent`
+  would drift from `web`'s, and a mix the model wrote itself could get the weights wrong.
+- *The page's mix* is used by `get_backtest` when the user is on `/labs` with a mix in the URL. It
+  comes from page context, which is schema-validated (tickers, positive weights, at most 50 assets).
+  A tampered mix only changes a calculation over market data. It holds no user data and reaches no
+  other user.
+
+**Arguments.** These are validated against each tool's pydantic model, with `extra="forbid"`:
+
+- `start` and `end` are dates, with `end` not before `start` and neither in the future;
+- `window` is `portfolio`'s standard-window enum, 3Y by default as on the page.
+
+`get_risk` uses `portfolio`'s default benchmark in v1. A benchmark argument would let the model
+send any ticker for no gain Pedro needs yet.
+
+### Result shaping and size caps
+
+Each tool returns only what Pedro needs to describe a figure, not the page's full payload. Figures
+keep the precision and period `portfolio` returned them with, since the persona gives figures "as
+the tool returned them" (`persona.md`). The numeric-grounding grader also matches against these
+values.
+
+- `get_holdings`: holdings ordered by market value, up to 50, plus the totals. The count of any
+  left out is stated.
+- `get_performance`: the value series reduced to month-end points plus the first and last, up to
+  60 points; the TWR summary with its reduced points, gap count and excluded holdings.
+- `get_risk`: each standard window's figures with their `reason`, `flags` and observation counts.
+  The rolling series and the regime view are left out, since they're charts.
+- `get_concentration`: coverage, the 10 heaviest buckets per dimension plus an "other" total, the
+  25 heaviest names, and the concentration figures.
+- `get_backtest`: the period-return table for the mix and each asset, and every asset's status.
+  The growth series is left out.
+
+**Hard cap: about 16 KB of serialized result per tool call.** It's a backstop behind the shaping.
+Past it, rows are dropped from the end, and the result says so (`truncated`, with what was dropped).
+Pedro then can't present a partial list as complete.
+
+### Untrusted fields
+
+Some result fields come from outside the app: broker imports, users' labels, providers'
+metadata. Each `ToolResult` lists their paths, so the context assembler (PD-12) can put them in
+labelled untrusted blocks (`.claude/rules/prompt-injection.md`).
+
+| Tool | Untrusted fields |
+|---|---|
+| `get_holdings` | `account_label` (typed by the user) |
+| `get_performance` | `excluded[].reason` |
+| `get_risk` | `excluded[].reason` |
+| `get_concentration` | issuer, location and bucket labels, `fund_key`, `note` (from the provider's holdings files) |
+| `get_backtest` | `statuses[].reason` |
+
+Tickers are app-validated identifiers, not free text. Figures are numbers. Neither is listed.
+
+**Deferred:**
+
+- *what-if and ranking.* Choosing a candidate to add is close to a trade suggestion, which the
+  persona doesn't make. Ranking scores every tracked ticker and is the costliest call `portfolio`
+  has. Revisit with stage 2's proposals.
+- *transactions and accounts.* Imported descriptions are the freest text in the system, so the
+  largest injection surface. Holdings already carry the account labels.
+
+## Loop policy
+
+These are defaults in the persona's model policy (`AgentSpec`), config rather than code. Confidence
+is medium: they're starting points, to be tuned against the first eval baseline (PD-17) and real
+traces.
+
+- **Steps.** At most 8 model calls and 12 tool calls per turn. The last allowed model call is made
+  with no tools offered, so a turn that runs out of steps still ends with Pedro answering from what
+  he has. It doesn't end with nothing. A turn that hits the cap is still recorded as
+  `budget_exceeded` (steps), so traces show it.
+- **Parallel tool calls.** Allowed, up to 4 in one step, when the model's capabilities include
+  them. They run concurrently, which is safe because every tool only reads. Their results go back
+  in the order the model made the calls.
+- **Repeated calls.** A call with the same tool and arguments as an earlier one in the same turn
+  gets that call's result again. `portfolio` wouldn't answer differently within a turn, and
+  repeating the call spends budget for nothing. The repeat still counts as a tool call.
+- **Stop conditions.**
+  - The model ends with no tool calls: `run_completed`.
+  - A budget trips: `budget_exceeded`, naming the budget.
+  - The model stops on its output-length limit: `run_completed`, with the message marked
+    incomplete.
+  - A provider error that survives the adapter's retries: `run_failed`.
+- **Per-turn budgets.**
+  - Input tokens: about 150k, summed over the turn's model calls.
+  - Output tokens: about 8k, summed the same way.
+  - Wall clock: 120 s. The delegated token lives about 5 minutes and is minted per request, which
+    leaves room for adapter retries before it expires mid-turn.
+  - Per tool call: a 20 s timeout. A timeout is a tool failure shown to the model, not a run
+    failure.
+  - Estimated cost: about $0.25. It's checked before each model call, from the input size and the
+    catalogue's pricing, and against actual usage after it.
+
+## Pre-tool guard
+
+Every tool call passes a guard in `runtime/` before it runs. The checks, in order:
+
+1. The tool's name is in the persona's toolset. Otherwise: `unknown_tool`.
+2. The tool's registry kind is `read`. Otherwise: `not_read_only`. v1 has no proposal tools.
+3. The arguments validate against the tool's input model, with `extra="forbid"`. Otherwise:
+   `invalid_arguments`, with the validation errors but not the raw input echoed back.
+4. The turn's tool-call budget isn't spent. Otherwise: `tool_budget`.
+
+A refused call goes back to the model as a tool result saying it was refused and why, so the model
+can correct its arguments or answer without the tool. It emits `tool_finished` with status
+`refused`, gets a span and a log line, and counts toward the turn's tool calls.
+
+**The guard isn't the boundary.** It catches mistakes early and makes them visible. The limits
+hold without it:
+
+- `PortfolioClient` has no method for a write route;
+- the token's scope is `portfolio:read`;
+- `portfolio` refuses delegated tokens on its write routes (PD-10).
+
+## Pedro's reach
+
+What the running `agent` process can touch, so a prompt injection that takes over the model can
+reach no further.
+
+- **Code paths.** A tool reaches the outside only through `PortfolioClient`. There is no URL fetch,
+  no filesystem access, no shell and no code execution, as a tool or otherwise. Every base URL comes
+  from settings and none from model output, so no argument can aim a request elsewhere (SSRF).
+- **Secrets held.**
+  - The provider API key(s).
+  - `AGENT_INTERNAL_SECRET`, which proves `web` is the caller.
+  - `AGENT_DATABASE_URL`, whose role reaches only schema `agent`.
+  - The delegated token, for one request only, in `ToolContext`.
+
+  None of these ever enter model context, logs or traces.
+- **Secrets not held.** `portfolio`'s internal secret, `auth`'s signing key, and any other
+  service's database credentials. Taking over `agent` gives no way to read data as anyone other
+  than the user whose token it holds, for the minutes that token lives.
+- **Network.**
+  - On `stakehold-net`: `portfolio-api` and `auth`'s JWKS endpoint. Never `data-store` and never
+    `web`.
+  - Out to the internet: only the configured model provider's API.
+- **Known limitation.** Docker networking alone can't limit outbound traffic to a list of hosts.
+  Today the network limit holds in code: there is no HTTP client a tool or the model can aim. A
+  bug that adds one wouldn't be stopped by the network. The intended fix is an egress proxy that
+  allows only the provider's host (see "Open questions").
+- **Container.** It runs as a non-root user, with `read_only: true` and a tmpfs for scratch,
+  `cap_drop: [ALL]` and no Docker socket. PD-20 and PD-27 carry this into the compose files.
 
 ## Provider abstraction
 
@@ -604,11 +809,18 @@ that can achieve:
 | XSS / phishing via output | `web` renders markdown with raw HTML off and same-origin links only |
 | Forged tokens | asymmetric signing: verifiers hold only public keys |
 | Run away cost | per-turn budgets; per-user daily budget before wider access |
-| Exfiltration to a third party | no tool fetches arbitrary URLs; the model can reach only `portfolio`, through the client |
+| Exfiltration to a third party | no tool fetches arbitrary URLs; the model can reach only `portfolio`, through the client; outbound network limited in code today, by an egress proxy later (see "Pedro's reach") |
+| Calling a tool outside the persona's toolset, or one that writes | the pre-tool guard refuses it; `PortfolioClient` has no write method; the token is read-scoped and `portfolio` refuses it on write routes |
+| Malformed or oversized tool arguments | validated against each tool's input model with `extra="forbid"`; arguments are dates and enums, never free text or URLs |
+| Aiming a request elsewhere (SSRF) | every base URL comes from settings; no argument is a URL or a host |
+| Injection in an instrument, issuer or account name | the field is listed as untrusted in the `ToolResult` and put in a labelled block (PD-12); the structural limits above hold even if the model follows it |
+| A tampered page-context mix | schema-validated; it drives only a backtest over market data and holds no user data |
+| Running up cost through tool loops | at most 8 model calls and 12 tool calls per turn; repeated calls reuse the turn's results; per-tool timeouts |
+| A full takeover of the `agent` process | holds no credential beyond its own: no `portfolio` secret, no signing key, no other service's database; one user's read token, for minutes |
 
 Provider API keys come from the environment only, per
-[`.claude/rules/security.md`](../../../.claude/rules/security.md). This review is repeated when
-tools are designed, since each tool is new attack surface.
+[`.claude/rules/security.md`](../../../.claude/rules/security.md). The tools in "Tools (v1)" are
+covered above. Each new tool or data source repeats this review, since each is new attack surface.
 
 ## Deployment
 
@@ -633,6 +845,8 @@ Intended shape, mirroring the other services:
     `AGENT_MODEL_CATALOGUE` (path), and a local-runtime base URL.
   - A local runtime on the host is reached from the container via `host.docker.internal`, which
     needs an `extra_hosts` entry on Linux.
+- **Hardening.** Non-root user, `read_only: true` with a tmpfs, `cap_drop: [ALL]`, no Docker
+  socket (see "Pedro's reach").
 
 ## Testing
 
@@ -669,6 +883,6 @@ Intended shape, mirroring the other services:
   callers. That's not needed for Pedro. Revisit once `portfolio` supports both.
 - **A dedicated eval service.** Not justified yet (see the eval doc). The trigger is online
   scoring of live conversations, or wanting eval history as a dashboard rather than files.
-- **Which tools Pedro has.** This is deliberately out of scope for this design (PD-4). His persona
-  and the prompt draft are in [`persona.md`](persona.md). The draft names no tools, so the tool
-  list can change without a new prompt version.
+- **An egress proxy.** Outbound traffic is limited in code only (see "Pedro's reach"). A proxy
+  that allows only the configured provider's host would make the limit hold even if a bug added
+  an HTTP client. Decide before wider access, alongside the per-user daily budget.

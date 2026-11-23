@@ -26,4 +26,8 @@ to another user's id.
 - A tool failure is returned to the model as a tool result saying it failed. Don't swallow it and
   don't raise it through the loop.
 - A tool never fetches an arbitrary URL.
+- One tool per question the user asks, not per route. Don't add a tool that overlaps an
+  existing one, and don't add a router argument like `view` (`docs/architecture.md`, "Tools (v1)").
+- Arguments are dates and enums. Never a URL, a host, free text or a mix the model writes.
+- A `ToolResult` lists its untrusted fields' paths, and its content stays under the size cap.
 - Tools reach `portfolio` only through the `PortfolioClient` Protocol, so evals can swap in a fake.
