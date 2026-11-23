@@ -317,7 +317,7 @@ argument, not a split.
 
 | Tool | Answers | `portfolio` calls | Arguments | Slice |
 |---|---|---|---|---|
-| `get_holdings` | what do I own? | `GET /holdings` | none | 1 |
+| `get_holdings` (preloaded, not offered to the model) | what do I own? | `GET /holdings` | none | 1 |
 | `get_performance` | how has it done? | `GET /returns/portfolio`, `GET /returns/portfolio/twr` | optional `start`, `end` | 1 |
 | `get_risk` | how risky is it? | `GET /risk/ex-post`; slice 2 adds ex-ante for the holdings mix | none; slice 2 adds `window` | 1 (ex-post only), 2 (ex-ante) |
 | `get_concentration` | what am I really exposed to? | look-through for the holdings mix | none | 2 |
@@ -327,11 +327,52 @@ No argument names a user, an account owner or a token (`.claude/rules/tools.md`)
 has no account filter, since `GET /holdings` has none: it returns every account, and each holding
 shows how it splits across accounts.
 
+### Holdings are preloaded, not chosen
+
+The model never calls `get_holdings`. The runner calls it at the start of every turn, before the
+first model call, and the context assembler puts its result near the top of the request (see
+"Context assembly"). The model is offered only the other tools.
+
+Why:
+
+- **Almost every portfolio question needs the holdings.** "How risky is it?", "what should I look
+  at?" and "why did it drop?" all start from what's held. As a tool, most turns would spend their
+  first model call only on asking for them: a round trip, its latency and its tokens, every time.
+- **Pedro can't skip it.** A model that answers without calling the tool falls back on memory or
+  guesses, which the persona forbids.
+- **One less choice for the model,** for the same reason the tools follow questions.
+
+The cost is input tokens on turns that don't need holdings: concept questions ("what is a Sharpe
+ratio?"), follow-ups on a figure already in the conversation, small talk and refusals. Two things
+keep it small:
+
+- The block sits after the system prompt and before the history. Holdings change at most once a
+  day, so within a conversation the provider's prompt cache usually holds it, and cached reads are
+  billed at a fraction of normal input.
+- It's never written into the history, so a long conversation carries one copy, not one per turn.
+
+It also means the portfolio goes to the provider on every turn under `cloud_allowed`, needed or
+not. The user has consented to that, so the extra exposure is small, but it is a step away from
+sending only what's needed.
+
+**It's still a tool result.** `get_holdings` stays a registered read tool, and the runner runs it
+through the same path a model's call takes: the guard, the span, the size cap and the list of
+untrusted fields. The assembler labels the block as `get_holdings`' result. Pedro's prompt
+("every figure about the user's portfolio must come from a tool result") and the numeric-grounding
+grader then cover the holdings with no special case. A persona declares preloaded tools in its
+`AgentSpec`, next to the tools it offers.
+
+**If it fails,** the turn still runs. The block says the holdings couldn't be loaded, and Pedro
+says so, as for any failed tool.
+
+Rejected: *keeping `get_holdings` as a tool the model may also call.* It would overlap the preload,
+the kind of overlap the tools are built to avoid.
+
 **Why two slices.** Slice 1 uses only user-scoped `GET` routes. The mix-based routes (ex-ante,
 look-through, backtest) take a ticker-to-weight mix and no `user_id`, and today only `web` builds
 the user's mix (`build_default_mix` in `web/labs_view.py`). Slice 1 needs no new `portfolio`
-route, so it can be built end to end first. It answers most of what the persona covers: what's held,
-how it has done and how volatile it has been. Slice 2 waits on `portfolio` serving the holdings mix
+route, so it can be built end to end first. With the preloaded holdings, it answers most of what
+the persona covers: what's held, how it has done and how volatile it has been. Slice 2 waits on `portfolio` serving the holdings mix
 (see "Cross-service work").
 
 **Where a mix comes from.** It never comes from tool arguments.
@@ -404,10 +445,11 @@ These are defaults in the persona's model policy (`AgentSpec`), config rather th
 is medium: they're starting points, to be tuned against the first eval baseline (PD-17) and real
 traces.
 
-- **Steps.** At most 8 model calls and 12 tool calls per turn. The last allowed model call is made
-  with no tools offered, so a turn that runs out of steps still ends with Pedro answering from what
-  he has. It doesn't end with nothing. A turn that hits the cap is still recorded as
-  `budget_exceeded` (steps), so traces show it.
+- **Steps.** At most 8 model calls and 12 tool calls per turn. The preloaded holdings call doesn't
+  count toward the 12 tool calls, but it does count against the wall clock. The last allowed model
+  call is made with no tools offered, so a turn that runs out of steps still ends with Pedro
+  answering from what he has. It doesn't end with nothing. A turn that hits the cap is still
+  recorded as `budget_exceeded` (steps), so traces show it.
 - **Parallel tool calls.** Allowed, up to 4 in one step, when the model's capabilities include
   them. They run concurrently, which is safe because every tool only reads. Their results go back
   in the order the model made the calls.
@@ -434,7 +476,9 @@ traces.
 
 Every tool call passes a guard in `runtime/` before it runs. The checks, in order:
 
-1. The tool's name is in the persona's toolset. Otherwise: `unknown_tool`.
+1. The tool's name is in the persona's offered toolset (for a model's call) or its preload list
+   (for the runner's preload call). Otherwise: `unknown_tool`. A model's call to a preloaded tool
+   is refused too, since it's not offered.
 2. The tool's registry kind is `read`. Otherwise: `not_read_only`. v1 has no proposal tools.
 3. The arguments validate against the tool's input model, with `extra="forbid"`. Otherwise:
    `invalid_arguments`, with the validation errors but not the raw input echoed back.
@@ -637,10 +681,13 @@ An `AgentSpec` is the unit a conversation runs under:
 `ContextAssembler` builds each `ModelRequest`, in order:
 
 1. The persona's system prompt.
-2. Page context (see below).
-3. Conversation history, trimmed by a `HistoryPolicy` to fit the model's context window from the
+2. Preloaded tool results: in v1, the user's holdings, fetched by the runner at the start of the
+   turn (see "Holdings are preloaded, not chosen"). They come before the history so the prompt
+   cache can hold them across turns, and they're never stored in the history.
+3. Page context (see below).
+4. Conversation history, trimmed by a `HistoryPolicy` to fit the model's context window from the
    catalogue.
-4. *(Later)* retrieved context.
+5. *(Later)* retrieved context.
 
 **Page context** is how "Pedro sees what the user sees" goes beyond "reads the same API". With
 each message, `web` sends a small, schema-validated description of the page the user is on:
@@ -659,7 +706,7 @@ and always keep tool-call/tool-result pairs together. The obvious next step, sum
 dropped turns, is an open question. It's an interface, so swapping it touches nothing else.
 
 **RAG (not a requirement yet) plugs in here and only here.** A future `Retriever` port, e.g.
-over glossary entries, methodology docs or past conversations, adds context blocks in step 4, or
+over glossary entries, methodology docs or past conversations, adds context blocks in step 5, or
 is exposed to the model as a read tool. Neither option touches the runner, the adapters or the
 API. Where embeddings would live (pgvector in `app-postgres` is the obvious candidate) is a
 schema decision for that later task.
