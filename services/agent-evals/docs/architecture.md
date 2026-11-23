@@ -298,7 +298,8 @@ Rules that make a judge trustworthy:
   isn't the system under test, but it means judge models are configured as pydantic-ai model
   strings, separately from our catalogue.
 - a **versioned rubric** (content hash recorded), stored as `rubrics/<name>/v<N>.md` in this
-  package and never edited once a result has used it. The first is `rubrics/voice/v1.md`. Its
+  package. A rubric is edited in place until a committed baseline records its hash, and is never
+  edited after that. Reports in the gitignored results directory don't freeze it. The first is `rubrics/voice/v1.md`. Its
   reasoning is in `agent`'s `docs/persona.md`;
 - scores on a fixed rubric with written anchors, not a free-form "rate 1–10". Each dimension is
   **pass/fail**, with a pass anchor, a fail anchor and labelled borderline examples, and is judged

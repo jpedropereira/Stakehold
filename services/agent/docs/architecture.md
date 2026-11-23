@@ -410,9 +410,13 @@ An `AgentSpec` is the unit a conversation runs under:
   `src/agent/personas/prompts/<persona>/v<N>.md`, inside the package so they ship in the image with
   the code that loads them. Each run records the prompt's content hash, so a trace or an eval result
   always says exactly which prompt produced it. A prompt change is then reviewable as a diff and
-  measurable as an eval delta. Once a run has used a version, that file is never edited: a change
-  is a new `v<N+1>.md`. Editing in place would leave old runs with a hash that no file in the
-  repo produces. Pedro's `v1.md` is a draft until PD-15 loads it.
+  measurable as an eval delta. A version is **frozen once its hash is recorded somewhere that's
+  kept**: a committed eval baseline, or a run recorded by a deployed `agent`. From then on it's
+  never edited, and a change is a new `v<N+1>.md`. Editing a frozen file would leave a recorded
+  hash that no file in the repo produces. Until then the file is a draft and is edited in place.
+  Freezing earlier would turn every wording fix before the first baseline into a new version that
+  nothing ever referenced. Pedro's `v1.md` is a draft until the first baseline (PD-17) or the first
+  recorded run.
 - **Voice follows the brand charter's chapter IV** (`brand/brand-charter.html`): plain verbs, no
   hype on gains, no panic on losses, numbers doing the talking. The evals' rubric grader checks
   this rather than trusting the prompt to have achieved it. The rubric lives in `agent-evals`

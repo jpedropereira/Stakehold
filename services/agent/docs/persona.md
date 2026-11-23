@@ -223,11 +223,19 @@ another language.
 ## Prompt and rubric versioning
 
 - The prompt is `src/agent/personas/prompts/pedro/v<N>.md`. Every run records the prompt's content
-  hash, so once a run has used a version, that file is never edited. A change is a new file,
-  `v<N+1>.md`, reviewed as a diff against the last one and measured as an eval delta
-  (`.claude/rules/evals-required.md`).
+  hash.
+- **A version is frozen once its hash is recorded somewhere that's kept:** a committed eval
+  baseline, or a run recorded by a deployed `agent`. From then on the file is never edited. A change
+  is a new file, `v<N+1>.md`, reviewed as a diff against the last one and measured as an eval delta
+  (`.claude/rules/evals-required.md`). Editing a frozen file would leave a recorded hash that no file
+  in the repo produces.
+- **Until then it's a draft, and is edited in place.** Unit tests with the fake model, smoke runs
+  and eval reports in the gitignored results directory don't freeze anything, since nothing kept
+  points at their hash. `pedro/v1.md` is a draft until PD-17 commits the first baseline or PD-15's
+  wiring records its first run, whichever comes first.
 - The voice rubric is `services/agent-evals/rubrics/voice/v<N>.md`, versioned the same way. Its
-  hash is recorded on every judged result. It has one pass/fail dimension per voice principle, plus
-  not-advice framing. Each dimension has written anchors.
+  hash is recorded on every judged result, so it's frozen by the first committed baseline that used
+  it (PD-18). It has one pass/fail dimension per voice principle, plus not-advice framing. Each
+  dimension has written anchors.
 - A change to this document that changes behaviour needs a new prompt version, and usually a new
   rubric version too. A wording fix here needs neither.
