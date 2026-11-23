@@ -477,8 +477,9 @@ reach no further.
   Today the network limit holds in code: there is no HTTP client a tool or the model can aim. A
   bug that adds one wouldn't be stopped by the network. The intended fix is an egress proxy that
   allows only the provider's host (see "Open questions").
-- **Container.** It runs as a non-root user, with `read_only: true` and a tmpfs for scratch,
-  `cap_drop: [ALL]` and no Docker socket. PD-20 and PD-27 carry this into the compose files.
+- **Container isolation is out of v1.** The egress proxy and container hardening (non-root user,
+  `read_only: true` with a tmpfs, `cap_drop: [ALL]`) are deferred (see "Open questions"). v1's
+  limits are the code-level ones above, plus the credentials `agent` doesn't hold.
 
 ## Provider abstraction
 
@@ -845,9 +846,6 @@ Intended shape, mirroring the other services:
     `AGENT_MODEL_CATALOGUE` (path), and a local-runtime base URL.
   - A local runtime on the host is reached from the container via `host.docker.internal`, which
     needs an `extra_hosts` entry on Linux.
-- **Hardening.** Non-root user, `read_only: true` with a tmpfs, `cap_drop: [ALL]`, no Docker
-  socket (see "Pedro's reach").
-
 ## Testing
 
 - **Unit tests:** `services/agent/tests/unit/`, with no `__init__.py`, per `CLAUDE.md`. The
@@ -883,6 +881,10 @@ Intended shape, mirroring the other services:
   callers. That's not needed for Pedro. Revisit once `portfolio` supports both.
 - **A dedicated eval service.** Not justified yet (see the eval doc). The trigger is online
   scoring of live conversations, or wanting eval history as a dashboard rather than files.
-- **An egress proxy.** Outbound traffic is limited in code only (see "Pedro's reach"). A proxy
-  that allows only the configured provider's host would make the limit hold even if a bug added
-  an HTTP client. Decide before wider access, alongside the per-user daily budget.
+- **Container isolation.** Left out of v1 by decision. Two parts:
+  - *An egress proxy.* Outbound traffic is limited in code only (see "Pedro's reach"). Putting
+    `agent` only on internal networks, with a proxy that allows only the configured provider's
+    host, would make the limit hold even if a bug added an HTTP client.
+  - *Container hardening:* non-root user, `read_only: true` with a tmpfs, `cap_drop: [ALL]`.
+
+  Decide before wider access, alongside the per-user daily budget.
