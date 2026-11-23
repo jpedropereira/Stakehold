@@ -881,6 +881,26 @@ Intended shape, mirroring the other services:
   callers. That's not needed for Pedro. Revisit once `portfolio` supports both.
 - **A dedicated eval service.** Not justified yet (see the eval doc). The trigger is online
   scoring of live conversations, or wanting eval history as a dashboard rather than files.
+- **Web search (planned, not in v1).** Pedro will at some point need to search the web. It
+  reverses three v1 decisions: "no tool fetches arbitrary URLs", "arguments are never free text"
+  (a query is), and "outbound traffic goes only to the model provider". The recommended shape
+  (medium confidence):
+  - *Search, not fetch.* A search takes a query and returns snippets. A fetch takes a URL, and an
+    injected instruction can aim it at an attacker's address with the user's figures in it. Pedro
+    gets no tool that takes a URL.
+  - *The provider's server-side search, not our own client.* `agent` then makes no new outbound
+    connection, and no new company receives data under `cloud_allowed` other than the provider's
+    own search partner, which the consent text must name. The cost is that local models don't get
+    it, so the `ChatModel` port gains a `web_search` capability. The provider's limits (a domain
+    allowlist, a cap on searches per turn) are to be checked against its docs when this starts.
+
+  What it then needs:
+  - labelled untrusted blocks for results, and an eval case with an injection in a result;
+  - a cap on searches per turn and a domain allowlist, which limit (but don't remove) figures
+    leaking out in queries;
+  - a grounding rule: a web figure is cited and never presented as one of the user's figures;
+  - a decision in `web` on rendering external citation links, which are same-origin only today;
+  - per-search fees and the results' tokens counted against the turn's budgets.
 - **Container isolation.** Left out of v1 by decision. Two parts:
   - *An egress proxy.* Outbound traffic is limited in code only (see "Pedro's reach"). Putting
     `agent` only on internal networks, with a proxy that allows only the configured provider's
