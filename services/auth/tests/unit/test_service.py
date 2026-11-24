@@ -1,8 +1,13 @@
+import logging
 from datetime import UTC, datetime, timedelta
 
+import jwt
 import pytest
 from auth import passwords, service, tokens
+from auth.signing import load_signing_key
 from auth.throttle import AttemptThrottle
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ed25519
 
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
 TTL_DAYS = 14
@@ -311,3 +316,85 @@ def test_revoking_admin_takes_effect_on_the_next_validation(repos, conn):
     validated = service.validate_session(conn, token=session.token, now=NOW, ttl_days=TTL_DAYS)
 
     assert validated.user.is_admin is False
+
+
+# --- delegated tokens ---------------------------------------------------------
+
+TOKEN_TTL_SECONDS = 300
+
+
+def _signing_key():
+    # Generated per run, never committed.
+    pem = ed25519.Ed25519PrivateKey.generate().private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+    return load_signing_key(pem)
+
+
+def _delegate(conn, session_token, *, key, now=NOW):
+    return service.issue_delegated_token(
+        conn,
+        session_token=session_token,
+        now=now,
+        ttl_days=TTL_DAYS,
+        signing_key=key,
+        token_ttl_seconds=TOKEN_TTL_SECONDS,
+    )
+
+
+def _claims(token, key, *, at=NOW):
+    leeway = (datetime.now(UTC) - at).total_seconds()
+    return jwt.decode(
+        token,
+        key.private_key.public_key(),
+        algorithms=["EdDSA"],
+        audience="portfolio",
+        leeway=leeway,
+    )
+
+
+def test_delegated_token_names_the_session_user_as_subject(repos, conn):
+    key = _signing_key()
+    session = _signup(conn)
+
+    delegated = _delegate(conn, session.token, key=key)
+
+    assert _claims(delegated.token, key)["sub"] == str(session.user.id)
+    assert delegated.expires_in == TOKEN_TTL_SECONDS
+
+
+def test_delegated_token_for_an_unknown_session_raises(repos, conn):
+    with pytest.raises(service.SessionInvalid):
+        _delegate(conn, "not-a-real-token", key=_signing_key())
+
+
+def test_delegated_token_for_an_expired_session_raises(repos, conn):
+    session = _signup(conn)
+    after_expiry = NOW + timedelta(days=TTL_DAYS, seconds=1)
+
+    with pytest.raises(service.SessionInvalid):
+        _delegate(conn, session.token, key=_signing_key(), now=after_expiry)
+
+
+def test_delegated_token_for_a_logged_out_session_raises(repos, conn):
+    session = _signup(conn)
+    service.logout(conn, token=session.token)
+
+    with pytest.raises(service.SessionInvalid):
+        _delegate(conn, session.token, key=_signing_key())
+
+
+def test_delegated_token_is_logged_by_jti_never_by_value(repos, conn, caplog):
+    key = _signing_key()
+    session = _signup(conn)
+
+    with caplog.at_level(logging.DEBUG):
+        delegated = _delegate(conn, session.token, key=key)
+
+    logged = "\n".join(record.getMessage() for record in caplog.records)
+    assert delegated.jti in logged
+    assert delegated.token not in logged
+    assert session.token not in logged
+    assert str(session.user.id) not in logged

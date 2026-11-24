@@ -1,11 +1,13 @@
 import os
 
+import jwt
 import psycopg
 import pytest
 from auth import cli
 from auth import service as service_module
 from auth.api.app import create_app
 from fastapi.testclient import TestClient
+from jwt.algorithms import OKPAlgorithm
 
 pytestmark = pytest.mark.integration
 
@@ -189,3 +191,36 @@ def test_set_admin_cli_is_reported_by_validate_and_revoke_applies_on_the_next_re
 
 def test_set_admin_cli_exits_nonzero_for_an_unknown_email():
     assert cli.main(["user", "set-admin", "--email", "nobody@example.com"]) == 1
+
+
+def test_delegated_token_names_the_signed_up_user_and_verifies_against_the_jwks(client):
+    """End to end against a real session row: what PD-8's verifier will do with the token."""
+    user_id = _signup(client, "delegate@example.com").json()["user_id"]
+
+    response = client.post("/tokens/delegate", headers={"X-Internal-Secret": _internal_secret()})
+    assert response.status_code == 200
+    token = response.json()["access_token"]
+
+    jwks = client.get("/.well-known/jwks.json").json()
+    kid = jwt.get_unverified_header(token)["kid"]
+    (jwk,) = [key for key in jwks["keys"] if key["kid"] == kid]
+    claims = jwt.decode(
+        token,
+        OKPAlgorithm.from_jwk(jwk),
+        algorithms=["EdDSA"],
+        audience="portfolio",
+        issuer="auth",
+    )
+    assert claims["sub"] == user_id
+
+
+def test_delegate_after_logout_returns_401(client):
+    secret = _internal_secret()
+    _signup(client, "delegate-logout@example.com")
+    session_token = client.cookies.get("stakehold_session")
+    client.post("/logout", headers={"X-Internal-Secret": secret})
+    client.cookies.set("stakehold_session", session_token)
+
+    response = client.post("/tokens/delegate", headers={"X-Internal-Secret": secret})
+
+    assert response.status_code == 401

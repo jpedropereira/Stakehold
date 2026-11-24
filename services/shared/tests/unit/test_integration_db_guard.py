@@ -194,6 +194,39 @@ def test_preparing_keeps_an_explicit_setting_for_the_guard_to_vet():
     assert env["AUTH_DATABASE_URL"] == _DEV_LIKE
 
 
+def test_preparing_supplies_an_ephemeral_auth_signing_key():
+    """auth refuses to start without a signing key, and with dotenv disabled nothing else would
+    give it one. Generated per run, so no private key is ever committed."""
+    guard = _load_guard()
+    env = {}
+
+    guard.prepare_integration_environment(env)
+
+    # The PEM header only, no key material.
+    pem_header = "-----BEGIN PRIVATE KEY-----"  # pragma: allowlist secret
+    assert env["AUTH_SIGNING_KEY"].startswith(pem_header)
+
+
+def test_preparing_keeps_an_explicit_auth_signing_key_file():
+    # auth rejects both sources at once, so a key file from the environment must not gain an
+    # inline key alongside it.
+    guard = _load_guard()
+    env = {"AUTH_SIGNING_KEY_FILE": "/run/secrets/key.pem"}
+
+    guard.prepare_integration_environment(env)
+
+    assert "AUTH_SIGNING_KEY" not in env
+
+
+def test_preparing_keeps_an_explicit_inline_auth_signing_key():
+    guard = _load_guard()
+    env = {"AUTH_SIGNING_KEY": "explicit"}
+
+    guard.prepare_integration_environment(env)
+
+    assert env["AUTH_SIGNING_KEY"] == "explicit"
+
+
 @pytest.mark.parametrize("existing", [None, "0", "false"])
 def test_preparing_disables_dotenv_loading(existing):
     """Every service's load_settings() calls load_dotenv(), which finds that service's dotenv

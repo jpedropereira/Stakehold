@@ -38,6 +38,13 @@ cmd_up() {
     fi
   done
 
+  if [[ ! -f "services/auth/secrets/signing-key.pem" ]]; then
+    echo "services/auth/secrets/signing-key.pem is missing -- generate it with" \
+      "'openssl genpkey -algorithm ed25519 -out services/auth/secrets/signing-key.pem'" \
+      "(see docs/smoke-test.md)." >&2
+    exit 1
+  fi
+
   for service in "${SERVICES[@]}"; do
     echo "Starting ${service}..."
     compose "$service" up -d "$@"

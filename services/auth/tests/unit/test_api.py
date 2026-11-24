@@ -4,13 +4,33 @@ real service, real dependencies, and real exception handlers all run without a P
 connection. Only the connection pool itself is faked (pool.open() would otherwise try to
 connect for real during the app's lifespan)."""
 
+import logging
+
+import jwt
 import pytest
 from auth.api.app import create_app
 from auth.settings import Settings
+from auth.signing import load_signing_key
 from auth.throttle import AttemptThrottle
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ed25519
 from fastapi.testclient import TestClient
+from jwt.algorithms import OKPAlgorithm
 
 PASSWORD = "correct horse battery staple"  # pragma: allowlist secret
+
+
+def _signing_key():
+    # Generated per run, never committed.
+    pem = ed25519.Ed25519PrivateKey.generate().private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+    return load_signing_key(pem)
+
+
+SIGNING_KEY = _signing_key()
 
 
 class _FakeConnectionContext:
@@ -52,6 +72,8 @@ def _settings(**overrides):
         api_port=8001,
         pool_min_size=1,
         pool_max_size=5,
+        signing_key=SIGNING_KEY,
+        delegated_token_ttl_seconds=300,
     )
     kwargs.update(overrides)
     return Settings(**kwargs)
@@ -360,3 +382,183 @@ def test_logout_without_a_cookie_is_idempotent(client):
     response = test_client.post("/logout", headers={"X-Internal-Secret": settings.internal_secret})
 
     assert response.status_code == 204
+
+
+# --- delegated tokens and JWKS ------------------------------------------------
+
+
+def _delegate(test_client, settings, **headers):
+    sent = {"X-Internal-Secret": settings.internal_secret}
+    sent.update(headers)
+    return test_client.post("/tokens/delegate", headers=sent)
+
+
+def _verify(token, jwks, audience="portfolio"):
+    """What a verifier (agent, portfolio) does: pick the JWKS key by the token's kid."""
+    kid = jwt.get_unverified_header(token)["kid"]
+    (jwk,) = [key for key in jwks["keys"] if key["kid"] == kid]
+    public_key = OKPAlgorithm.from_jwk(jwk)
+    return jwt.decode(token, public_key, algorithms=["EdDSA"], audience=audience, issuer="auth")
+
+
+def test_delegate_returns_a_bearer_token_for_the_session_user(client):
+    test_client, settings = client
+    user_id = _signup(test_client, settings).json()["user_id"]
+
+    response = _delegate(test_client, settings)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body) == {"access_token", "token_type", "expires_in"}
+    assert body["token_type"] == "Bearer"
+    assert body["expires_in"] == 300
+    claims = jwt.decode(
+        body["access_token"],
+        SIGNING_KEY.private_key.public_key(),
+        algorithms=["EdDSA"],
+        audience="agent",
+    )
+    assert claims["sub"] == user_id
+    assert claims["scope"] == "portfolio:read"
+    assert claims["exp"] - claims["iat"] == 300
+
+
+def test_delegate_uses_the_configured_ttl(repos, monkeypatch, healthy_pool):
+    test_client, settings = _build_client(monkeypatch, healthy_pool, delegated_token_ttl_seconds=60)
+
+    with test_client as entered:
+        _signup(entered, settings)
+        response = _delegate(entered, settings)
+
+    assert response.json()["expires_in"] == 60
+
+
+def test_delegate_response_is_not_cacheable(client):
+    test_client, settings = client
+    _signup(test_client, settings)
+
+    response = _delegate(test_client, settings)
+
+    assert response.headers["cache-control"] == "no-store"
+
+
+def test_delegate_sets_no_cookie(client):
+    # web proxies auth's Set-Cookie to the browser on the session routes. This one must give it
+    # nothing to forward.
+    test_client, settings = client
+    _signup(test_client, settings)
+
+    response = _delegate(test_client, settings)
+
+    assert "set-cookie" not in response.headers
+
+
+def test_delegate_without_a_session_cookie_returns_401(client):
+    test_client, settings = client
+
+    response = _delegate(test_client, settings)
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "invalid or expired session"}
+
+
+def test_delegate_with_an_unknown_session_returns_401(client):
+    test_client, settings = client
+    test_client.cookies.set("stakehold_session", "not-a-real-token")
+
+    response = _delegate(test_client, settings)
+
+    assert response.status_code == 401
+
+
+def test_delegate_after_logout_returns_401(client):
+    test_client, settings = client
+    _signup(test_client, settings)
+    session_token = test_client.cookies.get("stakehold_session")
+    test_client.post("/logout", headers={"X-Internal-Secret": settings.internal_secret})
+    test_client.cookies.set("stakehold_session", session_token)
+
+    response = _delegate(test_client, settings)
+
+    assert response.status_code == 401
+
+
+def test_delegate_without_the_internal_secret_returns_401(client):
+    # The session cookie alone is not enough: only web may mint tokens.
+    test_client, settings = client
+    _signup(test_client, settings)
+
+    response = test_client.post("/tokens/delegate")
+
+    assert response.status_code == 401
+
+
+def test_delegate_with_a_wrong_internal_secret_returns_401(client):
+    test_client, settings = client
+    _signup(test_client, settings)
+
+    response = _delegate(
+        test_client, settings, **{"X-Internal-Secret": "not-the-secret"}  # pragma: allowlist secret
+    )
+
+    assert response.status_code == 401
+
+
+def test_delegated_token_never_appears_in_logs(client, caplog):
+    test_client, settings = client
+    _signup(test_client, settings)
+    session_token = test_client.cookies.get("stakehold_session")
+
+    with caplog.at_level(logging.DEBUG):
+        token = _delegate(test_client, settings).json()["access_token"]
+
+    logged = "\n".join(record.getMessage() for record in caplog.records)
+    assert token not in logged
+    # Nor any one of its three parts, e.g. a signature logged on its own.
+    for part in token.split("."):
+        assert part not in logged
+    assert session_token not in logged
+
+
+def test_jwks_is_reachable_without_the_internal_secret(client):
+    # agent and portfolio fetch it, and agent deliberately holds no auth secret. A public key is
+    # not a secret; the endpoint is internal by network, not by credential.
+    test_client, _ = client
+
+    response = test_client.get("/.well-known/jwks.json")
+
+    assert response.status_code == 200
+
+
+def test_jwks_publishes_the_signing_key(client):
+    test_client, _ = client
+
+    jwks = test_client.get("/.well-known/jwks.json").json()
+
+    assert len(jwks["keys"]) == 1
+    jwk = jwks["keys"][0]
+    assert jwk["kid"] == SIGNING_KEY.kid
+    assert jwk["kty"] == "OKP"
+    assert jwk["crv"] == "Ed25519"
+    assert jwk["alg"] == "EdDSA"
+    assert jwk["use"] == "sig"
+    assert "d" not in jwk
+
+
+def test_jwks_is_cacheable_by_verifiers(client):
+    test_client, _ = client
+
+    response = test_client.get("/.well-known/jwks.json")
+
+    assert "max-age=" in response.headers["cache-control"]
+
+
+@pytest.mark.parametrize("audience", ["agent", "portfolio"])
+def test_a_delegated_token_verifies_against_the_published_jwks(client, audience):
+    test_client, settings = client
+    user_id = _signup(test_client, settings).json()["user_id"]
+    token = _delegate(test_client, settings).json()["access_token"]
+
+    jwks = test_client.get("/.well-known/jwks.json").json()
+
+    assert _verify(token, jwks, audience=audience)["sub"] == user_id

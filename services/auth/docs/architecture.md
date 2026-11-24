@@ -1,6 +1,7 @@
 # auth architecture
 
-**Status: schema/foundation (task 1) and the identity HTTP API (task 2) both implemented.**
+**Status: schema/foundation (task 1), the identity HTTP API (task 2) and delegated tokens with
+their JWKS (PD-7) implemented.**
 
 ## Responsibility
 
@@ -18,6 +19,10 @@ references a user only by the UUID `auth` issues at signup, as a trusted plain c
   reasoning and how this reconciles with `app-postgres` being the shared database every other
   future non-data-store service uses instead of standing up its own instance.
 - **Argon2id** via `argon2-cffi` for password hashing, not bcrypt.
+- **PyJWT** (`pyjwt[crypto]`, on `cryptography`) for signing delegated tokens. It is the most
+  widely used Python JWT library, signs EdDSA from an `Ed25519PrivateKey`, and exports a public
+  JWK, so it covers both halves of "Delegated tokens" below; the shared verifier (PD-8) can use
+  the same library. `joserfc` would also do, but it offered nothing extra here.
 - **Sync route handlers, not `async def`.** psycopg is used synchronously here (a
   `psycopg_pool.ConnectionPool`, not the async pool variant), so routes are plain `def`s — FastAPI
   runs those in its threadpool, which keeps a blocking DB call from stalling the event loop without
@@ -50,7 +55,9 @@ references a user only by the UUID `auth` issues at signup, as a trusted plain c
 - **Session cookies, not JWTs** — specifically an opaque session token (a random session ID), not
   a signed/stateless token. `web` is server-rendered and same-origin, so no token needs to reach
   the browser except the opaque cookie value; opaque tokens make logout/revocation trivial
-  (delete the row) compared to signed tokens, which need a deny-list.
+  (delete the row) compared to signed tokens, which need a deny-list. The delegated tokens below
+  don't change this: they solve a different problem (a credential `agent` can carry without
+  holding the user's session), and their 5-minute TTL is what stands in for a deny-list.
 - **Session validation is a per-request API call** (e.g. `/sessions/validate`) from `web`,
   deliberately not optimized with caching yet — acceptable at hobby-project request volumes,
   revisit only if it becomes a real bottleneck.
@@ -65,8 +72,9 @@ references a user only by the UUID `auth` issues at signup, as a trusted plain c
   outside the deployment's private network — only `web` is publicly exposed — and every internal
   call additionally carries a shared secret (an env-var-configured bearer token) that the receiving
   service checks before processing the request. This proves "a legitimate internal caller," not
-  cryptographically that a specific `user_id` came from `auth` — an accepted gap at this stage, see
-  the signed-assertion upgrade path under "Open questions." As of task 13, that "private network" is
+  cryptographically that a specific `user_id` came from `auth`. That is still the trust model for
+  `web`'s own calls; the signed alternative now exists as delegated tokens (see "Delegated
+  tokens" below), used first by `agent`. As of task 13, that "private network" is
   a concrete, ordinary Docker bridge (`stakehold-net`, external, joined via each service's own
   `docker-compose.stakehold-net.yml` overlay) with no inter-container firewalling among the four app
   containers on it — the shared secret, not network segmentation, is what actually separates a
@@ -75,7 +83,7 @@ references a user only by the UUID `auth` issues at signup, as a trusted plain c
 ## Endpoint surface
 
 `auth.api` (`src/auth/api/{app,deps,cookies,schemas,routes}.py`). Every route below except
-`/health` requires the shared internal secret (`X-Internal-Secret` header — see "Service-to-service
+`/health` and the JWKS requires the shared internal secret (`X-Internal-Secret` header — see "Service-to-service
 trust" below); failure responses are deliberately uniform, so a bad password, an unknown email, and
 an expired session are indistinguishable to the caller.
 
@@ -85,6 +93,8 @@ an expired session are indistinguishable to the caller.
 | `POST /login` | `200` + `Set-Cookie` | `401` on wrong password or unknown email (identical response either way — see "user enumeration" below); `429` once the login throttle trips |
 | `POST /sessions/validate` | `200` + refreshed `Set-Cookie` | reads the `Cookie` header; `401` on missing/expired/unknown session |
 | `POST /logout` | `204` + cookie cleared | idempotent — `204` even for a missing or unrecognized token |
+| `POST /tokens/delegate` | `200` `{access_token, token_type: "Bearer", expires_in}` | reads the `Cookie` header like validate (and slides the session the same way); `401` on a missing, expired or unknown session. `Cache-Control: no-store`, and **no `Set-Cookie`**; see "Delegated tokens" |
+| `GET /.well-known/jwks.json` | `200` `{keys: [one Ed25519 public JWK]}` | unauthenticated; `Cache-Control: max-age=300`; never carries the private `d` |
 | `GET /health` | `200` | unauthenticated; backs the container healthcheck. `503` if the database is unreachable **or** the schema hasn't been applied — a liveness-only check would report ready before `auth db init` has run, while every other route 500s on `relation "users" does not exist` |
 
 `auth` sets the `Set-Cookie` header itself (name `stakehold_session`, flags below) — `web` proxies
@@ -109,6 +119,50 @@ first). `auth` only stores and reports the role; the pages it unlocks are gated 
   effect on the user's next request, with no cache or session row to invalidate.
 - **Not on `sessions`.** Copying the flag onto the session at login would make revoking it wait
   for the session to expire, or need a second update to every live session.
+
+## Delegated tokens
+
+`web` mints one per chat request and hands it to `agent`, which forwards it to `portfolio`; both
+verify it offline. The design, and why a token at all, is in
+[`agent`'s architecture doc](../../agent/docs/architecture.md#identity-and-authorization-the-delegated-token).
+This section covers `auth`'s side: `signing.py` (the key and the JWKS), `delegation.py` (minting)
+and `service.issue_delegated_token`.
+
+- **Claims**: `iss=auth`, `sub=<user_id>`, `aud=[agent, portfolio]`, `azp=agent`,
+  `scope=portfolio:read`, `iat`, `exp`, `jti`; header `alg=EdDSA`, `kid`, `typ=JWT`. `iss` and
+  `iat` go beyond the agent doc's table because the shared verifier (PD-8) checks `iss`. The
+  issuer, audiences and scope are constants in `delegation.py`, not settings: every verifier has
+  to agree on them, so an override could only break verification.
+- **EdDSA (Ed25519), not HMAC.** With a shared HMAC key every verifier could mint tokens too, so
+  a compromised `agent` could forge one for any user. Only `auth` holds the private key.
+- **`kid` is the RFC 7638 thumbprint of the public key**, computed rather than configured, so it
+  can't drift from the key it names.
+- **Minted only for a live session.** `issue_delegated_token` runs the same `validate_session`
+  that `/sessions/validate` does, so a logged-out or expired session gets the same uniform `401`.
+- **No `Set-Cookie` on `/tokens/delegate`.** `web` forwards `auth`'s `Set-Cookie` to the browser
+  on the session routes; this one gives it nothing to forward. `web` has just called
+  `/sessions/validate`, which already refreshed the cookie.
+- **The JWKS skips the internal secret.** `agent` fetches it and deliberately holds no `auth`
+  secret (agent doc, "Pedro's reach"), and a public key isn't a secret. "Internal" here means
+  reachable only on `stakehold-net`, like every `auth` route.
+- **TTL**: `AUTH_DELEGATED_TOKEN_TTL_SECONDS`, default 300. It bounds a leaked token and outlasts
+  one chat turn (agent's 120 s budget plus retries). It must be positive.
+- **Never logged.** `issue_delegated_token` logs the `jti` only, which traces a request across
+  services. `DelegatedToken`'s `repr` omits the token and `SigningKey`'s omits the key, so neither
+  reaches a log through an accidental `%r`. Unit tests assert that neither the token nor any of
+  its three parts appears in the log output.
+- **Nothing persisted.** The `jti` isn't stored: no deny-list is needed at this TTL, so there's no
+  schema change.
+- **The key is required.** `load_settings` raises without one, so a misconfigured deploy fails at
+  startup instead of on the first chat. Every `auth` entry point loads the same settings, so
+  `auth db init` and the other CLI commands need the key too; in compose they get it through the
+  shared image anchor (see "Deployment").
+- **Known limitation: no key rotation.** The JWKS publishes the one current key. Replacing it
+  invalidates tokens already issued (for at most one TTL) and needs every verifier's cache to
+  refetch, which PD-8 does on an unknown `kid`. Rotating without that gap means publishing the
+  old and new keys together for one TTL, i.e. a list of verification-only keys in settings. Not
+  built: there's one operator and no rotation schedule yet. **Trigger**: the first planned
+  rotation, or a suspected key leak.
 
 ## Login throttling and user enumeration
 
@@ -206,6 +260,26 @@ helpers and log setup underneath both are the *same* code, not just the same pat
 services depend on [`services/shared`](../../shared/docs/architecture.md) rather than each keeping
 its own copy.
 
+**The delegated-token signing key** is a file, `services/auth/secrets/signing-key.pem`. It is
+gitignored, and the repo-root `.dockerignore`'s `**/secrets/` keeps it out of the image, since the
+Dockerfile copies each service's whole directory. `docker-compose.yml` mounts it as a compose
+secret at `/run/secrets/auth_signing_key` and points `AUTH_SIGNING_KEY_FILE` there, for both
+`db-init` and `api` through the `x-auth-image` anchor. A compose secret, not a bind mount: compose
+refuses to start when the file is missing, where a bind mount would create an empty root-owned
+directory in its place. The anchor also blanks `AUTH_SIGNING_KEY`, the inline-PEM alternative
+that tests and CI use, so a leftover value in the service's dotenv file can't make `settings.py`
+see two sources and refuse to start. `./scripts/stack.sh up` checks for the file before starting
+anything.
+
+A file, not an environment variable: an env var shows in `docker inspect`, is inherited by every
+child process and readable from `/proc/<pid>/environ`, and is what error reporters dump, while a
+compose secret is only a file inside the container. On the host the key sits beside the
+service's dotenv file, gitignored and mode 600, and is exposed the same way that file is. The
+project's Claude Code settings deny reading or editing anything under a `secrets/` directory,
+as they already do for dotenv files. **Trigger to move it**: when the stack first runs on any
+machine other than the developer's own, move the key and the dotenv files out of the working
+tree together, into that host's secret store. Moving only the key wouldn't change the exposure.
+
 **`auth-postgres` runs with `log_statement=mod`** (`docker-compose.yml`'s `command:`), logging
 every `INSERT`/`UPDATE`/`DELETE`/`TRUNCATE` to the container's own log — including a direct `psql`
 connection that bypasses `auth`'s own code entirely. Added after an incident where a `users` row
@@ -261,8 +335,11 @@ outright with `error from sender: ... permission denied`.
 
 ## Talks to
 
-- **`web`** calls `auth` server-to-server for login, logout, signup, and session validation, over
-  `stakehold-net` (task 13) and carrying the shared internal secret (see "Key decisions").
+- **`web`** calls `auth` server-to-server for login, logout, signup, session validation and,
+  for chat (PD-25), delegated tokens, over `stakehold-net` (task 13) and carrying the shared
+  internal secret (see "Key decisions").
+- **`agent`** and **`portfolio`** fetch `GET /.well-known/jwks.json` (cached, PD-8) to verify
+  delegated tokens. They call no other `auth` route.
 - **`portfolio`** references auth-issued UUIDs as a trusted plain column but does not call `auth`
   directly — it has no local `users` table to keep in sync.
 
@@ -270,16 +347,16 @@ outright with `error from sender: ... permission denied`.
 
 - Whether bearer-token support will ever be needed alongside cookie sessions — tied to whether
   `web` ever needs to serve non-browser clients.
-- **Signed identity assertions (the service-to-service trust upgrade path)**: today `portfolio`
-  trusts a forwarded `user_id` as a plain value, backed only by network isolation and the shared
-  internal secret above — not distinguished from any other request an internal caller with the
-  secret could make. The stronger fix — `auth`'s session-validate response including a short-lived,
-  `auth`-signed assertion (e.g. a JWT with `user_id` + expiry) that `portfolio` verifies instead of
-  trusting the raw value — is deliberately not built yet: it adds key distribution/rotation with
-  nothing at stake to justify it currently. **Trigger to revisit**: before this deployment is ever
-  reachable beyond a single trusted host, or before real user funds/PII are involved.
 - **Failed-login throttle storage** — see "Login throttling and user enumeration" above; the
   in-memory limiter is correct only for a single worker process.
+
+Closed by PD-7: **signed identity assertions**, the service-to-service trust upgrade path. Pedro
+was the trigger: `agent` must reach `portfolio` for one user without a credential of its own.
+`auth` issues them as delegated tokens from their own endpoint, not inside the session-validate
+response as first sketched, so `web` asks for one only when it calls `agent`; see "Delegated
+tokens". `web`'s own calls to `portfolio` still use the internal secret plus a plain `user_id`.
+Whether they move to delegated tokens too is an open question in
+[`agent`'s architecture doc](../../agent/docs/architecture.md).
 
 Closed by task 2: exact API contracts (see "Endpoint surface" above), and the
 "bootstrapping before `auth` has a real signup endpoint" gap — `portfolio` (task 4+) can now get a

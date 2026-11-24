@@ -1,7 +1,7 @@
 import logging
 from contextlib import asynccontextmanager
 
-from auth.api.routes import health_router, router
+from auth.api.routes import public_router, router
 from auth.service import (
     EmailAlreadyRegistered,
     InvalidCredentials,
@@ -62,7 +62,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or load_settings()
 
     app = FastAPI(title="auth", lifespan=_lifespan(settings))
-    app.include_router(health_router)
+    app.include_router(public_router)
     app.include_router(router)
 
     # Exception handlers, not per-route try/except, so a bad password, an unknown email, and an

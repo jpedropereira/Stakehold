@@ -42,7 +42,9 @@
       "Edit(**/.env.ci)",
       "Edit(**/.env.dev)",
       "Edit(**/.env.prod)",
-      "Edit(**/.secrets.baseline)"
+      "Edit(**/.secrets.baseline)",
+      "Read(**/secrets/**)",
+      "Edit(**/secrets/**)"
     ]
   },
   "hooks": {

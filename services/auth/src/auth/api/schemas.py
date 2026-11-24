@@ -36,3 +36,11 @@ class UserResponse(BaseModel):
     email: str
     display_name: str
     is_admin: bool
+
+
+class DelegatedTokenResponse(BaseModel):
+    """RFC 6749 §5.1 field names, so a standard OAuth-aware client reads it without a mapping."""
+
+    access_token: str
+    token_type: str = "Bearer"
+    expires_in: int

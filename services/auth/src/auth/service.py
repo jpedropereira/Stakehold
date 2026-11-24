@@ -4,8 +4,10 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 import psycopg
-from auth import passwords, tokens
+from auth import delegation, passwords, tokens
+from auth.delegation import DelegatedToken
 from auth.sessions import repository as sessions_repository
+from auth.signing import SigningKey
 from auth.throttle import AttemptThrottle
 from auth.users import repository as users_repository
 from shared.db.connection import transaction
@@ -199,6 +201,30 @@ def validate_session(conn, *, token: str, now: datetime, ttl_days: int) -> Sessi
         token=token,
         expires_at=result.expires_at,
     )
+
+
+def issue_delegated_token(
+    conn,
+    *,
+    session_token: str,
+    now: datetime,
+    ttl_days: int,
+    signing_key: SigningKey,
+    token_ttl_seconds: int,
+) -> DelegatedToken:
+    """A short-lived, read-scoped token naming the session's user, for `web` to hand to `agent`.
+
+    The session is checked the same way `/sessions/validate` checks it (and its expiry slides
+    the same way), so a token can only ever be minted for a session that is live right now.
+    """
+    session = validate_session(conn, token=session_token, now=now, ttl_days=ttl_days)
+    delegated = delegation.mint(
+        signing_key, user_id=session.user.id, now=now, ttl_seconds=token_ttl_seconds
+    )
+    # The jti only: the token is a bearer credential, and the jti is what traces a request
+    # across auth, agent and portfolio.
+    logger.info("delegate: token issued (jti=%s).", delegated.jti)
+    return delegated
 
 
 def logout(conn, *, token: str) -> None:
