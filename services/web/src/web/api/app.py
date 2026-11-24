@@ -11,6 +11,7 @@ from shared.logging_config import configure_logging
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from web.api.deletion import router as deletion_router
 from web.api.deps import AdminRequired, AuthRequired
+from web.api.editing import router as editing_router
 from web.api.glossary import router as glossary_router
 from web.api.holdings import router as holdings_router
 from web.api.htmx import htmx_or_redirect
@@ -110,6 +111,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(risk_router)
     app.include_router(router)
     app.include_router(deletion_router)
+    app.include_router(editing_router)
     app.include_router(theme_router)
     app.include_router(tickers_router)
     app.include_router(glossary_router)

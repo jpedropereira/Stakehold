@@ -26,6 +26,7 @@ this file; references to sections that stayed in `architecture.md` name it.
 | Broker file import | `import-transactions --user <id> --file <path> --account <label>` | `POST /transactions/import` (multipart) | manual, on demand | export file, `accounts` scoped by `user_id` | `transactions` (idempotent on `(account_id, broker_transaction_ref)`) |
 | Cash-ledger import | `import-cashflow --user <id> --file <path> --account <label>` | `POST /cashflows/import` (multipart) | manual, on demand | export file, `accounts` scoped by `user_id`, data-store's FX read API (`datastore_client`) for non-EUR rows | `transactions` (idempotent on `(account_id, broker_transaction_ref)`) |
 | Transaction listing | — (CLI has none) | `GET /transactions` | on demand | `transactions`, scoped through the resolved account | — (read-only report) |
+| Transaction edit | `edit-transaction --user <id> --account <label> --ref <key>` plus `add-transaction`'s other options | `PUT /transactions` | manual, by the account's owner | `accounts`, scoped by `user_id`; the row itself; data-store's `GET /tickers/{ticker}` for a changed TICKER instrument | `transactions` (one row rewritten under its key, 404 if none matched, nothing if the edit changed nothing), then `position_snapshots` and `return_snapshots` for that account |
 | Transaction delete | `delete-transaction --user <id> --account <label> --ref <key>` | `DELETE /transactions?user_id=&account_label=&broker_transaction_ref=` | manual, by the account's owner | `accounts`, scoped by `user_id` | `transactions` (one row deleted, 404 if none matched), then `position_snapshots` and `return_snapshots` for that account |
 | Positions rebuild | `rebuild-positions --user <id> [--account <label>]` | `POST /positions/rebuild` | automatically after every transaction write that saves rows (see "Positions and returns follow every transaction write") and, for each affected account, after every ticker-mapping change | `transactions`, `ticker_mappings` | `position_snapshots` |
 | Position listing | — (CLI has none) | `GET /positions` | on demand | `position_snapshots`, latest row per ticker | — (read-only report) |
@@ -148,6 +149,17 @@ the account) raises `TransactionNotFound` before anything is rebuilt. **Known li
 a blocked (unmapped) instrument the positions rebuild skips pruning altogether, so a ticker
 whose only BUY was deleted keeps its last position, and with it its returns, until that
 instrument is mapped.
+
+`run_update_transaction` (an edit, TA-1) goes through `_rebuild_after_write` like an add, so an
+edit that changed nothing (the row as sent, once its amount is derived, equals the row as
+stored) reports `nothing_to_do` and rebuilds nothing. An edit that moves a BUY to another
+instrument prunes the old ticker the same way a delete does, with the same blocked-instrument
+limitation. `pipeline.update_transaction` reads the row before writing it, without a lock, to
+decide whether the instrument and rate changed (see `schema.md`'s `transactions`). **Known
+edge:** two edits of the same row racing each other can decide that from the row as it stood
+before the other one. One owner editing their own ledger makes that rare, so the row isn't
+locked. A row deleted between the read and the write raises `TransactionNotFound` rather than
+being reported as saved.
 
 `run_delete_account` is the exception: it rebuilds nothing. `pipeline.delete_account` deletes the
 account's return snapshots, position snapshots and transactions, and then the account itself, in

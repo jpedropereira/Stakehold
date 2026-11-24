@@ -1,4 +1,5 @@
-"""Persistence for the transaction ledger: append-only except for an explicit delete by its owner.
+"""Persistence for the transaction ledger: append-only except for an explicit edit or delete by
+its owner.
 
 The one write path both manual entry (pipeline.py) and, later, broker import (task 6) share --
 splitting persistence into broker_import/ would let the two paths drift. See
@@ -46,6 +47,21 @@ _LIST_BY_ACCOUNTS_SQL = """
            native_currency, native_amount, eur_amount, fx_rate, fx_rate_source, fees_native
     FROM transactions
     WHERE account_id = ANY(%s)
+"""
+
+_GET_ONE_SQL = (
+    _LIST_BY_ACCOUNTS_SQL.replace("account_id = ANY(%s)", "account_id = %s")
+    + " AND broker_transaction_ref = %s"
+)
+
+# The key columns are the WHERE, never the SET: an edit can't move a row to another account or
+# reference.
+_UPDATE_ONE_SQL = """
+    UPDATE transactions SET
+        transaction_type = %s, trade_datetime = %s, instrument_identifier = %s,
+        instrument_identifier_kind = %s, quantity = %s, price = %s, native_currency = %s,
+        native_amount = %s, eur_amount = %s, fx_rate = %s, fx_rate_source = %s, fees_native = %s
+    WHERE account_id = %s AND broker_transaction_ref = %s
 """
 
 _DELETE_ONE_SQL = "DELETE FROM transactions WHERE account_id = %s AND broker_transaction_ref = %s"
@@ -177,6 +193,41 @@ def list_by_account(
     return list_by_accounts(conn, [account_id], transaction_types=transaction_types).get(
         account_id, []
     )
+
+
+def get_one(conn, *, account_id: int, broker_transaction_ref: str) -> CanonicalTransaction | None:
+    """One transaction by its (account_id, broker_transaction_ref) key, or None. Unscoped by
+    user_id, like delete_one."""
+    with conn.cursor() as cur:
+        cur.execute(_GET_ONE_SQL, (account_id, broker_transaction_ref))
+        row = cur.fetchone()
+    return None if row is None else CanonicalTransaction(*row)
+
+
+def update_one(conn, txn: CanonicalTransaction) -> int:
+    """Rewrites the row `txn`'s key addresses with `txn`'s other fields. Returns the row count
+    changed (0 or 1). Unscoped by user_id, like delete_one. Does not commit."""
+    with conn.cursor() as cur:
+        cur.execute(
+            _UPDATE_ONE_SQL,
+            (
+                txn.transaction_type,
+                txn.trade_datetime,
+                txn.instrument_identifier,
+                txn.instrument_identifier_kind,
+                txn.quantity,
+                txn.price,
+                txn.native_currency,
+                txn.native_amount,
+                txn.eur_amount,
+                txn.fx_rate,
+                txn.fx_rate_source,
+                txn.fees_native,
+                txn.account_id,
+                txn.broker_transaction_ref,
+            ),
+        )
+        return cur.rowcount
 
 
 def delete_one(conn, *, account_id: int, broker_transaction_ref: str) -> int:

@@ -228,7 +228,12 @@ REBUILD_FAILED = "failed"
 
 
 def _rebuild_after_write(
-    *, saved: int, user_id: UUID, account_label: str, settings: Settings
+    *,
+    saved: int,
+    user_id: UUID,
+    account_label: str,
+    settings: Settings,
+    committed_write: str = "transactions are saved",
 ) -> dict[str, str]:
     """Rebuild one account's positions, then its returns, right after a write to its
     transaction log committed, so neither `position_snapshots` nor `return_snapshots` silently
@@ -258,7 +263,7 @@ def _rebuild_after_write(
         user_id=user_id,
         account_label=account_label,
         settings=settings,
-        committed_write="transactions are saved",
+        committed_write=committed_write,
     )
     return {"positions_rebuild": positions, "returns_rebuild": returns}
 
@@ -407,6 +412,81 @@ def run_add_transaction(
     result.update(
         _rebuild_after_write(
             saved=saved, user_id=user_id, account_label=account_label, settings=settings
+        )
+    )
+    return result
+
+
+def run_update_transaction(
+    *,
+    user_id: UUID,
+    account_label: str,
+    broker_transaction_ref: str,
+    transaction_type: str,
+    trade_datetime: datetime,
+    native_amount: Decimal | None,
+    native_currency: str,
+    instrument_identifier: str | None = None,
+    instrument_identifier_kind: str | None = None,
+    quantity: Decimal | None = None,
+    price: Decimal | None = None,
+    fx_rate: Decimal | None = None,
+    fees_native: Decimal | None = None,
+    settings: Settings | None = None,
+) -> dict[str, int | str]:
+    """Edit one recorded transaction, then rebuild the account's positions and returns. See
+    pipeline.update_transaction for the rules. TransactionNotFound and AccountNotFound
+    propagate, like any domain error. An edit that changed nothing rebuilds nothing, and the
+    rebuilds are isolated as after any write (_rebuild_after_write)."""
+    configure_logging()
+    settings = settings or load_settings()
+    datastore_client = (
+        _require_datastore_client(settings, command="edit-transaction with a TICKER instrument")
+        if instrument_identifier_kind == "TICKER"
+        else None
+    )
+    conn = get_connection(settings.database_url)
+    try:
+        logger.info(
+            "edit-transaction: editing %r in account %r (user %s).",
+            broker_transaction_ref,
+            account_label,
+            user_id,
+        )
+        updated = pipeline.update_transaction(
+            conn,
+            user_id=user_id,
+            account_label=account_label,
+            broker_transaction_ref=broker_transaction_ref,
+            transaction_type=transaction_type,
+            trade_datetime=trade_datetime,
+            native_amount=native_amount,
+            native_currency=native_currency,
+            instrument_identifier=instrument_identifier,
+            instrument_identifier_kind=instrument_identifier_kind,
+            quantity=quantity,
+            price=price,
+            fx_rate=fx_rate,
+            fees_native=fees_native,
+            datastore_client=datastore_client,
+        )
+    finally:
+        conn.close()
+
+    if updated:
+        logger.info("edit-transaction: done, %d transaction(s) updated.", updated)
+    else:
+        logger.info("edit-transaction: done, nothing changed.")
+    result = build_run_result(
+        units_total=updated, rows_saved=updated, failed=0, transactions_updated=updated
+    )
+    result.update(
+        _rebuild_after_write(
+            saved=updated,
+            user_id=user_id,
+            account_label=account_label,
+            settings=settings,
+            committed_write="edit is saved",
         )
     )
     return result

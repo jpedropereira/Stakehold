@@ -52,10 +52,11 @@ def _log_url(account_label: str, deleted: int) -> str:
     return f"/transactions?account={quote(account_label)}&deleted={deleted}"
 
 
-async def _transaction_delete_context(
+async def _transaction_page_context(
     portfolio_client: PortfolioClient, user_id: str, account_label: str, ref: str
 ) -> dict:
-    """What transaction_delete.html shows: the account header and the transaction itself.
+    """What transaction_delete.html and transaction_edit.html show: the account header and the
+    transaction itself.
 
     portfolio has no single-transaction read, so the account's log is fetched and searched.
     `transaction` is None both when the row is gone and when the log couldn't be loaded;
@@ -105,7 +106,7 @@ async def transaction_delete_confirm(
 ):
     """The confirmation page a Delete link opens without JS."""
     csrf_token = ensure_csrf_cookie(request, response, cookie_secure=settings.cookie_secure)
-    context = await _transaction_delete_context(portfolio_client, user.user_id, account, ref)
+    context = await _transaction_page_context(portfolio_client, user.user_id, account, ref)
     if context["account_known"] is False:
         return _render_account_not_found(
             request, response, templates, user=user, csrf_token=csrf_token
@@ -140,7 +141,7 @@ async def transaction_delete_submit(
     visitor can retry from it whichever of the two they started on."""
 
     async def load_page_context() -> dict:
-        return await _transaction_delete_context(portfolio_client, user.user_id, account, ref)
+        return await _transaction_page_context(portfolio_client, user.user_id, account, ref)
 
     csrf_error = await _check_csrf(
         request,

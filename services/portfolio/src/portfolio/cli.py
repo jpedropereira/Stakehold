@@ -247,6 +247,57 @@ def _add_transaction(args: argparse.Namespace) -> int:
     return _report(result, "transaction(s) saved")
 
 
+def _edit_transaction(args: argparse.Namespace) -> int:
+    result = jobs.run_update_transaction(
+        user_id=args.user,
+        account_label=args.account,
+        broker_transaction_ref=args.ref,
+        transaction_type=args.type,
+        trade_datetime=args.datetime,
+        native_amount=args.amount,
+        native_currency=args.currency,
+        instrument_identifier=args.instrument,
+        instrument_identifier_kind=args.instrument_kind,
+        quantity=args.quantity,
+        price=args.price,
+        fx_rate=args.fx_rate,
+        fees_native=args.fees,
+    )
+    return _report(result, "transaction(s) updated", count_key="transactions_updated")
+
+
+def _add_transaction_fields(txn_parser: argparse.ArgumentParser) -> None:
+    """Every field of a transaction but its key: shared by add-transaction and edit-transaction,
+    which take the whole row."""
+    txn_parser.add_argument(
+        "--type", required=True, dest="type", choices=TRANSACTION_TYPES, help="Transaction type"
+    )
+    txn_parser.add_argument(
+        "--datetime",
+        required=True,
+        type=_datetime,
+        dest="datetime",
+        help="ISO 8601 with a UTC offset, e.g. 2026-03-01T10:00:00+00:00",
+    )
+    txn_parser.add_argument(
+        "--amount",
+        type=_decimal,
+        help="Signed native amount. Optional for BUY/SELL: derived as -(quantity * price) - fees",
+    )
+    txn_parser.add_argument("--currency", required=True, help="ISO 4217, e.g. EUR")
+    txn_parser.add_argument("--instrument", help="ISIN or symbol -- omit for cash-only rows")
+    txn_parser.add_argument("--instrument-kind", dest="instrument_kind", choices=IDENTIFIER_KINDS)
+    txn_parser.add_argument("--quantity", type=_decimal, help="Signed: positive buy, negative sell")
+    txn_parser.add_argument("--price", type=_decimal, help="Per unit, native currency")
+    txn_parser.add_argument(
+        "--fx-rate",
+        type=_decimal,
+        dest="fx_rate",
+        help="Native units per 1 EUR. Required unless --currency EUR",
+    )
+    txn_parser.add_argument("--fees", type=_decimal, help="Native currency")
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="portfolio")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -299,34 +350,24 @@ def _build_parser() -> argparse.ArgumentParser:
         required=True,
         help="A caller-chosen unique key -- re-running with the same --ref is a safe no-op",
     )
-    txn_parser.add_argument(
-        "--type", required=True, dest="type", choices=TRANSACTION_TYPES, help="Transaction type"
-    )
-    txn_parser.add_argument(
-        "--datetime",
-        required=True,
-        type=_datetime,
-        dest="datetime",
-        help="ISO 8601 with a UTC offset, e.g. 2026-03-01T10:00:00+00:00",
-    )
-    txn_parser.add_argument(
-        "--amount",
-        type=_decimal,
-        help="Signed native amount. Optional for BUY/SELL: derived as -(quantity * price) - fees",
-    )
-    txn_parser.add_argument("--currency", required=True, help="ISO 4217, e.g. EUR")
-    txn_parser.add_argument("--instrument", help="ISIN or symbol -- omit for cash-only rows")
-    txn_parser.add_argument("--instrument-kind", dest="instrument_kind", choices=IDENTIFIER_KINDS)
-    txn_parser.add_argument("--quantity", type=_decimal, help="Signed: positive buy, negative sell")
-    txn_parser.add_argument("--price", type=_decimal, help="Per unit, native currency")
-    txn_parser.add_argument(
-        "--fx-rate",
-        type=_decimal,
-        dest="fx_rate",
-        help="Native units per 1 EUR. Required unless --currency EUR",
-    )
-    txn_parser.add_argument("--fees", type=_decimal, help="Native currency")
+    _add_transaction_fields(txn_parser)
     txn_parser.set_defaults(handler=_add_transaction)
+
+    edit_txn_parser = subparsers.add_parser(
+        "edit-transaction",
+        help="Rewrite one transaction with the fields given, then rebuild the account",
+    )
+    edit_txn_parser.add_argument(
+        "--user", required=True, type=_uuid, help="The auth-issued user id"
+    )
+    edit_txn_parser.add_argument(
+        "--account", required=True, help="The --label of an existing account"
+    )
+    edit_txn_parser.add_argument(
+        "--ref", required=True, help="The transaction's reference (its --ref, or the broker's)"
+    )
+    _add_transaction_fields(edit_txn_parser)
+    edit_txn_parser.set_defaults(handler=_edit_transaction)
 
     delete_txn_parser = subparsers.add_parser(
         "delete-transaction", help="Delete one transaction, then rebuild the account"

@@ -111,15 +111,20 @@ there's no database row left to point at.
 
 The ledger. One row per broker-reported line item or manually entered transaction.
 
-**Rows are never edited, only added or deleted.** This used to be "the immutable ledger", with
-no delete path at all. Deleting is now allowed, by the account's owner, one row at a time
+**Rows are added, edited or deleted, one at a time, by the account's owner.** This used to be
+"the immutable ledger", with no delete path at all; then rows could be deleted but not edited, so
+a correction was a delete plus a new row. Deleting is allowed one row at a time
 (`portfolio delete-transaction`, `DELETE /transactions`), or every row at once when the whole
-account is deleted (see `accounts`' "Deleting" above), so a mistaken entry can be removed
-and, since the reference is free again, re-entered correctly. Editing in place is still not
-offered: a correction is a delete plus a new row, so every figure a row carries stays exactly
-what was entered or imported. A row is addressed by `(account_id, broker_transaction_ref)`, the
-same unique key imports are idempotent on. Deletes hard-delete; nothing records that the row
-existed. No DDL changed for this. The snapshots derived from a deleted row are rebuilt straight
+account is deleted (see `accounts`' "Deleting" above), and since the reference is then free
+again, the row can be re-entered correctly. Editing in place (`portfolio edit-transaction`,
+`PUT /transactions`, TA-1) saves that round trip: it rewrites every column but the key. A row is
+addressed by `(account_id, broker_transaction_ref)`, the same unique key imports are idempotent
+on, so an edit can't change either: an edited imported row still makes a re-import of its file
+skip it. What an edit leaves alone keeps how it was recorded: an unchanged instrument keeps its
+`instrument_identifier_kind`, and an unchanged rate in an unchanged currency keeps its
+`fx_rate_source`. A changed rate is `'manual'`, and a changed instrument takes the kind sent
+(`'TICKER'` from web). Neither edits nor deletes leave a trace of what the row was. No DDL
+changed for either. The snapshots derived from an edited or deleted row are rebuilt straight
 after (see [`flows.md`](flows.md)'s "Positions and returns follow every transaction write").
 
 | Column | Type | Notes |

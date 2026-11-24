@@ -39,6 +39,7 @@ from web.auth_client.errors import (
 from web.portfolio_client.base import (
     PortfolioClient,
     TransactionDeleteResult,
+    TransactionUpdateResult,
     TransactionWriteResult,
 )
 from web.portfolio_client.errors import (
@@ -182,6 +183,7 @@ _ERROR_LEADS = {
     "tickers_new.html": "Couldn't add the ticker.",
     "tickers.html": "Couldn't change the ticker.",
     "transaction_delete.html": "Couldn't delete.",
+    "transaction_edit.html": "Couldn't save.",
     "account_delete.html": "Couldn't delete.",
 }
 
@@ -1048,6 +1050,9 @@ async def transactions_page(
             # Set by deletion.py's redirect after a delete: 1 if it deleted the row, 0 if the
             # row was already gone.
             "deleted": _query_int(request, "deleted"),
+            # Set by editing.py's redirect after an edit: "1" saved, "0" nothing changed,
+            # "gone" the row wasn't there. Anything else shows nothing.
+            "edited": request.query_params.get("edited"),
             "outcome": _write_outcome(request),
             **_account_page_context("transactions"),
             **header,
@@ -1118,11 +1123,11 @@ def _query_int(request: Request, name: str) -> int | None:
 
 
 def _with_rebuild_statuses(
-    url: str, result: TransactionWriteResult | TransactionDeleteResult
+    url: str, result: TransactionWriteResult | TransactionDeleteResult | TransactionUpdateResult
 ) -> str:
-    """The post-write (or post-delete) redirect, plus portfolio's follow-on rebuild statuses, so
-    the page it lands on can say what they did (UI-7). A status an older portfolio doesn't
-    report is left out."""
+    """The post-write (or post-edit, or post-delete) redirect, plus portfolio's follow-on rebuild
+    statuses, so the page it lands on can say what they did (UI-7). A status an older portfolio
+    doesn't report is left out."""
     statuses = {
         name: value
         for name, value in (
@@ -1163,8 +1168,12 @@ async def _transaction_new_context(
         # still be typed in. An error re-render gets a new one too, which is harmless: nothing
         # was saved under the old one.
         "reference": f"manual-{uuid4()}",
-        # datetime-local's own format, to the minute; the field is labelled UTC.
-        "default_datetime": _utcnow().strftime("%Y-%m-%dT%H:%M"),
+        "reference_editable": True,
+        "values": {
+            # datetime-local's own format, to the minute; the field is labelled UTC.
+            "trade_datetime": _utcnow().strftime("%Y-%m-%dT%H:%M"),
+            "native_currency": "EUR",
+        },
         "currencies": _SUGGESTED_CURRENCIES,
         "field_types": _FIELD_TYPES,
         "field_required_for": _FIELD_REQUIRED_FOR,

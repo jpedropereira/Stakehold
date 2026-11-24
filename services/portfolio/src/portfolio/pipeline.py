@@ -364,6 +364,60 @@ def _manual_amount(
     return native_amount
 
 
+def _build_manual_transaction(
+    *,
+    account_id: int,
+    broker_transaction_ref: str,
+    transaction_type: str,
+    trade_datetime: datetime,
+    native_amount: Decimal | None,
+    native_currency: str,
+    instrument_identifier: str | None,
+    instrument_identifier_kind: str | None,
+    quantity: Decimal | None,
+    price: Decimal | None,
+    fx_rate: Decimal | None,
+    fees_native: Decimal | None,
+    fx_rate_source: str = FX_RATE_SOURCE_MANUAL,
+) -> CanonicalTransaction:
+    """A typed-in transaction, its amount derived and its EUR figure computed, validated.
+    `fx_rate_source` applies only when there is a rate: a EUR row carries none."""
+    native_amount = _manual_amount(
+        transaction_type=transaction_type,
+        native_amount=native_amount,
+        quantity=quantity,
+        price=price,
+        fees_native=fees_native,
+    )
+    if native_currency == "EUR":
+        if fx_rate is not None:
+            raise InvalidTransaction("a EUR transaction must not carry an fx_rate")
+        source = None
+    else:
+        if fx_rate is None:
+            raise InvalidTransaction(f"{native_currency} transactions require --fx-rate")
+        source = fx_rate_source
+
+    txn = CanonicalTransaction(
+        account_id=account_id,
+        broker_transaction_ref=broker_transaction_ref,
+        transaction_type=transaction_type,
+        trade_datetime=trade_datetime,
+        instrument_identifier=instrument_identifier,
+        instrument_identifier_kind=instrument_identifier_kind,
+        quantity=quantity,
+        price=price,
+        native_currency=native_currency,
+        native_amount=native_amount,
+        eur_amount=to_eur(native_amount, fx_rate),
+        fx_rate=fx_rate,
+        fx_rate_source=source,
+        fees_native=fees_native,
+    )
+    validate(txn)
+    return txn
+
+
 def add_manual_transaction(
     conn,
     *,
@@ -395,13 +449,6 @@ def add_manual_transaction(
     A BUY/SELL's `native_amount` is derived when omitted -- see _trade_amount. A typed one is
     kept only if it agrees with the derived figure to within _TRADE_AMOUNT_TOLERANCE.
     """
-    native_amount = _manual_amount(
-        transaction_type=transaction_type,
-        native_amount=native_amount,
-        quantity=quantity,
-        price=price,
-        fees_native=fees_native,
-    )
     account = _resolve_account(conn, user_id=user_id, account_label=account_label)
 
     if instrument_identifier_kind == "TICKER":
@@ -409,35 +456,104 @@ def add_manual_transaction(
             raise ValueError("a TICKER instrument needs a datastore_client to check it against")
         _require_usable_ticker(datastore_client, instrument_identifier)
 
-    if native_currency == "EUR":
-        if fx_rate is not None:
-            raise InvalidTransaction("a EUR transaction must not carry an fx_rate")
-        fx_rate_source = None
-    else:
-        if fx_rate is None:
-            raise InvalidTransaction(f"{native_currency} transactions require --fx-rate")
-        fx_rate_source = FX_RATE_SOURCE_MANUAL
-
-    txn = CanonicalTransaction(
+    txn = _build_manual_transaction(
         account_id=account.id,
         broker_transaction_ref=broker_transaction_ref,
         transaction_type=transaction_type,
         trade_datetime=trade_datetime,
+        native_amount=native_amount,
+        native_currency=native_currency,
         instrument_identifier=instrument_identifier,
         instrument_identifier_kind=instrument_identifier_kind,
         quantity=quantity,
         price=price,
-        native_currency=native_currency,
-        native_amount=native_amount,
-        eur_amount=to_eur(native_amount, fx_rate),
         fx_rate=fx_rate,
-        fx_rate_source=fx_rate_source,
         fees_native=fees_native,
     )
-    validate(txn)
 
     with transaction(conn):
         return transactions_repository.insert_transactions(conn, [txn])
+
+
+def update_transaction(
+    conn,
+    *,
+    user_id: UUID,
+    account_label: str,
+    broker_transaction_ref: str,
+    transaction_type: str,
+    trade_datetime: datetime,
+    native_amount: Decimal | None,
+    native_currency: str,
+    instrument_identifier: str | None = None,
+    instrument_identifier_kind: str | None = None,
+    quantity: Decimal | None = None,
+    price: Decimal | None = None,
+    fx_rate: Decimal | None = None,
+    fees_native: Decimal | None = None,
+    datastore_client: DataStoreClient | None = None,
+) -> int:
+    """Rewrite one recorded transaction with the fields given, under the same reference, by the
+    same rules as add_manual_transaction. Returns 1 if the row changed, 0 if the edit changed
+    nothing. Raises AccountNotFound or TransactionNotFound as delete_transaction does.
+
+    Any row can be edited, imported ones included, so what the edit leaves alone keeps how it
+    was recorded: an unchanged instrument keeps its kind (an imported ISIN stays an ISIN), and an
+    unchanged rate in an unchanged currency keeps its fx_rate_source. A changed instrument takes
+    `instrument_identifier_kind` and, as a TICKER, is checked with data-store as a new one would
+    be. A changed rate is a typed-in, `manual` one.
+
+    The row is read before it's written, without a lock. An edit racing another edit of the same
+    row can decide kind and source from the row as it was before that other edit; a single
+    owner's ledger makes that rare enough to accept. A row deleted in between is reported as
+    TransactionNotFound, never claimed as saved.
+    """
+    account = _resolve_account(conn, user_id=user_id, account_label=account_label)
+    existing = transactions_repository.get_one(
+        conn, account_id=account.id, broker_transaction_ref=broker_transaction_ref
+    )
+    if existing is None:
+        raise TransactionNotFound(
+            f"no transaction {broker_transaction_ref!r} in account {account_label!r}"
+        )
+
+    if instrument_identifier == existing.instrument_identifier:
+        instrument_identifier_kind = existing.instrument_identifier_kind
+    elif instrument_identifier_kind == "TICKER":
+        if datastore_client is None:
+            raise ValueError("a TICKER instrument needs a datastore_client to check it against")
+        _require_usable_ticker(datastore_client, instrument_identifier)
+
+    same_rate = native_currency == existing.native_currency and fx_rate == existing.fx_rate
+    txn = _build_manual_transaction(
+        account_id=account.id,
+        broker_transaction_ref=broker_transaction_ref,
+        transaction_type=transaction_type,
+        trade_datetime=trade_datetime,
+        native_amount=native_amount,
+        native_currency=native_currency,
+        instrument_identifier=instrument_identifier,
+        instrument_identifier_kind=instrument_identifier_kind,
+        quantity=quantity,
+        price=price,
+        fx_rate=fx_rate,
+        fees_native=fees_native,
+        fx_rate_source=(
+            existing.fx_rate_source
+            if same_rate and existing.fx_rate_source
+            else FX_RATE_SOURCE_MANUAL
+        ),
+    )
+    if txn == existing:
+        return 0
+
+    with transaction(conn):
+        updated = transactions_repository.update_one(conn, txn)
+    if not updated:
+        raise TransactionNotFound(
+            f"no transaction {broker_transaction_ref!r} in account {account_label!r}"
+        )
+    return updated
 
 
 # data-store's onboarding statuses for a ticker it has accepted but not finished loading. A

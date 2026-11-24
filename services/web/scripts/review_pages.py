@@ -95,6 +95,11 @@ PAGES = [
         click="a[data-confirm]",
     ),
     Page("transactions-delete", "/transactions/delete?account=main&ref=buy-0904", "admin"),
+    Page(
+        "transactions-edit",
+        "/transactions/edit?account=main&ref=c0a8f5e2-9b1d-4e7a-8f3c-2d6b9e1a7f40",
+        "admin",
+    ),
     Page("transactions-new", "/transactions/new?account=main", "admin"),
     Page("transactions-import", "/transactions/import?account=main", "admin"),
     Page("tickers", "/tickers", "admin"),

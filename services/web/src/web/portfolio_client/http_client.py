@@ -28,6 +28,7 @@ from web.portfolio_client.base import (
     TrackedTickerAddResult,
     Transaction,
     TransactionDeleteResult,
+    TransactionUpdateResult,
     TransactionWriteResult,
     UnmappedInstrument,
     WhatIf,
@@ -187,6 +188,18 @@ def _transaction_delete_result(body: dict) -> TransactionDeleteResult:
         return TransactionDeleteResult(
             status=body["status"],
             transactions_deleted=body["transactions_deleted"],
+            positions_rebuild=_opt_status(body, "positions_rebuild"),
+            returns_rebuild=_opt_status(body, "returns_rebuild"),
+        )
+    except (KeyError, TypeError) as exc:
+        raise PortfolioUnavailable(f"malformed portfolio response: {exc}") from exc
+
+
+def _transaction_update_result(body: dict) -> TransactionUpdateResult:
+    try:
+        return TransactionUpdateResult(
+            status=body["status"],
+            transactions_updated=body["transactions_updated"],
             positions_rebuild=_opt_status(body, "positions_rebuild"),
             returns_rebuild=_opt_status(body, "returns_rebuild"),
         )
@@ -774,6 +787,45 @@ class HttpPortfolioClient:
         if response.status_code != 200:
             _raise_for_status(response)
         return _account_delete_result(_json_body(response))
+
+    async def update_transaction(
+        self,
+        *,
+        user_id: str,
+        account_label: str,
+        broker_transaction_ref: str,
+        transaction_type: str,
+        trade_datetime: datetime,
+        native_amount: Decimal | None,
+        native_currency: str,
+        instrument_identifier: str | None = None,
+        instrument_identifier_kind: str | None = None,
+        quantity: Decimal | None = None,
+        price: Decimal | None = None,
+        fx_rate: Decimal | None = None,
+        fees_native: Decimal | None = None,
+    ) -> TransactionUpdateResult:
+        payload = {
+            "user_id": user_id,
+            "account_label": account_label,
+            "broker_transaction_ref": broker_transaction_ref,
+            "transaction_type": transaction_type,
+            "trade_datetime": trade_datetime.isoformat(),
+            "native_amount": _decimal_str(native_amount),
+            "native_currency": native_currency,
+            "instrument_identifier": instrument_identifier,
+            "instrument_identifier_kind": instrument_identifier_kind,
+            "quantity": _decimal_str(quantity),
+            "price": _decimal_str(price),
+            "fx_rate": _decimal_str(fx_rate),
+            "fees_native": _decimal_str(fees_native),
+        }
+        response = await self._request("PUT", "/transactions", json=payload)
+        if response.status_code == 404:
+            raise TransactionNotFound(_error_detail(response))
+        if response.status_code != 200:
+            _raise_for_status(response)
+        return _transaction_update_result(_json_body(response))
 
     async def delete_transaction(
         self, *, user_id: str, account_label: str, broker_transaction_ref: str

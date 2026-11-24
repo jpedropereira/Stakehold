@@ -1,4 +1,5 @@
 import uuid
+from decimal import Decimal
 
 import pytest
 from portfolio import jobs
@@ -400,3 +401,90 @@ def test_delete_transaction_lets_a_missing_transaction_reach_the_404_handler(mon
     with pytest.raises(TransactionNotFound):
         client.delete("/transactions", params=_delete_params())
     assert TransactionNotFound.status_code == 404
+
+
+# --- PUT /transactions ---
+
+
+def _update_body(**overrides):
+    body = {
+        "user_id": str(uuid.uuid4()),
+        "account_label": "m",
+        "broker_transaction_ref": "manual-1",
+        "transaction_type": "BUY",
+        "trade_datetime": "2026-03-01T10:00:00+00:00",
+        "native_currency": "EUR",
+        "instrument_identifier": "IWDA.AS",
+        "instrument_identifier_kind": "TICKER",
+        "quantity": "12",
+        "price": "50",
+    }
+    body.update(overrides)
+    return body
+
+
+def _update_result(updated=1):
+    return {
+        "status": "ok" if updated else "nothing_to_do",
+        "rows_saved": updated,
+        "transactions_updated": updated,
+        "positions_rebuild": "ok" if updated else "skipped",
+        "returns_rebuild": "skipped",
+    }
+
+
+def test_update_transaction_passes_the_fields_to_the_job_and_returns_200(monkeypatch, client):
+    captured = {}
+
+    def fake_run(**kw):
+        captured.update(kw)
+        return _update_result()
+
+    monkeypatch.setattr(jobs, "run_update_transaction", fake_run)
+    body = _update_body()
+
+    response = client.put("/transactions", json=body)
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ok",
+        "transactions_updated": 1,
+        "positions_rebuild": "ok",
+        "returns_rebuild": "skipped",
+    }
+    assert str(captured["user_id"]) == body["user_id"]
+    assert captured["broker_transaction_ref"] == "manual-1"
+    assert captured["quantity"] == Decimal("12")
+    assert captured["native_amount"] is None
+    assert captured["instrument_identifier_kind"] == "TICKER"
+
+
+def test_update_transaction_returns_200_when_nothing_changed(monkeypatch, client):
+    monkeypatch.setattr(jobs, "run_update_transaction", lambda **kw: _update_result(0))
+
+    response = client.put("/transactions", json=_update_body())
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "nothing_to_do"
+
+
+def test_update_transaction_rejects_a_naive_datetime(client):
+    response = client.put("/transactions", json=_update_body(trade_datetime="2026-03-01T10:00:00"))
+
+    assert response.status_code == 422
+
+
+def test_update_transaction_rejects_an_unknown_transaction_type(client):
+    response = client.put("/transactions", json=_update_body(transaction_type="GIFT"))
+
+    assert response.status_code == 422
+
+
+def test_update_transaction_lets_a_missing_transaction_reach_the_404_handler(monkeypatch, client):
+    def boom(**kw):
+        raise TransactionNotFound("no such transaction")
+
+    monkeypatch.setattr(jobs, "run_update_transaction", boom)
+
+    with pytest.raises(TransactionNotFound):
+        client.put("/transactions", json=_update_body())

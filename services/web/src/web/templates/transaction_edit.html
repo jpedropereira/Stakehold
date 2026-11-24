@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% from "partials/_banner.html" import banner %}
+{% block title %}Edit transaction — {{ account_label }} — Stakehold{% endblock %}
+{% block content %}
+{% include "partials/_account_header.html" %}
+{% set log_url = "/transactions?account=" ~ (account_label | urlencode) %}
+{# The add form's fields, prefilled from the row (or, after an error, from what was typed).
+   Without the row there is nothing to edit, so a failed load shows no form. #}
+<section class="card">
+  <h1>Edit transaction</h1>
+  {% if load_error %}
+  {% call banner("error") %}<strong>Couldn't load the transaction.</strong> {{ load_error }}{% endcall %}
+  <a href="{{ log_url }}">Back to the transactions</a>
+  {% else %}
+  <form class="transaction-form" hx-post="/transactions/edit" hx-target="#form-errors" hx-swap="innerHTML" hx-disabled-elt="find button[type='submit']" method="post" action="/transactions/edit">
+    <div id="form-errors" aria-live="polite">
+      {% include "partials/_form_errors.html" %}
+    </div>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="account" value="{{ account_label }}">
+    <input type="hidden" name="ref" value="{{ reference }}">
+    <input type="hidden" name="original_instrument_identifier" value="{{ original_instrument_identifier }}">
+    <input type="hidden" name="original_instrument_identifier_kind" value="{{ original_instrument_identifier_kind }}">
+
+    {% include "partials/_transaction_fields.html" %}
+
+    <p class="field-hint">Your holdings and returns for this account will be recalculated with the change.</p>
+    <div class="confirm-actions">
+      <a class="btn btn-ghost" href="{{ log_url }}">Cancel</a>
+      <button type="submit" class="btn btn-primary">Save changes</button>
+    </div>
+    <span class="htmx-indicator busy" role="status">Saving…</span>
+  </form>
+  {% endif %}
+</section>
+<script src="{{ asset_url('/static/transaction_form.js') }}" defer></script>
+{% endblock %}
