@@ -11,24 +11,36 @@ from auth.api.deps import (
     get_signup_throttle,
     require_internal_secret,
 )
-from auth.api.schemas import LoginRequest, SignupRequest, UserResponse
+from auth.api.schemas import (
+    DelegatedTokenResponse,
+    LoginRequest,
+    SignupRequest,
+    UserResponse,
+)
 from auth.service import AuthenticatedUser
 from auth.settings import Settings
+from auth.signing import public_jwks
 from fastapi import APIRouter, Depends, Request, Response, status
 
 logger = logging.getLogger(__name__)
 
-# /health carries no internal-secret requirement -- it backs the container healthcheck, which
-# doesn't have the shared secret to send. Every other route does, via this router-level dependency.
+# /health and the JWKS carry no internal-secret requirement: the container healthcheck doesn't
+# have the shared secret to send, and agent, which fetches the JWKS, deliberately holds no auth
+# secret (a public key isn't one). Every other route requires it, via this router-level
+# dependency.
 router = APIRouter(dependencies=[Depends(require_internal_secret)])
-health_router = APIRouter()
+public_router = APIRouter()
 
 # Cheap enough to run on every healthcheck tick: to_regclass is a catalogue lookup, not a scan,
 # and returns NULL rather than erroring for a table that doesn't exist.
 _SCHEMA_PROBE = "SELECT to_regclass('public.users'), to_regclass('public.sessions')"
 
+# Verifiers cache the JWKS and refetch on an unknown kid (PD-8), so this only bounds how long a
+# cache that never sees an unknown kid holds on to a key. Short, since the key set is tiny.
+_JWKS_MAX_AGE_SECONDS = 300
 
-@health_router.get("/health")
+
+@public_router.get("/health")
 def health(request: Request, response: Response) -> dict[str, str]:
     """Reports unhealthy unless the database is reachable *and* the schema has been applied.
 
@@ -50,6 +62,12 @@ def health(request: Request, response: Response) -> dict[str, str]:
         return {"status": "schema_missing"}
 
     return {"status": "ok"}
+
+
+@public_router.get("/.well-known/jwks.json")
+def jwks(response: Response, settings: Settings = Depends(get_settings)) -> dict:
+    response.headers["Cache-Control"] = f"max-age={_JWKS_MAX_AGE_SECONDS}"
+    return public_jwks(settings.signing_key)
 
 
 def _user_response(user: AuthenticatedUser) -> UserResponse:
@@ -145,6 +163,35 @@ def validate(
         secure=settings.cookie_secure,
     )
     return _user_response(session.user)
+
+
+@router.post("/tokens/delegate", response_model=DelegatedTokenResponse)
+def delegate(
+    request: Request,
+    response: Response,
+    conn=Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> DelegatedTokenResponse:
+    """A short-lived, read-scoped token for `web` to hand to `agent` for one chat request.
+
+    Sets no cookie, unlike /sessions/validate: web forwards auth's Set-Cookie to the browser on
+    the session routes, and this response must give it nothing to forward.
+    """
+    token = request.cookies.get(COOKIE_NAME)
+    if token is None:
+        raise service.SessionInvalid()
+
+    delegated = service.issue_delegated_token(
+        conn,
+        session_token=token,
+        now=datetime.now(UTC),
+        ttl_days=settings.session_ttl_days,
+        signing_key=settings.signing_key,
+        token_ttl_seconds=settings.delegated_token_ttl_seconds,
+    )
+    # A bearer credential: no proxy or client cache may keep it.
+    response.headers["Cache-Control"] = "no-store"
+    return DelegatedTokenResponse(access_token=delegated.token, expires_in=delegated.expires_in)
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)

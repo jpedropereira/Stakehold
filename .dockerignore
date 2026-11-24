@@ -11,6 +11,9 @@ services/data-store/logs/
 # a secret file added under any workspace member would otherwise be baked into the image.
 # `.env.example` is deliberately not matched -- it holds no secrets and documents the contract.
 **/.env
+# auth's delegated-token signing key is mounted at runtime as a compose secret, never baked in:
+# the image COPYs each service's whole directory, so without this it would ship in the image.
+**/secrets/
 **/__pycache__/
 **/.pytest_cache/
 **/.testmondata

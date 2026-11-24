@@ -138,7 +138,8 @@ sequenceDiagram
     W-->>B: streamed HTML fragments
 ```
 
-Token shape. The exact claims are fixed when `auth` builds it:
+Token shape, as `auth` builds it (PD-7; header `alg=EdDSA`, `kid`, `typ=JWT`, and the details in
+[`auth`'s architecture doc](../../auth/docs/architecture.md#delegated-tokens)):
 
 | Claim | Value | Why |
 |---|---|---|
@@ -147,7 +148,8 @@ Token shape. The exact claims are fixed when `auth` builds it:
 | `aud` | `["agent", "portfolio"]` | a token minted for this path is useless anywhere else |
 | `azp` | `agent` | names the party acting for the user, for logs and future policy |
 | `scope` | `portfolio:read` | stage 2 adds no write scope (see "Action proposals") |
-| `exp` | about 5 minutes | bounds a leaked token; longer than a turn's wall-clock budget |
+| `iat` | mint time | lets a verifier reject a token from the future |
+| `exp` | `iat` + 300 s (`AUTH_DELEGATED_TOKEN_TTL_SECONDS`) | bounds a leaked token; longer than a turn's wall-clock budget |
 | `jti` | random | traceability; no deny-list is needed at this TTL |
 
 - **Signing: EdDSA (Ed25519), asymmetric.** `auth` holds the private key, and `agent` and
@@ -181,15 +183,15 @@ Rejected alternatives:
   at all, which is safe and simple. It doesn't scale to stage 1's tool-driven reading, where the
   model chooses what to look at (e.g. drilling into one position's risk), let alone stage 2.
 
-Confidence: high on delegated tokens and asymmetric signing; medium on the exact TTL and claim
-set, which get fixed when `auth` builds them.
+Confidence: high on delegated tokens and asymmetric signing. The TTL and claim set were the
+open part; PD-7 fixed them as above.
 
 ### Cross-service work this implies (not part of this design task)
 
-- **`auth`:** an Ed25519 key pair from env or a mounted file, `POST /tokens/delegate`, and an
-  internal `GET /.well-known/jwks.json`. This is the "signed identity assertions" upgrade that
-  `auth/docs/architecture.md` lists under "Open questions". Pedro is the trigger that question
-  was waiting for.
+- **`auth`** (done, PD-7): an Ed25519 key pair from env or a mounted file, `POST /tokens/delegate`,
+  and an internal `GET /.well-known/jwks.json`. This was the "signed identity assertions" upgrade
+  that `auth/docs/architecture.md` listed under "Open questions"; Pedro was the trigger that
+  question was waiting for.
 - **`portfolio`:** a verifying dependency on its read routes. It takes `user_id` from `sub` and
   rejects a request whose `user_id` parameter disagrees. During the transition it accepts either
   the internal secret (`web`, unchanged) or a valid delegated token (`agent`). Whether `web` later

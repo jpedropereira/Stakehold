@@ -8,7 +8,8 @@ used to read the services' own `.env` files, i.e. the dev stack's real databases
 integration test, this file:
 
 1. Fills in the test databases' URLs (`TEST_DATABASE_ENV`), unless the environment already sets
-   them, as CI or a developer may. It also turns off python-dotenv for the run
+   them, as CI or a developer may, plus a freshly generated signing key for `auth`'s delegated
+   tokens unless one is already set. It also turns off python-dotenv for the run
    (`PYTHON_DOTENV_DISABLED`): every service's `load_settings()` calls `load_dotenv()`, which
    would otherwise read that service's dev settings at test time, after the check below.
 2. Refuses to start (exit code 4, before the first test) unless every `*DATABASE_URL` variable
@@ -137,9 +138,29 @@ def check_test_databases(environ, *, connect=None) -> list[str]:
     return problems
 
 
+def _ephemeral_auth_signing_key() -> str:
+    """A fresh Ed25519 PEM for auth's delegated tokens: auth refuses to start without one.
+    Generated per run rather than committed, so no private key ever sits in the repo."""
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    return (
+        Ed25519PrivateKey.generate()
+        .private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+        .decode("ascii")
+    )
+
+
 def prepare_integration_environment(environ) -> None:
     for name, value in TEST_DATABASE_ENV.items():
         environ.setdefault(name, value)
+    # Only when neither source is set: auth rejects both at once.
+    if not environ.get("AUTH_SIGNING_KEY") and not environ.get("AUTH_SIGNING_KEY_FILE"):
+        environ["AUTH_SIGNING_KEY"] = _ephemeral_auth_signing_key()
     # Forced, not defaulted: nothing in an integration run may read a dotenv file.
     environ["PYTHON_DOTENV_DISABLED"] = "1"
 

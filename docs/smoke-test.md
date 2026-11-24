@@ -60,6 +60,15 @@ values across the two sides:
 | web → portfolio | `services/web/.env` `WEB_PORTFOLIO_INTERNAL_SECRET` | `services/portfolio/.env` `PORTFOLIO_INTERNAL_SECRET` |
 | portfolio → data-store | `services/portfolio/.env` `INTERNAL_API_SECRET` | `services/data-store/.env` `INTERNAL_API_SECRET` |
 
+Also the user's own step: generate `auth`'s delegated-token signing key. `auth` won't start
+without it (compose refuses with `bind source path does not exist`):
+
+```bash
+mkdir -p services/auth/secrets
+openssl genpkey -algorithm ed25519 -out services/auth/secrets/signing-key.pem
+chmod 600 services/auth/secrets/signing-key.pem
+```
+
 ## Bringing the stack up
 
 `./scripts/stack.sh up` runs the four `docker compose ... up -d` commands below in order, then

@@ -37,6 +37,10 @@ services/data-store/.data/
 # Postgres data (services/auth)
 services/auth/.data/
 
+# auth's delegated-token signing key (services/auth) -- a private key, never committed. See
+# services/auth/.env.example for how to generate it.
+services/auth/secrets/
+
 # Postgres data (services/portfolio -- the app-postgres instance)
 services/portfolio/.data/
 
