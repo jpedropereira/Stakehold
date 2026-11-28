@@ -31,6 +31,17 @@ class TransactionNotFound(PortfolioClientError):
     is nothing of the user's to delete, so the two aren't told apart here."""
 
 
+class SavedLabNotFound(PortfolioClientError):
+    """portfolio returned 404 on a saved-lab delete: the user has no lab by that name, most
+    likely already deleted. Its own class because on the account routes a 404 means
+    AccountNotFound."""
+
+
+class SavedLabNameTaken(PortfolioClientError):
+    """portfolio returned 409 on a save without `replace`: the user already has a lab by that
+    name. web asks before saving again with `replace`."""
+
+
 class InvalidPortfolioRequest(PortfolioClientError):
     """portfolio returned 422 -- a caller-supplied value failed validation or parsing (a bad
     fx_rate, an unmapped broker, a malformed export file, and so on).

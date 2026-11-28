@@ -98,6 +98,10 @@ class FakePortfolioClient:
 
     backtest_error: Exception | None = None
 
+    async def list_saved_labs(self, *, user_id):
+        # Saved labs (LF-1) are test_saved_labs_pages.py's; none here.
+        return []
+
     async def backtest(self, *, assets, period, benchmark):
         self.backtest_calls.append((tuple(assets), period))
         self.benchmarks.append(benchmark)

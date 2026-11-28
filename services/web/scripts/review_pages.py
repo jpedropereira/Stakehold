@@ -119,6 +119,18 @@ PAGES = [
         "user",
     ),
     Page("labs-added-row", "/labs", "user", click="[data-labs-add]"),
+    # LF-1: the saved labs fold open after a save, with labs-edited's mix marked shown; saving
+    # that mix again under its name (the prefilled field), which asks to replace; the delete's
+    # confirmation page, and its dialog over /labs.
+    Page("labs-saved", "/labs?ticker=VWCE.DE&weight=70&ticker=AAPL&weight=50&saved=1", "user"),
+    Page(
+        "labs-save-conflict",
+        "/labs?ticker=VWCE.DE&weight=70&ticker=AAPL&weight=50",
+        "user",
+        click="form.labs-save button[type=submit]",
+    ),
+    Page("labs-saved-delete", "/labs/saved/delete?name=Core", "user"),
+    Page("labs-saved-delete-dialog", "/labs?lab_deleted=1", "user", click="[data-confirm]"),
     # UX-8: a long mix scrolls in its rows box. Rows added in place make labs_form.js mark the
     # box a region; a 12-row URL the fake doesn't track makes the server do it, with an error
     # under every row and the table keeping the last mix.

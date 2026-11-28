@@ -33,6 +33,12 @@ out-of-band copies of whatever else carries the choice in its query. The route d
 work either way; only the template differs. Every link keeps its region's #anchor, so without
 JS a click reloads onto its section.
 
+Saved labs (LF-1) are listed in the editor, beside a form that saves the mix shown; saving and
+deleting are saved_labs.py's routes, which redirect back here with a status flag
+(saved_labs_view.py has the contract). The list fails on its own, like the ticker list, and isn't
+fetched for a section swap, which doesn't show it. Every link and form here leaves the status
+flags out, so the banner they raise doesn't follow the reader around.
+
 On its own router, like portfolio.py, because routes.py is close to the repo's 64KB file limit;
 it renders through routes.py's _render, so a cookie set earlier in the request still reaches
 the response.
@@ -79,8 +85,17 @@ from web.portfolio_client.base import (
     Backtest,
     BacktestRisk,
     PortfolioClient,
+    SavedLab,
 )
 from web.portfolio_client.errors import InvalidPortfolioRequest, PortfolioClientError
+from web.saved_labs_view import (
+    back_query,
+    matching_lab,
+    mix_summary,
+    open_url,
+    status_message,
+    view_params,
+)
 from web.settings import Settings
 from web.ticker_names import load_names
 
@@ -89,6 +104,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _UNAVAILABLE = "Can't reach the portfolio service right now, so it can't be shown."
+_SAVED_LABS_UNAVAILABLE = "Can't load your saved labs right now."
+# The view choices a save carries back to this page, when the query has them.
+_VIEW_KEYS = ("period", "risk_window", "benchmark")
 _DEFAULT_PERIOD = "1Y"
 _DEFAULT_RISK_WINDOW = "1Y"
 # The regions a switch swaps (UX-10), each its links' #anchor.
@@ -115,6 +133,39 @@ async def _load_mix(portfolio_client: PortfolioClient, user_id: str) -> DefaultM
     return mix
 
 
+async def _load_saved_labs(
+    portfolio_client: PortfolioClient, user_id: str, wanted: bool
+) -> tuple[list[SavedLab] | None, str | None]:
+    """The user's saved labs and None, or None and a notice when they couldn't be loaded. Not
+    fetched (None, None) when the page won't show them, for a section swap."""
+    if not wanted:
+        return None, None
+    try:
+        labs = await portfolio_client.list_saved_labs(user_id=user_id)
+    except PortfolioClientError:
+        logger.exception("labs: portfolio service unavailable listing saved labs.")
+        return None, _SAVED_LABS_UNAVAILABLE
+    logger.info("labs: %d saved lab(s).", len(labs))
+    return labs, None
+
+
+def _saved_lab_items(
+    labs: list[SavedLab] | None, current: SavedLab | None, back: str
+) -> list[dict]:
+    """What the template lists for each saved lab: its open link, its delete link back to this
+    view, and the summary the delete dialog confirms."""
+    return [
+        {
+            "lab": lab,
+            "open": open_url(lab),
+            "delete": "/labs/saved/delete?" + urlencode([("name", lab.name), ("back", back)]),
+            "summary": f"{lab.name} — {mix_summary(lab)}",
+            "current": lab is current,
+        }
+        for lab in labs or []
+    ]
+
+
 def _chosen_period(requested: str | None) -> str:
     """`requested` if it is a period, exactly as portfolio spells it; otherwise the default."""
     if requested is None or requested in BACKTEST_PERIODS:
@@ -134,7 +185,9 @@ def _chosen_risk_window(requested: str | None) -> str:
 def _risk_window_links(request: Request) -> dict[str, str]:
     """Each risk window's URL: this page's query string with only `risk_window` changed, back
     at the comparison, for a click that reloads the page."""
-    kept = [(k, v) for k, v in request.query_params.multi_items() if k != "risk_window"]
+    kept = [
+        (k, v) for k, v in view_params(request.query_params.multi_items()) if k != "risk_window"
+    ]
     return {
         w: "/labs?" + urlencode(kept + [("risk_window", w)]) + f"#{_COMPARE}"
         for w in BACKTEST_RISK_WINDOWS
@@ -144,7 +197,7 @@ def _risk_window_links(request: Request) -> dict[str, str]:
 def _benchmark_kept(request: Request) -> list[tuple[str, str]]:
     """The query the benchmark form re-sends as hidden inputs: everything but `benchmark`, which
     its field sends. Not `remove`, which the route answers with a redirect before rendering."""
-    return [(k, v) for k, v in request.query_params.multi_items() if k != "benchmark"]
+    return [(k, v) for k, v in view_params(request.query_params.multi_items()) if k != "benchmark"]
 
 
 def _risk_open(risk_window: str, benchmark: str, benchmark_error: str | None) -> bool:
@@ -192,7 +245,7 @@ def _log_risk(risk: BacktestRisk) -> None:
 def _period_links(request: Request) -> dict[str, str]:
     """Each period's URL: this page's query string with only `period` changed, back at the
     growth chart, for a click that reloads the page."""
-    kept = [(k, v) for k, v in request.query_params.multi_items() if k != "period"]
+    kept = [(k, v) for k, v in view_params(request.query_params.multi_items()) if k != "period"]
     return {
         p: "/labs?" + urlencode(kept + [("period", p)]) + f"#{_GROWTH}" for p in BACKTEST_PERIODS
     }
@@ -266,6 +319,7 @@ async def labs(
     # The header's logout and theme forms need the token, as on every other page.
     csrf_token = ensure_csrf_cookie(request, response, cookie_secure=settings.cookie_secure)
 
+    target = swap_target(request, (_GROWTH, _COMPARE))
     period = _chosen_period(period)
     risk_window = _chosen_risk_window(risk_window)
     benchmark, benchmark_error = chosen_benchmark(benchmark)
@@ -277,10 +331,13 @@ async def labs(
     shown: tuple[MixRow, ...] = ()  # the mix the table shows, for the form's last_* fields
     to_send: tuple[tuple[str, Decimal], ...] = ()
     if form is None:
-        mix, (tickers, tickers_notice), ticker_names = await asyncio.gather(
-            _load_mix(portfolio_client, user.user_id),
-            _load_tickers(portfolio_client),
-            load_names(portfolio_client),
+        mix, (tickers, tickers_notice), ticker_names, (saved_labs, saved_labs_notice) = (
+            await asyncio.gather(
+                _load_mix(portfolio_client, user.user_id),
+                _load_tickers(portfolio_client),
+                load_names(portfolio_client),
+                _load_saved_labs(portfolio_client, user.user_id, target is None),
+            )
         )
         if mix is None:
             holdings_error = _UNAVAILABLE
@@ -290,8 +347,12 @@ async def labs(
             if not mix.assets:
                 logger.info("labs: nothing to backtest, no holding has a market value.")
     else:
-        (tickers, tickers_notice), ticker_names = await asyncio.gather(
-            _load_tickers(portfolio_client), load_names(portfolio_client)
+        (tickers, tickers_notice), ticker_names, (saved_labs, saved_labs_notice) = (
+            await asyncio.gather(
+                _load_tickers(portfolio_client),
+                load_names(portfolio_client),
+                _load_saved_labs(portfolio_client, user.user_id, target is None),
+            )
         )
         checked = check_mix(form.rows, None if tickers_notice else tickers)
         logger.info(
@@ -324,9 +385,12 @@ async def labs(
     risk = None if backtest is None else backtest.risk
     if risk is not None:
         _log_risk(risk)
-    target = swap_target(request, (_GROWTH, _COMPARE))
     if target is not None:
         logger.info("labs: sending #%s only.", target)
+    # Only a mix that can be sent can be saved: not one with errors, whose table shows the last.
+    can_save = checked is not None and checked.valid and bool(shown)
+    current_lab = matching_lab(saved_labs, shown) if can_save else None
+    lab_status = status_message(request.query_params, current_lab)
     page = _render(
         request,
         response,
@@ -372,6 +436,16 @@ async def labs(
             "risk_window": risk_window,
             "risk_measures": RISK_MEASURES,
             "relative_measures": RELATIVE_MEASURES,
+            "saved_labs": _saved_lab_items(
+                saved_labs, current_lab, back_query(request.query_params.multi_items())
+            ),
+            "saved_labs_notice": saved_labs_notice,
+            "current_lab": current_lab,
+            "lab_status": lab_status,
+            "can_save": can_save,
+            "save_kept": [
+                (k, request.query_params[k]) for k in _VIEW_KEYS if request.query_params.get(k)
+            ],
             "benchmark": benchmark,
             "benchmark_error": benchmark_error,
             "benchmark_kept": _benchmark_kept(request),

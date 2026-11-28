@@ -43,6 +43,9 @@ this file; references to sections that stayed in `architecture.md` name it.
 | Candidate ranking | — (CLI has none) | `POST /risk/what-if/ranking` | on demand (web's `/risk` page, RK-29) | `data-store`'s `GET /tracked-tickers?status=ready` once, then `GET /tickers/{t}`, `GET /prices/{t}` and `GET /fx/EUR/{c}` per holding and for up to 50 candidates, and `GET /rates/risk-free` (RK-29); no portfolio table: web sends the mix | — (read-only: nothing is stored) |
 | Look-through exposures | — (CLI has none) | `POST /risk/look-through` | on demand (web's `/risk` page, RK-23) | `data-store`'s `GET /tickers/{t}` per asset, `GET /tracked-tickers?ticker=` and `GET /etf-holdings` once, and `GET /etf-holdings/{fund_key}/latest` per held fund (RK-22); no portfolio table: web sends the mix | — (read-only: nothing is stored) |
 | Labs backtest | — (CLI has none) | `POST /labs/backtest` | on demand (web's `/labs` page, LB-6) | `data-store`'s `GET /tickers/{t}`, `GET /prices/{t}` and `GET /fx/EUR/{c}` per asset and for the benchmark (RK-13); no portfolio table | — (read-only: nothing is stored) |
+| Saved labs listing (LF-1) | `lab list --user <id>` | `GET /labs/saved?user_id=` | on demand (web's `/labs` page) | `saved_labs`, `saved_lab_assets`, scoped by `user_id` | — (read-only report) |
+| Save a lab (LF-1) | `lab save --user <id> --name <name> --asset T=W… [--replace]` | `POST /labs/saved` | manual, by the lab's owner | `saved_labs` (by `user_id`, `name`) | `saved_labs` and `saved_lab_assets`, in one transaction: 201 for a new lab, 200 for a replace, 409 for a taken name without `replace`, 422 for a lab that breaks a rule |
+| Delete a lab (LF-1) | `lab delete --user <id> --name <name>` | `DELETE /labs/saved?user_id=&name=` | manual, by the lab's owner | `saved_labs`, scoped by `user_id` | `saved_labs`; its `saved_lab_assets` by cascade (404 if the name didn't resolve) |
 
 **No separate `brokers` table** ever materialized — `schema.md` settled on `broker` as a plain
 string on `accounts`, so `account add` writes only to `accounts`, never a second table.
@@ -502,8 +505,10 @@ handlers, `auth`'s pattern of app-level handlers rather than per-route `try`/`ex
 | `AccountNotFound` | 404 | `--account`/`account_label` didn't resolve for this user — the isolation chokepoint |
 | `TickerMappingNotFound` | 404 | a mapping delete for an id that's already gone |
 | `TransactionNotFound` | 404 | a transaction delete whose reference isn't in the (resolved) account, most likely already deleted |
+| `SavedLabNotFound` | 404 | a saved-lab delete for a name this user has no lab under (LF-1); another user's lab reads the same |
 | `AccountLabelConflict` | 409 | a label re-used under a different broker |
-| `InvalidBroker`, `InvalidTransaction`, `BrokerFileError`, `BrokerParserNotFound`, `UnknownTicker`, `InvalidTickerMapping` | 422 | a caller-supplied value failed validation or parsing |
+| `SavedLabNameTaken` | 409 | a lab saved under a taken name without `replace` (LF-1): web asks before replacing |
+| `InvalidBroker`, `InvalidTransaction`, `BrokerFileError`, `BrokerParserNotFound`, `UnknownTicker`, `InvalidTickerMapping`, `InvalidSavedLab` | 422 | a caller-supplied value failed validation or parsing |
 | `TickerMappingError`, `BrokerPluginError` | 500 | a server-side data/plugin problem, not a caller mistake (`TickerMappingError` now means a stored transaction carries an identifier kind `resolve` doesn't know) |
 | `DataStoreApiError` | 502 | the upstream `data-store` call failed |
 | `TickerRequestRefused` | `data-store`'s own (404, 409, 422, 429, 503) | `data-store` refused a tracked-ticker request for a reason the user must be told: not on the provider, can't be held, over the daily limit, provider down, or an admin change it won't make. Kept apart from `DataStoreApiError` so `web` can tell these apart from the status code |
@@ -517,7 +522,9 @@ blocked/failed detail in the body, not an error status, since the caller needs t
 which instruments to map. Every write endpoint, rebuild routes included, goes through the same
 `routes._write_status_code`: `ok` is **201**, anything else (`nothing_to_do`, or a rebuild's own
 `partial`) is **200** — a domain error on any of them reaches the API as an exception instead, per
-the table above.
+the table above. The one exception is `POST /labs/saved` (LF-1). A replace writes rows as much as
+a create does, so `status` can't tell them apart, and the route answers 201 or 200 from the job's
+`labs_created` count instead.
 
 **Broker-file imports take a multipart `UploadFile`.** `import-transactions`/`import-cashflow`
 both take a local filesystem `Path` in `jobs.py` — unchanged by this task, since the CLI still

@@ -2161,3 +2161,58 @@ img.logo-on-dark {
 .glossary-terms dd {
   margin: var(--space-1) 0 0;
 }
+
+/* ---- saved labs (LF-1) ---- */
+
+/* The name field and its button on one line, the button wrapping under it at phone width. As
+   specific as .card form, whose column direction it overrides. */
+.card form.labs-save {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-3);
+  margin-top: var(--space-5);
+}
+
+.labs-save .field {
+  flex: 1 1 12rem;
+  margin: 0;
+}
+
+/* The field's height, as .labs-actions' secondary buttons match the primary's. */
+.labs-save .btn-secondary {
+  padding: var(--space-3);
+}
+
+.saved-labs {
+  list-style: none;
+  margin: var(--space-3) 0 0;
+  padding: 0;
+}
+
+/* Like an account row: the name is the row's one link to open, Delete at the far end. */
+.saved-lab {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-3);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.saved-lab:last-child {
+  border-bottom: none;
+}
+
+.saved-lab-name {
+  font-weight: 600;
+}
+
+.saved-lab-count {
+  font: var(--text-caption);
+  color: var(--text-muted);
+}
+
+.saved-lab .btn {
+  margin-left: auto;
+}

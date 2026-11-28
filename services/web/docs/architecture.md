@@ -519,8 +519,13 @@ Every route `web` serves, with what it requires and which upstream calls it make
 - `labs_mix.py` (LB-7) — pure: the edited mix's query-string contract (`parse_mix`,
   `canonical_query`) and its checks (`check_mix`). It sits apart from `labs_view.py` because it
   owns a different thing: what the user typed and whether it can be sent, where `labs_view.py`
-  derives a mix from holdings. The query string is the whole state, since a lab is never
-  stored.
+  derives a mix from holdings. The query string is the whole state: even a saved lab (LF-1)
+  opens as a link to its mix.
+- `api/saved_labs.py` and `saved_labs_view.py` (LF-1) — saving and deleting a named mix
+  (`POST /labs/saved`, the delete's page and POST), and the pure part: a lab's open link, which
+  saved lab `/labs` shows, and the `saved`/`lab_deleted` flags every link drops. Its own router
+  for `routes.py`'s size. Client: `list_saved_labs`, `save_lab`, `delete_saved_lab`, with their
+  own 404/409 errors (`SavedLabNotFound`, `SavedLabNameTaken`). See [`labs-ui.md`](labs-ui.md).
 - `labs_view.py` (LB-6) — pure: `build_default_mix`, the mix `/labs` sends when the visitor
   hasn't edited one. Reuses `portfolio_view.build_portfolio_holdings` for the weights, so
   `/labs` and `/portfolio` can't disagree about them, and mirrors `portfolio`'s 50-asset cap

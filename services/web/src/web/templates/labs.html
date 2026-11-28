@@ -6,6 +6,7 @@
 {% from "partials/_ticker.html" import ticker, ticker_list, ticker_option %}
 {% from "partials/_labs_figures.html" import mix_leaves_out, risk_cell, measure_label, against_heading, form_kept with context %}
 {% from "partials/_fold.html" import fold %}
+{% from "partials/_delete_dialog.html" import delete_dialog %}
 {% block title %}Labs — Stakehold{% endblock %}
 {# The holdings the default mix left out, one line per reason (labs_view.DefaultMix). Shown
    whatever the backtest did, since it says what the figures don't cover. #}
@@ -64,6 +65,7 @@
 <div class="split split-labs">
 <section class="card labs-editor" aria-labelledby="edit-mix">
   <h2 id="edit-mix">Edit the mix</h2>
+  {% if lab_status %}{% call banner(lab_status[0]) %}<strong>{{ lab_status[1] }}</strong>{% if lab_status[2] %} {{ lab_status[2] }}{% endif %}{% endcall %}{% endif %}
   {# A GET form, so the mix is the URL: a lab can be bookmarked or reloaded, and nothing is
      stored. Works without JS: the empty row adds an asset and each Remove button submits the
      form, which the route answers with the mix that's left. labs_form.js adds rows in place. #}
@@ -109,6 +111,47 @@
   {# labs_form.js's copy for each added row; it numbers the ids and adds a Remove that only
      takes the row off the page. #}
   <template id="labs-row-template">{{ mix_row("new") }}</template>
+  {# LF-1. Saves the mix the table shows, so only one that can be sent: not a mix with errors,
+     whose table shows the last one. The name starts as the saved lab the page shows, if any, so
+     saving it again asks whether to replace it. #}
+  {% if can_save %}
+  <form method="post" action="/labs/saved" class="labs-save">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    {% for row in shown %}
+    <input type="hidden" name="ticker" value="{{ row.ticker }}">
+    <input type="hidden" name="weight" value="{{ row.weight }}">
+    {% endfor %}
+    {% for key, value in save_kept %}
+    <input type="hidden" name="{{ key }}" value="{{ value }}">
+    {% endfor %}
+    <div class="field">
+      <label for="lab-name">Save this mix as</label>
+      <input type="text" id="lab-name" name="name" maxlength="100" required autocomplete="off" value="{{ current_lab.name if current_lab else '' }}">
+    </div>
+    <button type="submit" class="btn btn-secondary">Save</button>
+  </form>
+  {% endif %}
+  <h3 id="saved-labs">Saved labs</h3>
+  {% if saved_labs_notice %}
+  <p class="entry-empty">{{ saved_labs_notice }}</p>
+  {% elif not saved_labs %}
+  <p class="entry-empty">No saved labs yet.</p>
+  {% else %}
+  {% call fold("Open or delete", saved_labs | length, ("lab", "labs"), open=lab_status is not none) %}
+  <ul class="saved-labs">
+    {% for item in saved_labs %}
+    <li class="saved-lab"{% if item.current %} aria-current="true"{% endif %}>
+      <a class="saved-lab-name" href="{{ item.open }}">{{ item.lab.name }}</a>
+      <span class="saved-lab-count"><span class="mono">{{ item.lab.assets | length }}</span> asset{{ "" if item.lab.assets | length == 1 else "s" }}{% if item.current %} · shown{% endif %}</span>
+      {# A link to the confirmation page, the whole flow without JS; with it, confirm_dialog.js
+         opens the dialog below instead. #}
+      <a class="btn btn-ghost" href="{{ item.delete }}" data-confirm="delete-lab-dialog" data-confirm-summary="{{ item.summary }}">Delete<span class="visually-hidden"> {{ item.lab.name }}</span></a>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endcall %}
+  {% call delete_dialog("delete-lab-dialog", "/labs/saved/delete", "Delete this lab?", csrf_token, ["name", "back"], summary_mono=false) %}<strong>This can't be undone.</strong> Its mix isn't kept anywhere else.{% endcall %}
+  {% endif %}
 </section>
 <section class="card card-wide" aria-labelledby="labs-returns-title">
   <h2 id="labs-returns-title">Returns</h2>
@@ -286,4 +329,5 @@
 <script src="{{ asset_url('/static/labs_drawdown_chart.js') }}" defer></script>
 {% endif %}
 <script src="{{ asset_url('/static/labs_form.js') }}" defer></script>
+<script src="{{ asset_url('/static/confirm_dialog.js') }}" defer></script>
 {% endblock %}

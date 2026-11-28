@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% from "partials/_banner.html" import banner %}
+{% block title %}Save a lab — Stakehold{% endblock %}
+{% block content %}
+{# Where a save from /labs lands when it can't simply go back (LF-1): a taken name asks whether
+   to replace that lab's mix, and a refused or failed save shows why, with the name to fix. The
+   mix travels as hidden fields, as the form on /labs sent it. #}
+{% macro mix_fields() -%}
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+{% for row in rows %}
+<input type="hidden" name="ticker" value="{{ row.ticker }}">
+<input type="hidden" name="weight" value="{{ row.weight }}">
+{% endfor %}
+{% for key, value in kept %}
+<input type="hidden" name="{{ key }}" value="{{ value }}">
+{% endfor %}
+{%- endmacro %}
+<section class="card">
+  {% if conflict %}
+  <h1>Replace this lab?</h1>
+  {% call banner("warning") %}<strong>That name is taken.</strong> You already have a lab called {{ name | trim }}. Replacing it swaps its mix for this one.{% endcall %}
+  {% if summary %}<p class="confirm-summary mono">{{ summary }}</p>{% endif %}
+  <form method="post" action="/labs/saved">
+    {{ mix_fields() }}
+    <input type="hidden" name="name" value="{{ name }}">
+    <input type="hidden" name="replace" value="1">
+    <div class="confirm-actions">
+      <a class="btn btn-ghost" href="{{ back_url }}">Back to Labs</a>
+      <button type="submit" class="btn btn-primary">Replace it</button>
+    </div>
+  </form>
+  {% else %}
+  <h1>Save this lab</h1>
+  {% if error %}{% call banner("error") %}<strong>{{ error_lead }}</strong> {{ error }}{% endcall %}{% endif %}
+  {% if summary %}<p class="confirm-summary mono">{{ summary }}</p>{% endif %}
+  {% if rows %}
+  <form method="post" action="/labs/saved">
+    {{ mix_fields() }}
+    <div class="field">
+      <label for="lab-name">Name</label>
+      <input type="text" id="lab-name" name="name" maxlength="100" required autocomplete="off" value="{{ name }}"{% if name_error %} aria-invalid="true"{% endif %}>
+    </div>
+    <div class="confirm-actions">
+      <a class="btn btn-ghost" href="{{ back_url }}">Back to Labs</a>
+      <button type="submit" class="btn btn-primary">Save</button>
+    </div>
+  </form>
+  {% else %}
+  <a class="btn btn-ghost" href="{{ back_url }}">Back to Labs</a>
+  {% endif %}
+  {% endif %}
+</section>
+{% endblock %}

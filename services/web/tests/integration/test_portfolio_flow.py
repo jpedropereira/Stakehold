@@ -16,6 +16,7 @@ task 15), so only the reliably-reproducible BrokerParserNotFound path is exercis
 import os
 from decimal import Decimal
 from pathlib import Path
+from urllib.parse import urlencode
 
 import httpx
 import psycopg
@@ -57,7 +58,7 @@ def _clean_portfolio_tables():
         with conn.cursor() as cur:
             cur.execute(
                 "TRUNCATE return_snapshots, position_snapshots, transactions, accounts, "
-                "ticker_mappings CASCADE"
+                "ticker_mappings, saved_lab_assets, saved_labs CASCADE"
             )
         conn.commit()
     yield
@@ -513,3 +514,59 @@ async def test_portfolio_page_sums_a_ticker_held_in_two_accounts(web_client_with
     assert 'href="/accounts/holdings?account=main"' in breakdown
     assert "No return history yet" in response.text
     assert "Couldn't load your returns" not in response.text
+
+
+def _post_form(client, path, pairs):
+    """A form post with repeated keys, encoded by hand: httpx sends a list of pairs as raw
+    content."""
+    return client.post(
+        path,
+        content=urlencode(pairs),
+        headers={"content-type": "application/x-www-form-urlencoded"},
+        follow_redirects=False,
+    )
+
+
+async def test_a_lab_is_saved_listed_replaced_and_deleted_through_portfolio(web_client):
+    """LF-1 end to end: web's save form, portfolio's POST /labs/saved and its tables, and back.
+    No data-store in this suite, so the page's backtest fails; the saved labs list doesn't
+    depend on it."""
+    token = _csrf_token(web_client, "/accounts")
+    mix = [("ticker", "IWDA.AS"), ("weight", "60"), ("ticker", "AAPL"), ("weight", "40")]
+
+    saved = _post_form(web_client, "/labs/saved", [("csrf_token", token), ("name", "Core"), *mix])
+    assert saved.status_code == 303
+    page = web_client.get(saved.headers["location"])
+    assert page.status_code == 200
+    assert "Saved." in page.text and "This mix is your lab Core." in page.text
+    assert '<a class="saved-lab-name" href="/labs?' in page.text
+
+    other = [("ticker", "AAPL"), ("weight", "100")]
+    taken = _post_form(web_client, "/labs/saved", [("csrf_token", token), ("name", "Core"), *other])
+    assert taken.status_code == 200
+    assert "Replace this lab?" in taken.text
+    replaced = _post_form(
+        web_client,
+        "/labs/saved",
+        [("csrf_token", token), ("name", "Core"), ("replace", "1"), *other],
+    )
+    assert replaced.status_code == 303
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT a.ticker, a.weight_pct FROM portfolio.saved_labs l "
+            "JOIN portfolio.saved_lab_assets a ON a.saved_lab_id = l.id WHERE l.user_id = %s",
+            (_USER.user_id,),
+        )
+        assert cur.fetchall() == [("AAPL", Decimal("100.000000"))]
+
+    confirm = web_client.get("/labs/saved/delete", params={"name": "Core"})
+    assert confirm.status_code == 200
+    assert "AAPL 100%" in confirm.text
+    deleted = _post_form(
+        web_client, "/labs/saved/delete", [("csrf_token", token), ("name", "Core"), ("back", "")]
+    )
+    assert deleted.headers["location"] == "/labs?lab_deleted=1"
+    again = _post_form(
+        web_client, "/labs/saved/delete", [("csrf_token", token), ("name", "Core"), ("back", "")]
+    )
+    assert again.headers["location"] == "/labs?lab_deleted=0"

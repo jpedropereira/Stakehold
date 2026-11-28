@@ -10,10 +10,11 @@ Keep it in lockstep with any future schema change, the same discipline
 out this way*, see [`architecture.md`](architecture.md), which this document turns from a
 conceptual entity model into concrete tables.
 
-Five tables: `accounts` (who owns what — `user_id` is a plain UUID referencing `auth`, not a local
+Seven tables: `accounts` (who owns what — `user_id` is a plain UUID referencing `auth`, not a local
 `users` table), `transactions` (the ledger), `position_snapshots` /
-`return_snapshots` (derived, materialized, rebuildable), and `ticker_mappings` (the global,
-admin-managed broker-instrument → `data-store`-ticker mapping).
+`return_snapshots` (derived, materialized, rebuildable), `ticker_mappings` (the global,
+admin-managed broker-instrument → `data-store`-ticker mapping), and `saved_labs` /
+`saved_lab_assets` (a user's saved, named Labs mixes, LF-1).
 
 ## Users — not a table here
 
@@ -291,6 +292,58 @@ replacement only runs once the new rows exist), and so does a ticker data-store 
 A ticker is only pruned once it has no position snapshots, and `rebuild-positions` never prunes in
 an account with a blocked instrument ([`flows.md`](flows.md)'s "Pruning a ticker"), so "blocked
 means don't touch" carries over unchanged.
+
+## `saved_labs`
+
+**Added at LF-1, signed off in that task.** One row per Labs mix a user saved under a name.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `BIGSERIAL PRIMARY KEY` | Surrogate PK — what `saved_lab_assets` references. Never exposed: the API addresses a lab by `(user_id, name)`. |
+| `user_id` | `UUID NOT NULL` | The id `auth` issues, a trusted plain column like `accounts.user_id`. Per user, not per account: a mix is any set of tickers, not something held in an account, so deleting an account leaves the user's labs alone. |
+| `name` | `VARCHAR(100) NOT NULL` | The user's handle for the lab, trimmed, 1–100 characters (checked in `saved_labs/base.py`). |
+| `created_at` | `TIMESTAMPTZ NOT NULL DEFAULT now()` | |
+| `updated_at` | `TIMESTAMPTZ NOT NULL DEFAULT now()` | Set to `now()` again when the lab's mix is replaced. |
+
+Indexes: `UNIQUE (user_id, name)`, scoped to the owner like `(user_id, account_label)`. It also
+serves "list my labs", since `user_id` leads it, so there's no separate `(user_id)` index.
+
+**Saving** (`lab save`, `POST /labs/saved`) inserts with `ON CONFLICT (user_id, name) DO NOTHING`.
+A taken name without `replace` is refused (`SavedLabNameTaken`, 409), never silently overwritten.
+web asks the user first. With `replace`, the lab's row is updated (`updated_at`, which also locks
+it), its assets are deleted, and the new ones are inserted, all in one transaction, so a lab is
+never left with no assets or half of the new ones. A lab deleted by another request between
+the conflict and the update is created again, since that is what the user asked for.
+
+**Deleting** (`lab delete`, `DELETE /labs/saved`) removes the row; its assets go with it through the
+cascade below. It's a hard delete, like an account's, scoped by `user_id` and `name`, and an
+unknown name and another user's lab are the same 404.
+
+**Not stored: the view.** Period, risk window and benchmark are choices about how to look at a mix,
+and they stay in web's query string (agreed in LF-1). Adding a benchmark column later is cheap if
+opening a lab should restore one.
+
+## `saved_lab_assets`
+
+**Added at LF-1.** One row per asset in a saved lab.
+
+| Column | Type | Notes |
+|---|---|---|
+| `saved_lab_id` | `BIGINT NOT NULL REFERENCES saved_labs (id) ON DELETE CASCADE` | |
+| `position` | `SMALLINT NOT NULL` | The row's place in the form, 0-based, so a lab opens in the order it was saved. |
+| `ticker` | `VARCHAR(20) NOT NULL` | data-store's ticker limit, as in `BacktestAssetRequest`. Not checked against the tracked list here: web saves only a mix it could show, and a ticker that stops being tracked later is flagged by the mix form when the lab is opened. |
+| `weight_pct` | `NUMERIC(12,6) NOT NULL CHECK (weight_pct > 0)` | The percentage as typed, unscaled: the backtest scales a mix's weights to 100% (LB-7), so a lab of "60 and 60" opens as typed. Six places and under 10⁶, checked in code first so the user gets a message rather than a driver error. |
+
+Keys: `PRIMARY KEY (saved_lab_id, position)` and `UNIQUE (saved_lab_id, ticker)`, so a ticker
+can't appear twice in one lab. The form refuses that too, but the table is the backstop. Between
+1 and 50 assets per lab (the backtest's cap), checked in code.
+
+**Why this foreign key cascades when no other one here does.** The other foreign keys reference
+`accounts`, whose delete is ordered explicitly in `pipeline.delete_account`, so a missed table
+fails loudly instead of being swept away. An asset row is only ever written and read as part of
+its lab, nothing else references it, and it means nothing alone, so the cascade can't remove
+anything a caller meant to keep. *Rejected: a JSONB `assets` column on `saved_labs`*, which
+would leave uniqueness and positivity to code alone.
 
 ## Open items, carried forward rather than resolved here
 

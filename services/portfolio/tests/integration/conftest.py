@@ -26,7 +26,7 @@ def clean_tables():
         with conn.cursor() as cur:
             cur.execute(
                 "TRUNCATE return_snapshots, position_snapshots, transactions, accounts, "
-                "ticker_mappings CASCADE"
+                "ticker_mappings, saved_lab_assets, saved_labs CASCADE"
             )
         conn.commit()
     yield
