@@ -721,8 +721,9 @@ schema decision for that later task.
   → `agent` returns `text/event-stream` of typed JSON `AgentEvent`s. `web` translates each event
   into an HTML fragment and streams that to the browser. `agent` never emits HTML, so `web` keeps
   sole control of escaping, the CSP and the brand rules. A JS-off browser gets the complete answer
-  as one page render after the run finishes. Choosing between the htmx SSE extension (vendored,
-  like htmx itself) and a small vanilla fetch-stream script is left to `web`'s UI docs.
+  as one page render after the run finishes. `web` uses a small fetch-stream script rather than
+  the htmx SSE extension, because EventSource is GET-only and can't carry the POST's body or CSRF
+  token (decided in PD-24, [`web/docs/chat-ui.md`](../../web/docs/chat-ui.md)).
 - **The panel** lives in `web`'s app shell, so it's available on every page and can attach that
   page's context.
 - **Rendering model output.** Text is markdown, rendered server-side by `web` with raw HTML
