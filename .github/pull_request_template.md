@@ -7,6 +7,6 @@ docs/architecture.md or docs/schema.md; link it here instead of repeating it. --
 
 ## Testing
 
-- [ ] Unit tests: `uv run pytest services`
+- [ ] Unit tests: `uv run pytest services scripts`
 - [ ] Integration tests, if Postgres behaviour changed: `uv run pytest services -m integration`
 - [ ] `docs/architecture.md` / `docs/schema.md` updated, or checked and not needed

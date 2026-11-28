@@ -63,7 +63,7 @@ jobs:
       # rather than merged into one `-m ''` invocation so a Postgres-side failure is
       # immediately distinguishable from a unit-test failure in the run summary.
       - name: Run unit test suite
-        run: uv run pytest services
+        run: uv run pytest services scripts
 
       # The integration suite talks to a real Postgres rather than a fake, because what it covers
       # is precisely the part a fake can't: COPY-into-temp-table upserts, ON CONFLICT semantics,

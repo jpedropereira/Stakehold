@@ -30,13 +30,22 @@ planned, ask the user which of those items, if any, it takes on; each one taken 
 
 `Status` is one of:
 
-- `Blocked`: at least one Blocked-by issue is still open.
+- `Blocked`: at least one Blocked-by issue is open, or closed other than as completed (not
+  planned, duplicate).
 - `Ready`: every Blocked-by issue is closed as completed.
 - `In progress`: being worked on, usually with an open PR.
 - `Done`: merged and closed. The board sets this when the issue closes.
 
-Set it with `gh project item-edit 1 --owner jpedropereira --url <issue URL> --field Status
---value "<status>"`. The project goes by its number: `--url` doesn't work with `--project-id`.
+`Blocked` and `Ready` are kept up to date by the **Board status** workflow
+(`.github/workflows/board-status.yml`, logic in `scripts/sync_board_status.py`). It recomputes
+every open issue in either status when an issue is closed or reopened, and once a day; it never
+touches `In progress`, `Done` or an issue with no status. A Blocked-by link added or removed by
+hand is only picked up by the next run, so after editing links run it at once with
+`gh workflow run board-status.yml`. To see what it would change without writing:
+`python scripts/sync_board_status.py --owner jpedropereira --project 1 --dry-run`.
+
+Set a status by hand (a new issue's first `Blocked` or `Ready`, or `In progress`) with
+`gh project item-edit 1 --owner jpedropereira --url <issue URL> --field Status --value "<status>"`. The project goes by its number: `--url` doesn't work with `--project-id`.
 
 The board's auto-add workflow can add a new issue before `gh issue create --project` does. The
 create then fails with "Content already exists in this project", but the issue exists. Look it
@@ -57,9 +66,9 @@ up rather than creating it again.
 - Before starting: `gh issue view <N>`, including comments and relationships. Set `In progress`.
 - The PR body starts with `Closes #<N>` (the PR template has the line). That closes the issue on
   merge, and the board marks it `Done`.
-- After the merge, recompute its dependents: for each issue in `gh issue view <N> --json blocking`,
-  check `gh issue view <M> --json blockedBy`, and set `Ready` if every issue there is now closed as
-  completed.
+- After the merge, the Board status workflow moves its dependents to `Ready`. Check the run
+  succeeded (`gh run list --workflow board-status.yml --limit 1`); if it failed, run it again
+  rather than editing the statuses by hand.
 
 ## Changing scope
 

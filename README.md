@@ -60,7 +60,7 @@ uv run pre-commit install --hook-type pre-commit --hook-type pre-push
 Run the test suite for every service:
 
 ```bash
-uv run pytest services                 # unit tests
+uv run pytest services scripts         # unit tests
 uv run pytest services -m integration  # integration tests (needs Postgres, see below)
 ```
 
