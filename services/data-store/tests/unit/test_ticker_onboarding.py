@@ -338,24 +338,6 @@ def test_a_cached_answer_expires_after_the_ttl():
 # --- FX universe -------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "code, expected",
-    [
-        ("EUR", "EUR"),
-        ("USD", "USD"),
-        ("GBp", "GBP"),
-        ("ZAc", "ZAR"),
-        ("ILA", "ILS"),
-        (None, None),
-        ("", None),
-        ("usd", None),
-        ("EURO", None),
-    ],
-)
-def test_major_currency(code, expected):
-    assert ticker_onboarding.major_currency(code) == expected
-
-
 def with_currency(row, currency, *, enabled=True):
     from dataclasses import replace
 

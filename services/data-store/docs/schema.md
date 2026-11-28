@@ -71,14 +71,41 @@ to take again. Drop them yourself, once, after confirming `raw_market_data` is p
 | `price_date`   | `DATE`           | Part of PK.                                         |
 | `source`       | `VARCHAR(20)`    | Part of PK, e.g. `'yfinance'`.                      |
 | `asset_type`   | `VARCHAR(20)`    | `equity` / `etf` / `commodity` / `crypto` / `etc`. `etc` (Exchange Traded Commodity, e.g. a gold-backed ETC) is kept distinct from `commodity` (raw futures contracts, not tracked yet) since they're different instrument wrappers. Not part of the PK — a descriptive attribute of the ticker, not part of its identity. Validated at the app layer (`config_loader.VALID_ASSET_TYPES`), not a DB `CHECK` constraint. |
-| `open`         | `NUMERIC(18,4)`  | Split-adjusted, not dividend-adjusted — see below.  |
-| `high`         | `NUMERIC(18,4)`  | Split-adjusted, not dividend-adjusted — see below.  |
-| `low`          | `NUMERIC(18,4)`  | Split-adjusted, not dividend-adjusted — see below.  |
-| `close`        | `NUMERIC(18,4)`  | **Already split-adjusted by the provider** (see "What `close` actually contains"), not dividend-adjusted. The basis for any return calculation this service computes itself — used as-is, with no further split correction. |
-| `adj_close`    | `NUMERIC(18,4)`  | yfinance's own blackbox-adjusted close — split *and* dividend adjusted. Stored for reference/validation only; not used for return calculations, since how yfinance derives it isn't documented and has changed defaults across versions before. |
+| `open`         | `NUMERIC(20,6)`  | Split-adjusted, not dividend-adjusted — see below. In the major currency unit — see below. |
+| `high`         | `NUMERIC(20,6)`  | Split-adjusted, not dividend-adjusted — see below. In the major currency unit — see below. |
+| `low`          | `NUMERIC(20,6)`  | Split-adjusted, not dividend-adjusted — see below. In the major currency unit — see below. |
+| `close`        | `NUMERIC(20,6)`  | **Already split-adjusted by the provider** (see "What `close` actually contains"), not dividend-adjusted. In the major currency unit (see "Prices are in the major currency unit"). The basis for any return calculation this service computes itself — used as-is, with no further split correction. |
+| `adj_close`    | `NUMERIC(20,6)`  | yfinance's own blackbox-adjusted close — split *and* dividend adjusted. Stored for reference/validation only; not used for return calculations, since how yfinance derives it isn't documented and has changed defaults across versions before. |
 | `volume`       | `BIGINT`         |                                                      |
-| `dividends`    | `NUMERIC(18,4)`  | Per-share cash amount, `NOT NULL DEFAULT 0`. `0` on non-event days rather than filtered out — unlike the old `dividend_events` table, this table mirrors the source dataframe's own dense grain. Retroactively split-adjusted on the same basis as `close`, so the two share one scale and can be added directly. |
+| `dividends`    | `NUMERIC(20,6)`  | Per-share cash amount, in the same unit as `close`, `NOT NULL DEFAULT 0`. `0` on non-event days rather than filtered out — unlike the old `dividend_events` table, this table mirrors the source dataframe's own dense grain. Retroactively split-adjusted on the same basis as `close`, so the two share one scale and can be added directly. |
 | `stock_splits` | `NUMERIC(18,6)`  | Split ratio (e.g. `4.0` for a 4-for-1 split, `0.25` for a 1-for-4 reverse split), `NOT NULL DEFAULT 0` on non-split days. Wider precision than the price columns since ratios can be fractional. Read by `pipeline.ingest_market_data` to detect that a ticker's stored history needs restating — see below. |
+
+### Prices are in the major currency unit
+
+yfinance quotes London, Johannesburg and Tel Aviv listings in minor units: `GBp` (pence), `ZAc`
+(cents) and `ILA` (agorot). Ingestion divides `open`, `high`, `low`, `close`, `adj_close` and
+`dividends` by 100 for those, using the quote currency yfinance reports with each fetch
+(`history_metadata["currency"]`), so every stored price is in the major unit: pounds, rand or
+shekels. `volume` and `stock_splits` aren't amounts of money and are stored as fetched. The map
+lives in `currency_units.py`.
+
+Why on ingestion rather than on read (IQ-1): the read side doesn't reliably know a ticker's quote
+unit. A ticker priced through a fund's holdings has no `tracked_tickers` row, and iShares labels
+LSE lines `GBP` where yfinance says `GBp`. The ticker suffix doesn't tell you either, since some
+`.L` lines quote in USD or EUR. The fetch knows, for the exact response it came with. A consumer
+can then multiply a stored price by an FX rate for `major_currency(...)` directly.
+
+The columns are `NUMERIC(20,6)` rather than `(18,4)` for the same reason: a 4-decimal pence price
+needs 6 decimals in pounds to stay exact (2.3456p is 0.023456 GBP). The 14 integer digits are
+unchanged. `schema.sql` widens databases created before this change, a guarded per-column
+`ALTER` that rewrites the table, so run `db init` with the ingest DAGs paused.
+
+**Rows stored before the change are still in minor units** until they're re-fetched. Repair with
+`backfill-market-data --force-refresh --ticker …`, then `calculate-returns --ticker …`. Re-run
+the daily ingest only after that: it rewrites the last few days in the major unit, and a history
+left half in pence and half in pounds shows a −99% return on the day it switches. The refresh is
+idempotent (it re-fetches and upserts), unlike an in-place `UPDATE … / 100`, which divides again
+if run twice.
 
 ### What `close` actually contains
 
@@ -102,7 +129,7 @@ Two consequences, both load-bearing:
    returns design specified — double-adjusts and yields a *+313%* return on AAPL's 2020 split day
    instead of the real +3.39%. Confirmed positively as well as by elimination: computing total
    return this way matches Yahoo's independently-derived `adj_close` series to a maximum of
-   0.018% (mean 0.00054%) across 5,441 AAPL rows since 2005, which is `NUMERIC(18,4)` rounding.
+   0.018% (mean 0.00054%) across 5,441 AAPL rows since 2005, which is the then `NUMERIC(18,4)` rounding.
 2. **A split invalidates every stored row for that ticker.** See the loading note below.
 | `ingested_at`  | `TIMESTAMPTZ`    | Defaults to `now()`.                                |
 
@@ -210,7 +237,7 @@ the unprocessed landing zone.
 | `ticker`                | `VARCHAR(20)`    | Part of PK. Same value as `raw_market_data.ticker`. |
 | `price_date`            | `DATE`           | Part of PK. |
 | `source`                | `VARCHAR(20)`    | Part of PK, e.g. `'yfinance'`. |
-| `split_adjusted_close`  | `NUMERIC(18,4)`  | Copied verbatim from `raw_market_data.close`, which is already split-adjusted by the provider (see `raw_market_data`, "What `close` actually contains"). This is the chart column. Denormalised on purpose so a chart query needs no join back to `raw_market_data`. |
+| `split_adjusted_close`  | `NUMERIC(20,6)`  | Copied verbatim from `raw_market_data.close`, so in the major currency unit, which is already split-adjusted by the provider (see `raw_market_data`, "What `close` actually contains"). This is the chart column. Denormalised on purpose so a chart query needs no join back to `raw_market_data`. |
 | `future_split_factor`   | `NUMERIC(30,15)` | Product of every split ratio strictly *after* this date (`1.0` for every date after a ticker's last split). Not otherwise derivable from a single row, and self-verifying against `raw_market_data.stock_splits`. Never legitimately `0` — see "Why the scale is 15" below. |
 | `price_return`          | `NUMERIC(18,8)`  | `close_t / close_(t-1) - 1`. Nullable — `NULL` on a ticker's first stored date, where no prior close exists, or when the row is flagged as an implausible single-day return — see "Implausible single-day returns are suppressed, not corrected" below. **No split term** — see below. |
 | `dividend_return`       | `NUMERIC(18,8)`  | `dividends_t / close_(t-1)`. `0` (not `NULL`) on a non-dividend day; `NULL` on the series-anchor row, or when the row is flagged as an implausible single-day return — see below. |
@@ -256,8 +283,8 @@ price. It isn't (see `raw_market_data`, "What `close` actually contains"): the p
 retroactively split-adjusts `close`, so that correction double-adjusts and produces a
 triple-digit fake return on every split day. Confirmed against real AAPL data before this
 shipped: the corrected formula above matches Yahoo's independently-derived `adj_close` series to
-a maximum 0.018% (mean 0.00054%) over 5,441 rows spanning two splits and 21 years — `NUMERIC(18,4)`
-rounding, not coincidence.
+a maximum 0.018% (mean 0.00054%) over 5,441 rows spanning two splits and 21 years — the then
+`NUMERIC(18,4)` rounding, not coincidence.
 
 **Implausible single-day returns are suppressed, not corrected.** A 460-row / 45-ticker
 investigation against the real dataset found `abs(simple_return) > 100%` in a single day, and
@@ -335,11 +362,11 @@ doesn't read `etf_holdings` or any config file — it operates on exactly what's
 (`SELECT DISTINCT ticker`) from the data itself. This also means it keeps working for a source
 that has since been retired but still has stored rows.
 
-**Precision inherited from `raw_market_data`, not improved on.** `raw_market_data` stores prices
-as `NUMERIC(18,4)`, which represents a sub-cent price like `PLS.AX`'s `0.0093` with only two
-significant figures. `split_adjusted_close` copies that value directly, so a return computed for
-such a ticker inherits the same quantisation. Out of scope to fix here since it originates in the
-upstream table.
+**Precision inherited from `raw_market_data`, not improved on.** `split_adjusted_close` copies
+`raw_market_data.close` directly, so a return inherits its scale. Both are `NUMERIC(20,6)` since
+IQ-1 (see "Prices are in the major currency unit"). Rows stored under the old `NUMERIC(18,4)`
+keep their 4-decimal values until re-fetched: `PLS.AX`'s sub-cent `0.0093`, for example, still
+has two significant figures, and returns computed from it inherit the same quantisation.
 
 ## `fx_rates`
 

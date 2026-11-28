@@ -309,3 +309,21 @@ def test_save_market_returns_drops_a_split_factor_that_would_round_to_zero():
     assert count == 1
     assert zeroed == 0
     conn.close()
+
+
+def test_save_market_returns_keeps_six_decimals_of_a_split_adjusted_close():
+    conn = _connect()
+    df = make_returns_df([["TEST", date(2026, 1, 1), 0.023456, 1.0, None, None, None, None]])
+
+    save_market_returns(conn, "yfinance", df)
+
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT split_adjusted_close FROM market_returns "
+            "WHERE ticker = %s AND price_date = %s AND source = %s",
+            ("TEST", date(2026, 1, 1), "yfinance"),
+        )
+        (split_adjusted_close,) = cur.fetchone()
+
+    assert str(split_adjusted_close) == "0.023456"
+    conn.close()

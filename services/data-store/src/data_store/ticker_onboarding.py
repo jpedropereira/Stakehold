@@ -18,6 +18,7 @@ from datetime import date, datetime, timedelta
 
 from data_store import pipeline
 from data_store.config_loader import CurrenciesConfig, CurrencyConfig, TickerConfig
+from data_store.currency_units import major_currency
 from data_store.fx import repository as fx_repository
 from data_store.returns import repository as returns_repository
 from data_store.run_result import STATUS_PARTIAL, build_run_result
@@ -208,25 +209,6 @@ def tracked_ticker_configs(conn, *, ready_only: bool) -> list[TickerConfig]:
         for row in tracked_tickers_repository.get_tracked_tickers(conn)
         if row.enabled and (not ready_only or row.status == tracked_tickers_repository.STATUS_READY)
     ]
-
-
-# Currencies yfinance quotes some listings in, as minor units of a major currency. FX rates exist
-# for the major one only. Verified for GBp (TK-0); ZAc and ILA are yfinance's documented
-# equivalents for Johannesburg and Tel Aviv.
-_MINOR_TO_MAJOR_CURRENCY = {"GBp": "GBP", "ZAc": "ZAR", "ILA": "ILS"}
-_CURRENCY_CODE = re.compile(r"^[A-Z]{3}$")
-
-
-def major_currency(code: str | None) -> str | None:
-    """The ISO code FX rates are tracked under for a provider currency, or None if it isn't one.
-
-    This only picks which FX pair a ticker needs. A price quoted in pence is still stored in
-    pence; nothing rescales it (a known limitation, see tasks.md).
-    """
-    if code is None:
-        return None
-    code = _MINOR_TO_MAJOR_CURRENCY.get(code, code)
-    return code if _CURRENCY_CODE.fullmatch(code) else None
 
 
 def currencies_with_tracked_tickers(conn, currencies: CurrenciesConfig) -> CurrenciesConfig:

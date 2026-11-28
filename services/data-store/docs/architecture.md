@@ -78,6 +78,7 @@ flowchart TD
         RETRY["yfinance_retry.py<br/><i>shared transient-error classifier</i>"]
         PRETRY["provider_retry.py<br/><i>provider-agnostic retry loop</i>"]
         RESOLVE["ticker_resolution.py<br/><i>holding → provider ticker</i>"]
+        UNITS["currency_units.py<br/><i>minor → major currency unit</i>"]
     end
 
     subgraph ext_pkg["services/shared (workspace package)"]
@@ -113,8 +114,10 @@ flowchart TD
     READ --> REG
     READ --> RF
     READ --> RESOLVE
-    READ --> ONB
+    READ --> UNITS
     ONB --> TRK
+    ONB --> UNITS
+    MKT --> UNITS
     HOLD --> EXT
     MKT --> EXT
     FX --> EXT
@@ -362,6 +365,30 @@ therefore re-fetches that ticker's full stored range and rewrites it
 (`pipeline._refresh_split_histories`). This is the one place the daily flow issues an unbounded
 historical request rather than a windowed one; splits are rare enough that the cost is negligible.
 
+**Minor-unit prices are rescaled in the source, as they arrive (IQ-1).** yfinance quotes LSE, JSE
+and TASE listings in pence, cents or agorot, while `fx_rates` only has the major currency. Until
+IQ-1 those prices were stored as quoted, and portfolio's `quantity × split_adjusted_close ÷ rate`
+made every London position's market value 100× too high. `market_data/yfinance_source.py` now
+divides the money columns by 100 when the fetch's `history_metadata["currency"]` is a minor unit.
+It logs one line per fetch counting the tickers rescaled, and warns about a fetch with no currency.
+So `raw_market_data` holds major-unit prices whatever the listing.
+
+- *Why on ingestion, not on read:* the fetch is the only point that reliably knows the unit.
+  Holdings-priced tickers have no `tracked_tickers.currency`, iShares labels them `GBP`, and the
+  ticker suffix doesn't decide it (some `.L` lines quote in USD). A read-side fix would also have
+  had to be repeated in every consumer of `GET /prices`.
+- *Why not let yfinance do it:* `repair=True` converts only internally, then reverts to the quote
+  unit before returning (verified against yfinance 1.7.0's `scrapers/history.py`). It also turns
+  on price reconstruction this service doesn't want.
+- *The map lives in `currency_units.py`*, a foundation module, because ingestion
+  (`market_data/`), onboarding (`ticker_onboarding.py`, for the FX universe) and the read API
+  (`read_flows.py`, for `fx_currency`) all need it. Before IQ-1 it sat in `ticker_onboarding.py`,
+  which made `read_flows.py` import an orchestration sibling just for one function.
+- *Known sharp edge:* rows stored before the change stay in minor units until
+  `backfill-market-data --force-refresh` re-fetches them. If the daily ingest writes recent days
+  first, the history is left on two scales. See schema.md, "Prices are in the major currency
+  unit", for the repair order.
+
 **The daily ingests catch up after an outage instead of trusting a fixed window.**
 `ingest-market-data` and `ingest-fx-rates` fetch `today − days`, but a ticker or currency pair
 whose latest stored date is older than that is fetched from that date instead, up to
@@ -605,8 +632,8 @@ What follows from it:
   `INDEX`, `CURRENCY`. The first five can be held; an index or a currency pair can't.
 - **`currency` is per listing, and can be a minor unit.** `VOD.L` is `GBp` (pence), `VUSA.L` is
   `GBP` and `CSPX.L` is `USD`, all on the LSE. So a lookup has to show the currency for the user to
-  confirm. Nothing in the system rescales a minor-unit price yet; see `tasks.md`'s known
-  limitations.
+  confirm. Ingestion rescales a minor-unit price to the major unit (IQ-1, above), so the stored
+  price of `VOD.L` is in pounds.
 - **Symbols are case-insensitive** (`asml.as` works), and `history_metadata["symbol"]` returns the
   canonical spelling (`ASML.AS`), which is what should be stored.
 - `longName` can be `null` (`GC=F`), so a display name falls back to `shortName`.
@@ -642,9 +669,9 @@ nobody can convert into the base currency can't be valued, so `currencies_with_t
 ingest, FX backfill and `GET /fx` use the list. That way adding a Johannesburg stock doesn't also
 need someone to edit a file on the server.
 
-- Minor units map to their major currency first (`GBp`→`GBP`, `ZAc`→`ZAR`, `ILA`→`ILS`), since
-  FX rates exist only for the major one. That picks the pair only: a pence-quoted price is still
-  stored in pence, and nothing rescales it yet (a known limitation, in `tasks.md`).
+- Minor units map to their major currency first (`GBp`→`GBP`, `ZAc`→`ZAR`, `ILA`→`ILS`,
+  `currency_units.major_currency`), since FX rates exist only for the major one. Stored prices
+  are already in that major unit (IQ-1), so the pair applies to them directly.
 - **A currency the YAML explicitly disables stays disabled**, with a warning naming the tickers
   it leaves unconvertible. `enabled: false` is an operator decision, and the ticker list
   shouldn't override it silently.

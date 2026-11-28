@@ -1,3 +1,4 @@
+import logging
 import threading
 import time
 from datetime import date
@@ -45,9 +46,14 @@ class FakeTicker:
     """Stands in for yf.Ticker(ticker): .history(**kwargs) returns whatever `responses` wired up
     for that ticker (a frame, a zero-arg callable returning one, or an exception instance to
     raise), and records every call's kwargs. Use .configured({...}) to get an isolated fake per
-    test -- the class-level responses/calls would otherwise leak between tests."""
+    test -- the class-level responses/calls would otherwise leak between tests.
+
+    .history_metadata is what yfinance fills in from the same response: `currencies` maps a
+    ticker to the quote currency it reports (None for metadata with no currency). A ticker not
+    in `currencies` reports USD, so tests that don't care about units get a major currency."""
 
     responses: dict = {}
+    currencies: dict = {}
     calls: list = []
 
     def __init__(self, ticker):
@@ -62,9 +68,18 @@ class FakeTicker:
             return response()
         return response
 
+    @property
+    def history_metadata(self):
+        currency = type(self).currencies.get(self.ticker, "USD")
+        return {} if currency is None else {"currency": currency}
+
     @classmethod
-    def configured(cls, responses):
-        return type("ConfiguredFakeTicker", (cls,), {"responses": responses, "calls": []})
+    def configured(cls, responses, currencies=None):
+        return type(
+            "ConfiguredFakeTicker",
+            (cls,),
+            {"responses": responses, "currencies": currencies or {}, "calls": []},
+        )
 
 
 def test_name_is_yfinance():
@@ -341,3 +356,77 @@ def test_each_fetch_reports_only_its_own_unreachable_tickers(monkeypatch):
     source.fetch(["GOOD"], date(2026, 1, 1), date(2026, 1, 3))
 
     assert source.unreachable == set()
+
+
+# --- Minor currency units ----------------------------------------------------------------------
+
+PRICE_COLUMNS = ["open", "high", "low", "close", "adj_close"]
+
+
+@pytest.mark.parametrize("minor_unit", ["GBp", "ZAc", "ILA"])
+def test_fetch_rescales_a_minor_unit_quote_to_its_major_unit(monkeypatch, minor_unit):
+    day = date(2026, 1, 1)
+    frame = make_history_frame([day], dividends={day: 12.5}, stock_splits={day: 2.0})
+    fake = FakeTicker.configured({"VOD.L": frame}, currencies={"VOD.L": minor_unit})
+    monkeypatch.setattr("data_store.market_data.yfinance_source.yf.Ticker", fake)
+
+    row = YFinanceMarketDataSource().fetch(["VOD.L"], day, date(2026, 1, 2)).iloc[0]
+
+    assert [row[c] for c in PRICE_COLUMNS] == pytest.approx([1.0, 1.01, 0.99, 1.005, 1.005])
+    assert row["dividends"] == pytest.approx(0.125)
+    # Neither is an amount of money: a share count and a ratio stay as they are.
+    assert row["volume"] == 1000.0
+    assert row["stock_splits"] == 2.0
+
+
+@pytest.mark.parametrize("currency", ["USD", "GBP", "ZAR", "ILS"])
+def test_fetch_leaves_a_major_currency_quote_alone(monkeypatch, currency):
+    day = date(2026, 1, 1)
+    frame = make_history_frame([day], dividends={day: 12.5})
+    fake = FakeTicker.configured({"X": frame}, currencies={"X": currency})
+    monkeypatch.setattr("data_store.market_data.yfinance_source.yf.Ticker", fake)
+
+    row = YFinanceMarketDataSource().fetch(["X"], day, date(2026, 1, 2)).iloc[0]
+
+    assert [row[c] for c in PRICE_COLUMNS] == [100.0, 101.0, 99.0, 100.5, 100.5]
+    assert row["dividends"] == 12.5
+
+
+def test_fetch_keeps_and_warns_about_a_quote_with_no_currency(monkeypatch, caplog):
+    day = date(2026, 1, 1)
+    fake = FakeTicker.configured({"VOD.L": make_history_frame([day])}, currencies={"VOD.L": None})
+    monkeypatch.setattr("data_store.market_data.yfinance_source.yf.Ticker", fake)
+
+    row = YFinanceMarketDataSource().fetch(["VOD.L"], day, date(2026, 1, 2)).iloc[0]
+
+    assert row["close"] == 100.5
+    assert "VOD.L" in caplog.text
+    assert "no currency" in caplog.text
+
+
+def test_fetch_summarises_the_minor_unit_quotes_it_rescaled(monkeypatch, caplog):
+    caplog.set_level(logging.INFO)
+    day = date(2026, 1, 1)
+    frame = make_history_frame([day])
+    fake = FakeTicker.configured(
+        {"VOD.L": frame, "BARC.L": frame, "NPN.JO": frame, "AAPL": frame},
+        currencies={"VOD.L": "GBp", "BARC.L": "GBp", "NPN.JO": "ZAc"},
+    )
+    monkeypatch.setattr("data_store.market_data.yfinance_source.yf.Ticker", fake)
+
+    YFinanceMarketDataSource().fetch(["VOD.L", "BARC.L", "NPN.JO", "AAPL"], day, date(2026, 1, 2))
+
+    assert "rescaled 3 of 4 ticker(s) quoted in minor units to the major unit" in caplog.text
+    assert "GBp: 2" in caplog.text
+    assert "ZAc: 1" in caplog.text
+
+
+def test_fetch_logs_nothing_about_minor_units_when_there_were_none(monkeypatch, caplog):
+    caplog.set_level(logging.INFO)
+    day = date(2026, 1, 1)
+    fake = FakeTicker.configured({"AAPL": make_history_frame([day])})
+    monkeypatch.setattr("data_store.market_data.yfinance_source.yf.Ticker", fake)
+
+    YFinanceMarketDataSource().fetch(["AAPL"], day, date(2026, 1, 2))
+
+    assert "minor unit" not in caplog.text

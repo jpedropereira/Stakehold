@@ -33,9 +33,14 @@ call beyond one quick lookup.
 **A ticker's currency** comes from `tracked_tickers.currency` when that is set. Otherwise it comes
 from the newest `etf_holdings` row that resolves to the ticker, else `null`. It is the
 provider's spelling verbatim (`GBp` stays `GBp`). `fx_currency` is
-`ticker_onboarding.major_currency(currency)`, the code `fx_rates` is keyed by. That function is
+`currency_units.major_currency(currency)`, the code `fx_rates` is keyed by. That function is
 the one minor→major map; a consumer picks its FX pair from `fx_currency` instead of keeping a
 copy (portfolio's Labs backtest does this).
+
+**Prices are in `fx_currency`, not `currency`.** Ingestion rescales minor-unit quotes to the major
+unit (schema.md, "Prices are in the major currency unit"), so `GET /prices/VOD.L` serves pounds
+although `currency` says `GBp`. Multiply a price by the `fx_currency` rate directly; never divide
+by 100 again.
 
 - **Holdings are matched by resolving forward**, with ingest's own rules (`ticker_resolution.py`),
   not by stripping the suffix. iShares reuses a raw symbol across exchanges (`DG` is Vinci in
@@ -44,9 +49,8 @@ copy (portfolio's Labs backtest does this).
 - **Every snapshot counts, not just the latest**, so a holding that left the index keeps a
   currency for its stored history.
 - **iShares writes `GBP` where yfinance writes `GBp`** (`AZN`, `SHEL` on the LSE), so a
-  holdings-only London ticker reports `GBP`. This does no harm: a percentage return doesn't
-  depend on the unit, and `fx_currency` is `GBP` either way. A price in that currency is still
-  in pence.
+  holdings-only London ticker reports `GBP`. That is the unit its stored prices are in, and
+  `fx_currency` is `GBP` either way.
 
 **`source` is an explicit, defaulted query parameter, not hardcoded.** `source` is part of the
 primary key on every table these routes read — the schema's own hook for a second provider to

@@ -19,8 +19,9 @@ _COLUMNS = [
     "stock_splits",
 ]
 
-# Matches the columns tmp_raw_market_data is staged into below. The NUMERIC(18,4)/(18,6) bounds
-# come from that precision: 18 digits total, so the integer part tops out at (18 - scale) digits.
+# Matches the columns tmp_raw_market_data is staged into below. The NUMERIC(20,6)/(18,6) bounds
+# come from that precision: the integer part tops out at (precision - scale) digits, 14 for the
+# prices and 12 for stock_splits.
 # Yahoo's own API occasionally returns a garbage adjclose (confirmed against yfinance/utils.py's
 # parse_quotes, which takes Yahoo's "adjclose" field verbatim -- no computation of its own to
 # blame) that blows past this; checked before COPY so one bad day drops just that row, not the
@@ -45,9 +46,9 @@ def save_raw_market_data(conn, source: str, asset_type: str, df: pd.DataFrame) -
         cur.execute("""
             CREATE TEMP TABLE tmp_raw_market_data (
                 ticker VARCHAR(20), price_date DATE, source VARCHAR(20),
-                asset_type VARCHAR(20), open NUMERIC(18,4), high NUMERIC(18,4),
-                low NUMERIC(18,4), close NUMERIC(18,4), adj_close NUMERIC(18,4),
-                volume BIGINT, dividends NUMERIC(18,4), stock_splits NUMERIC(18,6)
+                asset_type VARCHAR(20), open NUMERIC(20,6), high NUMERIC(20,6),
+                low NUMERIC(20,6), close NUMERIC(20,6), adj_close NUMERIC(20,6),
+                volume BIGINT, dividends NUMERIC(20,6), stock_splits NUMERIC(18,6)
             ) ON COMMIT DROP
             """)
 

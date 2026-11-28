@@ -20,9 +20,10 @@ described here updates this file in the same change.
   - Every other outcome is one plain sentence in a warning banner, never an error: nothing
     went wrong, the symbol just can't be added. "Delisted securities may not be available" is
     said wherever a symbol isn't found.
-  - **A minor-unit currency (`GBp`, `ZAc`, `ILA`) gets a warning before adding.** Nothing in
-    Stakehold rescales those prices yet, and saying "its values will read 100 times too high"
-    is better than a surprise on the holdings page.
+  - **A minor-unit currency (`GBp`, `ZAc`, `ILA`) is shown as the provider spells it, with no
+    warning.** It used to carry one ("its values will read 100 times too high"). data-store now
+    rescales those prices to the major unit as it ingests them (IQ-1), so the warning was
+    removed in the same change.
   - **No new CSS**: the pages reuse cards, `.field`, `.positions-table`, `.badge`,
     `.inline-form`, `.field-hint` and the banner macro.
   - A holding without prices reads "Prices loading" or "Prices couldn't be loaded" in the same

@@ -84,3 +84,74 @@ def test_holdings_weight_percent_accepts_a_fully_concentrated_position():
         with conn.cursor() as cur:
             cur.execute("DELETE FROM etf_holdings WHERE fund_key = 'weight_overflow_probe'")
         conn.commit()
+
+
+_PRICE_COLUMNS = [
+    ("market_returns", "split_adjusted_close"),
+    ("raw_market_data", "adj_close"),
+    ("raw_market_data", "close"),
+    ("raw_market_data", "dividends"),
+    ("raw_market_data", "high"),
+    ("raw_market_data", "low"),
+    ("raw_market_data", "open"),
+]
+
+
+def _price_column_types(conn):
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT table_name, column_name, numeric_precision, numeric_scale
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND (table_name, column_name) IN (
+                  ('market_returns', 'split_adjusted_close'), ('raw_market_data', 'open'),
+                  ('raw_market_data', 'high'), ('raw_market_data', 'low'),
+                  ('raw_market_data', 'close'), ('raw_market_data', 'adj_close'),
+                  ('raw_market_data', 'dividends'))
+            ORDER BY table_name, column_name
+            """)
+        return cur.fetchall()
+
+
+def test_db_init_stores_prices_to_six_decimals():
+    # Rescaling a pence price to pounds (IQ-1) needs two more decimals to stay exact.
+    assert cli.main(["db", "init"]) == 0
+
+    with _connect() as conn:
+        types = _price_column_types(conn)
+
+    assert types == [(table, column, 20, 6) for table, column in _PRICE_COLUMNS]
+
+
+def test_db_init_widens_price_columns_created_at_four_decimals_and_keeps_their_values():
+    cli.main(["db", "init"])
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            # A database created before IQ-1, with a row in it.
+            for table, column in _PRICE_COLUMNS:
+                cur.execute(f"ALTER TABLE {table} ALTER COLUMN {column} TYPE NUMERIC(18,4)")
+            cur.execute("""
+                INSERT INTO raw_market_data
+                    (ticker, price_date, source, asset_type, open, high, low, close, adj_close)
+                VALUES ('WIDEN_PROBE', DATE '2026-01-01', 'yfinance', 'equity',
+                        1234.5678, 1234.5678, 1234.5678, 1234.5678, 1234.5678)
+                """)
+        conn.commit()
+
+    try:
+        assert cli.main(["db", "init"]) == 0
+        assert cli.main(["db", "init"]) == 0  # and a rerun leaves the widened columns alone
+
+        with _connect() as conn:
+            types = _price_column_types(conn)
+            with conn.cursor() as cur:
+                cur.execute("SELECT close FROM raw_market_data WHERE ticker = 'WIDEN_PROBE'")
+                (close,) = cur.fetchone()
+    finally:
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM raw_market_data WHERE ticker = 'WIDEN_PROBE'")
+            conn.commit()
+
+    assert types == [(table, column, 20, 6) for table, column in _PRICE_COLUMNS]
+    assert str(close) == "1234.567800"

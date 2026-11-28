@@ -32,9 +32,6 @@
   <h1><span class="mono">{{ lookup.ticker }}</span></h1>
   <p>{{ lookup.display_name }}</p>
   <p>{{ lookup.exchange }} · <span class="mono">{{ lookup.currency }}</span></p>
-  {% if lookup.currency in ("GBp", "ZAc", "ILA") %}
-  {% call banner("warning") %}<strong>Quoted in minor units.</strong> Yahoo Finance prices <span class="mono">{{ lookup.ticker }}</span> in <span class="mono">{{ lookup.currency }}</span> (hundredths of the currency). Stakehold doesn't convert those yet, so its values will read 100 times too high.{% endcall %}
-  {% endif %}
   <form method="post" action="/tickers">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <input type="hidden" name="symbol" value="{{ lookup.ticker }}">
