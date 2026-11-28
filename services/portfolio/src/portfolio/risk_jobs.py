@@ -11,6 +11,7 @@ from decimal import Decimal
 from uuid import UUID
 
 from portfolio.benchmark.base import DEFAULT_BENCHMARK
+from portfolio.db.connection import user_connection
 from portfolio.jobs import _require_datastore_client
 from portfolio.look_through import flows as look_through_flows
 from portfolio.look_through.calculator import DIMENSION_LABELS, Concentration, Dimension
@@ -22,7 +23,6 @@ from portfolio.risk.types import RiskFigure
 from portfolio.risk.what_if import Funding, Row, WhatIfReport
 from portfolio.risk.windows import StandardWindow
 from portfolio.settings import Settings, load_settings
-from shared.db.connection import get_connection
 from shared.logging_config import configure_logging
 
 logger = logging.getLogger(__name__)
@@ -37,7 +37,7 @@ def get_ex_post_risk(
     configure_logging()
     settings = settings or load_settings()
     datastore_client = _require_datastore_client(settings, command="ex-post risk")
-    conn = get_connection(settings.database_url)
+    conn = user_connection(settings, user_id)
     try:
         logger.info("get-ex-post-risk: measuring ex-post risk for user %s.", user_id)
         result = risk_flows.compute_ex_post(

@@ -132,3 +132,23 @@ def test_api_host_and_port_load_from_env(monkeypatch):
 
     assert result.api_host == "127.0.0.1"
     assert result.api_port == 9001
+
+
+def test_cross_user_database_url_defaults_to_none(monkeypatch):
+    # Optional: only the cross-user jobs need it, and they check it themselves.
+    monkeypatch.setenv("PORTFOLIO_DATABASE_URL", "postgresql://user:pass@localhost/app")
+    monkeypatch.delenv("PORTFOLIO_CROSS_USER_DATABASE_URL", raising=False)
+
+    assert load_settings().cross_user_database_url is None
+
+
+def test_cross_user_database_url_loads_from_env(monkeypatch):
+    monkeypatch.setenv("PORTFOLIO_DATABASE_URL", "postgresql://user:pass@localhost/app")
+    monkeypatch.setenv(
+        "PORTFOLIO_CROSS_USER_DATABASE_URL", "postgresql://portfolio_cross_user:pass@localhost/app"
+    )
+
+    assert (
+        load_settings().cross_user_database_url
+        == "postgresql://portfolio_cross_user:pass@localhost/app"
+    )

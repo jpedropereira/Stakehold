@@ -11,7 +11,13 @@ from portfolio import cli
 
 
 def connect():
-    return psycopg.connect(os.environ["PORTFOLIO_DATABASE_URL"])
+    """The test server's superuser, on portfolio's schema. A superuser skips row-level security,
+    so seeding and checking rows here works for any user's data -- this connection stands in for
+    "what is in the database". The code under test still goes through RLS: jobs open their own
+    connections as the `portfolio` role (see test_row_level_security.py)."""
+    return psycopg.connect(
+        os.environ["APP_POSTGRES_ADMIN_DATABASE_URL"], options="-c search_path=portfolio"
+    )
 
 
 @pytest.fixture(autouse=True)

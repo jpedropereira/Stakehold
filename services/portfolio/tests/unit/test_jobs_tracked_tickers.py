@@ -196,6 +196,8 @@ def ready_sweep(monkeypatch):
 
     monkeypatch.setattr(jobs, "HttpDataStoreClient", FakeHttpDataStoreClient)
     monkeypatch.setattr(jobs, "get_connection", lambda url: _SimpleFakeConnection())
+    monkeypatch.setattr(jobs, "user_connection", lambda settings, user_id: _SimpleFakeConnection())
+    monkeypatch.setattr(jobs, "cross_user_connection", lambda settings: _SimpleFakeConnection())
     monkeypatch.setattr(jobs.pipeline, "list_accounts_holding", fake_holding)
     monkeypatch.setattr(jobs, "run_rebuild_returns", fake_rebuild)
     state["now"] = now
