@@ -31,6 +31,13 @@ make the evals test something other than what ships.
 
 - No vendor type crosses the `ChatModel` port. Only `models/adapters/` imports a provider SDK.
 - `agent` never imports `agent_evals` (the dependency runs the other way), nor `pydantic_ai`.
+- Only `observability/` imports the OpenTelemetry SDK. `runtime/` and `models/adapters/` use the
+  OpenTelemetry API, which is a no-op until a driver installs the SDK. Span attribute names come
+  from `observability/`'s constants, never from `opentelemetry-semantic-conventions`. See
+  [`docs/observability.md`](docs/observability.md).
+- Spans go over OTLP to a self-hosted Phoenix, with `gen_ai.*` attributes only. Don't add a
+  Phoenix or OpenInference package to `agent`. Production spans carry no content: content
+  attributes are written only when `record_content` is on, and only the eval driver sets it.
 - Persistence modules split into a domain model, a repository that only executes SQL, and a
   service that owns the transaction boundary.
 - `api/` is `async def` throughout. Don't call the sync `shared.db.pool` from a route.

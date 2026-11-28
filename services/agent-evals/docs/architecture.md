@@ -56,8 +56,9 @@ coverage. In practice:
   database, nothing to keep running. A service would mean a container, a schema and a deployment
   to maintain before there's a single production conversation to score. **Trigger to revisit:**
   online scoring of live conversations (tier 3 below), or wanting eval history over time as a
-  dashboard rather than as files. At that point a service, or a self-hosted tool such as Langfuse
-  or Phoenix, earns its keep.
+  dashboard rather than as files. At that point a service earns its keep. The self-hosted
+  tracing tool is already decided: `agent` runs a Phoenix for its traces, and eval runs send their
+  spans there too (see "Viewing runs in Phoenix").
 - **Not a directory inside `agent`.** A separate workspace package makes the dependency
   direction part of the dependency graph:
   - `agent_evals` imports `agent` (its runner, types, fakes);
@@ -148,8 +149,11 @@ wasn't kept.
 
 What we give up, said plainly, and what we build to make up for it:
 
-- **No local viewer.** Failed cases are read through the report's `include_reasons` output and
-  our own JSON reports. This is the weakest point of the choice.
+- **No local viewer.** This was the weakest point of the choice. It's now covered by `agent`'s
+  self-hosted Phoenix: eval runs send their spans there, with their synthetic content, so a
+  failed case can be read as a transcript (see "Viewing runs in Phoenix"). Without Phoenix
+  configured, failed cases are read through the report's `include_reasons` output and our own JSON
+  reports, as before.
 - **No report persistence.** We serialize it ourselves.
 - **No pass@k reducers.** We compute pass rates.
 - **No token or cost limits.** We keep our own run-wide cost ceiling, which neither harness
@@ -164,13 +168,32 @@ for its own loop (`agent/docs/architecture.md`, "Provider abstraction") into the
 
 **Triggers to revisit:**
 
-- reading failures through reports becomes the bottleneck, i.e. we want transcript browsing;
 - we need per-sample token or cost limits enforced by the harness;
-- tier 3 needs a log store.
+- comparing many runs over time outgrows two-report diffs, and Phoenix's span views aren't enough.
 
-The likely move then is Inspect with the custom-solver variant, or a tracing tool alongside
-pydantic-evals. The domain graders are plain functions with thin harness wrappers, so a switch
-rewrites wrappers, not graders.
+Transcript browsing and a log store for tier 3 were triggers too. Phoenix now covers both. The
+likely move, if a trigger fires, is Inspect with the custom-solver variant. The domain graders are
+plain functions with thin harness wrappers, so a switch rewrites wrappers, not graders.
+
+### Alternatives considered after the spike (2026-11-24)
+
+When observability was planned (PD-5), two more tools were weighed against this choice. The full
+findings are in `agent`'s [`observability.md`](../../agent/docs/observability.md), under
+"Rejected alternatives" and "Sources".
+
+- **DeepEval: rejected.** Its many agent metrics are almost all LLM-judged, so each is a paid call.
+  It also doesn't fit the workspace:
+  - it loads `.env` files at import, against the root conftest's guard and
+    [`synthetic-data-only.md`](../.claude/rules/synthetic-data-only.md);
+  - its `pytest11` plugin loads in every pytest run in the workspace;
+  - it adds about 80 packages to the shared lockfile;
+  - its telemetry is on by default;
+  - marking a run as the regression baseline needs its hosted service.
+- **Phoenix experiments as the harness: not adopted.** `run_experiment` can run our runner
+  unchanged with plain-function evaluators. But it needs the Phoenix server for every run,
+  including the free smoke test and CI. Baselines would live in Phoenix's database rather than be
+  reviewed in the repo, and `arize-phoenix-evals` is under the Elastic License. Phoenix is used for
+  viewing runs instead, which doesn't change the harness.
 
 ## What the harness provides, and what we build
 
@@ -342,6 +365,26 @@ Rules that make a judge trustworthy:
   An errored case (a provider outage, a harness bug) is reported separately from a failed case
   (the agent did badly), and never counted as either pass or fail.
 
+## Viewing runs in Phoenix
+
+`agent`'s runner emits OpenTelemetry spans whichever driver runs it (see `agent`'s
+[`observability.md`](../../agent/docs/observability.md)). The harness's CLI installs the SDK the
+same way the API does, with two differences:
+
+- **Content is recorded.** The harness sets `record_content`, which production never does, so a
+  case's spans hold the user message, the model's answer and the tool results. The worlds are
+  synthetic by rule, so that's safe, and it's what makes a failed case readable.
+- **The spans go to the `agent-evals` project**, set through
+  `OTEL_RESOURCE_ATTRIBUTES=openinference.project.name=agent-evals`, apart from production runs.
+
+**Export is optional.** The harness exports only when `OTEL_EXPORTER_OTLP_ENDPOINT` is set. The
+free fake-model smoke test, the unit run and CI set nothing and need no Phoenix. A paid run on a
+developer's machine sets the endpoint and the Phoenix API key to browse its transcripts. Each JSON
+report records the trace ids of its cases, so a failed case in the report can be found in Phoenix.
+
+Phoenix is a viewer here, not the record: pass rates, baselines and costs still come from our
+reports and the catalogue's pricing.
+
 ## Results and baselines
 
 - **Persisted by us.** pydantic-evals has no report save/load. Each invocation writes a **JSON
@@ -372,8 +415,8 @@ Rules that make a judge trustworthy:
 
 ## Tier 3, later: online evals
 
-Once Pedro has real users, the run traces `agent` already records (see its "Observability"
-section) become the input:
+Once Pedro has real users, the run traces `agent` already sends to Phoenix (see its
+"Observability" section) become the input:
 
 - sample runs and score them with the same plain-function graders (grounding works on any trace
   with its tool results);
@@ -383,21 +426,22 @@ section) become the input:
 **Promotion requires the user's consent and anonymization**: the real portfolio is replaced by a
 synthetic world with the same shape. That's a policy to define then.
 
+Production spans carry no content, so a grader that needs the answer or the tool results reads
+them from `agent`'s `messages`, and the run's structure from Phoenix.
+
 pydantic-evals' span-based evaluators could score OpenTelemetry spans directly, but they need the
 Logfire SDK configured. Whether a plain OpenTelemetry setup feeds them isn't documented, and
-wasn't tested. This tier is also what would justify a dedicated eval service or a self-hosted
-tracing tool.
+wasn't tested. This tier is also what would justify a dedicated eval service.
 
 ## Open questions
 
 - **Version-pin cadence.** pydantic-evals and `pydantic-ai-slim` release in lockstep, with an
   exact pin between them. Decide how often to upgrade, and treat an upgrade as an eval-affecting
   change: re-run the smoke suite against the baseline.
-- **A viewer.** If reading failures through reports becomes the bottleneck, decide between a
-  self-hosted tracing tool and moving to Inspect (see "Harness choice", triggers to revisit).
 - **The world's fixture shape.** It should reuse `portfolio`'s own response shapes so the fake
   can't drift from the real API.
 - **Grounding tolerance and its arithmetic scope.** Which derived figures count as "traceable"
   (sums and shares, yes; anything model-estimated, no). Fix it with the first real cases.
 - **Who labels the judge-calibration set**, and how large it needs to be before rubric scores
-  can gate a change.
+  can gate a change. Phoenix's annotation UI, on the `agent-evals` transcripts, is a candidate
+  place to do the labelling.
