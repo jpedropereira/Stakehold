@@ -54,11 +54,11 @@ Tests are split by marker. `pytest` defaults to unit tests only — the root `py
 nothing running. Don't treat a green plain run as "the suite passed".
 
 ```bash
-uv run pytest services                                                        # unit tests, all services
+uv run pytest services scripts                                                # unit tests, all services and repo scripts
 uv run pytest services -m integration                                         # integration tests (needs Postgres, below)
 uv run pytest services/portfolio                                              # one service
 uv run pytest services/portfolio/tests/unit/test_cli.py::test_db_init_prints_the_table_count_to_stdout  # single test
-uv run pytest services --testmon --tb=short -x                                # fast, testmon-scoped (what pre-commit runs on commit)
+uv run pytest services scripts --testmon --tb=short -x                        # fast, testmon-scoped (what pre-commit runs on commit)
 ```
 
 Integration tests hit a real Postgres (they cover `COPY` upserts, `ON CONFLICT` behaviour and

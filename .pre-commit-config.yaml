@@ -15,9 +15,9 @@
 #   full suite, as a slower but thorough gate before code leaves the machine).
 #   `pre-commit`/`pre-push` are the current stage names -- avoid the old
 #   `commit`/`push` aliases, which are deprecated.
-# - Test path is `services`, not a single `tests/` dir: this is a uv workspace with
-#   four services (data-store, portfolio, web, auth) plus the shared library package,
-#   each with its own tests/. Pytest recurses into all of them from that one root.
+# - Test paths are `services` and `scripts`, not a single `tests/` dir: this is a uv
+#   workspace whose services and shared library each have their own tests/, and the
+#   repo-tooling scripts under scripts/ have theirs. Pytest recurses into both roots.
 
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -74,13 +74,13 @@ repos:
     hooks:
       - id: pytest-fast
         name: Run tests for changed files
-        entry: bash -c 'uv run pytest services --testmon --tb=short -x'
+        entry: bash -c 'uv run pytest services scripts --testmon --tb=short -x'
         language: system
         pass_filenames: false
         stages: [pre-commit]
       - id: pytest-all
         name: Run all tests on push
-        entry: bash -c 'uv run pytest services'
+        entry: bash -c 'uv run pytest services scripts'
         language: system
         pass_filenames: false
         stages: [pre-push]

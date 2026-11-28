@@ -1,0 +1,61 @@
+# Keeps the Stakehold Roadmap board's Blocked/Ready statuses in line with each issue's
+# Blocked-by links (RT-1, rules in .claude/rules/tasks.md). The logic and its reasoning live in
+# scripts/sync_board_status.py; this file only decides when it runs and with what token.
+#
+# Triggers:
+# - issues closed/reopened: the moments a dependent's status usually changes.
+# - a daily schedule: GitHub Actions has no trigger for adding or removing a Blocked-by link,
+#   so a link edited after the fact is picked up by the next daily run at the latest. It also
+#   repairs any drift from a run that failed.
+# - workflow_dispatch: run it by hand after editing links, or to check the token works.
+#
+# Token: the board is owned by a user account, and neither GITHUB_TOKEN, fine-grained PATs
+# nor GitHub Apps can write to a user-owned Projects board. So this needs a classic PAT with
+# the `project` scope (add `repo` only if the board ever holds private-repo issues), stored as
+# the PROJECT_TOKEN repo secret.
+
+name: Board status
+
+on:
+  issues:
+    types: [closed, reopened]
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Print what would change without writing"
+        type: boolean
+        default: false
+
+# Each run recomputes the whole board, so runs never need to overlap: queue them rather than
+# letting two write at once. A queued run still sees the latest state when it starts.
+concurrency:
+  group: board-status
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # Python comes from the committed .python-version, as in ci.yml. The script uses only
+      # the standard library, so the workspace isn't installed (`--no-project`).
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.0.1
+
+      - name: Sync Blocked/Ready statuses
+        env:
+          GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run && '--dry-run' || '' }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::The PROJECT_TOKEN secret is not set. It needs a classic PAT with the 'project' scope."
+            exit 1
+          fi
+          uv run --no-project python scripts/sync_board_status.py \
+            --owner "${{ github.repository_owner }}" --project 1 $DRY_RUN
