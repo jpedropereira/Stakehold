@@ -49,7 +49,10 @@ built yet. When it is, don't run it yourself: say which suite and model, and the
 
 ## Results
 
-Reports (JSON plus a markdown summary) go to a gitignored directory. Baselines are committed, one
+Reports (JSON plus a markdown summary) go to a gitignored directory. When
+`OTEL_EXPORTER_OTLP_ENDPOINT` is set, runs also send their spans, with their synthetic content, to
+`agent`'s self-hosted Phoenix under the `agent-evals` project, for reading transcripts. That's
+optional: the smoke test and CI never need Phoenix, and Phoenix is never the record of a result. Baselines are committed, one
 per suite. A change that intends to move a number updates the baseline in the same change.
 
 ## Rules

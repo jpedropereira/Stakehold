@@ -19,6 +19,10 @@ Every row has these, NOT NULL, with 0 when the provider lacks the concept:
 - `cache_read_tokens`;
 - `cache_write_tokens`.
 
+A fifth, `cache_write_1h_tokens`, is the part of `cache_write_tokens` written with the 1-hour TTL,
+since it's priced differently from a 5-minute write. It's a subset, not a fifth kind, so SUMs over
+the four stay right.
+
 They are `agent`'s own provider-neutral fields, filled by the adapter from the `usage` event on the
 port. Don't add a vendor-shaped JSON blob in their place, and don't leak a vendor usage type past
 the adapter.
@@ -35,10 +39,22 @@ Each row has a status (`ok`, `error`, `aborted`). A call that errors after strea
 disconnect and a tripped budget can all bill tokens, so record whatever usage the provider
 reported, whatever the outcome.
 
+## Written by the service, never from spans or Phoenix
+
+`observability/`'s service writes each row as the attempt finishes, through the `UsageRecorder`
+the runner is given. The OpenTelemetry batch processor drops spans when its queue is full or
+Phoenix is down, so spend never goes through it. Don't derive consumption from spans or from
+Phoenix's cost figures (they're floats, priced from Phoenix's own table), and don't wait for the
+run to end to write it: a crash would lose calls already paid for.
+
 ## Totals are derived
 
 A run's tokens and cost are the SUM of its calls. A per-user daily budget is a SUM over a day's
-rows. Don't store the totals a second time.
+rows, where a day is a **UTC** day, by the call's `finished_at`. Don't store the totals a second
+time.
+
+The full design, including the 1-hour cache-write column and the fields the schema must hold, is in
+[`../../docs/observability.md`](../../docs/observability.md).
 
 ## Make it visible
 

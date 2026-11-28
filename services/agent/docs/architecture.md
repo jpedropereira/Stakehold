@@ -61,9 +61,10 @@ flowchart LR
         AU["auth-api<br/><i>sessions, delegated tokens, JWKS</i>"]
         AG["agent-api<br/><i>runner, personas, tools,<br/>provider adapters</i>"]
         PF["portfolio-api<br/><i>positions, returns, risk, labs</i>"]
+        PX["phoenix<br/><i>trace store + UI<br/>(UI on host 127.0.0.1 only)</i>"]
     end
 
-    APPDB[("app-postgres<br/><i>role/schema agent:<br/>conversations, runs, consent</i>")]
+    APPDB[("app-postgres<br/><i>role/schema agent:<br/>conversations, runs, model calls, consent<br/>role/schema phoenix: spans</i>")]
 
     subgraph llm["model providers"]
         AN["Anthropic API"]
@@ -78,6 +79,8 @@ flowchart LR
     AG -->|"fetch JWKS (cached)"| AU
     PF -->|"fetch JWKS (cached)"| AU
     AG --> APPDB
+    AG -->|"OTLP spans<br/>(no content)"| PX
+    PX --> APPDB
     AG -->|HTTPS| AN
     AG -->|HTTPS| OA
     AG -->|"OpenAI-compatible HTTP<br/>(base URL)"| LO
@@ -280,8 +283,13 @@ would be testing something other than what ships.
   boundary. That split is the reasoning `auth/docs/architecture.md` "Transaction boundaries"
   records after a real bug: a unit of work spanning two repositories can't be composed if each
   repository commits itself.
-- **`settings.py`, `cli.py`:** `agent serve` and `agent db init`, with
-  `shared.logging_config` for output.
+- **`observability/`** also owns the OpenTelemetry SDK setup (OTLP export to a self-hosted
+  Phoenix), the `gen_ai.*` attribute constants and the `UsageRecorder` Protocol the runner reports
+  each model call to. `runtime/` and `models/adapters/` import only the OpenTelemetry *API*, which is a no-op
+  until a driver installs the SDK, so the runner still doesn't know Postgres exists. See
+  [`observability.md`](observability.md).
+- **`settings.py`, `cli.py`:** `agent serve`, `agent db init` and `agent usage` (the consumption
+  report), with `shared.logging_config` for output.
 
 ## Tools (v1)
 
@@ -510,14 +518,19 @@ reach no further.
   - `AGENT_INTERNAL_SECRET`, which proves `web` is the caller.
   - `AGENT_DATABASE_URL`, whose role reaches only schema `agent`.
   - The delegated token, for one request only, in `ToolContext`.
+  - The Phoenix API key, in `OTEL_EXPORTER_OTLP_HEADERS`, used only by the span exporter. It can
+    read Phoenix's traces as well as send them, so a takeover could read past traces. Production
+    traces carry no content (see "Observability"), so that exposes run structure, token counts and
+    tool names, not portfolio figures.
 
   None of these ever enter model context, logs or traces.
 - **Secrets not held.** `portfolio`'s internal secret, `auth`'s signing key, and any other
   service's database credentials. Taking over `agent` gives no way to read data as anyone other
   than the user whose token it holds, for the minutes that token lives.
 - **Network.**
-  - On `stakehold-net`: `portfolio-api` and `auth`'s JWKS endpoint. Never `data-store` and never
-    `web`.
+  - On `stakehold-net`: `portfolio-api`, `auth`'s JWKS endpoint, and `phoenix`'s OTLP endpoint
+    (spans only, sent by the SDK's exporter, not reachable from a tool). Never `data-store` and
+    never `web`.
   - Out to the internet: only the configured model provider's API.
 - **Known limitation.** Docker networking alone can't limit outbound traffic to a list of hosts.
   Today the network limit holds in code: there is no HTTP client a tool or the model can aim. A
@@ -776,20 +789,24 @@ fences `agent`'s tables from `portfolio`'s and vice versa.
 - **Run:** one per user turn. It records:
   - catalogue model id and adapter;
   - prompt hash;
-  - status and failure reason;
-  - latency.
-  Its spans (each model call and tool call, with timings) are what "Observability" describes.
+  - status (`running` until it ends) and its typed outcome;
+  - its OpenTelemetry trace id;
+  - start and finish times.
+  It's inserted when the user's message is saved, so its model calls have a run to belong to.
+  Its spans (each model call and tool call, with timings) live in Phoenix, not in `agent`'s
+  schema; the run's trace id links the two (see "Observability").
   The run holds no token or cost totals: those are derived from its model calls.
-- **Model call:** one per call to a `ChatModel`, retries included, child of a run. It records the
+- **Model call:** one per call to a `ChatModel`, retries included, child of a run, written as
+  each attempt finishes rather than at the end of the run. It records the
   four token counts (`input`, `output` including thinking, `cache_read`, `cache_write`, each 0 when
-  the provider lacks the concept), the cost snapshotted from the catalogue's pricing when the call
+  the provider lacks the concept), the 1-hour-TTL part of `cache_write`, the cost snapshotted from the catalogue's pricing when the call
   finished (plus the pricing version used), a status (`ok`, `error`, `aborted`) and its latency.
   Failed and aborted calls are recorded with whatever usage the provider reported, since they can
   still bill. *Why per call, not per run:* a per-run total can't show which step spent the tokens
   or whether the prompt cache hit. *Why snapshot the cost:* a later price change must not rewrite
   past spend. A run's totals and a per-user daily budget are SUMs over these rows. See
-  `.claude/rules/consumption.md` in this service. Cache-write TTL tiers (5 minute and 1 hour) are
-  priced through the catalogue; whether they need their own column is left to the schema proposal.
+  `.claude/rules/consumption.md` in this service. The fields the schema must hold, and why, are in
+  [`observability.md`](observability.md) ("Fields PD-6's schema must hold").
 - **Consent:** per user, the policy, when it was set, and the text version shown.
 
 **Async database access.** `shared` provides only a sync pool today (`shared.db.pool`). A sync
@@ -800,26 +817,31 @@ thread, works but spreads `to_thread` across every call site.
 
 ## Observability
 
-Per [`.claude/rules/logging.md`](../../../.claude/rules/logging.md):
+The full design is in [`observability.md`](observability.md). In short, a run produces three
+records with different jobs:
 
-- every run logs its start (conversation, persona, model, page route);
-- one checkpoint line per model call and per tool call (name, status, latency, tokens);
-- a completion summary (steps, tokens, cost, outcome).
+- **Container logs**, per [`.claude/rules/logging.md`](../../../.claude/rules/logging.md): a
+  `run_started` line, one checkpoint per model call attempt and per tool call, and a
+  `run_finished` summary whose outcome says whether the run answered, tripped a budget, was
+  refused for consent or failed. Text with `key=value` pairs, through `shared.logging_config`.
+- **Traces**, through the **OpenTelemetry SDK**: one trace per run (`invoke_agent`, `chat`,
+  `execute_tool` spans per the GenAI conventions), exported in batches over OTLP to a
+  **self-hosted Phoenix**, which stores them in `app-postgres` under its own schema and gives us a
+  UI to read them. Eval runs send their spans to the same Phoenix under a separate project, which
+  gives the eval harness the transcript viewer it otherwise lacks. We send `gen_ai.*` attributes
+  only. A spike showed Phoenix reads them fully, so `agent` doesn't depend on any Phoenix package
+  and can point the exporter at another OTLP backend. Traces are also raw material for future
+  eval cases (see the eval doc's tier 3).
+- **Consumption**, `model_calls`: one row per model call attempt, written by `observability/`'s
+  service as the attempt finishes. Never from spans or Phoenix, because the batch processor drops
+  spans when its queue is full or Phoenix is down, and spend must not be lossy.
 
-A run that ended on a budget, a consent refusal or a provider error says so as clearly as one
-that answered.
-
-**Traces** are the persisted form of the same thing: one trace per run, with spans named after
-OpenTelemetry's GenAI semantic conventions (`gen_ai.*` attributes). Those conventions are still
-marked experimental upstream, so the names are a mapping we own, not a dependency. That keeps the
-door open to exporting to an OTel backend, or a tracing tool such as Langfuse or Phoenix, without
-re-instrumenting. Traces are also the raw material for future eval cases (see the eval doc's
-tier 3).
-
-**Never in logs or traces:** the delegated token, the session cookie, provider API keys. Full
-prompt and tool-result content goes in the database trace (it's already the conversation's
-content) but not in container logs. That keeps the container logs free of portfolio figures, the
-same reasoning as `auth`'s `log_parameter_max_length=0` keeping emails out of its logs.
+**Never in logs, and never in production traces:** the delegated token, the session cookie,
+provider API keys, and any content (user messages, prompts, model output, tool arguments and
+results). Content is stored once, in `messages`; a span refers to it by id. That keeps portfolio
+figures out of container logs and out of Phoenix, the same reasoning as `auth`'s
+`log_parameter_max_length=0` keeping emails out of its logs. Eval runs, whose worlds are
+synthetic, do record content in their spans, through a flag only the eval driver sets.
 
 ## Failure isolation and limits
 
@@ -868,6 +890,7 @@ that can achieve:
 | A tampered page-context mix | schema-validated; it drives only a backtest over market data and holds no user data |
 | Running up cost through tool loops | at most 8 model calls and 12 tool calls per turn; repeated calls reuse the turn's results; per-tool timeouts |
 | A full takeover of the `agent` process | holds no credential beyond its own: no `portfolio` secret, no signing key, no other service's database; one user's read token, for minutes |
+| Reading traces through Phoenix | production spans carry no content; Phoenix's UI and API sit behind its own auth (401 without a key, verified), are published on `127.0.0.1` only, and make no outbound calls |
 
 Provider API keys come from the environment only, per
 [`.claude/rules/security.md`](../../../.claude/rules/security.md). The tools in "Tools (v1)" are
@@ -883,6 +906,12 @@ Intended shape, mirroring the other services:
 - **`agent-db-init`** runs `agent db init` once and exits. `api` waits on it
   (`service_completed_successfully`), for the reason `auth`'s doc gives: idempotent but not
   concurrency-safe schema application.
+- **`phoenix`**, the trace store and UI, from the `arizephoenix/phoenix` image pinned to an exact
+  version, in the same compose file and on `stakehold-net`. It stores to `app-postgres` under its
+  own role and schema `phoenix`, created by the same admin-role step as `agent`'s. Its UI port is
+  published on `127.0.0.1` only. `agent-api` doesn't wait on it: a missing Phoenix loses spans,
+  never a run. Its hardened settings are in [`observability.md`](observability.md) ("Phoenix
+  deployment and configuration").
 - **Dockerfile** built from the repo root with the multi-`COPY` of every workspace member, because
   `uv sync --frozen` resolves the whole workspace lock. Adding `agent` and `agent-evals` as
   members already required adding their `COPY` lines to every other image's Dockerfile. The eval
@@ -890,10 +919,18 @@ Intended shape, mirroring the other services:
   extra rather than a root dependency. That's verified, and lands with the first eval code; see
   the eval doc's "Packaging".
 - **Environment.**
-  - Credentials: provider API keys and `AGENT_INTERNAL_SECRET` (shared with `web`).
+  - Credentials: provider API keys, `AGENT_INTERNAL_SECRET` (shared with `web`), and the Phoenix
+    API key in `OTEL_EXPORTER_OTLP_HEADERS`. Phoenix's own: `PHOENIX_SECRET`,
+    `PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD` and its database URL.
   - Behaviour-changing: `AGENT_DATABASE_URL` (named per service, for the root `conftest.py`'s
     test-database guard), `AGENT_AUTH_JWKS_URL`, `AGENT_PORTFOLIO_API_URL`,
     `AGENT_MODEL_CATALOGUE` (path), and a local-runtime base URL.
+  - Tracing, the standard OpenTelemetry variables rather than our own:
+    `OTEL_EXPORTER_OTLP_ENDPOINT` (Phoenix), `OTEL_SERVICE_NAME=agent`,
+    `OTEL_RESOURCE_ATTRIBUTES=openinference.project.name=agent` (the Phoenix project),
+    `OTEL_SDK_DISABLED` to turn tracing off, and `OTEL_BSP_*` to tune the batch processor. The
+    exporter is wired in code, not chosen by `OTEL_TRACES_EXPORTER` (see
+    [`observability.md`](observability.md)).
   - A local runtime on the host is reached from the container via `host.docker.internal`, which
     needs an `extra_hosts` entry on Linux.
 ## Testing
@@ -925,7 +962,9 @@ Intended shape, mirroring the other services:
 - **History beyond the context window.** Summarization vs hard truncation. Revisit when real
   conversations hit the budget.
 - **Retention and deletion.** How long conversations are kept, and what deletes them when a user
-  is removed. No user-deletion flow exists anywhere yet. Decide before wider access.
+  is removed. No user-deletion flow exists anywhere yet. Decide before wider access. Span
+  retention in Phoenix is a separate, shorter setting; see
+  [`observability.md`](observability.md) ("Open questions").
 - **Does `web` move to delegated tokens too?** It would let `portfolio` drop the
   internal-secret-plus-`user_id` path entirely, closing `auth`'s "Open questions" item for all
   callers. That's not needed for Pedro. Revisit once `portfolio` supports both.
