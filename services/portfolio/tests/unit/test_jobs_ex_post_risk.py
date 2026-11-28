@@ -199,7 +199,7 @@ _RISK = ExPostRisk(
 def fake_conn(monkeypatch):
     monkeypatch.setattr(risk_jobs, "load_settings", _settings)
     conn = _FakeConnection()
-    monkeypatch.setattr(risk_jobs, "get_connection", lambda url: conn)
+    monkeypatch.setattr(risk_jobs, "user_connection", lambda settings, user_id: conn)
     return conn
 
 

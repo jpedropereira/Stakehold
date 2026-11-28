@@ -35,6 +35,7 @@ services:
       # The in-network addresses the anchor and `api` above override .env's host-oriented ones
       # with.
       PORTFOLIO_DATABASE_URL: postgresql://${APP_POSTGRES_USER}:${APP_POSTGRES_PASSWORD}@postgres:5432/${APP_POSTGRES_DB}
+      PORTFOLIO_CROSS_USER_DATABASE_URL: postgresql://${APP_POSTGRES_CROSS_USER_USER}:${APP_POSTGRES_CROSS_USER_PASSWORD}@postgres:5432/${APP_POSTGRES_DB}
       APP_POSTGRES_ADMIN_DATABASE_URL: postgresql://${APP_POSTGRES_ADMIN_USER}:${APP_POSTGRES_ADMIN_PASSWORD}@postgres:5432/${APP_POSTGRES_DB}
       DATASTORE_API_URL: http://data-store-api:8000
       # Six hours: at most that long after a daily close lands before it shows. A run when
@@ -75,6 +76,7 @@ services:
       - .env
     environment:
       PORTFOLIO_DATABASE_URL: postgresql://${APP_POSTGRES_USER}:${APP_POSTGRES_PASSWORD}@postgres:5432/${APP_POSTGRES_DB}
+      PORTFOLIO_CROSS_USER_DATABASE_URL: postgresql://${APP_POSTGRES_CROSS_USER_USER}:${APP_POSTGRES_CROSS_USER_PASSWORD}@postgres:5432/${APP_POSTGRES_DB}
       APP_POSTGRES_ADMIN_DATABASE_URL: postgresql://${APP_POSTGRES_ADMIN_USER}:${APP_POSTGRES_ADMIN_PASSWORD}@postgres:5432/${APP_POSTGRES_DB}
       DATASTORE_API_URL: http://data-store-api:8000
     command:

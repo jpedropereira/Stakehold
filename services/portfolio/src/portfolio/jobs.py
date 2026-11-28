@@ -22,6 +22,8 @@ from portfolio import pipeline
 from portfolio.accounts.repository import Account
 from portfolio.benchmark.base import DEFAULT_BENCHMARK
 from portfolio.datastore_client.http_client import HttpDataStoreClient
+from portfolio.db.connection import cross_user_connection, user_connection
+from portfolio.db.roles import ensure_cross_user_role, grant_cross_user_reads
 from portfolio.holdings import flows as holdings_flows
 from portfolio.labs import flows as labs_flows
 from portfolio.labs.calculator import BacktestResult, Period
@@ -102,10 +104,23 @@ def run_db_init() -> dict[str, int | str]:
     conn_info = conninfo_to_dict(settings.database_url)
     role = conn_info["user"]
 
+    cross_user_info = (
+        conninfo_to_dict(settings.cross_user_database_url)
+        if settings.cross_user_database_url
+        else None
+    )
+
     admin_conn = get_connection(settings.admin_database_url)
     try:
         logger.info("db init: ensuring role and schema %r exist.", role)
         _ensure_role_and_schema(admin_conn, role, conn_info["password"])
+        if cross_user_info is not None:
+            logger.info(
+                "db init: ensuring read-only cross-user role %r exists.", cross_user_info["user"]
+            )
+            ensure_cross_user_role(
+                admin_conn, cross_user_info["user"], cross_user_info["password"], role
+            )
     finally:
         admin_conn.close()
 
@@ -116,8 +131,19 @@ def run_db_init() -> dict[str, int | str]:
         )
         before = _existing_tables(conn, role)
         apply_schema(conn, SCHEMA_PATH)
+        if cross_user_info is not None:
+            grant_cross_user_reads(conn, cross_user_info["user"], role)
     finally:
         conn.close()
+
+    if cross_user_info is None:
+        # Not a failure: every per-user command still works. The cross-user ones (rebuild-returns
+        # --all, refresh-ready-tickers, ticker-mapping set/delete, the admin unmapped list)
+        # refuse to run until it's set, naming this variable.
+        logger.warning(
+            "db init: PORTFOLIO_CROSS_USER_DATABASE_URL is not set, so no cross-user role was "
+            "created; commands that read across users will refuse to run."
+        )
 
     created = len(set(_TARGET_TABLES) - before)
     logger.info("db init: schema applied, %d table(s) created.", created)
@@ -141,7 +167,7 @@ def run_add_account(
     """Create one account. See pipeline.add_account for what `created` means."""
     configure_logging()
     settings = settings or load_settings()
-    conn = get_connection(settings.database_url)
+    conn = user_connection(settings, user_id)
     try:
         logger.info(
             "account add: creating account %r (broker=%r) for user %s.",
@@ -166,7 +192,7 @@ def run_list_accounts(*, user_id: UUID, settings: Settings | None = None) -> dic
     empty result is still reported as `nothing_to_do`, not `ok`, per the logging rule."""
     configure_logging()
     settings = settings or load_settings()
-    conn = get_connection(settings.database_url)
+    conn = user_connection(settings, user_id)
     try:
         logger.info("account list: listing accounts for user %s.", user_id)
         accounts = pipeline.list_accounts(conn, user_id=user_id)
@@ -377,7 +403,7 @@ def run_add_transaction(
         if instrument_identifier_kind == "TICKER"
         else None
     )
-    conn = get_connection(settings.database_url)
+    conn = user_connection(settings, user_id)
     try:
         logger.info(
             "add-transaction: recording %r for account %r (user %s).",
@@ -445,7 +471,7 @@ def run_update_transaction(
         if instrument_identifier_kind == "TICKER"
         else None
     )
-    conn = get_connection(settings.database_url)
+    conn = user_connection(settings, user_id)
     try:
         logger.info(
             "edit-transaction: editing %r in account %r (user %s).",
@@ -507,7 +533,7 @@ def run_delete_transaction(
     raising would tell the caller a done delete had failed."""
     configure_logging()
     settings = settings or load_settings()
-    conn = get_connection(settings.database_url)
+    conn = user_connection(settings, user_id)
     try:
         logger.info(
             "delete-transaction: deleting %r from account %r (user %s).",
@@ -544,7 +570,7 @@ def run_delete_account(
     returns are deleted with it, and no other account's rows depend on them."""
     configure_logging()
     settings = settings or load_settings()
-    conn = get_connection(settings.database_url)
+    conn = user_connection(settings, user_id)
     try:
         logger.info(
             "delete-account: deleting account %r and everything recorded in it (user %s).",
@@ -579,7 +605,7 @@ def run_import_transactions(
     `saved` means."""
     configure_logging()
     settings = settings or load_settings()
-    conn = get_connection(settings.database_url)
+    conn = user_connection(settings, user_id)
     try:
         logger.info(
             "import-transactions: importing %s into account %r (user %s).",
@@ -616,7 +642,7 @@ def run_list_unmapped_instruments(
     empty result is still reported as `nothing_to_do`, not `ok`, per the logging rule."""
     configure_logging()
     settings = settings or load_settings()
-    conn = get_connection(settings.database_url)
+    conn = user_connection(settings, user_id)
     try:
         logger.info("list-unmapped-instruments: checking instruments for user %s.", user_id)
         mappings = pipeline.load_ticker_mappings(conn)
@@ -656,7 +682,7 @@ def run_import_cashflow(
         base_url=settings.datastore_api_url, internal_api_secret=settings.internal_api_secret
     )
 
-    conn = get_connection(settings.database_url)
+    conn = user_connection(settings, user_id)
     try:
         logger.info(
             "import-cashflow: importing %s into account %r (user %s).",
@@ -700,7 +726,7 @@ def run_rebuild_positions(
     configure_logging()
     settings = settings or load_settings()
     scope = f"account {account_label!r}" if account_label else "every account"
-    conn = get_connection(settings.database_url)
+    conn = user_connection(settings, user_id)
     try:
         logger.info("rebuild-positions: rebuilding positions for user %s (%s).", user_id, scope)
         mappings = pipeline.load_ticker_mappings(conn)
@@ -784,7 +810,7 @@ def run_rebuild_returns(
     )
 
     scope = f"account {account_label!r}" if account_label else "every account"
-    conn = get_connection(settings.database_url)
+    conn = user_connection(settings, user_id)
     try:
         logger.info("rebuild-returns: rebuilding returns for user %s (%s).", user_id, scope)
         mappings = pipeline.load_ticker_mappings(conn)
@@ -903,6 +929,9 @@ def run_set_ticker_mapping(
     configure_logging()
     settings = settings or load_settings()
     datastore_client = _require_datastore_client(settings, command="ticker-mapping set")
+    # Opened before the write, not after: a missing cross-user role then refuses the command up
+    # front, rather than saving the mapping and failing before any account is rebuilt.
+    cross_conn = cross_user_connection(settings)
     conn = get_connection(settings.database_url)
     try:
         logger.info(
@@ -923,10 +952,14 @@ def run_set_ticker_mapping(
             datastore_client=datastore_client,
         )
         accounts = pipeline.list_accounts_using_instrument(
-            conn, identifier_kind=row.identifier_kind, identifier=row.identifier, broker=row.broker
+            cross_conn,
+            identifier_kind=row.identifier_kind,
+            identifier=row.identifier,
+            broker=row.broker,
         )
     finally:
         conn.close()
+        cross_conn.close()
 
     logger.info("ticker-mapping set: saved %s.", _describe_mapping(row))
     rebuilds = _rebuild_accounts_for_mapping(
@@ -948,6 +981,8 @@ def run_delete_ticker_mapping(
     pipeline.delete_ticker_mapping for what happens to positions the mapping produced."""
     configure_logging()
     settings = settings or load_settings()
+    # Opened before the delete for the same reason as in run_set_ticker_mapping.
+    cross_conn = cross_user_connection(settings)
     conn = get_connection(settings.database_url)
     try:
         logger.info(
@@ -955,10 +990,14 @@ def run_delete_ticker_mapping(
         )
         row = pipeline.delete_ticker_mapping(conn, mapping_id=mapping_id)
         accounts = pipeline.list_accounts_using_instrument(
-            conn, identifier_kind=row.identifier_kind, identifier=row.identifier, broker=row.broker
+            cross_conn,
+            identifier_kind=row.identifier_kind,
+            identifier=row.identifier,
+            broker=row.broker,
         )
     finally:
         conn.close()
+        cross_conn.close()
 
     logger.info("ticker-mapping delete: deleted %s.", _describe_mapping(row))
     rebuilds = _rebuild_accounts_for_mapping(
@@ -990,7 +1029,7 @@ def run_list_all_unmapped_instruments(*, settings: Settings | None = None) -> di
     """run_list_unmapped_instruments across every user -- what an admin has left to map."""
     configure_logging()
     settings = settings or load_settings()
-    conn = get_connection(settings.database_url)
+    conn = cross_user_connection(settings)
     try:
         logger.info("list-unmapped-instruments: checking instruments across every user.")
         mappings = pipeline.load_ticker_mappings(conn)
@@ -1024,7 +1063,7 @@ def run_rebuild_returns_all(*, settings: Settings | None = None) -> dict[str, in
     # Checked up front, not per user: without data-store every user's rebuild would fail the
     # same way, and one SettingsError says so more plainly than N tracebacks.
     _require_datastore_client(settings, command="rebuild-returns --all")
-    conn = get_connection(settings.database_url)
+    conn = cross_user_connection(settings)
     try:
         user_ids = pipeline.list_user_ids(conn)
     finally:
@@ -1106,7 +1145,7 @@ def run_refresh_ready_tickers(
         )
     logger.info("refresh-ready-tickers: newly ready: %s.", ", ".join(tickers))
 
-    conn = get_connection(settings.database_url)
+    conn = cross_user_connection(settings)
     try:
         accounts = pipeline.list_accounts_holding(conn, tickers=tickers)
     finally:
@@ -1235,7 +1274,7 @@ def get_transactions(
     to report. Raises AccountNotFound if account_label doesn't resolve for this user."""
     configure_logging()
     settings = settings or load_settings()
-    conn = get_connection(settings.database_url)
+    conn = user_connection(settings, user_id)
     try:
         logger.info(
             "get-transactions: listing transactions for account %r (user %s).",
@@ -1259,7 +1298,7 @@ def get_positions(
     as_of_date. Raises AccountNotFound if account_label doesn't resolve for this user."""
     configure_logging()
     settings = settings or load_settings()
-    conn = get_connection(settings.database_url)
+    conn = user_connection(settings, user_id)
     try:
         logger.info(
             "get-positions: listing positions for account %r (user %s).", account_label, user_id
@@ -1287,7 +1326,7 @@ def get_returns(
     resolve for this user."""
     configure_logging()
     settings = settings or load_settings()
-    conn = get_connection(settings.database_url)
+    conn = user_connection(settings, user_id)
     try:
         logger.info(
             "get-returns: listing returns for account %r (user %s).", account_label, user_id
@@ -1314,7 +1353,7 @@ def get_latest_returns(
     Raises AccountNotFound if account_label doesn't resolve for this user."""
     configure_logging()
     settings = settings or load_settings()
-    conn = get_connection(settings.database_url)
+    conn = user_connection(settings, user_id)
     try:
         logger.info(
             "get-latest-returns: listing latest returns for account %r (user %s).",
@@ -1334,7 +1373,7 @@ def get_holdings(*, user_id: UUID, settings: Settings | None = None) -> dict:
     portfolio totals (see holdings/flows.list_holdings). Read-only: never triggers a rebuild."""
     configure_logging()
     settings = settings or load_settings()
-    conn = get_connection(settings.database_url)
+    conn = user_connection(settings, user_id)
     try:
         logger.info("get-holdings: listing holdings across accounts for user %s.", user_id)
         result = holdings_flows.list_holdings(conn, user_id=user_id)
@@ -1364,7 +1403,7 @@ def get_portfolio_returns(
     holdings/flows.list_portfolio_returns). Read-only: never triggers a rebuild."""
     configure_logging()
     settings = settings or load_settings()
-    conn = get_connection(settings.database_url)
+    conn = user_connection(settings, user_id)
     try:
         logger.info(
             "get-portfolio-returns: computing returns across accounts for user %s.", user_id
@@ -1396,7 +1435,7 @@ def get_portfolio_twr(*, user_id: UUID, settings: Settings | None = None) -> dic
     configure_logging()
     settings = settings or load_settings()
     datastore_client = _require_datastore_client(settings, command="the portfolio TWR")
-    conn = get_connection(settings.database_url)
+    conn = user_connection(settings, user_id)
     try:
         logger.info("get-portfolio-twr: computing the TWR across accounts for user %s.", user_id)
         result = twr_flows.compute_portfolio_twr(conn, datastore_client, user_id=user_id)
