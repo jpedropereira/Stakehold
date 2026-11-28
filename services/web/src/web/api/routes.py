@@ -185,6 +185,8 @@ _ERROR_LEADS = {
     "transaction_delete.html": "Couldn't delete.",
     "transaction_edit.html": "Couldn't save.",
     "account_delete.html": "Couldn't delete.",
+    "labs_save.html": "Couldn't save the lab.",
+    "labs_saved_delete.html": "Couldn't delete.",
 }
 
 

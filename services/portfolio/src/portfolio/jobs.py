@@ -46,6 +46,8 @@ _TARGET_TABLES = (
     "position_snapshots",
     "return_snapshots",
     "ticker_mappings",
+    "saved_labs",
+    "saved_lab_assets",
 )
 
 

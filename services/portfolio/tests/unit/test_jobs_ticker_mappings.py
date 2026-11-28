@@ -359,6 +359,10 @@ def test_run_db_init_targets_the_ticker_mappings_table():
     assert "ticker_mappings" in jobs._TARGET_TABLES
 
 
+def test_run_db_init_targets_the_saved_labs_tables():
+    assert {"saved_labs", "saved_lab_assets"} <= set(jobs._TARGET_TABLES)
+
+
 def test_a_mapping_change_rebuilds_returns_for_each_affected_account(monkeypatch):
     user_a, user_b = uuid.uuid4(), uuid.uuid4()
     _patch_mapping_job(monkeypatch, accounts=[(user_a, "main"), (user_b, "isa")])

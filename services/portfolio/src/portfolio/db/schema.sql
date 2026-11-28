@@ -135,6 +135,33 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_ticker_mappings_isin
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ticker_mappings_symbol
     ON ticker_mappings (broker, identifier) WHERE identifier_kind = 'SYMBOL';
 
+-- A user's saved, named Labs mixes (LF-1). Per user, not per account: a mix is any set of
+-- tickers, not a holding. user_id is a trusted plain column, like accounts.user_id.
+CREATE TABLE IF NOT EXISTS saved_labs (
+    id          BIGSERIAL     PRIMARY KEY,
+    user_id     UUID          NOT NULL,
+    name        VARCHAR(100)  NOT NULL,
+    created_at  TIMESTAMPTZ   NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ   NOT NULL DEFAULT now()
+);
+
+-- Scoped to the owner, like idx_accounts_user_label: the name is the user's handle for the lab.
+-- Also serves "list my labs", since user_id leads it.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_saved_labs_user_name ON saved_labs (user_id, name);
+
+-- One row per asset in a lab. Unlike every other foreign key here, this one cascades: an asset
+-- row means nothing without its lab, and nothing else references it -- see docs/schema.md.
+CREATE TABLE IF NOT EXISTS saved_lab_assets (
+    saved_lab_id  BIGINT         NOT NULL REFERENCES saved_labs (id) ON DELETE CASCADE,
+    -- The row's place in the form, 0-based, so a lab opens in the order it was saved.
+    position      SMALLINT       NOT NULL,
+    ticker        VARCHAR(20)    NOT NULL,
+    -- The percentage as typed, unscaled: the backtest scales a mix's weights to 100%.
+    weight_pct    NUMERIC(12,6)  NOT NULL CHECK (weight_pct > 0),
+    PRIMARY KEY (saved_lab_id, position),
+    UNIQUE (saved_lab_id, ticker)
+);
+
 -- Row-level security (TA-6). A second fence under the repositories' own user scoping: a query
 -- that forgets its user filter still sees only the connection's own user's rows. The user comes
 -- from the session setting app.user_id, set by db/connection.user_connection. With no user set,
@@ -187,4 +214,25 @@ CREATE POLICY return_snapshots_owner ON return_snapshots
         WHERE user_id = NULLIF(current_setting('app.user_id', true), '')::uuid))
     WITH CHECK (account_id IN (
         SELECT id FROM accounts
+        WHERE user_id = NULLIF(current_setting('app.user_id', true), '')::uuid));
+
+-- Saved labs (LF-1) are per user, not per account, so saved_labs carries its owner directly and
+-- saved_lab_assets checks it through saved_labs, as the account-owned tables do through accounts.
+-- No cross-user command reads them, so db/roles.py doesn't grant them to the cross-user role.
+ALTER TABLE saved_labs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE saved_labs FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS saved_labs_owner ON saved_labs;
+CREATE POLICY saved_labs_owner ON saved_labs
+    USING (user_id = NULLIF(current_setting('app.user_id', true), '')::uuid)
+    WITH CHECK (user_id = NULLIF(current_setting('app.user_id', true), '')::uuid);
+
+ALTER TABLE saved_lab_assets ENABLE ROW LEVEL SECURITY;
+ALTER TABLE saved_lab_assets FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS saved_lab_assets_owner ON saved_lab_assets;
+CREATE POLICY saved_lab_assets_owner ON saved_lab_assets
+    USING (saved_lab_id IN (
+        SELECT id FROM saved_labs
+        WHERE user_id = NULLIF(current_setting('app.user_id', true), '')::uuid))
+    WITH CHECK (saved_lab_id IN (
+        SELECT id FROM saved_labs
         WHERE user_id = NULLIF(current_setting('app.user_id', true), '')::uuid));

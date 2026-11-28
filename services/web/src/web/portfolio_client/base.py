@@ -192,6 +192,23 @@ class AccountDeleteResult:
 
 
 @dataclass(frozen=True)
+class SavedLab:
+    """A user's saved, named Labs mix (LF-1). Each asset is (ticker, weight), the weight the
+    percentage as portfolio stores it, as text ("60"), ready to fill the mix form."""
+
+    name: str
+    assets: tuple[tuple[str, str], ...]
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class SavedLabSaveResult:
+    name: str  # as portfolio stored it, trimmed
+    created: bool  # False when an existing lab was replaced
+    assets_saved: int
+
+
+@dataclass(frozen=True)
 class TransactionDeleteResult:
     status: str
     transactions_deleted: int
@@ -1137,3 +1154,16 @@ class PortfolioClient(Protocol):
     async def update_tracked_ticker(
         self, *, ticker: str, enabled: bool | None = None, retry: bool = False
     ) -> TrackedTicker: ...
+
+    # The user's saved labs by name (LF-1).
+    async def list_saved_labs(self, *, user_id: str) -> list[SavedLab]: ...
+
+    # Saves the mix (ticker, weight %) as the user's lab `name`. Raises SavedLabNameTaken when
+    # the name is taken and `replace` is False, and InvalidPortfolioRequest with portfolio's
+    # message for a lab it refuses.
+    async def save_lab(
+        self, *, user_id: str, name: str, assets: list[tuple[str, Decimal]], replace: bool
+    ) -> SavedLabSaveResult: ...
+
+    # Raises SavedLabNotFound when the user has no lab by that name.
+    async def delete_saved_lab(self, *, user_id: str, name: str) -> None: ...

@@ -21,6 +21,8 @@ from web.portfolio_client.base import (
     PortfolioSeriesPoint,
     Position,
     Return,
+    SavedLab,
+    SavedLabSaveResult,
     TickerLookup,
     TickerMapping,
     TickerMappingWriteResult,
@@ -39,6 +41,8 @@ from web.portfolio_client.errors import (
     InvalidPortfolioRequest,
     InvalidTickerRequest,
     PortfolioUnavailable,
+    SavedLabNameTaken,
+    SavedLabNotFound,
     TickerChangeRefused,
     TickerLimitReached,
     TickerMappingNotFound,
@@ -132,6 +136,12 @@ def _tracked_ticker(item: dict) -> TrackedTicker:
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise PortfolioUnavailable(f"malformed portfolio response: {exc}") from exc
+
+
+def _unexpected(response: httpx.Response) -> PortfolioUnavailable:
+    return PortfolioUnavailable(
+        f"unexpected portfolio response {response.status_code}: {_error_detail(response)}"
+    )
 
 
 def _json_body(response: httpx.Response):
@@ -856,6 +866,62 @@ class HttpPortfolioClient:
         if response.status_code != 200:
             _raise_for_status(response)
         return _ticker_mapping_write_result(_json_body(response))
+
+    # --- saved labs (LF-1) ----------------------------------------------------------------------
+    # Not _raise_for_status: its 404 and 409 mean an account's, and these routes have their own.
+
+    async def list_saved_labs(self, *, user_id: str) -> list[SavedLab]:
+        response = await self._request("GET", "/labs/saved", params={"user_id": user_id})
+        if response.status_code != 200:
+            raise _unexpected(response)
+        try:
+            return [
+                SavedLab(
+                    name=item["name"],
+                    assets=tuple((a["ticker"], a["weight"]) for a in item["assets"]),
+                    updated_at=item["updated_at"],
+                )
+                for item in _json_body(response)
+            ]
+        except (KeyError, TypeError) as exc:
+            raise PortfolioUnavailable(f"malformed portfolio response: {exc}") from exc
+
+    async def save_lab(
+        self, *, user_id: str, name: str, assets: list[tuple[str, Decimal]], replace: bool
+    ) -> SavedLabSaveResult:
+        response = await self._request(
+            "POST",
+            "/labs/saved",
+            json={
+                "user_id": user_id,
+                "name": name,
+                # Fixed-point: str() would write a normalized 40 as "4E+1".
+                "assets": [{"ticker": t, "weight": format(w, "f")} for t, w in assets],
+                "replace": replace,
+            },
+        )
+        if response.status_code == 409:
+            raise SavedLabNameTaken(_error_detail(response))
+        if response.status_code == 422:
+            raise InvalidPortfolioRequest(_error_detail(response))
+        if response.status_code not in (200, 201):
+            raise _unexpected(response)
+        body = _json_body(response)
+        try:
+            return SavedLabSaveResult(
+                name=body["name"], created=body["created"], assets_saved=body["assets_saved"]
+            )
+        except (KeyError, TypeError) as exc:
+            raise PortfolioUnavailable(f"malformed portfolio response: {exc}") from exc
+
+    async def delete_saved_lab(self, *, user_id: str, name: str) -> None:
+        response = await self._request(
+            "DELETE", "/labs/saved", params={"user_id": user_id, "name": name}
+        )
+        if response.status_code == 404:
+            raise SavedLabNotFound(_error_detail(response))
+        if response.status_code != 200:
+            raise _unexpected(response)
 
     # --- tracked tickers (ticker onboarding) -----------------------------------------------------
 

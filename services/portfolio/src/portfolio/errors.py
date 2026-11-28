@@ -145,3 +145,26 @@ class TickerRequestRefused(PortfolioError):
         super().__init__(detail)
         if status_code is not None:
             self.status_code = status_code
+
+
+class InvalidSavedLab(PortfolioError):
+    """A lab the user tried to save breaks a rule in saved_labs/base.py: a blank or over-long
+    name, no assets or too many, a repeated or malformed ticker, or a weight that isn't a
+    positive number saved_lab_assets.weight_pct can hold. Its message is shown to the user."""
+
+    status_code = 422
+
+
+class SavedLabNameTaken(PortfolioError):
+    """A save without `replace` used a name this user already gave another lab. Not swallowed:
+    web asks the user whether to replace it, and saves again with `replace` if they agree."""
+
+    status_code = 409
+
+
+class SavedLabNotFound(PortfolioError):
+    """This user has no lab by that name: already deleted, most likely. The same error for a
+    name that belongs to another user, so their labs are never distinguishable from missing
+    ones."""
+
+    status_code = 404

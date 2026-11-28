@@ -63,6 +63,8 @@ def fakes():
         RiskFreeStatus,
         RollingCorrelation,
         RollingRisk,
+        SavedLab,
+        SavedLabSaveResult,
         SeriesRisk,
         TickerLookup,
         TickerMapping,
@@ -76,7 +78,7 @@ def fakes():
         WhatIfThreshold,
         WhatIfWindow,
     )
-    from web.portfolio_client.errors import PortfolioUnavailable
+    from web.portfolio_client.errors import PortfolioUnavailable, SavedLabNameTaken
     from web.portfolio_view import aggregate_portfolio_returns
 
     # The benchmarks the review data has (RK-13): VWCE.DE's short history greys 10Y, IWDA.AS
@@ -502,6 +504,26 @@ def fakes():
                 ),
                 txn("dep-0901", "DEPOSIT", 1, "10000.00"),
             ]
+
+        # LF-1: two saved labs. "Growth tilt" is labs-edited's mix, so that page marks it shown
+        # and fills the save field with its name; saving it again asks to replace. Nothing is
+        # changed by a save or delete, so every page sees the same two.
+        _saved_labs = (
+            SavedLab("Core", (("VWCE.DE", "60"), ("AAPL", "40")), "2026-11-02T09:00:00Z"),
+            SavedLab("Growth tilt", (("VWCE.DE", "70"), ("AAPL", "50")), "2026-11-20T09:00:00Z"),
+        )
+
+        async def list_saved_labs(self, *, user_id):
+            return list(self._saved_labs)
+
+        async def save_lab(self, *, user_id, name, assets, replace):
+            taken = any(lab.name == name.strip() for lab in self._saved_labs)
+            if taken and not replace:
+                raise SavedLabNameTaken(f"You already have a lab called {name.strip()!r}.")
+            return SavedLabSaveResult(name.strip(), not taken, len(assets))
+
+        async def delete_saved_lab(self, *, user_id, name):
+            return None
 
         async def list_holdings(self, *, user_id):
             """The review holdings summed across accounts: VWCE.DE held in both accounts, AAPL

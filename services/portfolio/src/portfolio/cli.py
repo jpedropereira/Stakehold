@@ -5,7 +5,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from uuid import UUID
 
-from portfolio import jobs
+from portfolio import jobs, saved_lab_jobs
 from portfolio.errors import PortfolioError
 from portfolio.run_result import STATUS_NOTHING_TO_DO, STATUS_OK
 from portfolio.settings import SettingsError
@@ -77,6 +77,70 @@ def _account_delete(args: argparse.Namespace) -> int:
         f"with {result['transactions_deleted']} transaction(s)"
     )
     return _exit_code(result)
+
+
+def _lab_asset(value: str) -> tuple[str, Decimal]:
+    """`TICKER=WEIGHT`, the weight a percentage with an optional `%`. Only the shape is checked
+    here; saved_labs/base.py checks the values, as it does for the HTTP API."""
+    ticker, sep, weight = value.rpartition("=")
+    try:
+        if not sep or not ticker:
+            raise InvalidOperation
+        return ticker, Decimal(weight.removesuffix("%"))
+    except InvalidOperation as exc:
+        raise argparse.ArgumentTypeError(f"expected TICKER=WEIGHT, got {value!r}") from exc
+
+
+def _lab_list(args: argparse.Namespace) -> int:
+    result = saved_lab_jobs.run_list_saved_labs(user_id=args.user)
+    for lab in result["labs"]:
+        mix = " ".join(f"{a['ticker']}={a['weight']}" for a in lab["assets"])
+        print(f"{lab['name']}\t{mix}\t{lab['updated_at'][:10]}")
+    return _report(result, "lab(s)", count_key="labs_listed")
+
+
+def _lab_save(args: argparse.Namespace) -> int:
+    result = saved_lab_jobs.run_save_lab(
+        user_id=args.user, name=args.name, assets=args.assets, replace=args.replace
+    )
+    outcome = "created" if result["labs_created"] else "replaced"
+    print(f"Lab {result['name']!r} {outcome} with {result['rows_saved']} asset(s)")
+    return _exit_code(result)
+
+
+def _lab_delete(args: argparse.Namespace) -> int:
+    result = saved_lab_jobs.run_delete_saved_lab(user_id=args.user, name=args.name)
+    return _report(result, "lab(s) deleted", count_key="labs_deleted")
+
+
+def _add_lab_parsers(subparsers) -> None:
+    lab_parser = subparsers.add_parser("lab", help="Saved Labs mixes (LF-1)")
+    lab_subparsers = lab_parser.add_subparsers(dest="lab_command", required=True)
+
+    list_parser = lab_subparsers.add_parser("list", help="List a user's saved labs")
+    list_parser.add_argument("--user", required=True, type=_uuid, help="The auth-issued user id")
+    list_parser.set_defaults(handler=_lab_list)
+
+    save_parser = lab_subparsers.add_parser("save", help="Save a mix under a name")
+    save_parser.add_argument("--user", required=True, type=_uuid, help="The auth-issued user id")
+    save_parser.add_argument("--name", required=True, help="This user's own name for the lab")
+    save_parser.add_argument(
+        "--asset",
+        dest="assets",
+        action="append",
+        required=True,
+        type=_lab_asset,
+        help="TICKER=WEIGHT, the weight a percentage; repeat once per asset, in order",
+    )
+    save_parser.add_argument(
+        "--replace", action="store_true", help="Replace the mix of a lab with this name"
+    )
+    save_parser.set_defaults(handler=_lab_save)
+
+    delete_parser = lab_subparsers.add_parser("delete", help="Delete a saved lab")
+    delete_parser.add_argument("--user", required=True, type=_uuid, help="The auth-issued user id")
+    delete_parser.add_argument("--name", required=True, help="The --name of the lab to delete")
+    delete_parser.set_defaults(handler=_lab_delete)
 
 
 def _broker_list(_args: argparse.Namespace) -> int:
@@ -484,6 +548,8 @@ def _build_parser() -> argparse.ArgumentParser:
         help="How far back to look for newly ready tickers (default: 10)",
     )
     ready_parser.set_defaults(handler=_refresh_ready_tickers)
+
+    _add_lab_parsers(subparsers)
 
     serve_parser = subparsers.add_parser("serve", help="Run the HTTP API")
     serve_parser.set_defaults(handler=_serve)

@@ -37,8 +37,10 @@ upstream calls) is in [`architecture.md`](architecture.md) and [`endpoints.md`](
   `delta`, so forest and oxblood appear only on figures. *Rejected: periods as rows and assets
   as columns*, which reads better for two assets but not for fifty.
 - **Labs mix form (LB-7): a GET form, so the mix is the URL.** At the top of the page since
-  UX-8 (below), "Edit the mix" has one row per asset (ticker and weight %), then an empty row that adds one. Nothing is
-  stored, so a lab can be bookmarked or reloaded, and "Reset to my portfolio" is plain `/labs`.
+  UX-8 (below), "Edit the mix" has one row per asset (ticker and weight %), then an empty row that adds one. The URL
+  is the whole state, so a lab can be bookmarked or reloaded, and "Reset to my portfolio" is plain `/labs`.
+  Since LF-1 a mix can also be saved under a name, but a saved lab still opens as a link to its
+  mix in the query string (below).
   It works without JS: submitting reloads the page with the new query string, and a hidden
   `period` field keeps the chart's period (LB-8). Each row's Remove
   is a submit button whose value is the row's place, and the route answers it with a 303 to
@@ -317,3 +319,43 @@ upstream calls) is in [`architecture.md`](architecture.md) and [`endpoints.md`](
   and the macros both they and the page use in `partials/_labs_figures.html`. A failed
   backtest in a swap shows its banner in the region, since the page's own notice isn't sent.
   The pattern: "Section switches" in [`ui-architecture.md`](ui-architecture.md).
+- **Saved, named labs (LF-1): saved in the editor, opened as a URL.** portfolio stores a user's
+  labs (`saved_labs`, see its `schema.md`); web keeps no state of its own.
+  - *The editor card holds both.* Under the mix form, a "Save this mix as" field and a Save
+    button post the mix the table shows, as hidden `ticker`/`weight` pairs, with whatever
+    period, risk window and benchmark the query had. It is a POST form of its own, apart from
+    the GET mix form, so Update never saves and Save never reruns the mix. It shows only when
+    the shown mix can be sent: not for a mix with errors, whose table shows the last mix, nor for
+    an empty one. The default mix can be saved, as a snapshot of today's weights. Below it, a
+    "Saved labs" heading and a fold ("Open or delete · 2 labs") list each lab by name. The
+    fold starts open after a save or a delete, the only time its contents just changed.
+    *Rejected: a page of its own (`/labs/saved`)*, one more trip to open a lab. *Rejected:
+    saving from the mix form with a second submit button*, which would save the form's rows,
+    errors included, rather than the mix the figures belong to.
+  - *Opening a lab is a link* to `/labs?ticker=…&weight=…` with the weights as stored ("60", not
+    "60.000000"), so it can be bookmarked like any mix, and the mix form shows it as typed.
+    *Rejected: `?lab=<name>`*, which would make the page's state live in two places.
+  - *The lab on screen is found, not carried.* The saved lab whose mix equals the shown mix,
+    tickers in order and weights compared as numbers (`saved_labs_view.matching_lab`), is marked
+    `aria-current` with "· shown", and its name fills the save field. Saving it again then reads as
+    an update and asks to replace.
+  - *A taken name asks first (agreed).* portfolio answers 409 to a save without `replace`, and
+    `labs_save.html` says "You already have a lab called Core" with Replace it and Back to Labs.
+    Replace re-posts the same fields with `replace=1`. *Rejected: replacing silently*, which loses
+    a lab to a name clash. *Rejected: refusing*, which would make updating a lab a delete and a
+    re-save. A 422, an outage or a CSRF failure lands on the same page, with the error under the
+    name and the mix's summary, so nothing typed is lost.
+  - *The banner's words come from portfolio, not the URL.* A save redirects with `saved=1`, a
+    delete with `lab_deleted=1` (or `0` when it was already gone), never a name, so a crafted link
+    can't put words in the banner, the rule account delete follows. The banner names the lab
+    on screen when there is one: "Saved. This mix is your lab Core." Every link and form on the
+    page drops both flags (`saved_labs_view.view_params`), so the banner doesn't follow a
+    period click.
+  - *Delete is the accounts list's pattern*: a link to `/labs/saved/delete` (the whole flow
+    without JS), opened as `partials/_delete_dialog.html` by `confirm_dialog.js` with it, both
+    posting the name and `back`, the view to return to. The summary is "Core — VWCE.DE 60% ·
+    AAPL 40%". `back` is re-encoded from its parsed pairs into a query after `/labs?`, so it
+    can't point anywhere else.
+  - *Not fetched for a section swap (UX-10)*, which doesn't show the list.
+  - **Known cost:** the list shows every lab, with no paging or cap. A user with many labs gets a
+    long fold. If that happens, the next step is a cap in portfolio and a count in the summary.

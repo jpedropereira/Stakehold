@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% from "partials/_banner.html" import banner %}
+{% block title %}Delete lab — Stakehold{% endblock %}
+{% block content %}
+{# The no-JS confirmation behind each saved lab's Delete link on /labs (LF-1), and where a
+   failed delete lands. The dialog on /labs says the same things. #}
+<section class="card">
+  {% if gone %}
+  <h1>Nothing to delete</h1>
+  <p>You have no lab called {{ name }}.</p>
+  <a href="{{ back_url }}">Back to Labs</a>
+  {% else %}
+  <h1>Delete this lab?</h1>
+  {% if error %}{% call banner("error") %}<strong>{{ error_lead }}</strong> {{ error }}{% endcall %}{% endif %}
+  <p class="confirm-summary">{{ summary or name }}</p>
+  {% call banner("warning") %}<strong>This can't be undone.</strong> Its mix isn't kept anywhere else.{% endcall %}
+  <form method="post" action="/labs/saved/delete">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="name" value="{{ name }}">
+    <input type="hidden" name="back" value="{{ back }}">
+    <div class="confirm-actions">
+      <a class="btn btn-ghost" href="{{ back_url }}">Cancel</a>
+      <button type="submit" class="btn btn-secondary">Delete permanently</button>
+    </div>
+  </form>
+  {% endif %}
+</section>
+{% endblock %}

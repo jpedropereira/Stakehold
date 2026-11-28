@@ -25,7 +25,7 @@ from fastapi import (
 )
 from fastapi import Path as PathParam
 from fastapi import Query, Request, Response, UploadFile, status
-from portfolio import jobs, risk_jobs
+from portfolio import jobs, risk_jobs, saved_lab_jobs
 from portfolio.api.models import (
     AccountCreateRequest,
     AccountDeleteResponse,
@@ -49,6 +49,10 @@ from portfolio.api.models import (
     RebuildRequest,
     RebuildReturnsResponse,
     ReturnResponse,
+    SavedLabDeleteResponse,
+    SavedLabResponse,
+    SavedLabSaveRequest,
+    SavedLabSaveResponse,
     TickerLookupResponse,
     TickerMappingResponse,
     TickerMappingSetRequest,
@@ -633,3 +637,47 @@ def backtest(body: BacktestRequest, settings: Settings = Depends(get_settings)) 
         benchmark=body.benchmark,
         settings=settings,
     )
+
+
+# --- saved labs (LF-1) ---
+
+
+@router.get("/labs/saved", response_model=list[SavedLabResponse])
+def list_saved_labs(
+    user_id: UUID = Query(...), settings: Settings = Depends(get_settings)
+) -> list[dict]:
+    return saved_lab_jobs.run_list_saved_labs(user_id=user_id, settings=settings)["labs"]
+
+
+@router.post("/labs/saved", response_model=SavedLabSaveResponse)
+def save_lab(
+    body: SavedLabSaveRequest, response: Response, settings: Settings = Depends(get_settings)
+) -> dict:
+    """201 for a new lab, 200 for a replaced one. A taken name without `replace` is a 409, and
+    a lab that breaks a rule a 422, both via app.py's handler with a message for the user."""
+    result = saved_lab_jobs.run_save_lab(
+        user_id=body.user_id,
+        name=body.name,
+        assets=[(asset.ticker, asset.weight) for asset in body.assets],
+        replace=body.replace,
+        settings=settings,
+    )
+    created = bool(result["labs_created"])
+    response.status_code = status.HTTP_201_CREATED if created else status.HTTP_200_OK
+    return {
+        "status": result["status"],
+        "name": result["name"],
+        "created": created,
+        "assets_saved": result["rows_saved"],
+    }
+
+
+@router.delete("/labs/saved", response_model=SavedLabDeleteResponse)
+def delete_saved_lab(
+    user_id: UUID = Query(...),
+    name: str = Query(...),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    """The name is a query parameter, like DELETE /accounts' label: it's the user's handle for
+    the lab. An unknown name, or another user's, is a 404 via app.py's handler."""
+    return saved_lab_jobs.run_delete_saved_lab(user_id=user_id, name=name, settings=settings)

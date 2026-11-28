@@ -1143,3 +1143,45 @@ class LookThroughExposuresResponse(BaseModel):
 class LookThroughResponse(BaseModel):
     assets: list[LookThroughAssetResponse]  # every requested asset, in request order
     exposures: LookThroughExposuresResponse | None  # null exactly when nothing was included
+
+
+# --- saved labs (LF-1) ---
+
+
+class SavedLabAssetRequest(BaseModel):
+    # Types only: saved_labs/base.py checks every limit, so a bad lab gets one message written
+    # for the user (a string `detail`) rather than Pydantic's list of field errors.
+    ticker: str
+    weight: Decimal  # a percentage, unscaled
+
+
+class SavedLabSaveRequest(BaseModel):
+    user_id: UUID
+    name: str
+    assets: list[SavedLabAssetRequest]
+    # False: a taken name is a 409. True: replace that lab's mix.
+    replace: bool = False
+
+
+class SavedLabAssetResponse(BaseModel):
+    ticker: str
+    weight: str  # the stored percentage as plain text, column padding dropped ("60")
+
+
+class SavedLabResponse(BaseModel):
+    name: str
+    assets: list[SavedLabAssetResponse]  # in their saved order
+    created_at: datetime
+    updated_at: datetime
+
+
+class SavedLabSaveResponse(BaseModel):
+    status: str
+    name: str  # as stored, trimmed
+    created: bool  # False when an existing lab was replaced
+    assets_saved: int
+
+
+class SavedLabDeleteResponse(BaseModel):
+    status: str
+    labs_deleted: int

@@ -21,7 +21,7 @@ A structural change may need any of the eight updated.
 
 Recording every transaction across brokerage accounts — for multiple users, each seeing only their
 own — and deriving positions and returns from that record at any point in time, not just "now."
-Two things go in:
+Three things go in:
 
 - **Transactions** — entered manually, or imported from a broker's export file via an installed
   broker-parser plugin. Every transaction's native-currency amount is stored exactly as the
@@ -32,6 +32,9 @@ Two things go in:
   stored in the `ticker_mappings` table and managed by an admin from `web`'s admin page (see the
   [cross-cutting decision](cross-cutting-decisions.md)). Never inferred, never fuzzy-matched.
   Manual entry doesn't need one: it records a `data-store` ticker directly (`TICKER`).
+- **Saved labs** (LF-1) — a user's Labs mixes, saved under a name to come back to: tickers and
+  the weights typed, nothing derived. Backtesting one stays a read (`POST /labs/backtest`), which
+  takes the mix in the request; a saved lab is only where web keeps it between visits.
 
 Two things are derived, not entered — both **materialized**, not computed live:
 
@@ -70,7 +73,7 @@ flowchart TD
     end
 
     subgraph orch["Orchestration"]
-        JOBS["jobs.py · risk_jobs.py<br/><i>runnable units: config + connection + one flow</i>"]
+        JOBS["jobs.py · risk_jobs.py · saved_lab_jobs.py<br/><i>runnable units: config + connection + one flow</i>"]
         PIPE["pipeline.py<br/><i>the flows; broker-parser/cashflow-parser (entry-point discovered)<br/>and datastore-client registries</i>"]
         HFLOW["holdings/flows.py<br/><i>reads that span a user's accounts (PF-1, PF-5)</i>"]
         LFLOW["labs/flows.py<br/><i>backtest fetches, concurrent (LB-4);<br/>risk-free fetch (RK-8)</i>"]
@@ -78,6 +81,7 @@ flowchart TD
         RFLOW["risk/flows.py<br/><i>ex-post risk: TWR + risk-free fetch (RK-11);<br/>ex-ante risk of a mix (RK-17);<br/>rolling windows on both (RK-24);<br/>regime view on both (RK-28);<br/>candidate what-if (RK-19) and ranking (RK-29)</i>"]
         BFLOW["benchmark/flows.py<br/><i>the request's benchmark: fetch + wording (RK-13)</i>"]
         LTFLOW["look_through/flows.py<br/><i>classify holdings + fund snapshots (RK-22)</i>"]
+        SLFLOW["saved_labs/flows.py<br/><i>save, replace, delete a named mix,<br/>one transaction each (LF-1)</i>"]
     end
 
     subgraph domain["Domain modules"]
@@ -94,6 +98,7 @@ flowchart TD
         RISK["risk/<br/>types · weekly · quality · history<br/>windows · risk_free · var_mask<br/>measures · drawdown · tail · single_series<br/>covariance · listwise · ex_ante<br/>correlation · pairing · relative · ex_post<br/>ex_ante_report · rolling · what_if<br/>ranking · fx_decomposition · regimes<br/><i>pure library (RK-6, RK-7, RK-15, RK-16, RK-11, RK-13, RK-17, RK-24, RK-19, RK-26, RK-29, RK-28);<br/>first caller labs/risk (RK-8)</i>"]
         BENCH["benchmark/<br/>base<br/><i>the benchmark's return series and status (RK-13)</i>"]
         LT["look_through/<br/>calculator · issuer · instruments<br/><i>exposures and concentration of a mix (RK-22)</i>"]
+        SL["saved_labs/<br/>base · repository<br/><i>a user's saved, named mixes (LF-1)</i>"]
     end
 
     subgraph found["Foundation"]
@@ -125,6 +130,10 @@ flowchart TD
     TWR --> RET
     TWR --> EURR
     JOBS --> RFLOW
+    JOBS --> SLFLOW
+    SLFLOW --> SL
+    SLFLOW --> SH
+    SL --> ERR
     RFLOW --> TFLOW
     RFLOW --> RISK
     RFLOW --> DSC
@@ -192,6 +201,13 @@ same kind of unit and the same layer, called by `api/routes.py` the same way, an
 `jobs.py`'s data-store client check rather than keeping a copy. The split follows a subject
 (the risk endpoints) rather than a kind of job. Splitting reads from writes was rejected,
 because it would have cut through the rebuild-after-write helpers that the write jobs share.
+
+**The saved-lab jobs are `saved_lab_jobs.py` (LF-1)**, for the same reason: `jobs.py` was at
+60 KB. They call `saved_labs/flows.py`, not `pipeline.py`, because a lab touches none of the
+ledger's tables and nothing is rebuilt after it. Each write's transaction is in `flows.py`, beside
+the domain package, as `holdings/flows.py` keeps its orchestration. *Rejected: `labs/`*, which
+stores nothing and depends on data-store. A saved lab depends on neither, and putting the two
+together would give `labs/` a database dependency it doesn't need.
 
 That result is a plain dict of builtins, built by portfolio's own `run_result.py` — following the
 same two-key `{"status", "rows_saved"}` plus per-flow named-counts contract as
@@ -446,6 +462,11 @@ identity — not column-level DDL, which needs its own sign-off pass.
   PositionSnapshot, ReturnSnapshot) is scoped by Account and therefore transitively by User — there
   is no cross-user query path. **Stated assumption, not confirmed**: one user per account, no
   shared/joint accounts.
+- **SavedLab** (LF-1) — identified by `(user, name)`; owns its assets (ticker, weight %, place).
+  The one entity scoped directly by User rather than through an Account, since a mix isn't held
+  anywhere. Its repository takes a `user_id` on every statement, as `accounts/` does, so the
+  "no cross-user query path" rule still holds, and row-level security backs it at the database
+  (see "User isolation"). See [`schema.md`](schema.md)'s `saved_labs`.
 - **TickerLink** (the mapping) — identified by `(instrument_identifier_kind,
   instrument_identifier)`, e.g. `(ISIN, IE00B4L5Y983)` or `(SYMBOL, IWDA)`; maps to a
   `canonical_ticker` string (a `data-store` `raw_market_data.ticker` spelling, e.g. `IWDA.AS`).
@@ -501,17 +522,19 @@ imports, the HTTP error-mapping contract, and what portfolio reads from data-sto
 1. Repositories scope every read by the caller's accounts (`accounts/repository.list_by_user`,
    `pipeline._resolve_account`), with `user_id` taken from a validated session (`web`) or a
    verified delegated token (`agent`).
-2. Postgres row-level security on `accounts`, `transactions`, `position_snapshots` and
-   `return_snapshots` (TA-6; the policies are in [`schema.md`](schema.md)'s "Row-level
-   security"). A query that forgets its user filter still returns only the connection's own
+2. Postgres row-level security on `accounts`, `transactions`, `position_snapshots`,
+   `return_snapshots`, `saved_labs` and `saved_lab_assets` (TA-6, extended to the saved-labs
+   tables by LF-1; the policies are in [`schema.md`](schema.md)'s "Row-level security"). A query that forgets its user filter still returns only the connection's own
    user's rows. Fence 1 alone would let that one mistake leak across users, and the risk grows
    with an LLM-driven caller.
 
 **Every connection is one of two kinds** (`db/connection.py`):
 - `user_connection(settings, user_id)` is the `portfolio` role with the session setting
-  `app.user_id`. Every job that acts for one user opens this one.
+  `app.user_id`. Every job that acts for one user opens this one, `saved_lab_jobs.py`'s
+  included.
 - `cross_user_connection(settings)` is a second role (`PORTFOLIO_CROSS_USER_DATABASE_URL`) with
-  `BYPASSRLS`, but `SELECT` on four tables only (`db/roles.py`). It serves exactly four
+  `BYPASSRLS`, but `SELECT` on four tables only (`db/roles.py`), not the saved-labs tables,
+  which no cross-user command reads. It serves exactly four
   enumeration reads, each of which hands the real work to per-user jobs:
   - `list_user_ids` (`rebuild-returns --all`)
   - `list_accounts_holding` (`refresh-ready-tickers`)
@@ -600,6 +623,7 @@ data-store.
    `returns/calculator.py` next, since it's the one with an external dependency
    (`datastore_client`) deliberately kept out of the pure function itself.
 5. `jobs.py` — how configuration, a connection and a flow become one runnable operation, called by
-   both the CLI and the HTTP API. `risk_jobs.py` holds the risk endpoints' jobs, in the same shape.
+   both the CLI and the HTTP API. `risk_jobs.py` holds the risk endpoints' jobs, in the same shape,
+   and `saved_lab_jobs.py` the saved labs' (LF-1).
 6. `api/routes.py` and `api/app.py` — the HTTP entry point; read after `jobs.py`, since a route is
    argument parsing plus one call into it and nothing else. See [`flows.md`](flows.md)'s "HTTP API".
