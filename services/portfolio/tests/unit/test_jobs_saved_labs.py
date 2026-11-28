@@ -33,8 +33,41 @@ def _settings():
 def fake_conn(monkeypatch):
     monkeypatch.setattr(saved_lab_jobs, "load_settings", _settings)
     conn = _FakeConnection()
-    monkeypatch.setattr(saved_lab_jobs, "get_connection", lambda url: conn)
+
+    def user_connection(settings, user_id):
+        conn.user_id = user_id
+        return conn
+
+    monkeypatch.setattr(saved_lab_jobs, "user_connection", user_connection)
     return conn
+
+
+@pytest.mark.parametrize(
+    "run, flow",
+    [
+        (lambda: saved_lab_jobs.run_list_saved_labs(user_id=USER), "list_labs"),
+        (
+            lambda: saved_lab_jobs.run_save_lab(
+                user_id=USER, name="Core", assets=[("A", Decimal("1"))], replace=False
+            ),
+            "save_lab",
+        ),
+        (lambda: saved_lab_jobs.run_delete_saved_lab(user_id=USER, name="Core"), "delete_lab"),
+    ],
+)
+def test_each_job_connects_as_its_user_so_row_level_security_applies(
+    monkeypatch, fake_conn, run, flow
+):
+    def fake_flow(conn, **kw):
+        raise RuntimeError("stop after connecting")
+
+    monkeypatch.setattr(saved_lab_jobs.flows, flow, fake_flow)
+
+    with pytest.raises(RuntimeError):
+        run()
+
+    assert fake_conn.user_id == USER
+    assert fake_conn.closed
 
 
 def test_list_returns_each_lab_with_weights_as_plain_text(monkeypatch, fake_conn, caplog):

@@ -14,7 +14,8 @@ Seven tables: `accounts` (who owns what — `user_id` is a plain UUID referencin
 `users` table), `transactions` (the ledger), `position_snapshots` /
 `return_snapshots` (derived, materialized, rebuildable), `ticker_mappings` (the global,
 admin-managed broker-instrument → `data-store`-ticker mapping), and `saved_labs` /
-`saved_lab_assets` (a user's saved, named Labs mixes, LF-1).
+`saved_lab_assets` (a user's saved, named Labs mixes, LF-1). The six user-owned tables are under
+row-level security, and `ticker_mappings` is not (see "Row-level security" below).
 
 ## Users — not a table here
 
@@ -344,6 +345,50 @@ fails loudly instead of being swept away. An asset row is only ever written and 
 its lab, nothing else references it, and it means nothing alone, so the cascade can't remove
 anything a caller meant to keep. *Rejected: a JSONB `assets` column on `saved_labs`*, which
 would leave uniqueness and positivity to code alone.
+
+## Row-level security
+
+Signed off 2026-11-28 (TA-6, #211). No columns changed: this section is policies and one role.
+
+**Which tables.** `accounts`, `transactions`, `position_snapshots`, `return_snapshots`,
+`saved_labs` and `saved_lab_assets` each have `ENABLE` and `FORCE ROW LEVEL SECURITY` and one
+policy, `<table>_owner`. The two saved-labs tables were added to it when LF-1 merged TA-6. `FORCE` matters
+because the `portfolio` role owns these tables, and a table's owner skips RLS without it.
+`ticker_mappings` has no policy: a mapping is global, and every user's rebuild reads the same
+rows.
+
+**The rule.** Each policy compares against the session setting `app.user_id`, which
+`db/connection.user_connection` sets:
+- On `accounts`, the check is `user_id = NULLIF(current_setting('app.user_id', true), '')::uuid`.
+- On the three child tables, it is `account_id IN (SELECT id FROM accounts WHERE user_id = …)`
+  with the same expression.
+- On `saved_labs`, the check is the same as on `accounts`: a lab is per user, not per account.
+- On `saved_lab_assets`, it is `saved_lab_id IN (SELECT id FROM saved_labs WHERE user_id = …)`.
+
+The same expression is both `USING` and `WITH CHECK`. So a connection can neither read another
+user's rows nor write a row into another user's account. An update or delete aimed at another
+user's rows matches nothing.
+
+**Deny by default.** With no user set, `current_setting(..., true)` is `NULL`, or `''` after a
+reset, which the `NULLIF` turns into `NULL`. The comparison is then never true. A connection
+without a user sees no rows, and its inserts fail with `InsufficientPrivilege`.
+
+**Child tables check their owner through `accounts`, not a copied `user_id`.** Copying `user_id`
+into three tables would need a migration, a backfill, and a composite foreign key to stop it
+drifting from `accounts.user_id`. The subquery is a lookup on `idx_accounts_user_id` that
+Postgres runs once per query, returning a handful of ids. Revisit only if it ever shows up in a
+profile.
+
+**Not governed by RLS:**
+- `TRUNCATE` and DDL.
+- Foreign-key checks, which Postgres runs without policies.
+- Superusers, and the read-only `portfolio_cross_user` role (`BYPASSRLS`, `SELECT` only).
+  That role isn't granted the saved-labs tables, because no cross-user command reads them.
+  Its grants and the reason it exists are in [`deployment.md`](deployment.md) and
+  [`architecture.md`](architecture.md)'s "User isolation".
+
+**Idempotency.** `ENABLE` and `FORCE` are no-ops on a rerun. Each policy is `DROP POLICY IF
+EXISTS` then `CREATE POLICY`, so `db init` rewrites it to `schema.sql`'s current definition.
 
 ## Open items, carried forward rather than resolved here
 

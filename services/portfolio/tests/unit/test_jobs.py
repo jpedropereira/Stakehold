@@ -35,6 +35,7 @@ def _fake_settings(*, datastore_api_url=None, internal_api_secret=None):
             "admin_database_url": _FAKE_ADMIN_DATABASE_URL,
             "datastore_api_url": datastore_api_url,
             "internal_api_secret": internal_api_secret,
+            "cross_user_database_url": None,
         },
     )()
 
@@ -90,6 +91,8 @@ def _patch_common(monkeypatch, tmp_path, existing_tables):
     monkeypatch.setattr(jobs, "_ensure_role_and_schema", lambda admin_conn, role, password: None)
     fake_conn = _FakeConnection(existing_tables)
     monkeypatch.setattr(jobs, "get_connection", lambda url: fake_conn)
+    monkeypatch.setattr(jobs, "user_connection", lambda settings, user_id: fake_conn)
+    monkeypatch.setattr(jobs, "cross_user_connection", lambda settings: fake_conn)
     return fake_conn
 
 
@@ -163,6 +166,53 @@ def test_run_db_init_bootstraps_the_role_parsed_from_the_app_url(monkeypatch, tm
     jobs.run_db_init()
 
     assert calls == [("portfolio", "pw")]
+
+
+_FAKE_CROSS_USER_DATABASE_URL = (
+    "postgresql://portfolio_cross_user:cross-pw@localhost/app"  # pragma: allowlist secret
+)
+
+
+def _with_cross_user_url():
+    settings = _fake_settings()
+    settings.cross_user_database_url = _FAKE_CROSS_USER_DATABASE_URL
+    return settings
+
+
+def test_run_db_init_sets_up_the_cross_user_role_named_by_its_url(monkeypatch, tmp_path):
+    _patch_common(monkeypatch, tmp_path, existing_tables=[])
+    monkeypatch.setattr(jobs, "load_settings", _with_cross_user_url)
+    created, granted = [], []
+    monkeypatch.setattr(
+        jobs,
+        "ensure_cross_user_role",
+        lambda admin_conn, role, password, schema: created.append((role, password, schema)),
+    )
+    monkeypatch.setattr(
+        jobs, "grant_cross_user_reads", lambda conn, role, schema: granted.append((role, schema))
+    )
+
+    jobs.run_db_init()
+
+    assert created == [("portfolio_cross_user", "cross-pw", "portfolio")]
+    assert granted == [("portfolio_cross_user", "portfolio")]
+
+
+def test_run_db_init_without_a_cross_user_url_says_so_and_still_succeeds(
+    monkeypatch, tmp_path, caplog
+):
+    caplog.set_level(logging.INFO)
+    _patch_common(monkeypatch, tmp_path, existing_tables=[])
+    calls = []
+    monkeypatch.setattr(jobs, "ensure_cross_user_role", lambda *a: calls.append(a))
+    monkeypatch.setattr(jobs, "grant_cross_user_reads", lambda *a: calls.append(a))
+
+    result = jobs.run_db_init()
+
+    assert result["status"] == "ok"
+    assert calls == []
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("PORTFOLIO_CROSS_USER_DATABASE_URL" in r.getMessage() for r in warnings)
 
 
 def test_run_db_init_closes_the_admin_connection(monkeypatch, tmp_path):
@@ -272,6 +322,8 @@ def _patch_new_job_common(monkeypatch):
     monkeypatch.setattr(jobs, "load_settings", _fake_settings)
     fake_conn = _SimpleFakeConnection()
     monkeypatch.setattr(jobs, "get_connection", lambda url: fake_conn)
+    monkeypatch.setattr(jobs, "user_connection", lambda settings, user_id: fake_conn)
+    monkeypatch.setattr(jobs, "cross_user_connection", lambda settings: fake_conn)
     return fake_conn
 
 
@@ -623,6 +675,8 @@ def _patch_cashflow_job_common(monkeypatch):
     )
     fake_conn = _SimpleFakeConnection()
     monkeypatch.setattr(jobs, "get_connection", lambda url: fake_conn)
+    monkeypatch.setattr(jobs, "user_connection", lambda settings, user_id: fake_conn)
+    monkeypatch.setattr(jobs, "cross_user_connection", lambda settings: fake_conn)
     _stub_rebuild_positions(monkeypatch)
     return fake_conn
 

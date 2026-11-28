@@ -56,6 +56,8 @@ TEST_DATABASE_ENV = {
         "app_postgres_admin", _ADMIN_PASSWORD, 55435, "app_test"
     ),
     "PORTFOLIO_DATABASE_URL": _url("portfolio", _PASSWORD, 55435, "app_test"),
+    # portfolio's read-only, RLS-bypassing role for its cross-user reads; `db init` creates it.
+    "PORTFOLIO_CROSS_USER_DATABASE_URL": _url("portfolio_cross_user", _PASSWORD, 55435, "app_test"),
     "AUTH_INTERNAL_SECRET": "test-throwaway-internal-secret",  # pragma: allowlist secret
     "PORTFOLIO_INTERNAL_SECRET": (
         "test-throwaway-portfolio-internal-secret"  # pragma: allowlist secret

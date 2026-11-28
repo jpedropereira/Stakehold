@@ -9,11 +9,11 @@ from collections.abc import Iterable
 from decimal import Decimal
 from uuid import UUID
 
+from portfolio.db.connection import user_connection
 from portfolio.run_result import build_run_result
 from portfolio.saved_labs import flows
 from portfolio.saved_labs.base import LabAsset, SavedLab
 from portfolio.settings import Settings, load_settings
-from shared.db.connection import get_connection
 from shared.logging_config import configure_logging
 
 logger = logging.getLogger(__name__)
@@ -39,7 +39,7 @@ def run_list_saved_labs(*, user_id: UUID, settings: Settings | None = None) -> d
     """This user's labs by name. Saves nothing; no labs is `nothing_to_do`."""
     configure_logging()
     settings = settings or load_settings()
-    conn = get_connection(settings.database_url)
+    conn = user_connection(settings, user_id)
     try:
         logger.info("saved labs list: listing labs for user %s.", user_id)
         labs = flows.list_labs(conn, user_id=user_id)
@@ -65,7 +65,7 @@ def run_save_lab(
     configure_logging()
     settings = settings or load_settings()
     lab_assets = [LabAsset(ticker, weight) for ticker, weight in assets]
-    conn = get_connection(settings.database_url)
+    conn = user_connection(settings, user_id)
     try:
         logger.info(
             "save lab: saving %r with %d asset(s) for user %s%s.",
@@ -101,7 +101,7 @@ def run_delete_saved_lab(*, user_id: UUID, name: str, settings: Settings | None 
     """Delete this user's lab `name`. SavedLabNotFound propagates."""
     configure_logging()
     settings = settings or load_settings()
-    conn = get_connection(settings.database_url)
+    conn = user_connection(settings, user_id)
     try:
         logger.info("delete lab: deleting lab %r for user %s.", name, user_id)
         flows.delete_lab(conn, user_id=user_id, name=name)

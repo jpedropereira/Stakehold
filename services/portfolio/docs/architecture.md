@@ -103,7 +103,7 @@ flowchart TD
 
     subgraph found["Foundation"]
         SET["settings.py"]
-        DB["db/schema.sql"]
+        DB["db/<br/>schema.sql · connection · roles<br/><i>row-level security and the two connection kinds (TA-6)</i>"]
         ERR["errors.py<br/><i>PortfolioError and subclasses</i>"]
         DSC["datastore_client/<br/>base · http_client<br/><i>get_fx_rate built (task 14);<br/>price/FX-series/ticker methods built (task 8);<br/>risk-free series built (RK-4);<br/>ETF funds and holdings (RK-22);<br/>regimes (RK-28)</i>"]
     end
@@ -180,13 +180,13 @@ flowchart TD
     DSC -->|HTTP| DSAPI
 ```
 
-**Portfolio owns no `db/connection.py`.** Opening a connection, wrapping a transaction, and
-applying a schema file are identical in every service here, so they live once in the
-[`shared`](../../shared/docs/architecture.md) workspace package — extracted during the auth build
-when its copy turned out near-identical to data-store's. Portfolio imports
-`shared.db.connection` and `shared.logging_config` rather than growing a third copy; `db/` here
-holds only `schema.sql`, which is genuinely portfolio's own. Repository modules import
-`transaction`; `jobs.py` imports `get_connection` and `apply_schema`.
+**Opening a connection, wrapping a transaction, and applying a schema file come from
+[`shared`](../../shared/docs/architecture.md)**, because they are identical in every service
+here. They were extracted during the auth build, when its copy turned out near-identical to
+data-store's. Repository modules import `transaction`, and `jobs.py` imports `apply_schema`.
+What `db/` adds on top is genuinely portfolio's own: `schema.sql`, plus `connection.py` and
+`roles.py`, which exist only because of row-level security (see "User isolation" below).
+`db/connection.py` wraps `shared`'s `get_connection` rather than copying it.
 
 **`jobs.py` is the seam that matters**, for the same reason as data-store's: each `run_*`/`get_*`
 there is one complete operation — load settings, open a connection, run the flow, close the
@@ -465,7 +465,8 @@ identity — not column-level DDL, which needs its own sign-off pass.
 - **SavedLab** (LF-1) — identified by `(user, name)`; owns its assets (ticker, weight %, place).
   The one entity scoped directly by User rather than through an Account, since a mix isn't held
   anywhere. Its repository takes a `user_id` on every statement, as `accounts/` does, so the
-  "no cross-user query path" rule still holds. See [`schema.md`](schema.md)'s `saved_labs`.
+  "no cross-user query path" rule still holds, and row-level security backs it at the database
+  (see "User isolation"). See [`schema.md`](schema.md)'s `saved_labs`.
 - **TickerLink** (the mapping) — identified by `(instrument_identifier_kind,
   instrument_identifier)`, e.g. `(ISIN, IE00B4L5Y983)` or `(SYMBOL, IWDA)`; maps to a
   `canonical_ticker` string (a `data-store` `raw_market_data.ticker` spelling, e.g. `IWDA.AS`).
@@ -515,6 +516,58 @@ prerequisite on the data-store read API**: the flow table (command, endpoint, ca
 writes), the rebuild-after-write and ticker-mapping follow-on rules, manual entry, cash-ledger
 imports, the HTTP error-mapping contract, and what portfolio reads from data-store.
 
+## User isolation
+
+**Two fences keep one user's data from another's, and the second one is the database's.**
+1. Repositories scope every read by the caller's accounts (`accounts/repository.list_by_user`,
+   `pipeline._resolve_account`), with `user_id` taken from a validated session (`web`) or a
+   verified delegated token (`agent`).
+2. Postgres row-level security on `accounts`, `transactions`, `position_snapshots`,
+   `return_snapshots`, `saved_labs` and `saved_lab_assets` (TA-6, extended to the saved-labs
+   tables by LF-1; the policies are in [`schema.md`](schema.md)'s "Row-level security"). A query that forgets its user filter still returns only the connection's own
+   user's rows. Fence 1 alone would let that one mistake leak across users, and the risk grows
+   with an LLM-driven caller.
+
+**Every connection is one of two kinds** (`db/connection.py`):
+- `user_connection(settings, user_id)` is the `portfolio` role with the session setting
+  `app.user_id`. Every job that acts for one user opens this one, `saved_lab_jobs.py`'s
+  included.
+- `cross_user_connection(settings)` is a second role (`PORTFOLIO_CROSS_USER_DATABASE_URL`) with
+  `BYPASSRLS`, but `SELECT` on four tables only (`db/roles.py`), not the saved-labs tables,
+  which no cross-user command reads. It serves exactly four
+  enumeration reads, each of which hands the real work to per-user jobs:
+  - `list_user_ids` (`rebuild-returns --all`)
+  - `list_accounts_holding` (`refresh-ready-tickers`)
+  - `list_accounts_using_instrument` (ticker-mapping set/delete)
+  - `list_distinct_instruments_all` (the admin unmapped list)
+
+A plain `get_connection` is left for `db init`, `/health` and the global `ticker_mappings`
+writes and list. With no user set, the policies deny every row, so a job that forgets
+`user_connection` fails visibly rather than leaking.
+
+Why these choices:
+- **A separate role for cross-user reads, not a policy exemption.** An exemption (say
+  `app.cross_user = 'on'`) can be set by any connection of the main role, so it fences nothing
+  at the database. With the role, the main role can never see across users, and the
+  credential that can see across users can't write.
+- **The user is set once per connection, not per transaction.** Many reads run outside
+  `transaction()`, so a `SET LOCAL` at that boundary would miss them.
+- **No `SECURITY DEFINER` functions, no table ownership split from the runtime role.** Both
+  were rejected as more machinery for no safety the separate role doesn't already give.
+
+**Known sharp edges:**
+- **The session-wide setting relies on there being no connection pool.** Today every job opens
+  and closes its own connection (see `api/app.py`). Adding `psycopg_pool` means resetting
+  `app.user_id` on every checkout, or moving to transaction scope. Otherwise one user's setting
+  could reach the next request on that connection.
+- **The `portfolio` role owns its tables, so the policies rely on `FORCE ROW LEVEL SECURITY`.**
+  A table created later without `ENABLE`/`FORCE` and a policy has no RLS at all. The integration
+  test `test_db_init_twice_keeps_row_level_security_in_place` lists the tables that must have it,
+  so a new user-owned table belongs on that list too.
+- **Without `PORTFOLIO_CROSS_USER_DATABASE_URL`, `db init` warns and skips the role.** The four
+  cross-user commands then refuse to run, naming the variable. Ticker-mapping set/delete check
+  for it before writing, so a mapping is never saved with its rebuilds left undone.
+
 ## Configuration
 
 Much smaller than data-store's, since portfolio has no scraping/exchange-resolution reference data
@@ -522,7 +575,7 @@ of its own:
 
 | File | Committed? | Why |
 |---|---|---|
-| `.env` (`PORTFOLIO_DATABASE_URL`, `APP_POSTGRES_ADMIN_DATABASE_URL`, `DATASTORE_API_URL`, `INTERNAL_API_SECRET`, `PORTFOLIO_INTERNAL_SECRET`, `PORTFOLIO_API_HOST`, `PORTFOLIO_API_PORT`) | no — gitignored | Credentials, per-environment. **Not** the bare `DATABASE_URL`: data-store already owns that name, and both suites can run in one pytest process where a shared name would collide — the same reasoning behind `AUTH_DATABASE_URL`. `PORTFOLIO_DATABASE_URL` names the *service*, not the instance, so a future service sharing `app-postgres` gets its own name and its own role. `APP_POSTGRES_ADMIN_DATABASE_URL` is the one exception — it names the *instance*, because the admin role it points at is the shared container's own bootstrap role, not any one service's; see the role/schema paragraph above. **`INTERNAL_API_SECRET` is likewise deliberately unprefixed** (built at task 14), matching data-store's own env var name exactly — it's the one shared credential both sides of an internal *outbound* call (to data-store) must agree on, not a portfolio-owned setting. **`PORTFOLIO_INTERNAL_SECRET` (built at task 9) is a separate, prefixed credential for the *inbound* direction** — what `web` sends as `X-Internal-Secret` when calling portfolio's own HTTP API, matching `AUTH_INTERNAL_SECRET`'s convention. Keeping the inbound and outbound secrets distinct means either can be rotated without touching the other; a deployment could otherwise be tempted to reuse one secret both ways, at the cost of one leak compromising both edges. `PORTFOLIO_API_HOST`/`PORTFOLIO_API_PORT` default to `0.0.0.0`/`8002` (web is 8000, auth 8001, data-store's read API 8082). All four API-related settings are optional at `load_settings()` — the CLI must keep working with no API ever run; `create_app()` checks `PORTFOLIO_INTERNAL_SECRET` itself at startup, data-store's own pattern, and `import-cashflow`/`rebuild-returns` check `DATASTORE_API_URL`/`INTERNAL_API_SECRET` themselves. |
+| `.env` (`PORTFOLIO_DATABASE_URL`, `PORTFOLIO_CROSS_USER_DATABASE_URL`, `APP_POSTGRES_ADMIN_DATABASE_URL`, `DATASTORE_API_URL`, `INTERNAL_API_SECRET`, `PORTFOLIO_INTERNAL_SECRET`, `PORTFOLIO_API_HOST`, `PORTFOLIO_API_PORT`) | no — gitignored | Credentials, per-environment. **Not** the bare `DATABASE_URL`: data-store already owns that name, and both suites can run in one pytest process where a shared name would collide — the same reasoning behind `AUTH_DATABASE_URL`. `PORTFOLIO_DATABASE_URL` names the *service*, not the instance, so a future service sharing `app-postgres` gets its own name and its own role. `PORTFOLIO_CROSS_USER_DATABASE_URL` (TA-6) points at the read-only role that bypasses row-level security. It is optional at `load_settings()`, and `db/connection.cross_user_connection` checks it itself, so per-user commands work without it (see "User isolation"). `APP_POSTGRES_ADMIN_DATABASE_URL` is the one exception — it names the *instance*, because the admin role it points at is the shared container's own bootstrap role, not any one service's; see the role/schema paragraph above. **`INTERNAL_API_SECRET` is likewise deliberately unprefixed** (built at task 14), matching data-store's own env var name exactly — it's the one shared credential both sides of an internal *outbound* call (to data-store) must agree on, not a portfolio-owned setting. **`PORTFOLIO_INTERNAL_SECRET` (built at task 9) is a separate, prefixed credential for the *inbound* direction** — what `web` sends as `X-Internal-Secret` when calling portfolio's own HTTP API, matching `AUTH_INTERNAL_SECRET`'s convention. Keeping the inbound and outbound secrets distinct means either can be rotated without touching the other; a deployment could otherwise be tempted to reuse one secret both ways, at the cost of one leak compromising both edges. `PORTFOLIO_API_HOST`/`PORTFOLIO_API_PORT` default to `0.0.0.0`/`8002` (web is 8000, auth 8001, data-store's read API 8082). All four API-related settings are optional at `load_settings()` — the CLI must keep working with no API ever run; `create_app()` checks `PORTFOLIO_INTERNAL_SECRET` itself at startup, data-store's own pattern, and `import-cashflow`/`rebuild-returns` check `DATASTORE_API_URL`/`INTERNAL_API_SECRET` themselves. |
 | `.env.example` | yes | Template, matching data-store's convention |
 
 `PORTFOLIO_RETURNS_REFRESH_SECONDS` (default `21600`) isn't a `settings.py` setting: only the

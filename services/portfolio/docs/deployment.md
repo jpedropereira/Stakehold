@@ -80,7 +80,7 @@ around that — so `docker-compose.yml` and `ci.yml` bootstrap a separate admin 
 (`jobs.py`'s `_ensure_role_and_schema`) uses that admin role exactly once, to create the
 non-superuser `portfolio` role and a like-named schema it owns (`CREATE SCHEMA portfolio
 AUTHORIZATION portfolio`) — Postgres denies cross-schema access by default, so owning the schema
-is the entire isolation mechanism, no further `GRANT`s needed. A role's default `search_path`
+is the entire isolation mechanism *between services*, no further `GRANT`s needed. A role's default `search_path`
 resolves `"$user"` to the schema matching its own name first, which is why `schema.sql`'s table
 names stay unqualified. A second tenant follows the same recipe: its own `<service>_DATABASE_URL`
 with its own role name, and `db init` creates its role/schema the same way — never reusing
@@ -88,6 +88,16 @@ with its own role name, and `db init` creates its role/schema the same way — n
 superuser for as long as the stock postgres image bootstraps it that way; the guarantee is that
 nothing beyond one `db init` bootstrap step ever holds that privilege, not that no superuser
 exists on the instance.
+
+**Within portfolio, a second role separates users' data (TA-6).** Row-level security limits the
+`portfolio` role to one user's rows at a time. `db init` also creates `portfolio_cross_user`,
+named by `PORTFOLIO_CROSS_USER_DATABASE_URL`, on the same admin connection, because `BYPASSRLS`
+can only be granted by a superuser. The `portfolio` role then grants it `USAGE` on its schema and
+`SELECT` on `accounts`, `transactions`, `position_snapshots` and `ticker_mappings`, nothing more.
+It has no like-named schema, so `db init` sets its `search_path` to `portfolio`. Every portfolio
+container that runs cross-user commands gets the URL: `api` (ticker mappings and the admin
+unmapped list), `returns-refresh-all` and `returns-refresh-new-tickers`. See `architecture.md`'s
+"User isolation" for why this is a role and not a policy exemption.
 
 **Broker-parser plugins get into the image as wheels dropped into `services/portfolio/plugins/`.**
 The Dockerfile's `uv sync --frozen` installs only the workspace, so a plugin installed into the

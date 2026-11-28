@@ -28,6 +28,11 @@ class Settings:
     api_internal_secret: str | None
     api_host: str
     api_port: int
+    # The read-only role that bypasses row-level security, for the few reads that enumerate
+    # across users (docs/architecture.md's "User isolation"). Optional for the same reason
+    # datastore_api_url is: most commands act for one user and never need it, so
+    # db/connection.cross_user_connection checks it itself.
+    cross_user_database_url: str | None = None
 
 
 def load_settings() -> Settings:
@@ -60,4 +65,5 @@ def load_settings() -> Settings:
         api_host=os.environ.get("PORTFOLIO_API_HOST", "0.0.0.0"),
         # 8002: web is 8000, auth is 8001, data-store's read API is 8082.
         api_port=int_env("PORTFOLIO_API_PORT", 8002),
+        cross_user_database_url=os.environ.get("PORTFOLIO_CROSS_USER_DATABASE_URL") or None,
     )
