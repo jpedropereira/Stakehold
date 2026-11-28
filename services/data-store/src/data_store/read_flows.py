@@ -14,13 +14,13 @@ from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 
 from data_store.config_loader import CurrenciesConfig, FundConfig, TickerResolution
+from data_store.currency_units import major_currency
 from data_store.fx import repository as fx_repository
 from data_store.holdings import repository as holdings_repository
 from data_store.regimes import repository as regimes_repository
 from data_store.returns import repository as returns_repository
 from data_store.risk_free import repository as risk_free_repository
 from data_store.risk_free.splice import EONIA_ADJUSTED, ESTR, splice, spliced_first_date
-from data_store.ticker_onboarding import major_currency
 from data_store.ticker_resolution import holding_symbol, resolve_yfinance_ticker
 from data_store.tracked_tickers import repository as tracked_tickers_repository
 

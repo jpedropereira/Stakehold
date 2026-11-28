@@ -338,7 +338,7 @@ def test_prices_endpoint_returns_a_real_series_end_to_end(api_client):
 
     assert response.status_code == 200
     body = response.json()
-    assert body["points"][0]["split_adjusted_close"] == "10.0000"
+    assert body["points"][0]["split_adjusted_close"] == "10.000000"
     assert body["points"][0]["price_return"] is None
 
 

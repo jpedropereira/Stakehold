@@ -43,13 +43,13 @@ CREATE TABLE IF NOT EXISTS raw_market_data (
     price_date   DATE          NOT NULL,
     source       VARCHAR(20)   NOT NULL,
     asset_type   VARCHAR(20)   NOT NULL,
-    open         NUMERIC(18,4),
-    high         NUMERIC(18,4),
-    low          NUMERIC(18,4),
-    close        NUMERIC(18,4),
-    adj_close    NUMERIC(18,4),
+    open         NUMERIC(20,6),
+    high         NUMERIC(20,6),
+    low          NUMERIC(20,6),
+    close        NUMERIC(20,6),
+    adj_close    NUMERIC(20,6),
     volume       BIGINT,
-    dividends    NUMERIC(18,4)  NOT NULL DEFAULT 0,
+    dividends    NUMERIC(20,6)  NOT NULL DEFAULT 0,
     stock_splits NUMERIC(18,6)  NOT NULL DEFAULT 0,
     ingested_at  TIMESTAMPTZ    NOT NULL DEFAULT now(),
     PRIMARY KEY (ticker, price_date, source)
@@ -61,7 +61,7 @@ CREATE TABLE IF NOT EXISTS market_returns (
     ticker                VARCHAR(20)    NOT NULL,
     price_date            DATE           NOT NULL,
     source                VARCHAR(20)    NOT NULL,
-    split_adjusted_close  NUMERIC(18,4)  NOT NULL,
+    split_adjusted_close  NUMERIC(20,6)  NOT NULL,
     future_split_factor   NUMERIC(30,15) NOT NULL,
     price_return          NUMERIC(18,8),
     dividend_return       NUMERIC(18,8),
@@ -93,6 +93,34 @@ END
 $$;
 
 CREATE INDEX IF NOT EXISTS idx_market_returns_ticker_date ON market_returns (ticker, price_date);
+
+-- Widens the price columns on databases created before IQ-1. Prices quoted in minor units (GBp,
+-- ZAc, ILA) are now divided by 100 on ingestion, and a 4-decimal pence price needs 6 decimals
+-- in pounds to stay exact: 2.3456p is 0.023456 GBP, which NUMERIC(18,4) would round to 0.0235.
+-- NUMERIC(20,6) keeps the same 14 integer digits, so every value that fit before still fits.
+-- Guarded per column on the current scale, so a rerun is a no-op. Each ALTER rewrites its
+-- table, so run `db init` with the ingest DAGs paused.
+DO $$
+DECLARE
+    col RECORD;
+BEGIN
+    FOR col IN
+        SELECT table_name, column_name
+        FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND numeric_scale = 4
+          AND (table_name, column_name) IN (
+              ('raw_market_data', 'open'), ('raw_market_data', 'high'),
+              ('raw_market_data', 'low'), ('raw_market_data', 'close'),
+              ('raw_market_data', 'adj_close'), ('raw_market_data', 'dividends'),
+              ('market_returns', 'split_adjusted_close'))
+    LOOP
+        EXECUTE format(
+            'ALTER TABLE %I ALTER COLUMN %I TYPE NUMERIC(20,6)', col.table_name, col.column_name
+        );
+    END LOOP;
+END
+$$;
 
 CREATE TABLE IF NOT EXISTS fx_rates (
     base_currency  VARCHAR(3)    NOT NULL,

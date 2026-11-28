@@ -7,6 +7,7 @@ fakes, like test_portfolio_page.py.
 
 import html
 import re
+from dataclasses import replace
 from datetime import datetime, timezone
 
 import pytest
@@ -210,6 +211,22 @@ def test_an_available_symbol_is_shown_for_confirmation(client):
     assert 'name="symbol" value="ASML.AS"' in text(response)
     assert 'action="/tickers"' in text(response)
     assert "Add ASML.AS" in text(response)
+
+
+@pytest.mark.parametrize("currency", ["GBp", "ZAc", "ILA"])
+def test_a_minor_unit_symbol_is_offered_without_a_warning(client, currency):
+    # data-store rescales minor-unit prices to the major unit as it ingests them (IQ-1), so the
+    # "values will read 100 times too high" warning this page used to show is no longer true.
+    test_client, fake_auth, fake_portfolio = client
+    _log_in(test_client, fake_auth)
+    fake_portfolio.lookup_result = replace(lookup(ticker="VOD.L"), currency=currency)
+
+    response = test_client.get("/tickers/new", params={"symbol": "vod.l"})
+
+    assert f'<span class="mono">{currency}</span>' in text(response)
+    assert "Add VOD.L" in text(response)
+    assert "100 times" not in text(response)
+    assert "minor units" not in text(response)
 
 
 @pytest.mark.parametrize(

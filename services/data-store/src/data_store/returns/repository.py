@@ -18,10 +18,11 @@ _COLUMNS = [
     "log_return",
 ]
 
-# Mirrors market_data/repository.py's _NUMERIC_BOUNDS: 18 total digits per column, so the
-# integer part tops out at (18 - scale) digits. Guards the same failure mode that bit
-# raw_market_data (f9583ad, a2264cb) -- one bad computed value shouldn't fail a whole batch's
-# COPY.
+# Mirrors market_data/repository.py's _NUMERIC_BOUNDS: the integer part tops out at
+# (precision - scale) digits -- 14 for split_adjusted_close's NUMERIC(20,6), 15 for
+# future_split_factor's NUMERIC(30,15), 10 for the NUMERIC(18,8) returns. Guards the same
+# failure mode that bit raw_market_data (f9583ad, a2264cb) -- one bad computed value shouldn't
+# fail a whole batch's COPY.
 _NUMERIC_BOUNDS = {
     "split_adjusted_close": 10**14,
     "future_split_factor": 10**15,
@@ -191,7 +192,7 @@ def save_market_returns(conn, source: str, df: pd.DataFrame) -> int:
         cur.execute("""
             CREATE TEMP TABLE tmp_market_returns (
                 ticker VARCHAR(20), price_date DATE, source VARCHAR(20),
-                split_adjusted_close NUMERIC(18,4), future_split_factor NUMERIC(30,15),
+                split_adjusted_close NUMERIC(20,6), future_split_factor NUMERIC(30,15),
                 price_return NUMERIC(18,8), dividend_return NUMERIC(18,8),
                 simple_return NUMERIC(18,8), log_return NUMERIC(18,8)
             ) ON COMMIT DROP

@@ -257,3 +257,38 @@ def test_get_latest_close_dates_skips_rows_without_a_close():
     assert yfinance_result == {"TEST": date(2026, 9, 2)}
     assert other_result == {"TEST": date(2026, 9, 10)}
     conn.close()
+
+
+def test_save_raw_market_data_keeps_six_decimals_of_a_rescaled_minor_unit_price():
+    # A penny stock at 2.3456p is 0.023456 GBP once rescaled (IQ-1). At 4 decimals it would round
+    # to 0.0235, a 0.2% error that every return computed from it would inherit.
+    conn = _connect()
+    df = make_df(
+        [
+            [
+                "TEST",
+                date(2026, 1, 1),
+                0.023456,
+                0.024001,
+                0.022999,
+                0.023456,
+                0.023401,
+                1000,
+                0.001234,
+                0.0,
+            ]
+        ]
+    )
+
+    save_raw_market_data(conn, "yfinance", "equity", df)
+
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT open, high, low, close, adj_close, dividends FROM raw_market_data "
+            "WHERE ticker = %s AND price_date = %s AND source = %s",
+            ("TEST", date(2026, 1, 1), "yfinance"),
+        )
+        stored = [str(v) for v in cur.fetchone()]
+
+    assert stored == ["0.023456", "0.024001", "0.022999", "0.023456", "0.023401", "0.001234"]
+    conn.close()
