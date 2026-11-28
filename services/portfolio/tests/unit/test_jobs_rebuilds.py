@@ -44,6 +44,8 @@ def _patch_new_job_common(monkeypatch):
     monkeypatch.setattr(jobs, "load_settings", _fake_settings)
     fake_conn = _SimpleFakeConnection()
     monkeypatch.setattr(jobs, "get_connection", lambda url: fake_conn)
+    monkeypatch.setattr(jobs, "user_connection", lambda settings, user_id: fake_conn)
+    monkeypatch.setattr(jobs, "cross_user_connection", lambda settings: fake_conn)
     return fake_conn
 
 
@@ -319,6 +321,8 @@ def _patch_returns_job_common(monkeypatch):
     )
     fake_conn = _SimpleFakeConnection()
     monkeypatch.setattr(jobs, "get_connection", lambda url: fake_conn)
+    monkeypatch.setattr(jobs, "user_connection", lambda settings, user_id: fake_conn)
+    monkeypatch.setattr(jobs, "cross_user_connection", lambda settings: fake_conn)
     return fake_conn
 
 

@@ -134,3 +134,57 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_ticker_mappings_isin
     ON ticker_mappings (identifier) WHERE identifier_kind = 'ISIN';
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ticker_mappings_symbol
     ON ticker_mappings (broker, identifier) WHERE identifier_kind = 'SYMBOL';
+
+-- Row-level security (TA-6). A second fence under the repositories' own user scoping: a query
+-- that forgets its user filter still sees only the connection's own user's rows. The user comes
+-- from the session setting app.user_id, set by db/connection.user_connection. With no user set,
+-- current_setting(..., true) is NULL (or '' once set and reset), the comparison is never true,
+-- so a connection without a user reads no rows and writes none -- deny by default.
+--
+-- FORCE because the portfolio role owns these tables, and a table's owner skips RLS otherwise.
+-- Child tables check their owner through accounts rather than carrying a copied user_id, which
+-- could drift from accounts.user_id. ticker_mappings is global, so it has no policy. Cross-user
+-- reads go through a separate read-only BYPASSRLS role that jobs.run_db_init creates (its name
+-- comes from configuration, so it isn't in this file). See docs/schema.md.
+--
+-- DROP + CREATE rather than a guard: a rerun rewrites each policy to this file's definition,
+-- so editing one here takes effect on the next `db init`. ENABLE/FORCE are already idempotent.
+ALTER TABLE accounts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE accounts FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS accounts_owner ON accounts;
+CREATE POLICY accounts_owner ON accounts
+    USING (user_id = NULLIF(current_setting('app.user_id', true), '')::uuid)
+    WITH CHECK (user_id = NULLIF(current_setting('app.user_id', true), '')::uuid);
+
+ALTER TABLE transactions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE transactions FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS transactions_owner ON transactions;
+CREATE POLICY transactions_owner ON transactions
+    USING (account_id IN (
+        SELECT id FROM accounts
+        WHERE user_id = NULLIF(current_setting('app.user_id', true), '')::uuid))
+    WITH CHECK (account_id IN (
+        SELECT id FROM accounts
+        WHERE user_id = NULLIF(current_setting('app.user_id', true), '')::uuid));
+
+ALTER TABLE position_snapshots ENABLE ROW LEVEL SECURITY;
+ALTER TABLE position_snapshots FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS position_snapshots_owner ON position_snapshots;
+CREATE POLICY position_snapshots_owner ON position_snapshots
+    USING (account_id IN (
+        SELECT id FROM accounts
+        WHERE user_id = NULLIF(current_setting('app.user_id', true), '')::uuid))
+    WITH CHECK (account_id IN (
+        SELECT id FROM accounts
+        WHERE user_id = NULLIF(current_setting('app.user_id', true), '')::uuid));
+
+ALTER TABLE return_snapshots ENABLE ROW LEVEL SECURITY;
+ALTER TABLE return_snapshots FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS return_snapshots_owner ON return_snapshots;
+CREATE POLICY return_snapshots_owner ON return_snapshots
+    USING (account_id IN (
+        SELECT id FROM accounts
+        WHERE user_id = NULLIF(current_setting('app.user_id', true), '')::uuid))
+    WITH CHECK (account_id IN (
+        SELECT id FROM accounts
+        WHERE user_id = NULLIF(current_setting('app.user_id', true), '')::uuid));

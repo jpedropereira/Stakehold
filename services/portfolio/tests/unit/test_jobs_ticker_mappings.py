@@ -72,6 +72,8 @@ def _patch_new_job_common(monkeypatch):
     monkeypatch.setattr(jobs, "load_settings", _fake_settings)
     fake_conn = _SimpleFakeConnection()
     monkeypatch.setattr(jobs, "get_connection", lambda url: fake_conn)
+    monkeypatch.setattr(jobs, "user_connection", lambda settings, user_id: fake_conn)
+    monkeypatch.setattr(jobs, "cross_user_connection", lambda settings: fake_conn)
     return fake_conn
 
 
@@ -387,3 +389,34 @@ def test_a_mapping_change_counts_returns_rebuilds_that_failed(monkeypatch):
     assert result["accounts_rebuilt"] == 2
     assert result["rebuilds_failed"] == 0
     assert result["returns_rebuilds_failed"] == 1
+
+
+def _no_cross_user_role(settings):
+    raise SettingsError("PORTFOLIO_CROSS_USER_DATABASE_URL is not set")
+
+
+def test_run_set_ticker_mapping_without_the_cross_user_role_saves_nothing(monkeypatch):
+    # Refused before the write: otherwise the mapping would commit and no account would rebuild.
+    _patch_mapping_job(monkeypatch)
+    monkeypatch.setattr(jobs, "cross_user_connection", _no_cross_user_role)
+    writes = []
+    monkeypatch.setattr(jobs.pipeline, "set_ticker_mapping", lambda conn, **kw: writes.append(kw))
+
+    with pytest.raises(SettingsError, match="PORTFOLIO_CROSS_USER_DATABASE_URL"):
+        jobs.run_set_ticker_mapping(**_SET_KWARGS)
+
+    assert writes == []
+
+
+def test_run_delete_ticker_mapping_without_the_cross_user_role_deletes_nothing(monkeypatch):
+    _patch_new_job_common(monkeypatch)
+    monkeypatch.setattr(jobs, "cross_user_connection", _no_cross_user_role)
+    deletes = []
+    monkeypatch.setattr(
+        jobs.pipeline, "delete_ticker_mapping", lambda conn, **kw: deletes.append(kw)
+    )
+
+    with pytest.raises(SettingsError, match="PORTFOLIO_CROSS_USER_DATABASE_URL"):
+        jobs.run_delete_ticker_mapping(mapping_id=7, updated_by=_ADMIN)
+
+    assert deletes == []

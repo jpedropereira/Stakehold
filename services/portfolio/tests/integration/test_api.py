@@ -32,6 +32,7 @@ def _settings():
         api_internal_secret=_SECRET,
         api_host="0.0.0.0",
         api_port=8002,
+        cross_user_database_url=os.environ["PORTFOLIO_CROSS_USER_DATABASE_URL"],
     )
 
 

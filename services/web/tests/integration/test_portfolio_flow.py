@@ -47,7 +47,12 @@ _USER = AuthUser(
 
 
 def _connect():
-    return psycopg.connect(os.environ["PORTFOLIO_DATABASE_URL"])
+    """The test server's superuser, on portfolio's schema: a superuser skips portfolio's
+    row-level security, so this sees every test user's rows. The app under test still connects
+    as the `portfolio` role, where RLS applies."""
+    return psycopg.connect(
+        os.environ["APP_POSTGRES_ADMIN_DATABASE_URL"], options="-c search_path=portfolio"
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -76,6 +81,7 @@ def _portfolio_settings(*, with_data_store: bool = False) -> PortfolioSettings:
         api_internal_secret=_PORTFOLIO_SECRET,
         api_host="0.0.0.0",
         api_port=8002,
+        cross_user_database_url=os.environ["PORTFOLIO_CROSS_USER_DATABASE_URL"],
     )
 
 

@@ -50,6 +50,8 @@ def fake_conn(monkeypatch):
     monkeypatch.setattr(jobs, "load_settings", _settings)
     conn = _FakeConnection()
     monkeypatch.setattr(jobs, "get_connection", lambda url: conn)
+    monkeypatch.setattr(jobs, "user_connection", lambda settings, user_id: conn)
+    monkeypatch.setattr(jobs, "cross_user_connection", lambda settings: conn)
     return conn
 
 
