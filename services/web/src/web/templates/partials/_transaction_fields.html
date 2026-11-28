@@ -1,0 +1,96 @@
+{#- The manual-entry fields, shared by the add and edit forms. Prefilled from `values` (each
+    key named after its field), with the reference editable only when `reference_editable`. -#}
+{#- Marks a field with the types it applies to (and requires it for), from routes.py's
+    _FIELD_TYPES. static/transaction_form.js hides the field for any other type; without JS it
+    always shows. -#}
+{% macro shown_for(name) -%}
+data-types="{{ field_types[name] | join(' ') }}"
+{%- if field_required_for[name] %} data-required-for="{{ field_required_for[name] | join(' ') }}"{% endif %}
+{%- endmacro %}
+    <fieldset>
+      <legend>What</legend>
+      <div class="field">
+        <label for="transaction_type">Type</label>
+        <select id="transaction_type" name="transaction_type" required>
+          {% for t in transaction_types %}
+          <option value="{{ t }}"{% if t == values.transaction_type %} selected{% endif %}>{{ t }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="field">
+        <label for="broker_transaction_ref">Reference</label>
+        {% if reference_editable %}
+        <input type="text" id="broker_transaction_ref" name="broker_transaction_ref" value="{{ reference }}" required class="mono" aria-describedby="broker_transaction_ref-hint">
+        <p class="field-hint" id="broker_transaction_ref-hint">Filled in for you. Replace it with your broker's reference if you have one. A reference already saved is not saved again.</p>
+        {% else %}
+        <input type="text" id="broker_transaction_ref" name="broker_transaction_ref" value="{{ reference }}" readonly class="mono" aria-describedby="broker_transaction_ref-hint">
+        <p class="field-hint" id="broker_transaction_ref-hint">The reference identifies the transaction, so it can't be changed.</p>
+        {% endif %}
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>When</legend>
+      <div class="field">
+        <label for="trade_datetime">Date &amp; time (UTC)</label>
+        <input type="datetime-local" id="trade_datetime" name="trade_datetime" value="{{ values.trade_datetime }}" required>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Amount</legend>
+      <div class="field" {{ shown_for("native_amount") }}>
+        <label for="native_amount">Amount</label>
+        <input type="text" inputmode="decimal" id="native_amount" name="native_amount" value="{{ values.native_amount or '' }}" class="mono" aria-describedby="native_amount-hint">
+        <p class="field-hint" id="native_amount-hint">Money into the account is positive, money out is negative; leave blank for buys and sells: it's calculated as price × quantity + fees.</p>
+      </div>
+      <p class="field-hint" {{ shown_for("amount_derived") }}>The amount is calculated from price × quantity + fees.</p>
+
+      <div class="field">
+        <label for="native_currency">Currency</label>
+        <input type="text" id="native_currency" name="native_currency" value="{{ values.native_currency }}" list="currency-options" maxlength="3" autocomplete="off" required class="mono">
+      </div>
+      <datalist id="currency-options">
+        {% for currency in currencies %}
+        <option value="{{ currency }}">
+        {% endfor %}
+      </datalist>
+
+      <div class="field" data-hide-for-currency="EUR">
+        <label for="fx_rate">FX rate</label>
+        <input type="text" inputmode="decimal" id="fx_rate" name="fx_rate" value="{{ values.fx_rate or '' }}" class="mono" aria-describedby="fx_rate-hint">
+        <p class="field-hint" id="fx_rate-hint">Units of the currency per 1 EUR, for example 1.0850 for USD. Leave blank for EUR.</p>
+      </div>
+
+      <div class="field" {{ shown_for("fees_native") }}>
+        <label for="fees_native">Fees</label>
+        <input type="text" inputmode="decimal" id="fees_native" name="fees_native" value="{{ values.fees_native or '' }}" class="mono">
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Instrument</legend>
+      <div class="field" {{ shown_for("instrument_identifier") }}>
+        <label for="instrument_identifier">Ticker</label>
+        <input type="text" id="instrument_identifier" name="instrument_identifier" value="{{ values.instrument_identifier or '' }}" list="ticker-options" autocomplete="off" class="mono" aria-describedby="instrument_identifier-hint">
+        <p class="field-hint" id="instrument_identifier-hint">{% if values.instrument_identifier_kind and values.instrument_identifier_kind != "TICKER" %}Kept as your broker recorded it ({{ values.instrument_identifier_kind }}) unless you change it. {% endif %}Not in the list? <a href="/tickers/new">Add a ticker</a>.</p>
+        {% if tickers_notice %}<p class="entry-empty">{{ tickers_notice }}</p>{% endif %}
+      </div>
+      <datalist id="ticker-options">
+        {% for ticker in tickers %}
+        <option value="{{ ticker }}">
+        {% endfor %}
+      </datalist>
+
+      <div class="field" {{ shown_for("quantity") }}>
+        <label for="quantity">Quantity</label>
+        <input type="text" inputmode="decimal" id="quantity" name="quantity" value="{{ values.quantity or '' }}" class="mono" aria-describedby="quantity-hint">
+        <p class="field-hint" id="quantity-hint">Negative for a sell.</p>
+      </div>
+
+      <div class="field" {{ shown_for("price") }}>
+        <label for="price">Price</label>
+        <input type="text" inputmode="decimal" id="price" name="price" value="{{ values.price or '' }}" class="mono">
+      </div>
+    </fieldset>

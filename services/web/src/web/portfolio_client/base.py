@@ -201,6 +201,15 @@ class TransactionDeleteResult:
 
 
 @dataclass(frozen=True)
+class TransactionUpdateResult:
+    status: str
+    # 0 when the edit changed nothing; portfolio then rebuilds nothing.
+    transactions_updated: int
+    positions_rebuild: str | None = None
+    returns_rebuild: str | None = None
+
+
+@dataclass(frozen=True)
 class TickerMapping:
     id: int
     identifier_kind: str
@@ -985,6 +994,27 @@ class PortfolioClient(Protocol):
     # Deletes the account and everything recorded in it. Raises AccountNotFound when the label
     # doesn't resolve for this user.
     async def delete_account(self, *, user_id: str, account_label: str) -> AccountDeleteResult: ...
+
+    # Rewrites the transaction under (account_label, broker_transaction_ref) with every other
+    # field given. Raises TransactionNotFound when the account or the reference doesn't resolve
+    # for this user, and InvalidPortfolioRequest with portfolio's message for an invalid edit.
+    async def update_transaction(
+        self,
+        *,
+        user_id: str,
+        account_label: str,
+        broker_transaction_ref: str,
+        transaction_type: str,
+        trade_datetime: datetime,
+        native_amount: Decimal | None,
+        native_currency: str,
+        instrument_identifier: str | None = None,
+        instrument_identifier_kind: str | None = None,
+        quantity: Decimal | None = None,
+        price: Decimal | None = None,
+        fx_rate: Decimal | None = None,
+        fees_native: Decimal | None = None,
+    ) -> TransactionUpdateResult: ...
 
     # Raises TransactionNotFound when the account or the reference doesn't resolve for this user.
     async def delete_transaction(

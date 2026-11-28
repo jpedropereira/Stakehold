@@ -330,6 +330,70 @@ async def test_a_ticker_picked_in_the_form_shows_up_as_a_position(web_client_wit
     assert "No return history yet" in response.text
 
 
+def _edit_form(csrf_token: str, **overrides) -> dict:
+    data = {
+        "account": "main",
+        "ref": "buy-1",
+        "transaction_type": "BUY",
+        "trade_datetime": "2026-01-05T12:00",
+        "native_amount": "",
+        "native_currency": "EUR",
+        "instrument_identifier": "IWDA.AS",
+        "original_instrument_identifier": "IWDA.AS",
+        "original_instrument_identifier_kind": "TICKER",
+        "quantity": "10",
+        "price": "95",
+        "fx_rate": "",
+        "fees_native": "",
+        "csrf_token": csrf_token,
+    }
+    data.update(overrides)
+    return data
+
+
+async def test_editing_a_buys_quantity_updates_the_log_and_the_holding(
+    web_client_with_data_store,
+):
+    """The edit round trip: the edit page reads the row back from portfolio, a save goes
+    through portfolio's PUT and its rebuild, and the holding follows. Saving the row unchanged
+    is reported as nothing changed."""
+    web_client = web_client_with_data_store
+    _create_account(web_client)
+    token = _csrf_token(web_client, "/transactions/new", account="main")
+    web_client.post(
+        "/transactions/new",
+        data=_transaction_form(
+            token,
+            broker_transaction_ref="buy-1",
+            transaction_type="BUY",
+            instrument_identifier="IWDA.AS",
+            quantity="10",
+            price="95",
+            native_amount="",
+        ),
+        follow_redirects=False,
+    )
+
+    page = web_client.get("/transactions/edit", params={"account": "main", "ref": "buy-1"})
+    token = next(v for k, v in web_client.cookies.items() if "csrf" in k)
+    unchanged = web_client.post(
+        "/transactions/edit", data=_edit_form(token), follow_redirects=False
+    )
+    edited = web_client.post(
+        "/transactions/edit", data=_edit_form(token, quantity="12"), follow_redirects=False
+    )
+    log = web_client.get(edited.headers["location"])
+    holdings = web_client.get("/accounts/holdings", params={"account": "main"})
+
+    assert page.status_code == 200
+    assert 'name="quantity" value="10"' in page.text
+    assert unchanged.headers["location"] == "/transactions?account=main&edited=0"
+    assert edited.headers["location"].startswith("/transactions?account=main&edited=1&positions=")
+    assert "Transaction updated." in log.text
+    assert "-1,140.00 EUR" in log.text.replace("\u2212", "-")
+    assert ">12<" in holdings.text
+
+
 async def test_an_admin_maps_an_imported_isin_and_the_users_position_appears(admin_web_client):
     # Ann's account holds an ISIN-reported BUY -- what a broker import produces -- that nothing
     # maps yet. Entered through portfolio's CLI because web's own form only sends TICKERs.

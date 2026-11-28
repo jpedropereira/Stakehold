@@ -1538,6 +1538,130 @@ def test_delete_transaction_reports_a_missing_transaction_and_exits_nonzero(monk
     assert "error: no transaction 'manual-1' in account 'm'" in capsys.readouterr().err
 
 
+# --- edit-transaction ---
+
+
+def test_edit_transaction_dispatches_every_field(monkeypatch, capsys):
+    captured = {}
+
+    def fake_run(**kw):
+        captured.update(kw)
+        return {
+            "status": "ok",
+            "rows_saved": 1,
+            "transactions_updated": 1,
+            "positions_rebuild": "ok",
+            "returns_rebuild": "skipped",
+        }
+
+    monkeypatch.setattr(cli.jobs, "run_update_transaction", fake_run)
+    user_id = uuid.uuid4()
+
+    exit_code = cli.main(
+        [
+            "edit-transaction",
+            "--user",
+            str(user_id),
+            "--account",
+            "m",
+            "--ref",
+            "manual-1",
+            "--type",
+            "BUY",
+            "--datetime",
+            "2026-03-01T10:00:00+00:00",
+            "--currency",
+            "USD",
+            "--fx-rate",
+            "1.08",
+            "--instrument",
+            "IWDA.AS",
+            "--instrument-kind",
+            "TICKER",
+            "--quantity",
+            "12",
+            "--price",
+            "50",
+            "--fees",
+            "1",
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured == {
+        "user_id": user_id,
+        "account_label": "m",
+        "broker_transaction_ref": "manual-1",
+        "transaction_type": "BUY",
+        "trade_datetime": datetime(2026, 3, 1, 10, 0, tzinfo=UTC),
+        "native_amount": None,
+        "native_currency": "USD",
+        "instrument_identifier": "IWDA.AS",
+        "instrument_identifier_kind": "TICKER",
+        "quantity": Decimal("12"),
+        "price": Decimal("50"),
+        "fx_rate": Decimal("1.08"),
+        "fees_native": Decimal("1"),
+    }
+    assert capsys.readouterr().out == "1 transaction(s) updated\n"
+
+
+def test_edit_transaction_reports_an_edit_that_changed_nothing(monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli.jobs,
+        "run_update_transaction",
+        lambda **kw: {
+            "status": "nothing_to_do",
+            "rows_saved": 0,
+            "transactions_updated": 0,
+            "positions_rebuild": "skipped",
+            "returns_rebuild": "skipped",
+        },
+    )
+
+    exit_code = cli.main(
+        [
+            "edit-transaction",
+            "--user",
+            str(uuid.uuid4()),
+            "--account",
+            "m",
+            "--ref",
+            "manual-1",
+            "--type",
+            "DEPOSIT",
+            "--datetime",
+            "2026-03-01T10:00:00+00:00",
+            "--amount",
+            "100",
+            "--currency",
+            "EUR",
+        ]
+    )
+
+    assert exit_code == 0
+    assert capsys.readouterr().out == "0 transaction(s) updated\n"
+
+
+def test_edit_transaction_requires_the_ref(capsys):
+    with pytest.raises(SystemExit):
+        cli.main(
+            [
+                "edit-transaction",
+                "--user",
+                str(uuid.uuid4()),
+                "--account",
+                "m",
+                "--type",
+                "DEPOSIT",
+                "--datetime",
+                "2026-03-01T10:00:00+00:00",
+                "--currency",
+                "EUR",
+            ]
+        )
+
+
 # --- account delete ---
 
 

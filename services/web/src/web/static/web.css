@@ -536,6 +536,14 @@ img.logo-on-dark {
   max-width: 140px;
 }
 
+/* A value shown for reference, not for typing (the edit form's reference, the row's key): no box,
+   so it doesn't read as a field to fill in. */
+.field input[readonly] {
+  border-color: transparent;
+  background: transparent;
+  padding-inline: 0;
+}
+
 /* Tickers and identifiers are figures: the control rule above would otherwise override .mono. */
 :is(.field, .inline-form) input.mono {
   font: var(--text-figure);
@@ -740,9 +748,13 @@ img.logo-on-dark {
   margin-top: var(--space-5);
 }
 
-/* A row's Delete link: its own narrow last column, kept to one line. */
+/* A row's Edit and Delete links: their own narrow last column, kept to one line. */
 .row-action {
   white-space: nowrap;
+}
+
+.row-action .btn + .btn {
+  margin-left: var(--space-3);
 }
 
 .auth-switch {

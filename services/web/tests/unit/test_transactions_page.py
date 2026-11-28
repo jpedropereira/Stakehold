@@ -222,7 +222,7 @@ def test_transactions_page_renders_a_buy(client):
         f"{MINUS}1,124.40 EUR",
         "1.00 EUR",
         "buy-1",
-        "Delete BUY on 2026-01-05",
+        "Edit BUY on 2026-01-05 Delete BUY on 2026-01-05",
     ]
 
 
@@ -242,7 +242,7 @@ def test_transactions_page_shows_dashes_for_a_cash_only_row(client):
         "2,000.00 EUR",
         "—",
         "dep-1",
-        "Delete DEPOSIT on 2026-01-01",
+        "Edit DEPOSIT on 2026-01-01 Delete DEPOSIT on 2026-01-01",
     ]
 
 

@@ -5,10 +5,12 @@ from portfolio.transactions.base import CanonicalTransaction
 from portfolio.transactions.repository import (
     delete_by_account,
     delete_one,
+    get_one,
     insert_transactions,
     list_by_account,
     list_by_accounts,
     list_distinct_instruments,
+    update_one,
 )
 
 NOW = datetime(2026, 3, 1, 10, 0, tzinfo=UTC)
@@ -304,3 +306,79 @@ def test_delete_by_account_removes_every_transaction_in_the_account():
     assert "WHERE account_id = %s" in sql
     assert params == (7,)
     assert deleted == 3
+
+
+# --- get_one / update_one ---
+
+
+class FakeOneRowCursor(FakeCursor):
+    def __init__(self, row):
+        super().__init__(rowcounts=[1 if row else 0])
+        self._row = row
+
+    def fetchone(self):
+        return self._row
+
+
+def test_get_one_reads_the_row_scoped_to_the_account_and_ref():
+    txn = _txn(account_id=7)
+    conn = FakeConnection(rowcounts=[])
+    conn._cursor = FakeOneRowCursor(tuple(txn.__dict__.values()))
+
+    found = get_one(conn, account_id=7, broker_transaction_ref="manual-1")
+
+    sql, params = conn._cursor.executed[0]
+    assert "FROM transactions" in sql
+    assert "account_id = %s" in sql and "broker_transaction_ref = %s" in sql
+    assert params == (7, "manual-1")
+    assert found == txn
+
+
+def test_get_one_returns_none_when_no_row_matched():
+    conn = FakeConnection(rowcounts=[])
+    conn._cursor = FakeOneRowCursor(None)
+
+    assert get_one(conn, account_id=7, broker_transaction_ref="missing") is None
+
+
+def test_update_one_rewrites_every_non_key_column_of_the_addressed_row():
+    conn = FakeConnection(rowcounts=[1])
+    txn = _txn(account_id=7, quantity=Decimal("12"), native_amount=Decimal("-1146.00"))
+
+    updated = update_one(conn, txn)
+
+    sql, params = conn._cursor.executed[0]
+    assert sql.lstrip().startswith("UPDATE transactions")
+    assert "WHERE account_id = %s AND broker_transaction_ref = %s" in sql
+    for column in (
+        "transaction_type",
+        "trade_datetime",
+        "instrument_identifier",
+        "instrument_identifier_kind",
+        "quantity",
+        "price",
+        "native_currency",
+        "native_amount",
+        "eur_amount",
+        "fx_rate",
+        "fx_rate_source",
+        "fees_native",
+    ):
+        assert f"{column} = %s" in sql
+    assert params[-2:] == (7, "manual-1")
+    assert Decimal("12") in params and Decimal("-1146.00") in params
+    assert updated == 1
+
+
+def test_update_one_returns_zero_when_no_row_matched():
+    conn = FakeConnection(rowcounts=[0])
+
+    assert update_one(conn, _txn()) == 0
+
+
+def test_update_one_does_not_commit():
+    conn = FakeConnection(rowcounts=[1])
+
+    update_one(conn, _txn())
+
+    assert conn.committed is False

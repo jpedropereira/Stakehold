@@ -947,6 +947,100 @@ async def test_delete_transaction_malformed_response_is_unavailable():
         )
 
 
+# --- editing a transaction ---
+
+
+async def test_update_transaction_puts_the_whole_row_and_parses_the_result():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["method"] = request.method
+        captured["path"] = request.url.path
+        captured["body"] = json.loads(request.content)
+        captured["headers"] = request.headers
+        return httpx.Response(
+            200,
+            json={
+                "status": "ok",
+                "transactions_updated": 1,
+                "positions_rebuild": "ok",
+                "returns_rebuild": "partial",
+            },
+        )
+
+    result = await _client(handler).update_transaction(
+        user_id=USER_ID,
+        account_label="main",
+        broker_transaction_ref="buy 1",
+        transaction_type="BUY",
+        trade_datetime=datetime(2026, 3, 1, 10, 0, tzinfo=timezone.utc),
+        native_amount=None,
+        native_currency="USD",
+        instrument_identifier="IE00B4L5Y983",
+        instrument_identifier_kind="ISIN",
+        quantity=Decimal("12"),
+        price=Decimal("50.5"),
+        fx_rate=Decimal("1.08"),
+    )
+
+    assert (captured["method"], captured["path"]) == ("PUT", "/transactions")
+    assert captured["headers"]["x-internal-secret"] == INTERNAL_SECRET
+    assert captured["body"] == {
+        "user_id": USER_ID,
+        "account_label": "main",
+        "broker_transaction_ref": "buy 1",
+        "transaction_type": "BUY",
+        "trade_datetime": "2026-03-01T10:00:00+00:00",
+        "native_amount": None,
+        "native_currency": "USD",
+        "instrument_identifier": "IE00B4L5Y983",
+        "instrument_identifier_kind": "ISIN",
+        "quantity": "12",
+        "price": "50.5",
+        "fx_rate": "1.08",
+        "fees_native": None,
+    }
+    assert result.transactions_updated == 1
+    assert (result.positions_rebuild, result.returns_rebuild) == ("ok", "partial")
+
+
+def _update(client, **overrides):
+    kwargs = dict(
+        user_id=USER_ID,
+        account_label="main",
+        broker_transaction_ref="x",
+        transaction_type="DEPOSIT",
+        trade_datetime=datetime(2026, 3, 1, tzinfo=timezone.utc),
+        native_amount=Decimal("100"),
+        native_currency="EUR",
+    )
+    kwargs.update(overrides)
+    return client.update_transaction(**kwargs)
+
+
+async def test_update_transaction_maps_404_to_transaction_not_found():
+    client = _client(lambda request: httpx.Response(404, json={"detail": "no transaction"}))
+
+    with pytest.raises(TransactionNotFound):
+        await _update(client)
+
+
+async def test_update_transaction_maps_422_to_an_invalid_request_with_portfolios_message():
+    client = _client(
+        lambda request: httpx.Response(422, json={"detail": "SELL requires a negative quantity"})
+    )
+
+    with pytest.raises(InvalidPortfolioRequest, match="SELL requires a negative quantity"):
+        await _update(client)
+
+
+async def test_update_transaction_malformed_response_is_unavailable():
+    client = _client(lambda request: httpx.Response(200, json={"status": "ok"}))
+
+    with pytest.raises(PortfolioUnavailable):
+        await _update(client)
+
+
 # --- deleting an account ---
 
 

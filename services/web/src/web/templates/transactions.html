@@ -14,6 +14,13 @@
 {% elif deleted == 0 %}
 {% call banner("warning") %}<strong>Nothing deleted.</strong> That transaction isn't in this account any more.{% endcall %}
 {% endif %}
+{% if edited == "1" %}
+{% call banner("success") %}<strong>Transaction updated.</strong>{% if outcome %} {{ outcome }}{% endif %}{% endcall %}
+{% elif edited == "0" %}
+{% call banner("success") %}<strong>Nothing changed.</strong> The transaction already read that way.{% endcall %}
+{% elif edited == "gone" %}
+{% call banner("warning") %}<strong>Nothing saved.</strong> That transaction isn't in this account any more.{% endcall %}
+{% endif %}
 
 <section class="card card-wide">
   <h1>Transactions</h1>
@@ -53,9 +60,9 @@
         <td class="num" role="cell" data-label="Fees"><span class="mono">{{ txn.fees_native | native_money(currency) }}</span></td>
         {# Whole above phone width; shortened by CSS when stacked, with the full value in the tooltip. #}
         <td role="cell" data-label="Reference"><span class="mono reference" title="{{ txn.broker_transaction_ref }}">{{ txn.broker_transaction_ref }}</span></td>
-        {# A link to the confirmation page, which is the whole flow without JS; with it,
-           confirm_dialog.js opens the dialog below instead. #}
-        <td class="row-action" role="cell"><a class="btn btn-ghost" href="/transactions/delete?account={{ account_label | urlencode }}&amp;ref={{ txn.broker_transaction_ref | urlencode }}" data-confirm="delete-transaction-dialog" data-confirm-summary="{{ transaction_summary(txn) }}">Delete<span class="visually-hidden"> {{ txn.transaction_type }} on {{ txn.trade_datetime | date }}</span></a></td>
+        {# Edit opens the edit page. Delete links to the confirmation page, which is the whole
+           flow without JS; with it, confirm_dialog.js opens the dialog below instead. #}
+        <td class="row-action" role="cell"><a class="btn btn-ghost" href="/transactions/edit?account={{ account_label | urlencode }}&amp;ref={{ txn.broker_transaction_ref | urlencode }}">Edit<span class="visually-hidden"> {{ txn.transaction_type }} on {{ txn.trade_datetime | date }}</span></a> <a class="btn btn-ghost" href="/transactions/delete?account={{ account_label | urlencode }}&amp;ref={{ txn.broker_transaction_ref | urlencode }}" data-confirm="delete-transaction-dialog" data-confirm-summary="{{ transaction_summary(txn) }}">Delete<span class="visually-hidden"> {{ txn.transaction_type }} on {{ txn.trade_datetime | date }}</span></a></td>
       </tr>
       {% endfor %}
     </tbody>

@@ -607,6 +607,11 @@ Every route `web` serves, with what it requires and which upstream calls it make
 - `api/deletion.py` — the deletes: `GET`/`POST /transactions/delete` and
   `GET`/`POST /accounts/delete`, on their own router for the same reason as `api/overview.py`,
   rendering, redirecting and checking CSRF through `routes.py`'s helpers.
+- `api/editing.py` (TA-1) — the transaction edit: `GET`/`POST /transactions/edit`, on its own
+  router for the same reason. It reads the row through `deletion.py`'s
+  `_transaction_page_context` (portfolio has no single-transaction read, so both pages search the
+  account's log). It parses the form with `routes.py`'s `_parse_transaction_form`, so an edit is
+  checked exactly as a new entry is, with portfolio's own validation the final gate.
 - `transaction_counts.py` — `load_transaction_counts`, each account's transaction count for
   an account delete's warning. Its own module, like `ticker_status.py`, so `routes.py` (the
   accounts list) and `api/deletion.py` (the confirmation page) share it without importing each

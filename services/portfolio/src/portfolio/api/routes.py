@@ -61,6 +61,8 @@ from portfolio.api.models import (
     TransactionDeleteResponse,
     TransactionResponse,
     TransactionsWriteResponse,
+    TransactionUpdateRequest,
+    TransactionUpdateResponse,
     UnmappedInstrumentAnyBrokerResponse,
     UnmappedInstrumentResponse,
     WhatIfRequest,
@@ -349,6 +351,30 @@ def create_transaction(
     )
     response.status_code = _write_status_code(result)
     return result
+
+
+@router.put("/transactions", response_model=TransactionUpdateResponse)
+def update_transaction(
+    body: TransactionUpdateRequest, settings: Settings = Depends(get_settings)
+) -> dict:
+    """200 whether or not the edit changed anything: `status` says which. An unknown account or
+    reference is a 404 via app.py's handlers."""
+    return jobs.run_update_transaction(
+        user_id=body.user_id,
+        account_label=body.account_label,
+        broker_transaction_ref=body.broker_transaction_ref,
+        transaction_type=body.transaction_type,
+        trade_datetime=body.trade_datetime,
+        native_amount=body.native_amount,
+        native_currency=body.native_currency,
+        instrument_identifier=body.instrument_identifier,
+        instrument_identifier_kind=body.instrument_identifier_kind,
+        quantity=body.quantity,
+        price=body.price,
+        fx_rate=body.fx_rate,
+        fees_native=body.fees_native,
+        settings=settings,
+    )
 
 
 @router.delete("/transactions", response_model=TransactionDeleteResponse)

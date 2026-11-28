@@ -70,6 +70,11 @@ class TransactionCreateRequest(BaseModel):
         return value
 
 
+class TransactionUpdateRequest(TransactionCreateRequest):
+    """The whole row as it should now read, addressed by its unchanged
+    (account_label, broker_transaction_ref) key. See pipeline.update_transaction."""
+
+
 class TransactionResponse(BaseModel):
     account_id: int
     broker_transaction_ref: str
@@ -337,6 +342,14 @@ class TransactionDeleteResponse(BaseModel):
     transactions_deleted: int
     # Reported the same way as TransactionsWriteResponse's: the follow-on rebuilds' own statuses,
     # kept apart from `status`, which describes only the delete.
+    positions_rebuild: str
+    returns_rebuild: str
+
+
+class TransactionUpdateResponse(BaseModel):
+    status: str
+    # 0 when the edit changed nothing; the rebuilds are then `skipped`.
+    transactions_updated: int
     positions_rebuild: str
     returns_rebuild: str
 

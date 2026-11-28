@@ -537,6 +537,23 @@ described here updates this file in the same change.
   exposes `data-store`'s `currencies.yaml` and this chunk adds no endpoints. The field still
   accepts any code, so drift only makes the suggestions less useful. The fix, an endpoint
   listing supported currencies, is under Deferred in `tasks.md`.
+- **An edit is the add form, prefilled, on a page of its own (TA-1).** The fields live in
+  `partials/_transaction_fields.html`, which both `transactions_new.html` and
+  `transaction_edit.html` include, so the two forms can't drift and `transaction_form.js` works
+  on both unchanged (it applies the chosen type and currency on load). The partial is driven by a
+  `values` dict and a `reference_editable` flag. On the edit page the reference is shown
+  read-only: it's the row's key, so changing it would be a different transaction. A BUY/SELL's
+  amount is left blank, so `portfolio` derives it again. Prefilled, it would stop matching price ×
+  quantity + fees as soon as either changed, and the edit would be refused. An instrument left as
+  it was goes back with the kind it was recorded with: the hidden
+  `original_instrument_identifier(_kind)` fields carry it, and the hint under the field says so
+  for an imported ISIN or SYMBOL. A changed one is sent as a ticker, as on the add form. An error
+  re-renders the page with what was typed, not the stored row. After a save the log says
+  "Transaction updated." with the rebuild outcome, "Nothing changed." when the edit matched the
+  row, or "Nothing saved." when the row was deleted meanwhile (`?edited=1|0|gone`). The Edit link
+  sits beside Delete in the row's action cell, and both are outlined ghost buttons. *Rejected:
+  editing inline in the table row*: nine columns and type-dependent fields don't fit a row, and
+  it would need a second copy of the form's rules in JS.
 - **A delete is confirmed in a native `<dialog>`, with a confirmation page behind it.** Each row
   of the transaction log has a Delete link to `GET /transactions/delete`, and each account on
   the accounts list one to `GET /accounts/delete`: a full page with what is about to go, the
